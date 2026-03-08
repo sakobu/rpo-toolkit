@@ -1,14 +1,16 @@
 use roe_core::{
-    compute_roe, keplerian_to_state, roe_to_ric, state_to_keplerian, KeplerianElements,
+    compute_j2_params, compute_roe, keplerian_to_state, roe_to_ric, J2StmPropagator,
+    KeplerianElements, RelativePropagator,
 };
 
 fn main() {
-    println!("ROE-RUST RPO Mission Planner — Phase 1");
+    println!("ROE-RUST RPO Mission Planner — Phase 2");
+    println!("=======================================\n");
 
-    // Example: ISS-like chief orbit
+    // Example: ISS-like chief orbit (mean elements)
     let epoch = hifitime::Epoch::from_gregorian_utc_hms(2024, 1, 1, 0, 0, 0);
 
-    let chief_ke = KeplerianElements {
+    let chief_mean = KeplerianElements {
         a: 6786.0,
         e: 0.0001,
         i: 51.6_f64.to_radians(),
@@ -18,7 +20,7 @@ fn main() {
     };
 
     // Deputy: 1 km higher, small phase offset
-    let deputy_ke = KeplerianElements {
+    let deputy_mean = KeplerianElements {
         a: 6787.0,
         e: 0.0001,
         i: 51.6_f64.to_radians(),
@@ -27,28 +29,81 @@ fn main() {
         mean_anomaly: 0.01,
     };
 
-    let chief_sv = keplerian_to_state(&chief_ke, epoch);
-    let deputy_sv = keplerian_to_state(&deputy_ke, epoch);
-
+    // Step 1: ECI state vectors (from mean elements for visualization)
+    let chief_sv = keplerian_to_state(&chief_mean, epoch);
+    let deputy_sv = keplerian_to_state(&deputy_mean, epoch);
     println!("Chief ECI:  pos={:.3} km", chief_sv.position.transpose());
     println!("Deputy ECI: pos={:.3} km", deputy_sv.position.transpose());
 
-    let chief_ke2 = state_to_keplerian(&chief_sv);
-    let deputy_ke2 = state_to_keplerian(&deputy_sv);
+    println!("\nChief mean SMA:  {:.4} km", chief_mean.a);
+    println!("Deputy mean SMA: {:.4} km", deputy_mean.a);
 
-    let roe = compute_roe(&chief_ke2, &deputy_ke2);
+    // Step 2: Compute QNS ROEs (directly from mean elements)
+    let roe = compute_roe(&chief_mean, &deputy_mean);
     println!(
         "\nQNS ROEs:\n  da={:.6e}\n  dlambda={:.6e}\n  dex={:.6e}\n  dey={:.6e}\n  dix={:.6e}\n  diy={:.6e}",
         roe.da, roe.dlambda, roe.dex, roe.dey, roe.dix, roe.diy
     );
 
-    let ric = roe_to_ric(&roe, &chief_ke2);
+    // Step 3: J2 parameters
+    let j2p = compute_j2_params(&chief_mean);
+    println!("\nJ2 Secular Rates:");
     println!(
-        "\nRIC position: [{:.6}, {:.6}, {:.6}] km",
-        ric.position.x, ric.position.y, ric.position.z
+        "  RAAN rate: {:.4} deg/day",
+        j2p.raan_dot.to_degrees() * 86400.0
     );
     println!(
-        "RIC velocity: [{:.6}, {:.6}, {:.6}] km/s",
-        ric.velocity.x, ric.velocity.y, ric.velocity.z
+        "  AoP rate:  {:.4} deg/day",
+        j2p.aop_dot.to_degrees() * 86400.0
+    );
+
+    // Step 4: Initial RIC state
+    let ric = roe_to_ric(&roe, &chief_mean);
+    println!(
+        "\nInitial RIC position: [{:.4}, {:.4}, {:.4}] km",
+        ric.position.x, ric.position.y, ric.position.z
+    );
+
+    // Step 5: Propagate over 3 orbits with 30 steps per orbit
+    let period = std::f64::consts::TAU / j2p.n;
+    let n_orbits = 3;
+    let n_steps = 30 * n_orbits;
+    let total_time = period * n_orbits as f64;
+
+    let propagator = J2StmPropagator;
+    let trajectory = propagator
+        .propagate_with_steps(&roe, &chief_mean, epoch, total_time, n_steps)
+        .expect("propagation failed");
+
+    println!("\nPropagated trajectory ({n_orbits} orbits, {n_steps} steps):");
+    println!(
+        "{:>10}  {:>12}  {:>12}  {:>12}",
+        "Time (s)", "R (km)", "I (km)", "C (km)"
+    );
+
+    for (k, state) in trajectory.iter().enumerate() {
+        if k % 10 == 0 || k == trajectory.len() - 1 {
+            println!(
+                "{:10.1}  {:12.4}  {:12.4}  {:12.4}",
+                state.elapsed_s,
+                state.ric.position.x,
+                state.ric.position.y,
+                state.ric.position.z,
+            );
+        }
+    }
+
+    let final_state = trajectory.last().unwrap();
+    println!(
+        "\nFinal RIC position: [{:.4}, {:.4}, {:.4}] km",
+        final_state.ric.position.x,
+        final_state.ric.position.y,
+        final_state.ric.position.z
+    );
+    println!(
+        "Final RIC velocity: [{:.6}, {:.6}, {:.6}] km/s",
+        final_state.ric.velocity.x,
+        final_state.ric.velocity.y,
+        final_state.ric.velocity.z
     );
 }

@@ -12,7 +12,9 @@ use crate::types::{KeplerianElements, QuasiNonsingularROE, RICState};
 /// # Arguments
 /// * `roe` - Quasi-nonsingular relative orbital elements
 /// * `chief` - Chief Keplerian elements (used for a and mean argument of latitude u)
+#[must_use]
 pub fn roe_to_ric(roe: &QuasiNonsingularROE, chief: &KeplerianElements) -> RICState {
+    debug_assert!(chief.a > 0.0, "chief semi-major axis must be positive");
     let a = chief.a;
     let u = chief.mean_arg_of_lat();
     let cos_u = u.cos();
@@ -26,7 +28,7 @@ pub fn roe_to_ric(roe: &QuasiNonsingularROE, chief: &KeplerianElements) -> RICSt
 
     // Velocity components from time derivative of position
     // Using mean motion n = sqrt(μ/a³) and du/dt = n (for near-circular)
-    let n = (crate::constants::MU_EARTH / (a * a * a)).sqrt();
+    let n = chief.mean_motion();
     let v_radial = a * n * (roe.dex * sin_u - roe.dey * cos_u);
     let v_along = a * n * (-1.5 * roe.da + 2.0 * roe.dex * cos_u + 2.0 * roe.dey * sin_u);
     let v_cross = a * n * (roe.dix * cos_u + roe.diy * sin_u);

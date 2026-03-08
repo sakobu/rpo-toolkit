@@ -1,0 +1,222 @@
+//! Propagator trait and analytical J2 STM implementation.
+
+use hifitime::{Duration, Epoch};
+use serde::{Deserialize, Serialize};
+
+use crate::frames::roe_to_ric;
+use crate::stm::propagate_roe_stm;
+use crate::types::{KeplerianElements, QuasiNonsingularROE, RICState};
+
+/// Result of a single propagation step.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PropagatedState {
+    /// Absolute epoch of this state
+    pub epoch: Epoch,
+    /// Propagated quasi-nonsingular ROE
+    pub roe: QuasiNonsingularROE,
+    /// Propagated chief mean Keplerian elements
+    pub chief_mean: KeplerianElements,
+    /// Relative state in RIC frame
+    pub ric: RICState,
+    /// Elapsed time from epoch (seconds)
+    pub elapsed_s: f64,
+}
+
+/// Error type for propagation failures.
+#[derive(Debug, Clone)]
+pub enum PropagationError {
+    /// Number of steps must be greater than zero.
+    ZeroSteps,
+    /// Iterative solver failed to converge.
+    ConvergenceFailure(String),
+    /// Invalid configuration parameters.
+    InvalidConfiguration(String),
+}
+
+impl std::fmt::Display for PropagationError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::ZeroSteps => write!(f, "PropagationError: n_steps must be > 0"),
+            Self::ConvergenceFailure(msg) => {
+                write!(f, "PropagationError: convergence failure — {msg}")
+            }
+            Self::InvalidConfiguration(msg) => {
+                write!(f, "PropagationError: invalid configuration — {msg}")
+            }
+        }
+    }
+}
+
+impl std::error::Error for PropagationError {}
+
+/// Trait for relative orbit propagators.
+///
+/// Unifies analytical (STM-based) and numerical propagation engines
+/// under a common interface.
+pub trait RelativePropagator: Send + Sync {
+    /// Propagate ROE forward by `dt_seconds` from `epoch_0`.
+    fn propagate(
+        &self,
+        roe_0: &QuasiNonsingularROE,
+        chief_mean_0: &KeplerianElements,
+        epoch_0: Epoch,
+        dt_seconds: f64,
+    ) -> PropagatedState;
+
+    /// Propagate with intermediate steps, returning a trajectory.
+    ///
+    /// # Errors
+    /// Returns `PropagationError` if `n_steps` is zero.
+    #[allow(clippy::cast_precision_loss)]
+    fn propagate_with_steps(
+        &self,
+        roe_0: &QuasiNonsingularROE,
+        chief_mean_0: &KeplerianElements,
+        epoch_0: Epoch,
+        dt_seconds: f64,
+        n_steps: usize,
+    ) -> Result<Vec<PropagatedState>, PropagationError> {
+        if n_steps == 0 {
+            return Err(PropagationError::ZeroSteps);
+        }
+
+        let step = dt_seconds / n_steps as f64;
+        let mut states = Vec::with_capacity(n_steps + 1);
+
+        // Initial state at t=0
+        let initial = self.propagate(roe_0, chief_mean_0, epoch_0, 0.0);
+        states.push(initial);
+
+        // Propagate each step from the original epoch
+        for k in 1..=n_steps {
+            let t = step * k as f64;
+            let state = self.propagate(roe_0, chief_mean_0, epoch_0, t);
+            states.push(state);
+        }
+
+        Ok(states)
+    }
+}
+
+/// J2-perturbed STM propagator (Koenig formulation).
+///
+/// Uses the analytical state transition matrix from `stm.rs` to propagate
+/// quasi-nonsingular ROEs under J2 secular perturbations.
+#[derive(Debug, Clone, Default)]
+pub struct J2StmPropagator;
+
+impl RelativePropagator for J2StmPropagator {
+    fn propagate(
+        &self,
+        roe_0: &QuasiNonsingularROE,
+        chief_mean_0: &KeplerianElements,
+        epoch_0: Epoch,
+        dt_seconds: f64,
+    ) -> PropagatedState {
+        let (roe, chief_mean) = propagate_roe_stm(roe_0, chief_mean_0, dt_seconds);
+        let ric = roe_to_ric(&roe, &chief_mean);
+
+        PropagatedState {
+            epoch: epoch_0 + Duration::from_seconds(dt_seconds),
+            roe,
+            chief_mean,
+            ric,
+            elapsed_s: dt_seconds,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::test_helpers::{iss_like_elements, test_epoch};
+
+    #[test]
+    fn propagator_initial_state() {
+        let prop = J2StmPropagator;
+        let chief = iss_like_elements();
+        let epoch = test_epoch();
+        let roe = QuasiNonsingularROE {
+            da: 1.0 / chief.a,
+            dlambda: 0.001,
+            dex: 0.0001,
+            dey: 0.0001,
+            dix: 0.0005,
+            diy: 0.0003,
+        };
+
+        let state = prop.propagate(&roe, &chief, epoch, 0.0);
+        assert!((state.elapsed_s).abs() < 1e-15);
+        assert!((state.roe.da - roe.da).abs() < 1e-10);
+        assert_eq!(state.epoch, epoch);
+    }
+
+    #[test]
+    fn propagator_multi_step() {
+        let prop = J2StmPropagator;
+        let chief = iss_like_elements();
+        let epoch = test_epoch();
+        let roe = QuasiNonsingularROE {
+            da: 1.0 / chief.a,
+            dlambda: 0.001,
+            dex: 0.0001,
+            dey: 0.0001,
+            dix: 0.0005,
+            diy: 0.0003,
+        };
+
+        let period = std::f64::consts::TAU / chief.mean_motion();
+        let states = prop
+            .propagate_with_steps(&roe, &chief, epoch, period, 10)
+            .expect("propagation should succeed");
+
+        assert_eq!(states.len(), 11); // 10 steps + initial
+        assert!((states[0].elapsed_s).abs() < 1e-15);
+        assert!((states[10].elapsed_s - period).abs() < 1e-6);
+    }
+
+    #[test]
+    fn propagator_zero_steps_error() {
+        let prop = J2StmPropagator;
+        let chief = iss_like_elements();
+        let epoch = test_epoch();
+        let roe = QuasiNonsingularROE {
+            da: 0.0,
+            dlambda: 0.0,
+            dex: 0.0,
+            dey: 0.0,
+            dix: 0.0,
+            diy: 0.0,
+        };
+
+        let result = prop.propagate_with_steps(&roe, &chief, epoch, 3600.0, 0);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn along_track_drift_grows() {
+        // With nonzero δa, along-track distance should grow over time
+        let prop = J2StmPropagator;
+        let chief = iss_like_elements();
+        let epoch = test_epoch();
+        let roe = QuasiNonsingularROE {
+            da: 1.0 / chief.a,
+            dlambda: 0.0,
+            dex: 0.0,
+            dey: 0.0,
+            dix: 0.0,
+            diy: 0.0,
+        };
+
+        let s1 = prop.propagate(&roe, &chief, epoch, 1000.0);
+        let s2 = prop.propagate(&roe, &chief, epoch, 2000.0);
+
+        // Along-track (y) should be growing in magnitude
+        assert!(
+            s2.ric.position.y.abs() > s1.ric.position.y.abs(),
+            "Along-track drift should grow: {} vs {}",
+            s1.ric.position.y.abs(),
+            s2.ric.position.y.abs()
+        );
+    }
+}

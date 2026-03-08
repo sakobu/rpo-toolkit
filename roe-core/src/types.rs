@@ -1,7 +1,7 @@
 //! Core domain types: state vectors, Keplerian elements, ROEs, and RIC states.
 
 use hifitime::Epoch;
-use nalgebra::Vector3;
+use nalgebra::{SVector, Vector3};
 use serde::{Deserialize, Serialize};
 
 use crate::constants::{KEPLER_MAX_ITER, KEPLER_TOL, TWO_PI};
@@ -36,8 +36,15 @@ pub struct KeplerianElements {
 }
 
 impl KeplerianElements {
+    /// Mean motion n = sqrt(μ/a³) (rad/s).
+    #[must_use]
+    pub fn mean_motion(&self) -> f64 {
+        (crate::constants::MU_EARTH / (self.a * self.a * self.a)).sqrt()
+    }
+
     /// Solve Kepler's equation M = E - e*sin(E) for eccentric anomaly E,
     /// then compute true anomaly ν.
+    #[must_use]
     pub fn true_anomaly(&self) -> f64 {
         debug_assert!(self.e >= 0.0 && self.e < 1.0, "eccentricity must be in [0, 1), got {}", self.e);
 
@@ -45,6 +52,7 @@ impl KeplerianElements {
         let e = self.e;
 
         // Newton's method for Kepler's equation
+        // For high eccentricity (e >= 0.8), M is a poor initial guess; start from π
         let mut ea = if e < 0.8 { m } else { std::f64::consts::PI };
         for _ in 0..KEPLER_MAX_ITER {
             let f = ea - e * ea.sin() - m;
@@ -63,6 +71,7 @@ impl KeplerianElements {
     }
 
     /// Mean argument of latitude u = ω + M
+    #[must_use]
     pub fn mean_arg_of_lat(&self) -> f64 {
         (self.aop + self.mean_anomaly).rem_euclid(TWO_PI)
     }
@@ -84,6 +93,27 @@ pub struct QuasiNonsingularROE {
     pub dix: f64,
     /// Relative inclination vector y-component
     pub diy: f64,
+}
+
+impl QuasiNonsingularROE {
+    /// Convert to a 6-element column vector [da, dlambda, dex, dey, dix, diy].
+    #[must_use]
+    pub fn to_vector(&self) -> SVector<f64, 6> {
+        SVector::<f64, 6>::new(self.da, self.dlambda, self.dex, self.dey, self.dix, self.diy)
+    }
+
+    /// Construct from a 6-element column vector [da, dlambda, dex, dey, dix, diy].
+    #[must_use]
+    pub fn from_vector(v: &SVector<f64, 6>) -> Self {
+        Self {
+            da: v[0],
+            dlambda: v[1],
+            dex: v[2],
+            dey: v[3],
+            dix: v[4],
+            diy: v[5],
+        }
+    }
 }
 
 /// Relative state in the RIC (Radial-In-track-Cross-track) frame

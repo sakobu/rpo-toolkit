@@ -6,6 +6,7 @@ use crate::types::{KeplerianElements, QuasiNonsingularROE};
 /// Compute quasi-nonsingular relative orbital elements (Koenig Eq. 2).
 ///
 /// The ROEs are normalized by the chief semi-major axis.
+#[must_use]
 pub fn compute_roe(
     chief: &KeplerianElements,
     deputy: &KeplerianElements,
@@ -37,7 +38,8 @@ pub fn compute_roe(
 }
 
 /// Wrap angle to [-π, π]
-fn wrap_angle(angle: f64) -> f64 {
+#[must_use]
+pub fn wrap_angle(angle: f64) -> f64 {
     let a = angle.rem_euclid(TWO_PI);
     if a > std::f64::consts::PI {
         a - TWO_PI

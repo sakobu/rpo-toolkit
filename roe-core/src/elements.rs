@@ -11,6 +11,7 @@ use crate::types::{KeplerianElements, StateVector};
 /// Handles edge cases:
 /// - Near-circular orbits (e < `ECC_TOL`): ω set to 0, true anomaly measured from ascending node
 /// - Near-equatorial orbits (i < `INC_TOL`): Ω set to 0, ω measured from x-axis
+#[must_use]
 #[allow(clippy::many_single_char_names)]
 pub fn state_to_keplerian(sv: &StateVector) -> KeplerianElements {
     let r_vec = sv.position;
@@ -107,6 +108,7 @@ pub fn state_to_keplerian(sv: &StateVector) -> KeplerianElements {
 }
 
 /// Convert Keplerian orbital elements to an ECI state vector.
+#[must_use]
 pub fn keplerian_to_state(ke: &KeplerianElements, epoch: Epoch) -> StateVector {
     debug_assert!(ke.a > 0.0, "semi-major axis must be positive, got {}", ke.a);
     debug_assert!(ke.e >= 0.0 && ke.e < 1.0, "eccentricity must be in [0, 1), got {}", ke.e);
