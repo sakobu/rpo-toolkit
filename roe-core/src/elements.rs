@@ -1,0 +1,248 @@
+//! Conversions between ECI state vectors and Keplerian orbital elements.
+
+use hifitime::Epoch;
+use nalgebra::Vector3;
+
+use crate::constants::{ECC_TOL, INC_TOL, MU_EARTH, TWO_PI};
+use crate::types::{KeplerianElements, StateVector};
+
+/// Convert an ECI state vector to Keplerian orbital elements.
+///
+/// Handles edge cases:
+/// - Near-circular orbits (e < `ECC_TOL`): ω set to 0, true anomaly measured from ascending node
+/// - Near-equatorial orbits (i < `INC_TOL`): Ω set to 0, ω measured from x-axis
+#[allow(clippy::many_single_char_names)]
+pub fn state_to_keplerian(sv: &StateVector) -> KeplerianElements {
+    let r_vec = sv.position;
+    let v_vec = sv.velocity;
+    let r = r_vec.norm();
+    let v = v_vec.norm();
+
+    debug_assert!(r > 0.0, "position vector must be non-zero");
+
+    // Specific angular momentum
+    let h_vec = r_vec.cross(&v_vec);
+    let h = h_vec.norm();
+
+    // Node vector: k × h
+    let k = Vector3::new(0.0, 0.0, 1.0);
+    let n_vec = k.cross(&h_vec);
+    let n = n_vec.norm();
+
+    // Eccentricity vector
+    let e_vec = ((v * v - MU_EARTH / r) * r_vec - r_vec.dot(&v_vec) * v_vec) / MU_EARTH;
+    let e = e_vec.norm();
+
+    // Semi-major axis (vis-viva)
+    let energy = v * v / 2.0 - MU_EARTH / r;
+    let a = -MU_EARTH / (2.0 * energy);
+
+    // Inclination
+    let i = (h_vec.z / h).acos();
+
+    // RAAN
+    let raan = if i.abs() < INC_TOL {
+        0.0
+    } else if n_vec.y >= 0.0 {
+        (n_vec.x / n).acos()
+    } else {
+        TWO_PI - (n_vec.x / n).acos()
+    };
+
+    // Argument of perigee
+    let aop = if e < ECC_TOL {
+        0.0
+    } else if i.abs() < INC_TOL {
+        // Equatorial: measure ω from x-axis
+        let aop = e_vec.y.atan2(e_vec.x);
+        aop.rem_euclid(TWO_PI)
+    } else {
+        let cos_aop = n_vec.dot(&e_vec) / (n * e);
+        let aop = cos_aop.clamp(-1.0, 1.0).acos();
+        if e_vec.z >= 0.0 {
+            aop
+        } else {
+            TWO_PI - aop
+        }
+    };
+
+    // True anomaly
+    let nu = if e < ECC_TOL {
+        // Circular: measure from node line (or x-axis if equatorial)
+        if i.abs() < INC_TOL {
+            let nu = r_vec.y.atan2(r_vec.x);
+            nu.rem_euclid(TWO_PI)
+        } else {
+            let cos_nu = n_vec.dot(&r_vec) / (n * r);
+            let nu = cos_nu.clamp(-1.0, 1.0).acos();
+            if r_vec.z >= 0.0 {
+                nu
+            } else {
+                TWO_PI - nu
+            }
+        }
+    } else {
+        let cos_nu = e_vec.dot(&r_vec) / (e * r);
+        let nu = cos_nu.clamp(-1.0, 1.0).acos();
+        if r_vec.dot(&v_vec) >= 0.0 {
+            nu
+        } else {
+            TWO_PI - nu
+        }
+    };
+
+    // True anomaly → eccentric anomaly → mean anomaly
+    let ea = 2.0
+        * ((1.0 - e).sqrt() * (nu / 2.0).sin()).atan2((1.0 + e).sqrt() * (nu / 2.0).cos());
+    let mean_anomaly = (ea - e * ea.sin()).rem_euclid(TWO_PI);
+
+    KeplerianElements {
+        a,
+        e,
+        i,
+        raan,
+        aop,
+        mean_anomaly,
+    }
+}
+
+/// Convert Keplerian orbital elements to an ECI state vector.
+pub fn keplerian_to_state(ke: &KeplerianElements, epoch: Epoch) -> StateVector {
+    debug_assert!(ke.a > 0.0, "semi-major axis must be positive, got {}", ke.a);
+    debug_assert!(ke.e >= 0.0 && ke.e < 1.0, "eccentricity must be in [0, 1), got {}", ke.e);
+
+    let nu = ke.true_anomaly();
+    let p = ke.a * (1.0 - ke.e * ke.e); // semi-latus rectum
+    let r = p / (1.0 + ke.e * nu.cos());
+
+    // Position and velocity in perifocal frame (PQW)
+    let r_pqw = Vector3::new(r * nu.cos(), r * nu.sin(), 0.0);
+    let v_pqw = Vector3::new(
+        -(MU_EARTH / p).sqrt() * nu.sin(),
+        (MU_EARTH / p).sqrt() * (ke.e + nu.cos()),
+        0.0,
+    );
+
+    // Rotation matrix: perifocal → ECI
+    // R = R3(-Ω) · R1(-i) · R3(-ω)
+    let cos_o = ke.raan.cos();
+    let sin_o = ke.raan.sin();
+    let cos_i = ke.i.cos();
+    let sin_i = ke.i.sin();
+    let cos_w = ke.aop.cos();
+    let sin_w = ke.aop.sin();
+
+    let r11 = cos_o * cos_w - sin_o * sin_w * cos_i;
+    let r12 = -cos_o * sin_w - sin_o * cos_w * cos_i;
+    let r21 = sin_o * cos_w + cos_o * sin_w * cos_i;
+    let r22 = -sin_o * sin_w + cos_o * cos_w * cos_i;
+    let r31 = sin_w * sin_i;
+    let r32 = cos_w * sin_i;
+
+    let position = Vector3::new(
+        r11 * r_pqw.x + r12 * r_pqw.y,
+        r21 * r_pqw.x + r22 * r_pqw.y,
+        r31 * r_pqw.x + r32 * r_pqw.y,
+    );
+
+    let velocity = Vector3::new(
+        r11 * v_pqw.x + r12 * v_pqw.y,
+        r21 * v_pqw.x + r22 * v_pqw.y,
+        r31 * v_pqw.x + r32 * v_pqw.y,
+    );
+
+    StateVector {
+        epoch,
+        position,
+        velocity,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::test_helpers::{eccentric_elements, iss_like_elements, test_epoch};
+
+    #[test]
+    fn roundtrip_eci_keplerian() {
+        let epoch = test_epoch();
+        let ke = iss_like_elements();
+        let sv = keplerian_to_state(&ke, epoch);
+        let ke2 = state_to_keplerian(&sv);
+        let sv2 = keplerian_to_state(&ke2, sv.epoch);
+
+        let pos_err = (sv.position - sv2.position).norm();
+        let vel_err = (sv.velocity - sv2.velocity).norm();
+
+        assert!(
+            pos_err < 1e-10,
+            "Position roundtrip error: {pos_err} km"
+        );
+        assert!(
+            vel_err < 1e-10,
+            "Velocity roundtrip error: {vel_err} km/s"
+        );
+    }
+
+    #[test]
+    fn roundtrip_eccentric_orbit() {
+        let epoch = test_epoch();
+        let ke = eccentric_elements();
+        let sv = keplerian_to_state(&ke, epoch);
+        let ke2 = state_to_keplerian(&sv);
+        let sv2 = keplerian_to_state(&ke2, epoch);
+
+        let pos_err = (sv.position - sv2.position).norm();
+        let vel_err = (sv.velocity - sv2.velocity).norm();
+
+        assert!(pos_err < 1e-10, "Position roundtrip error: {pos_err} km");
+        assert!(vel_err < 1e-10, "Velocity roundtrip error: {vel_err} km/s");
+    }
+
+    #[test]
+    fn roundtrip_circular_equatorial() {
+        let epoch = test_epoch();
+        let ke = KeplerianElements {
+            a: 7000.0,
+            e: 0.0,
+            i: 0.0,
+            raan: 0.0,
+            aop: 0.0,
+            mean_anomaly: 90.0_f64.to_radians(),
+        };
+        let sv = keplerian_to_state(&ke, epoch);
+        let ke2 = state_to_keplerian(&sv);
+        let sv2 = keplerian_to_state(&ke2, epoch);
+
+        let pos_err = (sv.position - sv2.position).norm();
+        let vel_err = (sv.velocity - sv2.velocity).norm();
+
+        assert!(pos_err < 1e-10, "Position roundtrip error: {pos_err} km");
+        assert!(vel_err < 1e-10, "Velocity roundtrip error: {vel_err} km/s");
+    }
+
+    #[test]
+    fn keplerian_elements_correct() {
+        let epoch = test_epoch();
+        let ke_orig = KeplerianElements {
+            a: 8000.0,
+            e: 0.1,
+            i: 30.0_f64.to_radians(),
+            raan: 60.0_f64.to_radians(),
+            aop: 90.0_f64.to_radians(),
+            mean_anomaly: 45.0_f64.to_radians(),
+        };
+        let sv = keplerian_to_state(&ke_orig, epoch);
+        let ke = state_to_keplerian(&sv);
+
+        assert!((ke.a - ke_orig.a).abs() < 1e-8, "SMA mismatch");
+        assert!((ke.e - ke_orig.e).abs() < 1e-10, "Eccentricity mismatch");
+        assert!((ke.i - ke_orig.i).abs() < 1e-10, "Inclination mismatch");
+        assert!((ke.raan - ke_orig.raan).abs() < 1e-10, "RAAN mismatch");
+        assert!((ke.aop - ke_orig.aop).abs() < 1e-10, "AoP mismatch");
+        assert!(
+            (ke.mean_anomaly - ke_orig.mean_anomaly).abs() < 1e-10,
+            "Mean anomaly mismatch"
+        );
+    }
+}

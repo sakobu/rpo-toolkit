@@ -1,0 +1,12 @@
+[package]
+name = "roe-core"
+description = "Core astrodynamics library for relative orbital element computation"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[dependencies]
+nalgebra = { version = "0.33", features = ["serde-serialize"] }
+hifitime = "4"
+serde = { version = "1", features = ["derive"] }
