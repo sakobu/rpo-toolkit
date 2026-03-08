@@ -2,7 +2,7 @@
 
 use hifitime::Epoch;
 
-use crate::types::KeplerianElements;
+use crate::types::{DragConfig, KeplerianElements};
 
 /// Standard test epoch: 2024-01-01 00:00:00 UTC.
 pub fn test_epoch() -> Epoch {
@@ -30,5 +30,14 @@ pub fn eccentric_elements() -> KeplerianElements {
         raan: 120.0_f64.to_radians(),
         aop: 200.0_f64.to_radians(),
         mean_anomaly: 150.0_f64.to_radians(),
+    }
+}
+
+/// Test drag configuration with small nonzero rates.
+pub fn test_drag_config() -> DragConfig {
+    DragConfig {
+        da_dot: -1e-10,
+        dex_dot: 1e-11,
+        dey_dot: -1e-11,
     }
 }

@@ -3,9 +3,10 @@
 use hifitime::{Duration, Epoch};
 use serde::{Deserialize, Serialize};
 
+use crate::drag_stm::propagate_roe_j2_drag;
 use crate::frames::roe_to_ric;
 use crate::stm::propagate_roe_stm;
-use crate::types::{KeplerianElements, QuasiNonsingularROE, RICState};
+use crate::types::{DragConfig, KeplerianElements, QuasiNonsingularROE, RICState};
 
 /// Result of a single propagation step.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -98,6 +99,23 @@ pub trait RelativePropagator: Send + Sync {
     }
 }
 
+/// Build a [`PropagatedState`] from propagated ROE and chief elements.
+fn make_propagated_state(
+    roe: QuasiNonsingularROE,
+    chief_mean: KeplerianElements,
+    epoch_0: Epoch,
+    dt_seconds: f64,
+) -> PropagatedState {
+    let ric = roe_to_ric(&roe, &chief_mean);
+    PropagatedState {
+        epoch: epoch_0 + Duration::from_seconds(dt_seconds),
+        roe,
+        chief_mean,
+        ric,
+        elapsed_s: dt_seconds,
+    }
+}
+
 /// J2-perturbed STM propagator (Koenig formulation).
 ///
 /// Uses the analytical state transition matrix from `stm.rs` to propagate
@@ -114,15 +132,31 @@ impl RelativePropagator for J2StmPropagator {
         dt_seconds: f64,
     ) -> PropagatedState {
         let (roe, chief_mean) = propagate_roe_stm(roe_0, chief_mean_0, dt_seconds);
-        let ric = roe_to_ric(&roe, &chief_mean);
+        make_propagated_state(roe, chief_mean, epoch_0, dt_seconds)
+    }
+}
 
-        PropagatedState {
-            epoch: epoch_0 + Duration::from_seconds(dt_seconds),
-            roe,
-            chief_mean,
-            ric,
-            elapsed_s: dt_seconds,
-        }
+/// J2 + differential drag STM propagator (Koenig Sec. VIII / Appendix D).
+///
+/// Extends `J2StmPropagator` with density-model-free differential drag.
+/// When `drag` is `DragConfig::zero()`, produces identical results to `J2StmPropagator`.
+#[derive(Debug, Clone)]
+pub struct J2DragStmPropagator {
+    /// DMF differential drag configuration.
+    pub drag: DragConfig,
+}
+
+impl RelativePropagator for J2DragStmPropagator {
+    fn propagate(
+        &self,
+        roe_0: &QuasiNonsingularROE,
+        chief_mean_0: &KeplerianElements,
+        epoch_0: Epoch,
+        dt_seconds: f64,
+    ) -> PropagatedState {
+        let (roe, chief_mean) =
+            propagate_roe_j2_drag(roe_0, chief_mean_0, &self.drag, dt_seconds);
+        make_propagated_state(roe, chief_mean, epoch_0, dt_seconds)
     }
 }
 
@@ -218,5 +252,95 @@ mod tests {
             s1.ric.position.y.abs(),
             s2.ric.position.y.abs()
         );
+    }
+
+    #[test]
+    fn j2_drag_zero_matches_j2_only() {
+        let chief = iss_like_elements();
+        let epoch = test_epoch();
+        let roe = QuasiNonsingularROE {
+            da: 1.0 / chief.a,
+            dlambda: 0.001,
+            dex: 0.0001,
+            dey: 0.0001,
+            dix: 0.0005,
+            diy: 0.0003,
+        };
+
+        let j2_prop = J2StmPropagator;
+        let drag_prop = J2DragStmPropagator {
+            drag: DragConfig::zero(),
+        };
+
+        let tau = 3600.0;
+        let s_j2 = j2_prop.propagate(&roe, &chief, epoch, tau);
+        let s_drag = drag_prop.propagate(&roe, &chief, epoch, tau);
+
+        assert!(
+            (s_j2.roe.da - s_drag.roe.da).abs() < 1e-14,
+            "da mismatch"
+        );
+        assert!(
+            (s_j2.roe.dlambda - s_drag.roe.dlambda).abs() < 1e-14,
+            "dlambda mismatch"
+        );
+        assert!(
+            (s_j2.roe.dex - s_drag.roe.dex).abs() < 1e-14,
+            "dex mismatch"
+        );
+        assert!(
+            (s_j2.roe.dey - s_drag.roe.dey).abs() < 1e-14,
+            "dey mismatch"
+        );
+        assert!(
+            (s_j2.roe.dix - s_drag.roe.dix).abs() < 1e-14,
+            "dix mismatch"
+        );
+        assert!(
+            (s_j2.roe.diy - s_drag.roe.diy).abs() < 1e-14,
+            "diy mismatch"
+        );
+        assert!(
+            (s_j2.ric.position - s_drag.ric.position).norm() < 1e-10,
+            "RIC position mismatch"
+        );
+    }
+
+    #[test]
+    fn j2_drag_multi_step() {
+        use crate::test_helpers::test_drag_config;
+
+        let chief = iss_like_elements();
+        let epoch = test_epoch();
+        let roe = QuasiNonsingularROE {
+            da: 0.0,
+            dlambda: 0.0,
+            dex: 0.0,
+            dey: 0.0,
+            dix: 0.0,
+            diy: 0.0,
+        };
+
+        let drag_prop = J2DragStmPropagator {
+            drag: test_drag_config(),
+        };
+
+        let period = std::f64::consts::TAU / chief.mean_motion();
+        let states = drag_prop
+            .propagate_with_steps(&roe, &chief, epoch, 3.0 * period, 30)
+            .expect("propagation should succeed");
+
+        assert_eq!(states.len(), 31);
+
+        // Along-track drift should grow monotonically (drag causes secular drift)
+        let mut prev_abs = 0.0_f64;
+        for state in &states[1..] {
+            let curr_abs = state.ric.position.y.abs();
+            assert!(
+                curr_abs >= prev_abs * 0.9, // allow small oscillations
+                "Along-track drift should generally grow: {curr_abs} vs {prev_abs}"
+            );
+            prev_abs = prev_abs.max(curr_abs);
+        }
     }
 }

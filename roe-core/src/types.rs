@@ -116,6 +116,34 @@ impl QuasiNonsingularROE {
     }
 }
 
+/// Density-model-free (DMF) differential drag configuration (Koenig Sec. VIII).
+///
+/// Specifies the time derivatives of relative orbital elements due to
+/// differential drag, normalized by chief semi-major axis. These rates
+/// are treated as constant over the propagation interval.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct DragConfig {
+    /// Time derivative of relative SMA due to drag: `δȧ_drag` (1/s, normalized by `a_c`)
+    pub da_dot: f64,
+    /// Time derivative of relative eccentricity x-component due to drag: `δėx_drag` (1/s)
+    pub dex_dot: f64,
+    /// Time derivative of relative eccentricity y-component due to drag: `δėy_drag` (1/s)
+    pub dey_dot: f64,
+}
+
+impl DragConfig {
+    /// Zero drag configuration (no differential drag).
+    #[must_use]
+    pub fn zero() -> Self {
+        Self {
+            da_dot: 0.0,
+            dex_dot: 0.0,
+            dey_dot: 0.0,
+        }
+    }
+
+}
+
 /// Relative state in the RIC (Radial-In-track-Cross-track) frame
 /// Also known as Hill frame or LVLH frame
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

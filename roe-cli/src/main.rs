@@ -1,10 +1,10 @@
 use roe_core::{
-    compute_j2_params, compute_roe, keplerian_to_state, roe_to_ric, J2StmPropagator,
-    KeplerianElements, RelativePropagator,
+    compute_j2_params, compute_roe, keplerian_to_state, roe_to_ric, DragConfig,
+    J2DragStmPropagator, J2StmPropagator, KeplerianElements, RelativePropagator,
 };
 
 fn main() {
-    println!("ROE-RUST RPO Mission Planner — Phase 2");
+    println!("ROE-RUST RPO Mission Planner — Phase 3A");
     println!("=======================================\n");
 
     // Example: ISS-like chief orbit (mean elements)
@@ -105,5 +105,61 @@ fn main() {
         final_state.ric.velocity.x,
         final_state.ric.velocity.y,
         final_state.ric.velocity.z
+    );
+
+    // === Phase 3A: J2 + Differential Drag comparison ===
+    println!("\n\n=== J2 + Drag Comparison (DMF, Koenig Sec. VIII) ===\n");
+
+    let drag = DragConfig {
+        da_dot: -1e-10,   // differential SMA decay
+        dex_dot: 1e-11,   // eccentricity x drift
+        dey_dot: -1e-11,  // eccentricity y drift
+    };
+    println!(
+        "Drag config: da_dot={:.2e}, dex_dot={:.2e}, dey_dot={:.2e}",
+        drag.da_dot, drag.dex_dot, drag.dey_dot
+    );
+
+    let drag_prop = J2DragStmPropagator { drag };
+    let drag_traj = drag_prop
+        .propagate_with_steps(&roe, &chief_mean, epoch, total_time, n_steps)
+        .expect("drag propagation failed");
+
+    println!(
+        "\n{:>10}  {:>12} {:>12}  {:>12} {:>12}",
+        "Time (s)", "I_j2 (km)", "I_drag (km)", "dI (km)", "dR (km)"
+    );
+
+    for k in (0..drag_traj.len()).step_by(10) {
+        let j2_s = &trajectory[k];
+        let dr_s = &drag_traj[k];
+        let di = dr_s.ric.position.y - j2_s.ric.position.y;
+        let dr = dr_s.ric.position.x - j2_s.ric.position.x;
+        println!(
+            "{:10.1}  {:12.4} {:12.4}  {:12.6} {:12.6}",
+            j2_s.elapsed_s,
+            j2_s.ric.position.y,
+            dr_s.ric.position.y,
+            di,
+            dr,
+        );
+    }
+
+    let j2_final = trajectory.last().unwrap();
+    let drag_final = drag_traj.last().unwrap();
+    println!(
+        "\nDrag effect after {n_orbits} orbits:"
+    );
+    println!(
+        "  Along-track delta: {:.6} km",
+        drag_final.ric.position.y - j2_final.ric.position.y
+    );
+    println!(
+        "  Radial delta:      {:.6} km",
+        drag_final.ric.position.x - j2_final.ric.position.x
+    );
+    println!(
+        "  Cross-track delta: {:.6} km",
+        drag_final.ric.position.z - j2_final.ric.position.z
     );
 }
