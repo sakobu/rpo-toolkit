@@ -86,10 +86,10 @@ pub fn nyx_propagate_two_body(
 
 #[cfg(test)]
 mod tests {
-    use crate::elements::{keplerian_to_state, state_to_keplerian};
-    use crate::mission::{classify_separation, plan_mission};
-    use crate::propagator::{J2DragStmPropagator, J2StmPropagator, RelativePropagator};
-    use crate::roe::compute_roe;
+    use crate::elements::conversions::{keplerian_to_state, state_to_keplerian};
+    use crate::mission::planning::{classify_separation, plan_mission};
+    use crate::propagation::propagator::{J2DragStmPropagator, J2StmPropagator, RelativePropagator};
+    use crate::elements::roe::compute_roe;
     use crate::test_helpers::{
         iss_like_elements, leo_400km_elements, leo_800km_target_elements, test_drag_config,
         test_epoch,
@@ -323,7 +323,7 @@ mod tests {
 
         // Solve Lambert
         let transfer =
-            crate::lambert::solve_lambert(&dep, &arr).expect("Lambert should converge");
+            crate::mission::lambert::solve_lambert(&dep, &arr).expect("Lambert should converge");
 
         // Propagate departure state (with Lambert velocity) using nyx two-body
         let propagated = super::nyx_propagate_two_body(&transfer.departure_state, tof)
@@ -361,7 +361,7 @@ mod tests {
         let arr = keplerian_to_state(&arr_ke, epoch + hifitime::Duration::from_seconds(tof));
 
         let transfer =
-            crate::lambert::solve_lambert(&dep, &arr).expect("Lambert should converge");
+            crate::mission::lambert::solve_lambert(&dep, &arr).expect("Lambert should converge");
 
         let propagated = super::nyx_propagate_two_body(&transfer.departure_state, tof)
             .expect("nyx propagation should succeed");

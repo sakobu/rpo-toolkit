@@ -7,9 +7,9 @@
 //! Provides mission planning functions that combine Lambert transfers
 //! (when available) with ROE-based proximity operations.
 
-use crate::elements::state_to_keplerian;
-use crate::propagator::RelativePropagator;
-use crate::roe::compute_roe;
+use crate::elements::conversions::state_to_keplerian;
+use crate::propagation::propagator::RelativePropagator;
+use crate::elements::roe::compute_roe;
 use crate::types::{
     KeplerianElements, MissionError, MissionPhase, MissionPlan, MissionPlanConfig, PerchGeometry,
     ProximityConfig, QuasiNonsingularROE, StateVector,
@@ -30,7 +30,7 @@ pub fn classify_separation(
     let deputy_elements = state_to_keplerian(deputy);
     let separation_km = eci_separation_km(chief, deputy);
     let roe = compute_roe(&chief_elements, &deputy_elements);
-    let delta_r_over_r = roe.da.abs().max(roe.dex.abs()).max(roe.dey.abs()).max(roe.dix.abs());
+    let delta_r_over_r = roe.dimensionless_norm();
 
     if delta_r_over_r < config.roe_threshold {
         MissionPhase::Proximity {
@@ -70,7 +70,7 @@ pub fn dimensionless_separation(
     deputy: &KeplerianElements,
 ) -> f64 {
     let roe = compute_roe(chief, deputy);
-    roe.da.abs().max(roe.dex.abs()).max(roe.dey.abs()).max(roe.dix.abs())
+    roe.dimensionless_norm()
 }
 
 /// Convert a [`PerchGeometry`] to a [`QuasiNonsingularROE`] state relative to the chief.
@@ -220,10 +220,10 @@ pub fn plan_mission(
             let arrival_epoch =
                 deputy.epoch + hifitime::Duration::from_seconds(plan_config.transfer_tof_s);
             let target_state =
-                crate::elements::keplerian_to_state(&target_ke, arrival_epoch);
+                crate::elements::conversions::keplerian_to_state(&target_ke, arrival_epoch);
 
             // Solve Lambert: deputy → perch
-            let transfer = crate::lambert::solve_lambert(deputy, &target_state)?;
+            let transfer = crate::mission::lambert::solve_lambert(deputy, &target_state)?;
 
             // Propagate proximity phase from perch
             let trajectory = propagator.propagate_with_steps(
@@ -257,8 +257,9 @@ fn perch_roe_to_keplerian(
     let i = chief.i + roe.dix;
 
     // Recover eccentricity vector components: ex = e*cos(ω), ey = e*sin(ω)
-    let ecc_x_chief = chief.e * chief.aop.cos();
-    let ecc_y_chief = chief.e * chief.aop.sin();
+    let (sin_aop, cos_aop) = chief.aop.sin_cos();
+    let ecc_x_chief = chief.e * cos_aop;
+    let ecc_y_chief = chief.e * sin_aop;
     let ecc_x_dep = ecc_x_chief + roe.dex;
     let ecc_y_dep = ecc_y_chief + roe.dey;
     let e = (ecc_x_dep * ecc_x_dep + ecc_y_dep * ecc_y_dep).sqrt();
@@ -291,10 +292,10 @@ fn perch_roe_to_keplerian(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::elements::keplerian_to_state;
-    use crate::frames::roe_to_ric;
-    use crate::propagator::J2StmPropagator;
-    use crate::roe::compute_roe;
+    use crate::elements::conversions::keplerian_to_state;
+    use crate::elements::frames::roe_to_ric;
+    use crate::propagation::propagator::J2StmPropagator;
+    use crate::elements::roe::compute_roe;
     use crate::test_helpers::{iss_like_elements, test_epoch};
     use crate::types::KeplerianElements;
 

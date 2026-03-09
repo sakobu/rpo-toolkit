@@ -114,6 +114,15 @@ impl QuasiNonsingularROE {
             diy: v[5],
         }
     }
+
+    /// Dimensionless separation metric: max(|δa|, |δex|, |δey|, |δix|).
+    ///
+    /// Excludes δλ and δiy per Koenig Sec. V (these can be large without
+    /// violating linearization assumptions).
+    #[must_use]
+    pub fn dimensionless_norm(&self) -> f64 {
+        self.da.abs().max(self.dex.abs()).max(self.dey.abs()).max(self.dix.abs())
+    }
 }
 
 /// Density-model-free (DMF) differential drag configuration (Koenig Sec. VIII).
@@ -234,20 +243,20 @@ pub struct MissionPlan {
     /// Mission phase classification
     pub phase: MissionPhase,
     /// Lambert transfer (only present if `FarField`)
-    pub transfer: Option<crate::lambert::LambertTransfer>,
+    pub transfer: Option<crate::mission::lambert::LambertTransfer>,
     /// Perch orbit ROE state (transfer target / proximity start)
     pub perch_roe: QuasiNonsingularROE,
     /// Proximity trajectory from perch (analytical propagation)
-    pub proximity_trajectory: Vec<crate::propagator::PropagatedState>,
+    pub proximity_trajectory: Vec<crate::propagation::propagator::PropagatedState>,
 }
 
 /// Errors from mission planning.
 #[derive(Debug, Clone)]
 pub enum MissionError {
     /// Propagation failure during proximity phase.
-    Propagation(crate::propagator::PropagationError),
+    Propagation(crate::propagation::propagator::PropagationError),
     /// Lambert solver failure during transfer phase.
-    Lambert(crate::lambert::LambertError),
+    Lambert(crate::mission::lambert::LambertError),
     /// Invalid perch geometry configuration.
     InvalidPerch(String),
     /// Spacecraft are not in proximity for ROE-based operations.
@@ -275,14 +284,14 @@ impl std::fmt::Display for MissionError {
 
 impl std::error::Error for MissionError {}
 
-impl From<crate::propagator::PropagationError> for MissionError {
-    fn from(e: crate::propagator::PropagationError) -> Self {
+impl From<crate::propagation::propagator::PropagationError> for MissionError {
+    fn from(e: crate::propagation::propagator::PropagationError) -> Self {
         Self::Propagation(e)
     }
 }
 
-impl From<crate::lambert::LambertError> for MissionError {
-    fn from(e: crate::lambert::LambertError) -> Self {
+impl From<crate::mission::lambert::LambertError> for MissionError {
+    fn from(e: crate::mission::lambert::LambertError) -> Self {
         Self::Lambert(e)
     }
 }

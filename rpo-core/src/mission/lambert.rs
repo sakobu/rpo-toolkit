@@ -262,7 +262,7 @@ pub fn solve_lambert_izzo(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::elements::keplerian_to_state;
+    use crate::elements::conversions::keplerian_to_state;
     use crate::test_helpers::{leo_400km_elements, leo_800km_target_elements, test_epoch};
     use crate::types::KeplerianElements;
     use hifitime::Duration;

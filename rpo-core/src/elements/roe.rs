@@ -21,8 +21,10 @@ pub fn compute_roe(
     let d_raan = deputy.raan - chief.raan;
     let dlambda = wrap_angle(lambda_d - lambda_c + d_raan * chief.i.cos());
 
-    let dex = deputy.e * deputy.aop.cos() - chief.e * chief.aop.cos();
-    let dey = deputy.e * deputy.aop.sin() - chief.e * chief.aop.sin();
+    let (sin_aop_d, cos_aop_d) = deputy.aop.sin_cos();
+    let (sin_aop_c, cos_aop_c) = chief.aop.sin_cos();
+    let dex = deputy.e * cos_aop_d - chief.e * cos_aop_c;
+    let dey = deputy.e * sin_aop_d - chief.e * sin_aop_c;
 
     let dix = deputy.i - chief.i;
     let diy = d_raan * chief.i.sin();

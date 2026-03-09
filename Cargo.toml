@@ -1,5 +1,5 @@
 [workspace]
-members = ["roe-core", "roe-cli"]
+members = ["rpo-core", "rpo-cli"]
 resolver = "2"
 
 [workspace.package]

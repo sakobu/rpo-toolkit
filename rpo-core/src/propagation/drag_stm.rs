@@ -7,8 +7,8 @@
 
 use nalgebra::{SMatrix, SVector};
 
-use crate::j2_params::{compute_j2_params, J2Params};
-use crate::stm::{compute_stm_with_params, propagate_chief_mean};
+use crate::propagation::j2_params::{compute_j2_params, J2Params};
+use crate::propagation::stm::{compute_stm_with_params, propagate_chief_mean};
 use crate::types::{DragConfig, KeplerianElements, QuasiNonsingularROE};
 
 /// 9×9 matrix type alias for the augmented J2+drag STM.
@@ -163,7 +163,7 @@ pub fn propagate_roe_j2_drag(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::stm::compute_stm;
+    use crate::propagation::stm::compute_stm;
     use crate::test_helpers::{eccentric_elements, iss_like_elements, test_drag_config};
 
     #[test]

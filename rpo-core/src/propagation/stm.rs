@@ -7,7 +7,7 @@
 use nalgebra::SMatrix;
 
 use crate::constants::TWO_PI;
-use crate::j2_params::{compute_j2_params, J2Params};
+use crate::propagation::j2_params::{compute_j2_params, J2Params};
 use crate::types::{KeplerianElements, QuasiNonsingularROE};
 
 /// 6×6 matrix type alias.
@@ -151,7 +151,7 @@ pub fn propagate_chief_mean(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::roe::wrap_angle;
+    use crate::elements::roe::wrap_angle;
     use crate::test_helpers::iss_like_elements;
 
     #[test]

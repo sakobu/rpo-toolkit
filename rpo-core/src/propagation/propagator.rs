@@ -3,9 +3,9 @@
 use hifitime::{Duration, Epoch};
 use serde::{Deserialize, Serialize};
 
-use crate::drag_stm::propagate_roe_j2_drag;
-use crate::frames::roe_to_ric;
-use crate::stm::propagate_roe_stm;
+use crate::propagation::drag_stm::propagate_roe_j2_drag;
+use crate::elements::frames::roe_to_ric;
+use crate::propagation::stm::propagate_roe_stm;
 use crate::types::{DragConfig, KeplerianElements, QuasiNonsingularROE, RICState};
 
 /// Result of a single propagation step.

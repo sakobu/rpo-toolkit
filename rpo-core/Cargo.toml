@@ -1,6 +1,6 @@
 [package]
-name = "roe-core"
-description = "Core astrodynamics library for relative orbital element computation"
+name = "rpo-core"
+description = "Core astrodynamics library for RPO mission planning"
 version.workspace = true
 edition.workspace = true
 authors.workspace = true
