@@ -6,7 +6,7 @@
 //! and linearized ROE-to-RIC frame mapping.
 //!
 //! ## Module pipeline
-//! `types` → `constants` → `elements` → `roe` → `j2_params` → `stm` → `drag_stm` → `propagator` → `frames`
+//! `types` → `constants` → `elements` → `roe` → `j2_params` → `stm` → `drag_stm` → `propagator` → `frames` → `mission`
 
 #![warn(missing_docs)]
 #![warn(clippy::pedantic)]
@@ -16,6 +16,8 @@ pub mod drag_stm;
 pub mod elements;
 pub mod frames;
 pub mod j2_params;
+pub mod lambert;
+pub mod mission;
 pub mod propagator;
 pub mod roe;
 pub mod stm;
@@ -30,7 +32,18 @@ pub use propagator::{
 };
 pub use roe::compute_roe;
 pub use stm::{compute_stm, compute_stm_with_params, propagate_roe_stm};
-pub use types::{DragConfig, KeplerianElements, QuasiNonsingularROE, RICState, StateVector};
+pub use lambert::{
+    solve_lambert, solve_lambert_izzo, solve_lambert_with_config,
+    LambertConfig, LambertError, LambertTransfer, TransferDirection,
+};
+pub use mission::{
+    classify_separation, dimensionless_separation, eci_separation_km, plan_mission,
+    plan_proximity_mission,
+};
+pub use types::{
+    DragConfig, KeplerianElements, MissionError, MissionPhase, MissionPlan, MissionPlanConfig,
+    PerchGeometry, ProximityConfig, QuasiNonsingularROE, RICState, StateVector,
+};
 
 #[cfg(test)]
 mod test_helpers;

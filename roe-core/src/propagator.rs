@@ -68,7 +68,6 @@ pub trait RelativePropagator: Send + Sync {
     ///
     /// # Errors
     /// Returns `PropagationError` if `n_steps` is zero.
-    #[allow(clippy::cast_precision_loss)]
     fn propagate_with_steps(
         &self,
         roe_0: &QuasiNonsingularROE,
@@ -81,7 +80,10 @@ pub trait RelativePropagator: Send + Sync {
             return Err(PropagationError::ZeroSteps);
         }
 
-        let step = dt_seconds / n_steps as f64;
+        let n_steps_u32 = u32::try_from(n_steps).map_err(|_| {
+            PropagationError::InvalidConfiguration("n_steps exceeds u32::MAX".into())
+        })?;
+        let step = dt_seconds / f64::from(n_steps_u32);
         let mut states = Vec::with_capacity(n_steps + 1);
 
         // Initial state at t=0
@@ -89,8 +91,9 @@ pub trait RelativePropagator: Send + Sync {
         states.push(initial);
 
         // Propagate each step from the original epoch
-        for k in 1..=n_steps {
-            let t = step * k as f64;
+        let mut t = 0.0;
+        for _ in 1..=n_steps {
+            t += step;
             let state = self.propagate(roe_0, chief_mean_0, epoch_0, t);
             states.push(state);
         }

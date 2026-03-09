@@ -154,6 +154,150 @@ pub struct RICState {
     pub velocity: Vector3<f64>,
 }
 
+/// Configuration for mission flow decision-making.
+///
+/// Controls the threshold at which two spacecraft are considered
+/// within ROE-valid proximity vs. requiring a far-field transfer.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ProximityConfig {
+    /// Max dimensionless δr/r for ROE linearization validity (default: 0.005).
+    ///
+    /// Based on D'Amico Sec. 2.3.4: at δr/r ~ 0.005, second-order terms
+    /// are ~2.5×10⁻⁵ of orbit radius, comparable to J2 modeling residuals.
+    pub roe_threshold: f64,
+}
+
+impl Default for ProximityConfig {
+    fn default() -> Self {
+        Self {
+            roe_threshold: 0.005,
+        }
+    }
+}
+
+/// Result of analyzing the separation between two spacecraft.
+///
+/// Determines whether the spacecraft are close enough for linearized
+/// ROE operations or require a far-field transfer.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum MissionPhase {
+    /// Separation within ROE-valid range — proceed with analytical ROE ops.
+    Proximity {
+        /// Computed quasi-nonsingular ROE state
+        roe: QuasiNonsingularROE,
+        /// Chief Keplerian elements
+        chief_elements: KeplerianElements,
+        /// Deputy Keplerian elements
+        deputy_elements: KeplerianElements,
+        /// ECI separation distance (km)
+        separation_km: f64,
+        /// Dimensionless separation metric δr/r
+        delta_r_over_r: f64,
+    },
+    /// Separation exceeds ROE threshold — far-field transfer required.
+    FarField {
+        /// Chief Keplerian elements
+        chief_elements: KeplerianElements,
+        /// Deputy Keplerian elements
+        deputy_elements: KeplerianElements,
+        /// ECI separation distance (km)
+        separation_km: f64,
+        /// Dimensionless separation metric δr/r
+        delta_r_over_r: f64,
+    },
+}
+
+/// Predefined perch orbit geometries relative to the chief.
+///
+/// A perch orbit is a safe holding geometry at the boundary of the
+/// ROE-valid region, used as the handoff point between far-field
+/// Lambert transfers and near-field ROE proximity operations.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum PerchGeometry {
+    /// V-bar hold: deputy ahead/behind chief along the velocity vector.
+    VBar {
+        /// Along-track offset (km). Positive = ahead of chief.
+        along_track_km: f64,
+    },
+    /// R-bar hold: deputy above/below chief along the radial vector.
+    RBar {
+        /// Radial offset (km). Positive = above chief.
+        radial_km: f64,
+    },
+    /// Custom ROE state for advanced perch geometries.
+    Custom(QuasiNonsingularROE),
+}
+
+/// A complete mission plan from two arbitrary ECI states.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MissionPlan {
+    /// Mission phase classification
+    pub phase: MissionPhase,
+    /// Lambert transfer (only present if `FarField`)
+    pub transfer: Option<crate::lambert::LambertTransfer>,
+    /// Perch orbit ROE state (transfer target / proximity start)
+    pub perch_roe: QuasiNonsingularROE,
+    /// Proximity trajectory from perch (analytical propagation)
+    pub proximity_trajectory: Vec<crate::propagator::PropagatedState>,
+}
+
+/// Errors from mission planning.
+#[derive(Debug, Clone)]
+pub enum MissionError {
+    /// Propagation failure during proximity phase.
+    Propagation(crate::propagator::PropagationError),
+    /// Lambert solver failure during transfer phase.
+    Lambert(crate::lambert::LambertError),
+    /// Invalid perch geometry configuration.
+    InvalidPerch(String),
+    /// Spacecraft are not in proximity for ROE-based operations.
+    NotInProximity {
+        /// Actual dimensionless separation δr/r
+        delta_r_over_r: f64,
+        /// Configured proximity threshold
+        threshold: f64,
+    },
+}
+
+impl std::fmt::Display for MissionError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Propagation(e) => write!(f, "MissionError: {e}"),
+            Self::Lambert(e) => write!(f, "MissionError: {e}"),
+            Self::InvalidPerch(msg) => write!(f, "MissionError: invalid perch — {msg}"),
+            Self::NotInProximity { delta_r_over_r, threshold } => write!(
+                f,
+                "MissionError: not in proximity — δr/r = {delta_r_over_r:.6} exceeds threshold {threshold:.6}"
+            ),
+        }
+    }
+}
+
+impl std::error::Error for MissionError {}
+
+impl From<crate::propagator::PropagationError> for MissionError {
+    fn from(e: crate::propagator::PropagationError) -> Self {
+        Self::Propagation(e)
+    }
+}
+
+impl From<crate::lambert::LambertError> for MissionError {
+    fn from(e: crate::lambert::LambertError) -> Self {
+        Self::Lambert(e)
+    }
+}
+
+/// Configuration for mission planning execution.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MissionPlanConfig {
+    /// Time of flight for the Lambert transfer (seconds).
+    pub transfer_tof_s: f64,
+    /// Duration of proximity operations (seconds).
+    pub proximity_duration_s: f64,
+    /// Number of propagation steps for the proximity trajectory.
+    pub num_steps: usize,
+}
+
 /// Serde support for `hifitime::Epoch` (serialize as ISO 8601 string)
 mod epoch_serde {
     use hifitime::Epoch;
