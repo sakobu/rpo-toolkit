@@ -15,7 +15,7 @@ use rpo_core::{
     classify_separation, dimensionless_separation, plan_mission, plan_proximity_mission,
     plan_waypoint_mission, solve_lambert_with_config, LambertConfig, TransferDirection,
     // Types
-    DepartureState, DragConfig, KeplerianElements, MissionPhase, MissionPlanConfig,
+    DepartureState, DragConfig, KeplerianElements, MissionConfig, MissionPhase, MissionPlanConfig,
     PerchGeometry, ProximityConfig, QuasiNonsingularROE, SafetyConfig, StateVector,
     TargetingConfig, TofOptConfig, Waypoint,
 };
@@ -250,9 +250,11 @@ fn run_targeting(input_path: &PathBuf, json_output: bool) -> Result<(), Box<dyn 
         })
         .collect();
 
-    let targeting_config = input.targeting.unwrap_or_default();
-    let tof_config = input.tof_opt.unwrap_or_default();
-    let safety_config = input.safety;
+    let mission_config = MissionConfig {
+        targeting: input.targeting.unwrap_or_default(),
+        tof: input.tof_opt.unwrap_or_default(),
+        safety: input.safety,
+    };
 
     let departure = DepartureState {
         roe,
@@ -262,8 +264,7 @@ fn run_targeting(input_path: &PathBuf, json_output: bool) -> Result<(), Box<dyn 
 
     let prop = make_propagator(input.propagator, &input.drag);
     let mission = plan_waypoint_mission(
-        &departure, &waypoints,
-        &targeting_config, &tof_config, safety_config.as_ref(), prop.as_ref(),
+        &departure, &waypoints, &mission_config, prop.as_ref(),
     )?;
 
     if json_output {
@@ -303,12 +304,21 @@ fn run_targeting(input_path: &PathBuf, json_output: bool) -> Result<(), Box<dyn 
     }
 
     if let Some(ref safety) = mission.safety {
+        let sc = mission_config.safety.as_ref().map_or_else(SafetyConfig::default, |c| *c);
+        let rc_ok = safety.min_rc_separation_km >= sc.min_rc_separation_km;
+        let d3_ok = safety.min_distance_3d_km >= sc.min_distance_3d_km;
+        let overall = rc_ok && d3_ok;
         println!("\nSafety Analysis:");
-        println!("  Min R/C separation: {:.4} km", safety.min_radial_crosstrack_km);
-        println!("  δe magnitude:       {:.6e}", safety.de_magnitude);
-        println!("  δi magnitude:       {:.6e}", safety.di_magnitude);
-        println!("  e/i phase angle:    {:.2}°", safety.ei_phase_angle_rad.to_degrees());
-        println!("  Safe:               {}", if safety.is_safe { "YES" } else { "NO" });
+        println!("  R-C corridor constraint:  {}", if rc_ok { "PASS" } else { "FAIL" });
+        println!("  Min R/C separation:       {:.4} km  (threshold: {:.2} km)", safety.min_rc_separation_km, sc.min_rc_separation_km);
+        println!();
+        println!("  3D distance constraint:   {}", if d3_ok { "PASS" } else { "FAIL" });
+        println!("  Min 3D distance:          {:.4} km  (threshold: {:.2} km)", safety.min_distance_3d_km, sc.min_distance_3d_km);
+        println!();
+        println!("  Overall:                  {}", if overall { "PASS" } else { "FAIL" });
+        println!("  δe magnitude:             {:.6e}", safety.de_magnitude);
+        println!("  δi magnitude:             {:.6e}", safety.di_magnitude);
+        println!("  e/i phase angle:          {:.2}°", safety.ei_phase_angle_rad.to_degrees());
     }
 
     Ok(())

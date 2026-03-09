@@ -311,6 +311,16 @@ pub struct ManeuverLeg {
     pub arrival_chief_mean: KeplerianElements,
     /// Coast trajectory between burns
     pub trajectory: Vec<crate::propagation::propagator::PropagatedState>,
+    /// Departure RIC position (km)
+    pub from_position: Vector3<f64>,
+    /// Target RIC position (km)
+    pub to_position: Vector3<f64>,
+    /// Target RIC velocity (km/s)
+    pub target_velocity: Vector3<f64>,
+    /// Number of Newton-Raphson iterations used
+    pub iterations: u32,
+    /// Final position error after convergence (km)
+    pub position_error_km: f64,
 }
 
 /// A complete waypoint-based mission plan.
@@ -326,19 +336,19 @@ pub struct WaypointMission {
     pub safety: Option<SafetyMetrics>,
 }
 
-/// Passive safety metrics based on e/i vector separation.
+/// Passive safety metrics based on e/i vector separation and 3D distance.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
 pub struct SafetyMetrics {
     /// Minimum radial/cross-track separation (km) from D'Amico Eq. 2.22
-    pub min_radial_crosstrack_km: f64,
+    pub min_rc_separation_km: f64,
+    /// Minimum 3D distance between vehicles (km): min |RIC position|
+    pub min_distance_3d_km: f64,
     /// Magnitude of relative eccentricity vector
     pub de_magnitude: f64,
     /// Magnitude of relative inclination vector
     pub di_magnitude: f64,
     /// Phase angle between e/i vectors (rad). Parallel = 0, anti-parallel = π.
     pub ei_phase_angle_rad: f64,
-    /// Whether the formation meets the safety threshold
-    pub is_safe: bool,
 }
 
 /// Departure orbital state for targeting: groups ROE, chief elements, and epoch.
@@ -407,16 +417,33 @@ impl Default for TofOptConfig {
 /// Configuration for passive safety analysis.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
 pub struct SafetyConfig {
-    /// Minimum radial/cross-track separation threshold (km) (default: 0.2)
-    pub min_separation_km: f64,
+    /// R/C exclusion zone threshold (km) — formation geometry metric (D'Amico Eq. 2.22)
+    pub min_rc_separation_km: f64,
+    /// 3D keep-out sphere threshold (km) — minimum allowed distance between vehicles
+    pub min_distance_3d_km: f64,
 }
 
 impl Default for SafetyConfig {
     fn default() -> Self {
         Self {
-            min_separation_km: 0.2,
+            min_rc_separation_km: 0.2,
+            min_distance_3d_km: 0.1,
         }
     }
+}
+
+/// Bundled mission configuration: targeting, TOF optimization, and safety.
+///
+/// Groups the three config structs that always travel together across
+/// mission planning functions into a single serializable object.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct MissionConfig {
+    /// Newton-Raphson targeting solver settings.
+    pub targeting: TargetingConfig,
+    /// Time-of-flight optimization settings.
+    pub tof: TofOptConfig,
+    /// Optional passive safety analysis settings.
+    pub safety: Option<SafetyConfig>,
 }
 
 /// Errors from mission planning.
@@ -455,6 +482,13 @@ pub enum MissionError {
         /// Number of multi-start samples evaluated
         num_starts: u32,
     },
+    /// Replan index is out of bounds for the waypoint list.
+    InvalidReplanIndex {
+        /// The invalid index provided
+        index: usize,
+        /// Total number of waypoints
+        num_waypoints: usize,
+    },
 }
 
 impl std::fmt::Display for MissionError {
@@ -476,6 +510,10 @@ impl std::fmt::Display for MissionError {
             Self::TofOptimizationFailure { min_tof, max_tof, num_starts } => write!(
                 f,
                 "MissionError: TOF optimization failed — no valid TOF in [{min_tof:.1}, {max_tof:.1}] s ({num_starts} starts)"
+            ),
+            Self::InvalidReplanIndex { index, num_waypoints } => write!(
+                f,
+                "MissionError: replan index {index} out of bounds for {num_waypoints} waypoints"
             ),
         }
     }

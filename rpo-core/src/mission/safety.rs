@@ -1,26 +1,30 @@
 //! Passive safety analysis via e/i vector separation (D'Amico Sec. 2.2).
 //!
 //! Evaluates formation safety using the minimum radial/cross-track
-//! separation derived from the relative eccentricity and inclination vectors.
+//! separation derived from the relative eccentricity and inclination vectors,
+//! and minimum 3D distance from RIC position.
+
+use nalgebra::Vector3;
 
 use crate::propagation::propagator::PropagatedState;
-use crate::types::{KeplerianElements, QuasiNonsingularROE, SafetyConfig, SafetyMetrics};
+use crate::types::{KeplerianElements, QuasiNonsingularROE, SafetyMetrics};
 
-/// Analyze passive safety of a single ROE state (D'Amico Eq. 2.22).
+/// Analyze passive safety of a single ROE state (D'Amico Eq. 2.22) plus 3D distance.
 ///
 /// Computes the minimum radial/cross-track separation for bounded
 /// relative motion (assuming δa ≈ 0). When δa ≠ 0, the metric is
-/// still a useful safety indicator but not exact.
+/// still a useful safety indicator but not exact. Also computes the
+/// 3D distance from the RIC position vector.
 ///
 /// # Arguments
 /// * `roe` - Quasi-nonsingular ROE state
 /// * `chief` - Chief Keplerian elements (provides semi-major axis `a`)
-/// * `config` - Safety threshold configuration
+/// * `ric_position` - Relative position in RIC frame (km)
 #[must_use]
 pub fn analyze_safety(
     roe: &QuasiNonsingularROE,
     chief: &KeplerianElements,
-    config: &SafetyConfig,
+    ric_position: &Vector3<f64>,
 ) -> SafetyMetrics {
     let sma = chief.a;
 
@@ -43,7 +47,7 @@ pub fn analyze_safety(
     // Minimum radial/cross-track separation (D'Amico Eq. 2.22):
     // δr_nr^min = sqrt(2) · a · |δe × δi| / sqrt(δe² + δi²)
     // Cross product magnitude |dex*diy - dey*dix| avoids trig on the phase angle.
-    let min_sep = if ecc_mag > 1e-15 && inc_mag > 1e-15 {
+    let min_rc = if ecc_mag > 1e-15 && inc_mag > 1e-15 {
         let cross = (roe.dex * roe.diy - roe.dey * roe.dix).abs();
         let norm_sq = ecc_mag * ecc_mag + inc_mag * inc_mag;
         (2.0_f64).sqrt() * sma * cross / norm_sq.sqrt()
@@ -51,52 +55,52 @@ pub fn analyze_safety(
         0.0
     };
 
+    // 3D distance from RIC position
+    let dist_3d = ric_position.norm();
+
     SafetyMetrics {
-        min_radial_crosstrack_km: min_sep,
+        min_rc_separation_km: min_rc,
+        min_distance_3d_km: dist_3d,
         de_magnitude: ecc_mag,
         di_magnitude: inc_mag,
         ei_phase_angle_rad: ei_phase,
-        is_safe: min_sep >= config.min_separation_km,
     }
-}
-
-/// Check if e/i vector separation exceeds a minimum threshold (D'Amico Eq. 2.24).
-///
-/// Returns `true` if the formation is passively safe.
-#[must_use]
-pub fn check_ei_separation(
-    roe: &QuasiNonsingularROE,
-    chief: &KeplerianElements,
-    min_sep_km: f64,
-) -> bool {
-    let config = SafetyConfig {
-        min_separation_km: min_sep_km,
-    };
-    analyze_safety(roe, chief, &config).is_safe
 }
 
 /// Analyze safety along a trajectory, returning the worst-case metrics.
 ///
-/// Evaluates safety at every point in the trajectory and returns
-/// the metrics corresponding to the minimum separation.
+/// Evaluates safety at every point in the trajectory. Tracks the minimum
+/// R/C separation and minimum 3D distance independently, then returns a
+/// composite with both worst-case values.
 ///
 /// # Panics
 /// Panics if the trajectory is empty.
 #[must_use]
 pub fn analyze_trajectory_safety(
     trajectory: &[PropagatedState],
-    config: &SafetyConfig,
 ) -> SafetyMetrics {
     assert!(!trajectory.is_empty(), "trajectory must not be empty");
 
-    let mut worst = analyze_safety(&trajectory[0].roe, &trajectory[0].chief_mean, config);
+    let first = &trajectory[0];
+    let mut worst = analyze_safety(&first.roe, &first.chief_mean, &first.ric.position);
+    let mut min_rc = worst.min_rc_separation_km;
+    let mut min_3d = worst.min_distance_3d_km;
 
     for state in &trajectory[1..] {
-        let metrics = analyze_safety(&state.roe, &state.chief_mean, config);
-        if metrics.min_radial_crosstrack_km < worst.min_radial_crosstrack_km {
+        let metrics = analyze_safety(&state.roe, &state.chief_mean, &state.ric.position);
+        if metrics.min_rc_separation_km < min_rc {
+            min_rc = metrics.min_rc_separation_km;
+            // Keep the ROE-related fields from the worst R/C point
             worst = metrics;
         }
+        if metrics.min_distance_3d_km < min_3d {
+            min_3d = metrics.min_distance_3d_km;
+        }
     }
+
+    // Composite: both minimums
+    worst.min_rc_separation_km = min_rc;
+    worst.min_distance_3d_km = min_3d;
 
     worst
 }
@@ -105,19 +109,23 @@ pub fn analyze_trajectory_safety(
 mod tests {
     use super::*;
     use crate::test_helpers::iss_like_elements;
+    use crate::types::SafetyConfig;
 
     /// Zero ROE should be unsafe (zero separation).
     #[test]
     fn zero_roe_unsafe() {
         let chief = iss_like_elements();
         let roe = QuasiNonsingularROE::default();
-        let config = SafetyConfig::default();
-        let metrics = analyze_safety(&roe, &chief, &config);
+        let ric_pos = Vector3::zeros();
+        let metrics = analyze_safety(&roe, &chief, &ric_pos);
 
-        assert!(!metrics.is_safe, "Zero ROE should be unsafe");
         assert!(
-            metrics.min_radial_crosstrack_km < 1e-10,
-            "Min separation should be ~0"
+            metrics.min_rc_separation_km < 1e-10,
+            "Min R/C separation should be ~0"
+        );
+        assert!(
+            metrics.min_distance_3d_km < 1e-10,
+            "Min 3D distance should be ~0"
         );
     }
 
@@ -133,10 +141,13 @@ mod tests {
             dix: 0.0,
             diy: 0.0,
         };
-        let config = SafetyConfig::default();
-        let metrics = analyze_safety(&roe, &chief, &config);
+        let ric_pos = Vector3::new(1.0, 0.0, 0.0);
+        let metrics = analyze_safety(&roe, &chief, &ric_pos);
 
-        assert!(!metrics.is_safe, "Pure δe with no δi should be unsafe");
+        assert!(
+            metrics.min_rc_separation_km < 1e-10,
+            "Pure δe with no δi should have zero R/C separation"
+        );
     }
 
     /// Full e/i separation with perpendicular vectors should be safe.
@@ -152,17 +163,18 @@ mod tests {
             dix: 0.0,
             diy: 0.001,
         };
-        let config = SafetyConfig {
-            min_separation_km: 0.1,
-        };
-        let metrics = analyze_safety(&roe, &chief, &config);
+        let ric_pos = Vector3::new(1.0, 2.0, 1.0);
+        let metrics = analyze_safety(&roe, &chief, &ric_pos);
 
         assert!(
-            metrics.min_radial_crosstrack_km > 0.1,
+            metrics.min_rc_separation_km > 0.1,
             "Perpendicular e/i vectors should give good separation: {} km",
-            metrics.min_radial_crosstrack_km
+            metrics.min_rc_separation_km
         );
-        assert!(metrics.is_safe, "Should be safe with perpendicular e/i");
+        assert!(
+            metrics.min_distance_3d_km > 0.1,
+            "3D distance should exceed threshold"
+        );
     }
 
     /// Phase angle: parallel e/i vectors should give zero separation.
@@ -178,15 +190,85 @@ mod tests {
             dix: 0.001,
             diy: 0.0,
         };
+        let ric_pos = Vector3::new(1.0, 0.0, 0.0);
         let config = SafetyConfig::default();
-        let metrics = analyze_safety(&roe, &chief, &config);
+        let metrics = analyze_safety(&roe, &chief, &ric_pos);
 
         assert!(
-            metrics.min_radial_crosstrack_km < 1e-10,
+            metrics.min_rc_separation_km < 1e-10,
             "Parallel e/i vectors should give zero separation: {} km",
-            metrics.min_radial_crosstrack_km
+            metrics.min_rc_separation_km
         );
-        assert!(!metrics.is_safe, "Parallel e/i should be unsafe");
+        assert!(
+            metrics.min_rc_separation_km < config.min_rc_separation_km,
+            "Parallel e/i should fail R/C threshold"
+        );
+    }
+
+    /// 3D distance below threshold makes formation unsafe even with good R/C separation.
+    #[test]
+    fn small_3d_distance_unsafe() {
+        let chief = iss_like_elements();
+        let roe = QuasiNonsingularROE {
+            da: 0.0,
+            dlambda: 0.0,
+            dex: 0.001,
+            dey: 0.0,
+            dix: 0.0,
+            diy: 0.001,
+        };
+        // Very close 3D position
+        let ric_pos = Vector3::new(0.01, 0.01, 0.01);
+        let config = SafetyConfig {
+            min_rc_separation_km: 0.1,
+            min_distance_3d_km: 0.1,
+        };
+        let metrics = analyze_safety(&roe, &chief, &ric_pos);
+
+        assert!(
+            metrics.min_rc_separation_km > 0.1,
+            "R/C separation should be fine"
+        );
+        assert!(
+            metrics.min_distance_3d_km < 0.1,
+            "3D distance should be below threshold"
+        );
+        assert!(
+            metrics.min_distance_3d_km < config.min_distance_3d_km,
+            "Should fail 3D distance threshold"
+        );
+    }
+
+    /// V-bar waypoint: R/C = 0 but 3D distance is the in-track offset.
+    #[test]
+    fn vbar_waypoint_3d_distance() {
+        let chief = iss_like_elements();
+        let roe = QuasiNonsingularROE::default();
+        // Pure in-track offset (V-bar)
+        let ric_pos = Vector3::new(0.0, 5.0, 0.0);
+        let config = SafetyConfig {
+            min_rc_separation_km: 0.1,
+            min_distance_3d_km: 0.1,
+        };
+        let metrics = analyze_safety(&roe, &chief, &ric_pos);
+
+        assert!(
+            metrics.min_rc_separation_km < 1e-10,
+            "R/C separation should be ~0 for zero ROE"
+        );
+        assert!(
+            (metrics.min_distance_3d_km - 5.0).abs() < 1e-10,
+            "3D distance should be 5.0 km"
+        );
+        // R/C fails but 3D passes
+        assert!(
+            metrics.min_rc_separation_km < config.min_rc_separation_km,
+            "Should fail R/C threshold due to zero ROE"
+        );
+        assert!(
+            metrics.min_distance_3d_km >= config.min_distance_3d_km,
+            "3D distance should pass threshold"
+        );
     }
 
     /// Trajectory worst-case analysis.
@@ -213,13 +295,11 @@ mod tests {
             .propagate_with_steps(&roe, &chief, epoch, period, 20)
             .expect("propagation should succeed");
 
-        let config = SafetyConfig {
-            min_separation_km: 0.1,
-        };
-        let worst = analyze_trajectory_safety(&trajectory, &config);
+        let worst = analyze_trajectory_safety(&trajectory);
 
         // Should have valid metrics
         assert!(worst.de_magnitude > 0.0);
         assert!(worst.di_magnitude > 0.0);
+        assert!(worst.min_distance_3d_km > 0.0, "3D distance should be positive");
     }
 }

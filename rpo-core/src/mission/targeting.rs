@@ -107,6 +107,14 @@ struct ConvergedSolution {
     post_dep_roe: QuasiNonsingularROE,
     /// Propagated state at arrival.
     arrival: PropagatedState,
+    /// Number of Newton-Raphson iterations used (1-indexed).
+    iterations: u32,
+    /// Final position error at convergence (km).
+    position_error_km: f64,
+    /// Target RIC position that was solved for.
+    target_position: Vector3<f64>,
+    /// Target RIC velocity that was solved for.
+    target_velocity: Vector3<f64>,
 }
 
 /// Solve a single two-burn transfer leg using Newton-Raphson shooting.
@@ -125,33 +133,6 @@ pub fn solve_leg(
     tof_s: f64,
     config: &TargetingConfig,
     propagator: &dyn RelativePropagator,
-) -> Result<ManeuverLeg, MissionError> {
-    solve_leg_inner(departure, target_position, target_velocity, tof_s, config, propagator, false)
-}
-
-/// Cost-only variant: solves the leg without generating the coast trajectory.
-///
-/// Used internally by [`optimize_tof`] where only `total_dv` is needed.
-fn solve_leg_cost_only(
-    departure: &DepartureState,
-    target_position: &Vector3<f64>,
-    target_velocity: &Vector3<f64>,
-    tof_s: f64,
-    config: &TargetingConfig,
-    propagator: &dyn RelativePropagator,
-) -> Result<ManeuverLeg, MissionError> {
-    solve_leg_inner(departure, target_position, target_velocity, tof_s, config, propagator, true)
-}
-
-/// Inner implementation shared by `solve_leg` and `solve_leg_cost_only`.
-fn solve_leg_inner(
-    departure: &DepartureState,
-    target_position: &Vector3<f64>,
-    target_velocity: &Vector3<f64>,
-    tof_s: f64,
-    config: &TargetingConfig,
-    propagator: &dyn RelativePropagator,
-    skip_trajectory: bool,
 ) -> Result<ManeuverLeg, MissionError> {
     let mut dv1 = cw_initial_guess(
         &departure.chief,
@@ -188,8 +169,12 @@ fn solve_leg_inner(
                 dv1,
                 post_dep_roe,
                 arrival,
+                iterations: iter + 1,
+                position_error_km: pos_error_km,
+                target_position: *target_position,
+                target_velocity: *target_velocity,
             };
-            return build_leg(departure, &solution, target_velocity, tof_s, config, propagator, skip_trajectory);
+            return build_leg(departure, &solution, tof_s, config, propagator);
         }
 
         let delta_dv = jac_inv * pos_err;
@@ -208,35 +193,90 @@ fn solve_leg_inner(
     })
 }
 
-/// Build a [`ManeuverLeg`] from converged solver results.
-fn build_leg(
+/// Cost-only variant: returns only the total Δv (km/s) without building
+/// a full `ManeuverLeg`. Skips `build_leg` entirely — no trajectory,
+/// epoch arithmetic, or ROE post-processing.
+///
+/// Used internally by [`optimize_tof`] where only `total_dv` is needed.
+fn solve_leg_cost_only(
     departure: &DepartureState,
-    solution: &ConvergedSolution,
+    target_position: &Vector3<f64>,
     target_velocity: &Vector3<f64>,
     tof_s: f64,
     config: &TargetingConfig,
     propagator: &dyn RelativePropagator,
-    skip_trajectory: bool,
+) -> Result<f64, MissionError> {
+    let mut dv1 = cw_initial_guess(
+        &departure.chief,
+        target_position,
+        target_velocity,
+        tof_s,
+        config.dv_cap_km_s,
+    );
+
+    let jac = compute_analytical_jacobian(&departure.chief, tof_s);
+    let jac_inv = if let Some(inv) = jac.try_inverse() {
+        inv
+    } else {
+        let svd = jac.svd(true, true);
+        svd.pseudo_inverse(1e-10)
+            .map_err(|_| MissionError::SingularJacobian)?
+    };
+
+    let mut last_error = f64::INFINITY;
+    let max_iter = f64::from(config.max_iterations.max(1));
+
+    for iter in 0..config.max_iterations {
+        let (arrival, _) = forward_model(departure, &dv1, tof_s, propagator);
+
+        let pos_err = target_position - arrival.ric.position;
+        let pos_error_km = pos_err.norm();
+        last_error = pos_error_km;
+
+        if pos_error_km < config.position_tol_km {
+            let dv2 = target_velocity - arrival.ric.velocity;
+            return Ok(dv1.norm() + dv2.norm());
+        }
+
+        let delta_dv = jac_inv * pos_err;
+        let progress = f64::from(iter) / max_iter;
+        let damping = config.initial_damping + (1.0 - config.initial_damping) * progress;
+
+        dv1 += damping * delta_dv;
+        dv1 = clamp_dv(&dv1, config.dv_cap_km_s);
+    }
+
+    Err(MissionError::TargetingConvergence {
+        final_error_km: last_error,
+        iterations: config.max_iterations,
+    })
+}
+
+/// Build a [`ManeuverLeg`] from converged solver results.
+fn build_leg(
+    departure: &DepartureState,
+    solution: &ConvergedSolution,
+    tof_s: f64,
+    config: &TargetingConfig,
+    propagator: &dyn RelativePropagator,
 ) -> Result<ManeuverLeg, MissionError> {
     let arrival_epoch = departure.epoch + hifitime::Duration::from_seconds(tof_s);
 
     // Arrival Δv corrects velocity mismatch
-    let dv2 = target_velocity - solution.arrival.ric.velocity;
+    let dv2 = solution.target_velocity - solution.arrival.ric.velocity;
     let post_arr_roe = apply_maneuver(&solution.arrival.roe, &dv2, &solution.arrival.chief_mean);
 
     let total_dv = solution.dv1.norm() + dv2.norm();
 
-    let trajectory = if skip_trajectory {
-        Vec::new()
-    } else {
-        propagator.propagate_with_steps(
-            &solution.post_dep_roe,
-            &departure.chief,
-            departure.epoch,
-            tof_s,
-            config.trajectory_steps,
-        )?
-    };
+    let trajectory = propagator.propagate_with_steps(
+        &solution.post_dep_roe,
+        &departure.chief,
+        departure.epoch,
+        tof_s,
+        config.trajectory_steps,
+    )?;
+
+    let from_position = crate::elements::ric::roe_to_ric(&departure.roe, &departure.chief).position;
 
     Ok(ManeuverLeg {
         departure_maneuver: Maneuver {
@@ -254,6 +294,11 @@ fn build_leg(
         post_arrival_roe: post_arr_roe,
         arrival_chief_mean: solution.arrival.chief_mean,
         trajectory,
+        from_position,
+        to_position: solution.target_position,
+        target_velocity: solution.target_velocity,
+        iterations: solution.iterations,
+        position_error_km: solution.position_error_km,
     })
 }
 
@@ -284,16 +329,16 @@ pub fn optimize_tof(
         let frac = (f64::from(k) + 0.5) / num_starts;
         let tof = tof_min + frac * (tof_max - tof_min);
 
-        if let Ok(leg) = solve_leg_cost_only(
+        if let Ok(dv) = solve_leg_cost_only(
             departure,
             target_position,
             target_velocity,
             tof,
             targeting_config,
             propagator,
-        ) && leg.total_dv < best_dv
+        ) && dv < best_dv
         {
-            best_dv = leg.total_dv;
+            best_dv = dv;
             best_tof = Some(tof);
         }
     }
@@ -318,7 +363,7 @@ pub fn optimize_tof(
             targeting_config,
             propagator,
         )
-        .map_or(f64::INFINITY, |leg| leg.total_dv)
+        .unwrap_or(f64::INFINITY)
     };
 
     let mut c = hi - golden * (hi - lo);
