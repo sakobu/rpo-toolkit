@@ -24,7 +24,7 @@
     }
   ],
   "safety": {
-    "min_rc_separation_km": 0.1,
+    "min_ei_separation_km": 0.1,
     "min_distance_3d_km": 0.1
   }
 }

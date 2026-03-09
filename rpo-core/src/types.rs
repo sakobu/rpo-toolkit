@@ -338,19 +338,35 @@ pub struct WaypointMission {
     pub safety: Option<SafetyMetrics>,
 }
 
-/// Passive safety metrics based on e/i vector separation and 3D distance.
+/// Passive safety metrics based on instantaneous R/C distance, e/i vector separation, and 3D distance.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
 pub struct SafetyMetrics {
-    /// Minimum radial/cross-track separation (km) from D'Amico Eq. 2.22
+    /// Minimum instantaneous R/C distance (km): min sqrt(R^2 + C^2) along trajectory.
     pub min_rc_separation_km: f64,
     /// Minimum 3D distance between vehicles (km): min |RIC position|
     pub min_distance_3d_km: f64,
+    /// Minimum e/i vector separation (km) from D'Amico Eq. 2.22 (analytic orbit-averaged bound).
+    pub min_ei_separation_km: f64,
     /// Magnitude of relative eccentricity vector
     pub de_magnitude: f64,
     /// Magnitude of relative inclination vector
     pub di_magnitude: f64,
     /// Phase angle between e/i vectors (rad). Parallel = 0, anti-parallel = π.
     pub ei_phase_angle_rad: f64,
+
+    /// Leg index (0-based) where minimum R/C separation occurs.
+    pub min_rc_leg_index: usize,
+    /// Mission elapsed time (s) at minimum R/C separation.
+    pub min_rc_elapsed_s: f64,
+    /// RIC position (km) at minimum R/C separation.
+    pub min_rc_ric_position: Vector3<f64>,
+
+    /// Leg index (0-based) where minimum 3D distance occurs.
+    pub min_3d_leg_index: usize,
+    /// Mission elapsed time (s) at minimum 3D distance.
+    pub min_3d_elapsed_s: f64,
+    /// RIC position (km) at minimum 3D distance.
+    pub min_3d_ric_position: Vector3<f64>,
 }
 
 /// Departure orbital state for targeting: groups ROE, chief elements, and epoch.
@@ -419,8 +435,8 @@ impl Default for TofOptConfig {
 /// Configuration for passive safety analysis.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
 pub struct SafetyConfig {
-    /// R/C exclusion zone threshold (km) — formation geometry metric (D'Amico Eq. 2.22)
-    pub min_rc_separation_km: f64,
+    /// e/i vector separation threshold (km) — minimum D'Amico Eq. 2.22 passive safety bound
+    pub min_ei_separation_km: f64,
     /// 3D keep-out sphere threshold (km) — minimum allowed distance between vehicles
     pub min_distance_3d_km: f64,
 }
@@ -428,7 +444,7 @@ pub struct SafetyConfig {
 impl Default for SafetyConfig {
     fn default() -> Self {
         Self {
-            min_rc_separation_km: 0.2,
+            min_ei_separation_km: 0.2,
             min_distance_3d_km: 0.1,
         }
     }

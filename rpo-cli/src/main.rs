@@ -509,17 +509,17 @@ fn convert_waypoints(inputs: &[WaypointInput]) -> Vec<Waypoint> {
 
 /// Print safety analysis results with pass/fail assessment.
 fn print_safety_analysis(safety: &SafetyMetrics, config: &SafetyConfig) {
-    let rc_ok = safety.min_rc_separation_km >= config.min_rc_separation_km;
+    let ei_ok = safety.min_ei_separation_km >= config.min_ei_separation_km;
     let d3_ok = safety.min_distance_3d_km >= config.min_distance_3d_km;
-    let overall = rc_ok && d3_ok;
+    let overall = ei_ok && d3_ok;
     println!("\nSafety Analysis:");
     println!(
-        "  R-C corridor constraint:  {}",
-        if rc_ok { "PASS" } else { "FAIL" }
+        "  e/i separation constraint: {}",
+        if ei_ok { "PASS" } else { "FAIL" }
     );
     println!(
-        "  Min R/C separation:       {:.4} km  (threshold: {:.2} km)",
-        safety.min_rc_separation_km, config.min_rc_separation_km
+        "  Min e/i separation:       {:.4} km  (threshold: {:.2} km)",
+        safety.min_ei_separation_km, config.min_ei_separation_km
     );
     println!(
         "  3D distance constraint:   {}",
@@ -530,8 +530,36 @@ fn print_safety_analysis(safety: &SafetyMetrics, config: &SafetyConfig) {
         safety.min_distance_3d_km, config.min_distance_3d_km
     );
     println!(
+        "    Leg: {}  Time: {:.1} s ({:.2} min)",
+        safety.min_3d_leg_index + 1,
+        safety.min_3d_elapsed_s,
+        safety.min_3d_elapsed_s / 60.0,
+    );
+    println!(
+        "    RIC: [{:.4}, {:.4}, {:.4}] km",
+        safety.min_3d_ric_position.x,
+        safety.min_3d_ric_position.y,
+        safety.min_3d_ric_position.z,
+    );
+    println!(
         "  Overall:                  {}",
         if overall { "PASS" } else { "FAIL" }
+    );
+    println!(
+        "  Min instantaneous R/C:    {:.4} km",
+        safety.min_rc_separation_km
+    );
+    println!(
+        "    Leg: {}  Time: {:.1} s ({:.2} min)",
+        safety.min_rc_leg_index + 1,
+        safety.min_rc_elapsed_s,
+        safety.min_rc_elapsed_s / 60.0,
+    );
+    println!(
+        "    RIC: [{:.4}, {:.4}, {:.4}] km",
+        safety.min_rc_ric_position.x,
+        safety.min_rc_ric_position.y,
+        safety.min_rc_ric_position.z,
     );
     println!("  δe magnitude:             {:.6e}", safety.de_magnitude);
     println!("  δi magnitude:             {:.6e}", safety.di_magnitude);

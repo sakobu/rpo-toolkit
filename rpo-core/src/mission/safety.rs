@@ -9,12 +9,13 @@ use nalgebra::Vector3;
 use crate::propagation::propagator::PropagatedState;
 use crate::types::{KeplerianElements, QuasiNonsingularROE, SafetyMetrics};
 
-/// Analyze passive safety of a single ROE state (D'Amico Eq. 2.22) plus 3D distance.
+/// Analyze passive safety of a single ROE state plus instantaneous RIC distances.
 ///
-/// Computes the minimum radial/cross-track separation for bounded
-/// relative motion (assuming δa ≈ 0). When δa ≠ 0, the metric is
-/// still a useful safety indicator but not exact. Also computes the
-/// 3D distance from the RIC position vector.
+/// Computes:
+/// - **Instantaneous R/C distance**: `sqrt(R^2 + C^2)` from the RIC position.
+/// - **e/i vector separation** (D'Amico Eq. 2.22): analytic orbit-averaged
+///   minimum R/C bound from formation geometry.
+/// - **3D distance**: `‖RIC position‖`.
 ///
 /// # Arguments
 /// * `roe` - Quasi-nonsingular ROE state
@@ -44,10 +45,10 @@ pub fn analyze_safety(
         ei_phase_raw
     };
 
-    // Minimum radial/cross-track separation (D'Amico Eq. 2.22):
+    // e/i vector separation (D'Amico Eq. 2.22):
     // δr_nr^min = sqrt(2) · a · |δe × δi| / sqrt(δe² + δi²)
     // Cross product magnitude |dex*diy - dey*dix| avoids trig on the phase angle.
-    let min_rc = if ecc_mag > 1e-15 && inc_mag > 1e-15 {
+    let ei_separation = if ecc_mag > 1e-15 && inc_mag > 1e-15 {
         let cross = (roe.dex * roe.diy - roe.dey * roe.dix).abs();
         let norm_sq = ecc_mag * ecc_mag + inc_mag * inc_mag;
         (2.0_f64).sqrt() * sma * cross / norm_sq.sqrt()
@@ -55,36 +56,46 @@ pub fn analyze_safety(
         0.0
     };
 
+    // Instantaneous R/C distance: sqrt(R^2 + C^2)
+    let rc_instantaneous = (ric_position.x.powi(2) + ric_position.z.powi(2)).sqrt();
+
     // 3D distance from RIC position
     let dist_3d = ric_position.norm();
 
     SafetyMetrics {
-        min_rc_separation_km: min_rc,
+        min_rc_separation_km: rc_instantaneous,
         min_distance_3d_km: dist_3d,
+        min_ei_separation_km: ei_separation,
         de_magnitude: ecc_mag,
         di_magnitude: inc_mag,
         ei_phase_angle_rad: ei_phase,
+        min_rc_leg_index: 0,
+        min_rc_elapsed_s: 0.0,
+        min_rc_ric_position: *ric_position,
+        min_3d_leg_index: 0,
+        min_3d_elapsed_s: 0.0,
+        min_3d_ric_position: *ric_position,
     }
 }
 
 /// Analyze safety along a trajectory, returning the worst-case metrics.
 ///
 /// Evaluates safety at every point in the trajectory. Tracks the minimum
-/// R/C separation and minimum 3D distance independently, then returns a
-/// composite with both worst-case values.
+/// R/C separation, minimum e/i separation, and minimum 3D distance
+/// independently, then returns a composite with all worst-case values.
 ///
 /// # Sampling considerations
 ///
-/// The **R/C separation** metric (D'Amico Eq. 2.22) is an analytic worst-case
-/// bound computed from instantaneous ROE. It varies slowly with secular J2
-/// drift and is **not** susceptible to temporal aliasing.
-///
-/// The **3D distance** (`‖RIC‖`) oscillates at 1× and 2× orbital frequency.
-/// Its minimum between sample points is subject to quantization error
+/// Both the **R/C distance** (`sqrt(R^2 + C^2)`) and **3D distance**
+/// (`‖RIC‖`) oscillate at 1× and 2× orbital frequency. Their minima
+/// between sample points are subject to quantization error
 /// ≈ `sin(π/N) × amplitude`, where N = samples per orbit. The default 200
 /// trajectory steps gives ~1.6% quantization error per single-orbit leg.
 /// For safety-critical missions, increase `TargetingConfig::trajectory_steps`
 /// or `MissionPlanConfig::num_steps` to reduce this error further.
+///
+/// The **e/i separation** (D'Amico Eq. 2.22) is an analytic orbit-averaged
+/// bound and varies slowly with secular J2 drift.
 ///
 /// # Panics
 /// Panics if the trajectory is empty.
@@ -96,8 +107,13 @@ pub fn analyze_trajectory_safety(
 
     let first = &trajectory[0];
     let mut worst = analyze_safety(&first.roe, &first.chief_mean, &first.ric.position);
+    worst.min_rc_elapsed_s = first.elapsed_s;
+    worst.min_3d_elapsed_s = first.elapsed_s;
     let mut min_rc = worst.min_rc_separation_km;
+    let mut min_ei = worst.min_ei_separation_km;
     let mut min_3d = worst.min_distance_3d_km;
+    let mut min_3d_elapsed_s = first.elapsed_s;
+    let mut min_3d_ric_position = first.ric.position;
 
     for state in &trajectory[1..] {
         let metrics = analyze_safety(&state.roe, &state.chief_mean, &state.ric.position);
@@ -105,15 +121,26 @@ pub fn analyze_trajectory_safety(
             min_rc = metrics.min_rc_separation_km;
             // Keep the ROE-related fields from the worst R/C point
             worst = metrics;
+            worst.min_rc_elapsed_s = state.elapsed_s;
+            worst.min_rc_ric_position = state.ric.position;
+        }
+        if metrics.min_ei_separation_km < min_ei {
+            min_ei = metrics.min_ei_separation_km;
         }
         if metrics.min_distance_3d_km < min_3d {
             min_3d = metrics.min_distance_3d_km;
+            min_3d_elapsed_s = state.elapsed_s;
+            min_3d_ric_position = state.ric.position;
         }
     }
 
-    // Composite: both minimums
+    // Composite: all minimums
     worst.min_rc_separation_km = min_rc;
+    worst.min_ei_separation_km = min_ei;
     worst.min_distance_3d_km = min_3d;
+    worst.min_3d_elapsed_s = min_3d_elapsed_s;
+    worst.min_3d_ric_position = min_3d_ric_position;
+    // leg_index stays 0 — set by compute_worst_safety
 
     worst
 }
@@ -142,7 +169,8 @@ mod tests {
         );
     }
 
-    /// Pure δe separation (no δi) should be unsafe (zero cross-track).
+    /// Pure δe separation (no δi) should have zero e/i separation.
+    /// RIC [1,0,0] gives instantaneous R/C = 1.0 (radial only).
     #[test]
     fn pure_de_separation_unsafe() {
         let chief = iss_like_elements();
@@ -158,8 +186,13 @@ mod tests {
         let metrics = analyze_safety(&roe, &chief, &ric_pos);
 
         assert!(
-            metrics.min_rc_separation_km < 1e-10,
-            "Pure δe with no δi should have zero R/C separation"
+            metrics.min_ei_separation_km < 1e-10,
+            "Pure δe with no δi should have zero e/i separation"
+        );
+        assert!(
+            (metrics.min_rc_separation_km - 1.0).abs() < 1e-10,
+            "Instantaneous R/C should be 1.0 km for RIC [1,0,0]: {}",
+            metrics.min_rc_separation_km,
         );
     }
 
@@ -190,7 +223,8 @@ mod tests {
         );
     }
 
-    /// Phase angle: parallel e/i vectors should give zero separation.
+    /// Phase angle: parallel e/i vectors should give zero e/i separation.
+    /// RIC [1,0,0] gives instantaneous R/C = 1.0.
     #[test]
     fn parallel_ei_zero_separation() {
         let chief = iss_like_elements();
@@ -208,17 +242,18 @@ mod tests {
         let metrics = analyze_safety(&roe, &chief, &ric_pos);
 
         assert!(
-            metrics.min_rc_separation_km < 1e-10,
-            "Parallel e/i vectors should give zero separation: {} km",
-            metrics.min_rc_separation_km
+            metrics.min_ei_separation_km < 1e-10,
+            "Parallel e/i vectors should give zero e/i separation: {} km",
+            metrics.min_ei_separation_km
         );
         assert!(
-            metrics.min_rc_separation_km < config.min_rc_separation_km,
-            "Parallel e/i should fail R/C threshold"
+            metrics.min_ei_separation_km < config.min_ei_separation_km,
+            "Parallel e/i should fail threshold"
         );
     }
 
-    /// 3D distance below threshold makes formation unsafe even with good R/C separation.
+    /// 3D distance below threshold makes formation unsafe even with good e/i separation.
+    /// RIC [0.01, 0.01, 0.01] gives instantaneous R/C = sqrt(0.01^2 + 0.01^2) ≈ 0.0141.
     #[test]
     fn small_3d_distance_unsafe() {
         let chief = iss_like_elements();
@@ -233,14 +268,15 @@ mod tests {
         // Very close 3D position
         let ric_pos = Vector3::new(0.01, 0.01, 0.01);
         let config = SafetyConfig {
-            min_rc_separation_km: 0.1,
+            min_ei_separation_km: 0.1,
             min_distance_3d_km: 0.1,
         };
         let metrics = analyze_safety(&roe, &chief, &ric_pos);
 
         assert!(
-            metrics.min_rc_separation_km > 0.1,
-            "R/C separation should be fine"
+            metrics.min_ei_separation_km > 0.1,
+            "e/i separation should be fine: {}",
+            metrics.min_ei_separation_km
         );
         assert!(
             metrics.min_distance_3d_km < 0.1,
@@ -260,7 +296,7 @@ mod tests {
         // Pure in-track offset (V-bar)
         let ric_pos = Vector3::new(0.0, 5.0, 0.0);
         let config = SafetyConfig {
-            min_rc_separation_km: 0.1,
+            min_ei_separation_km: 0.1,
             min_distance_3d_km: 0.1,
         };
         let metrics = analyze_safety(&roe, &chief, &ric_pos);
@@ -273,10 +309,10 @@ mod tests {
             (metrics.min_distance_3d_km - 5.0).abs() < 1e-10,
             "3D distance should be 5.0 km"
         );
-        // R/C fails but 3D passes
+        // e/i fails (zero ROE) but 3D passes
         assert!(
-            metrics.min_rc_separation_km < config.min_rc_separation_km,
-            "Should fail R/C threshold due to zero ROE"
+            metrics.min_ei_separation_km < config.min_ei_separation_km,
+            "Should fail e/i threshold due to zero ROE"
         );
         assert!(
             metrics.min_distance_3d_km >= config.min_distance_3d_km,
@@ -354,5 +390,64 @@ mod tests {
         assert!(worst.de_magnitude > 0.0);
         assert!(worst.di_magnitude > 0.0);
         assert!(worst.min_distance_3d_km > 0.0, "3D distance should be positive");
+        assert!(worst.min_ei_separation_km > 0.0, "e/i separation should be positive");
+    }
+
+    /// Provenance fields are populated by `analyze_trajectory_safety`.
+    #[test]
+    fn trajectory_provenance_populated() {
+        use crate::propagation::propagator::{J2StmPropagator, RelativePropagator};
+        use crate::test_helpers::test_epoch;
+
+        let chief = iss_like_elements();
+        let epoch = test_epoch();
+        let propagator = J2StmPropagator;
+        let period = std::f64::consts::TAU / chief.mean_motion();
+
+        let roe = QuasiNonsingularROE {
+            da: 0.0,
+            dlambda: 0.001,
+            dex: 0.001,
+            dey: 0.0,
+            dix: 0.0,
+            diy: 0.001,
+        };
+
+        let trajectory = propagator
+            .propagate_with_steps(&roe, &chief, epoch, period, 200)
+            .expect("propagation should succeed");
+
+        let worst = analyze_trajectory_safety(&trajectory);
+
+        // Elapsed times should be non-negative and within the trajectory span
+        assert!(worst.min_rc_elapsed_s >= 0.0, "R/C elapsed_s should be non-negative");
+        assert!(worst.min_3d_elapsed_s >= 0.0, "3D elapsed_s should be non-negative");
+        assert!(
+            worst.min_rc_elapsed_s <= period + 1e-6,
+            "R/C elapsed_s should be within trajectory span"
+        );
+        assert!(
+            worst.min_3d_elapsed_s <= period + 1e-6,
+            "3D elapsed_s should be within trajectory span"
+        );
+
+        // RIC positions should match the trajectory points at those times
+        let rc_match = trajectory.iter().find(|s| {
+            (s.elapsed_s - worst.min_rc_elapsed_s).abs() < 1e-12
+        });
+        assert!(rc_match.is_some(), "Should find trajectory point matching R/C elapsed_s");
+        assert!(
+            (rc_match.unwrap().ric.position - worst.min_rc_ric_position).norm() < 1e-12,
+            "R/C RIC position should match trajectory point"
+        );
+
+        let d3_match = trajectory.iter().find(|s| {
+            (s.elapsed_s - worst.min_3d_elapsed_s).abs() < 1e-12
+        });
+        assert!(d3_match.is_some(), "Should find trajectory point matching 3D elapsed_s");
+        assert!(
+            (d3_match.unwrap().ric.position - worst.min_3d_ric_position).norm() < 1e-12,
+            "3D RIC position should match trajectory point"
+        );
     }
 }

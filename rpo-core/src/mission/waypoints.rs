@@ -5,6 +5,7 @@
 //! of the next.
 
 use hifitime::Duration;
+use nalgebra::Vector3;
 
 use crate::mission::targeting::{optimize_tof, solve_leg};
 use crate::propagation::propagator::{PropagatedState, PropagationError, RelativePropagator};
@@ -25,25 +26,41 @@ fn compute_worst_safety(
     safety_config.and_then(|_| {
         let mut worst: Option<SafetyMetrics> = None;
         let mut overall_min_rc = f64::INFINITY;
+        let mut overall_min_ei = f64::INFINITY;
         let mut overall_min_3d = f64::INFINITY;
+        let mut rc_provenance = (0_usize, 0.0_f64, Vector3::zeros());
+        let mut d3_provenance = (0_usize, 0.0_f64, Vector3::zeros());
+        let mut cumulative_time = 0.0_f64;
 
-        for leg in legs {
+        for (i, leg) in legs.iter().enumerate() {
             if leg.trajectory.is_empty() {
+                cumulative_time += leg.tof_s;
                 continue;
             }
             let m = crate::mission::safety::analyze_trajectory_safety(&leg.trajectory);
             if m.min_rc_separation_km < overall_min_rc {
                 overall_min_rc = m.min_rc_separation_km;
+                rc_provenance = (i, cumulative_time + m.min_rc_elapsed_s, m.min_rc_ric_position);
                 worst = Some(m);
             }
+            overall_min_ei = overall_min_ei.min(m.min_ei_separation_km);
             if m.min_distance_3d_km < overall_min_3d {
                 overall_min_3d = m.min_distance_3d_km;
+                d3_provenance = (i, cumulative_time + m.min_3d_elapsed_s, m.min_3d_ric_position);
             }
+            cumulative_time += leg.tof_s;
         }
 
         worst.map(|mut w| {
             w.min_rc_separation_km = overall_min_rc;
+            w.min_ei_separation_km = overall_min_ei;
             w.min_distance_3d_km = overall_min_3d;
+            w.min_rc_leg_index = rc_provenance.0;
+            w.min_rc_elapsed_s = rc_provenance.1;
+            w.min_rc_ric_position = rc_provenance.2;
+            w.min_3d_leg_index = d3_provenance.0;
+            w.min_3d_elapsed_s = d3_provenance.1;
+            w.min_3d_ric_position = d3_provenance.2;
             w
         })
     })
@@ -927,6 +944,87 @@ mod tests {
         assert!(
             (leg.from_position - mission.legs[0].from_position).norm() < 1e-14,
             "from_position should survive roundtrip"
+        );
+    }
+
+    /// Safety provenance tracks correct leg index and cumulative time.
+    #[test]
+    fn safety_provenance_leg_index() {
+        let departure = zero_departure();
+        let propagator = J2StmPropagator;
+        let period = std::f64::consts::TAU / departure.chief.mean_motion();
+        let tof = period * 0.75;
+
+        let config = MissionConfig {
+            targeting: crate::types::TargetingConfig::default(),
+            tof: crate::types::TofOptConfig::default(),
+            safety: Some(crate::types::SafetyConfig::default()),
+        };
+
+        let waypoints = vec![
+            Waypoint {
+                position: Vector3::new(0.0, 5.0, 0.0),
+                velocity: Vector3::zeros(),
+                tof_s: Some(tof),
+            },
+            Waypoint {
+                position: Vector3::new(2.0, 3.0, 0.0),
+                velocity: Vector3::zeros(),
+                tof_s: Some(tof),
+            },
+            Waypoint {
+                position: Vector3::new(0.0, 1.0, 0.0),
+                velocity: Vector3::zeros(),
+                tof_s: Some(tof),
+            },
+        ];
+
+        let mission =
+            plan_waypoint_mission(&departure, &waypoints, &config, &propagator)
+                .expect("mission with safety should succeed");
+
+        let safety = mission.safety.expect("safety should be present");
+
+        // Leg indices should be in range
+        assert!(
+            safety.min_rc_leg_index < mission.legs.len(),
+            "R/C leg index {} should be < {}",
+            safety.min_rc_leg_index,
+            mission.legs.len(),
+        );
+        assert!(
+            safety.min_3d_leg_index < mission.legs.len(),
+            "3D leg index {} should be < {}",
+            safety.min_3d_leg_index,
+            mission.legs.len(),
+        );
+
+        // Elapsed times should be non-negative and within mission duration
+        assert!(
+            safety.min_rc_elapsed_s >= 0.0,
+            "R/C elapsed_s should be non-negative"
+        );
+        assert!(
+            safety.min_3d_elapsed_s >= 0.0,
+            "3D elapsed_s should be non-negative"
+        );
+        assert!(
+            safety.min_rc_elapsed_s <= mission.total_duration_s + 1e-6,
+            "R/C elapsed_s ({}) should be within mission duration ({})",
+            safety.min_rc_elapsed_s,
+            mission.total_duration_s,
+        );
+        assert!(
+            safety.min_3d_elapsed_s <= mission.total_duration_s + 1e-6,
+            "3D elapsed_s ({}) should be within mission duration ({})",
+            safety.min_3d_elapsed_s,
+            mission.total_duration_s,
+        );
+
+        // RIC positions should be nonzero (we have nonzero waypoints)
+        assert!(
+            safety.min_3d_ric_position.norm() > 0.0,
+            "3D RIC position should be nonzero"
         );
     }
 }
