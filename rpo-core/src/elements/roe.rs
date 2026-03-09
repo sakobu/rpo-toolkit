@@ -77,7 +77,7 @@ mod tests {
             aop: 0.0,
             mean_anomaly: 0.0,
         };
-        let mut deputy = chief.clone();
+        let mut deputy = chief;
         deputy.a = 6787.0; // 1 km higher
 
         let roe = compute_roe(&chief, &deputy);
@@ -99,7 +99,7 @@ mod tests {
             aop: 0.0,
             mean_anomaly: 0.0,
         };
-        let mut deputy = chief.clone();
+        let mut deputy = chief;
         deputy.i = chief.i + 0.001; // small inclination offset
 
         let roe = compute_roe(&chief, &deputy);

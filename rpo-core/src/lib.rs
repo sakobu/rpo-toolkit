@@ -37,3 +37,21 @@ pub use types::{
 
 #[cfg(test)]
 mod test_helpers;
+
+#[cfg(test)]
+mod copy_trait_tests {
+    use hifitime::Epoch;
+    use nalgebra::Vector3;
+    
+    fn assert_copy<T: Copy>() {}
+    
+    #[test]
+    fn test_vector3_is_copy() {
+        assert_copy::<Vector3<f64>>();
+    }
+    
+    #[test]
+    fn test_epoch_is_copy() {
+        assert_copy::<Epoch>();
+    }
+}

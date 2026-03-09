@@ -232,7 +232,7 @@ mod tests {
 
         // J2+drag propagator
         let drag_prop = J2DragStmPropagator {
-            drag: drag_config.clone(),
+            drag: drag_config,
         };
         let drag_5 = drag_prop.propagate(&zero_roe, &chief, epoch, 5.0 * period);
         let drag_10 = drag_prop.propagate(&zero_roe, &chief, epoch, 10.0 * period);
@@ -269,7 +269,7 @@ mod tests {
         let epoch = test_epoch();
 
         // Deputy with 1 km SMA offset and 0.001 rad inclination offset
-        let mut deputy = chief.clone();
+        let mut deputy = chief;
         deputy.a += 1.0;
         deputy.i += 0.001;
         let roe_0 = compute_roe(&chief, &deputy);
@@ -388,7 +388,7 @@ mod tests {
     fn j2_stm_vs_nyx_two_body() {
         let epoch = test_epoch();
         let chief_ke = iss_like_elements();
-        let mut deputy_ke = chief_ke.clone();
+        let mut deputy_ke = chief_ke;
         deputy_ke.a += 1.0;
         deputy_ke.i += 0.001;
 

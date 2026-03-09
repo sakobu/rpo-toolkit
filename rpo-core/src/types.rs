@@ -19,7 +19,7 @@ pub struct StateVector {
 }
 
 /// Classical Keplerian orbital elements
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
 pub struct KeplerianElements {
     /// Semi-major axis (km)
     pub a: f64,
@@ -79,7 +79,7 @@ impl KeplerianElements {
 
 /// Quasi-nonsingular relative orbital elements (Koenig Eq. 2 / D'Amico Eq. 2.2)
 /// All elements are dimensionless (normalized by chief semi-major axis)
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
 pub struct QuasiNonsingularROE {
     /// Relative semi-major axis: `(a_d - a_c) / a_c`
     pub da: f64,
@@ -130,7 +130,7 @@ impl QuasiNonsingularROE {
 /// Specifies the time derivatives of relative orbital elements due to
 /// differential drag, normalized by chief semi-major axis. These rates
 /// are treated as constant over the propagation interval.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
 pub struct DragConfig {
     /// Time derivative of relative SMA due to drag: `δȧ_drag` (1/s, normalized by `a_c`)
     pub da_dot: f64,
@@ -167,7 +167,7 @@ pub struct RICState {
 ///
 /// Controls the threshold at which two spacecraft are considered
 /// within ROE-valid proximity vs. requiring a far-field transfer.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
 pub struct ProximityConfig {
     /// Max dimensionless δr/r for ROE linearization validity (default: 0.005).
     ///
@@ -297,7 +297,7 @@ impl From<crate::mission::lambert::LambertError> for MissionError {
 }
 
 /// Configuration for mission planning execution.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 pub struct MissionPlanConfig {
     /// Time of flight for the Lambert transfer (seconds).
     pub transfer_tof_s: f64,

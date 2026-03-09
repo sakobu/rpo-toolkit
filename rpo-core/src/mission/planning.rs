@@ -119,7 +119,7 @@ pub fn perch_to_roe(
                 diy: 0.0,
             })
         }
-        PerchGeometry::Custom(roe) => Ok(roe.clone()),
+        PerchGeometry::Custom(roe) => Ok(*roe),
     }
 }
 
@@ -145,7 +145,7 @@ pub fn plan_proximity_mission(
             roe,
             chief_elements,
             ..
-        } => (roe.clone(), chief_elements.clone()),
+        } => (*roe, *chief_elements),
         MissionPhase::FarField { delta_r_over_r, .. } => {
             return Err(MissionError::NotInProximity {
                 delta_r_over_r: *delta_r_over_r,
@@ -188,12 +188,11 @@ pub fn plan_mission(
 
     match phase {
         MissionPhase::Proximity {
-            ref roe,
             ref chief_elements,
             ..
         } => {
-            let perch_roe = roe.clone();
-            let chief_ke = chief_elements.clone();
+            let perch_roe = perch_to_roe(perch, chief_elements)?;
+            let chief_ke = *chief_elements;
             let trajectory = propagator.propagate_with_steps(
                 &perch_roe,
                 &chief_ke,
@@ -213,7 +212,7 @@ pub fn plan_mission(
             ref chief_elements, ..
         } => {
             let perch_roe = perch_to_roe(perch, chief_elements)?;
-            let chief_ke = chief_elements.clone();
+            let chief_ke = *chief_elements;
 
             // Convert perch ROE to a target Keplerian orbit for Lambert
             let target_ke = perch_roe_to_keplerian(&perch_roe, &chief_ke);
@@ -303,7 +302,7 @@ mod tests {
     fn classify_proximity_for_close_spacecraft() {
         let epoch = test_epoch();
         let chief_ke = iss_like_elements();
-        let mut deputy_ke = chief_ke.clone();
+        let mut deputy_ke = chief_ke;
         deputy_ke.a += 1.0; // 1 km higher
 
         let chief = keplerian_to_state(&chief_ke, epoch);
@@ -344,7 +343,7 @@ mod tests {
     #[test]
     fn dimensionless_separation_excludes_dlambda_diy() {
         let chief = iss_like_elements();
-        let mut deputy = chief.clone();
+        let mut deputy = chief;
         // Only change mean anomaly (affects δλ) and RAAN (affects δiy)
         deputy.mean_anomaly += 0.5; // large δλ
         deputy.raan += 0.1; // large δiy
@@ -374,10 +373,10 @@ mod tests {
 
         // Set δa/a exactly at threshold
         let threshold = 0.005;
-        let mut deputy_below = chief_ke.clone();
+        let mut deputy_below = chief_ke;
         deputy_below.a = chief_ke.a * (1.0 + threshold * 0.99); // just below
 
-        let mut deputy_above = chief_ke.clone();
+        let mut deputy_above = chief_ke;
         deputy_above.a = chief_ke.a * (1.0 + threshold * 1.01); // just above
 
         let chief = keplerian_to_state(&chief_ke, epoch);
@@ -399,7 +398,7 @@ mod tests {
     fn custom_proximity_config() {
         let epoch = test_epoch();
         let chief_ke = iss_like_elements();
-        let mut deputy_ke = chief_ke.clone();
+        let mut deputy_ke = chief_ke;
         deputy_ke.a += 50.0; // 50 km higher → δa/a ≈ 0.0074
 
         let chief = keplerian_to_state(&chief_ke, epoch);
@@ -424,7 +423,7 @@ mod tests {
     fn proximity_roe_matches_compute_roe() {
         let epoch = test_epoch();
         let chief_ke = iss_like_elements();
-        let mut deputy_ke = chief_ke.clone();
+        let mut deputy_ke = chief_ke;
         deputy_ke.a += 1.0;
         deputy_ke.mean_anomaly += 0.01;
 
@@ -476,7 +475,7 @@ mod tests {
     fn proximity_mission_no_lambert() {
         let epoch = test_epoch();
         let chief_ke = iss_like_elements();
-        let mut deputy_ke = chief_ke.clone();
+        let mut deputy_ke = chief_ke;
         deputy_ke.a += 1.0;
         deputy_ke.mean_anomaly += 0.01;
 
@@ -639,11 +638,65 @@ mod tests {
         );
     }
 
+    /// Run `plan_mission` in proximity regime with the given perch geometry.
+    fn run_proximity_plan_mission(perch: PerchGeometry) -> (MissionPlan, KeplerianElements) {
+        let epoch = test_epoch();
+        let chief_ke = iss_like_elements();
+        let mut deputy_ke = chief_ke;
+        deputy_ke.a += 1.0; // 1 km higher → Proximity regime
+        deputy_ke.mean_anomaly += 0.01;
+
+        let chief = keplerian_to_state(&chief_ke, epoch);
+        let deputy = keplerian_to_state(&deputy_ke, epoch);
+        let config = ProximityConfig::default();
+        let propagator = J2StmPropagator;
+        let period = std::f64::consts::TAU / chief_ke.mean_motion();
+        let plan_config = crate::types::MissionPlanConfig {
+            transfer_tof_s: 3600.0,
+            proximity_duration_s: period,
+            num_steps: 20,
+        };
+
+        let plan = plan_mission(&chief, &deputy, &perch, &config, &propagator, &plan_config)
+            .expect("proximity mission should succeed");
+        (plan, chief_ke)
+    }
+
+    #[test]
+    fn proximity_mission_uses_perch_roe() {
+        let perch = PerchGeometry::VBar { along_track_km: 5.0 };
+        let (plan, chief_ke) = run_proximity_plan_mission(perch);
+
+        assert!(matches!(plan.phase, MissionPhase::Proximity { .. }));
+        assert!(plan.transfer.is_none(), "proximity should have no Lambert transfer");
+
+        let expected_dlambda = 5.0 / chief_ke.a;
+        assert!(plan.perch_roe.da.abs() < 1e-15,
+            "V-bar perch should have δa = 0, got {}", plan.perch_roe.da);
+        assert!((plan.perch_roe.dlambda - expected_dlambda).abs() < 1e-12,
+            "V-bar perch should have δλ = {expected_dlambda}, got {}", plan.perch_roe.dlambda);
+    }
+
+    #[test]
+    fn proximity_mission_uses_rbar_perch() {
+        let perch = PerchGeometry::RBar { radial_km: 2.0 };
+        let (plan, chief_ke) = run_proximity_plan_mission(perch);
+
+        assert!(matches!(plan.phase, MissionPhase::Proximity { .. }));
+        assert!(plan.transfer.is_none(), "proximity should have no Lambert transfer");
+
+        let expected_da = 2.0 / chief_ke.a;
+        assert!((plan.perch_roe.da - expected_da).abs() < 1e-12,
+            "R-bar perch should have δa = {expected_da}, got {}", plan.perch_roe.da);
+        assert!(plan.perch_roe.dlambda.abs() < 1e-15,
+            "R-bar perch should have δλ = 0, got {}", plan.perch_roe.dlambda);
+    }
+
     #[test]
     fn mission_plan_serde_roundtrip() {
         let epoch = test_epoch();
         let chief_ke = iss_like_elements();
-        let mut deputy_ke = chief_ke.clone();
+        let mut deputy_ke = chief_ke;
         deputy_ke.a += 1.0;
 
         let chief = keplerian_to_state(&chief_ke, epoch);

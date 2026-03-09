@@ -108,7 +108,7 @@ fn run_mission(input_path: &PathBuf, json_output: bool) -> Result<(), Box<dyn Er
 
     let mission = match (input.config.propagator, &input.config.drag) {
         (PropagatorChoice::J2Drag, Some(drag)) => {
-            let prop = J2DragStmPropagator { drag: drag.clone() };
+            let prop = J2DragStmPropagator { drag: *drag };
             plan_mission(&input.chief, &input.deputy, &perch, &proximity, &prop, &plan_config)?
         }
         (PropagatorChoice::J2Drag, None) => {
@@ -471,7 +471,7 @@ fn run_demo() -> Result<(), Box<dyn Error>> {
     println!("  δėy_drag  = {:.2e} /s", drag.dey_dot);
 
     // --- J2+drag propagation ---
-    let drag_prop = J2DragStmPropagator { drag: drag.clone() };
+    let drag_prop = J2DragStmPropagator { drag };
     let drag_traj = drag_prop.propagate_with_steps(
         &roe, &chief, epoch, total_time, n_steps,
     )?;
@@ -687,7 +687,7 @@ fn run_demo() -> Result<(), Box<dyn Error>> {
         dix: 0.0,
         diy: 0.0,
     };
-    let custom_perch = PerchGeometry::Custom(custom_roe.clone());
+    let custom_perch = PerchGeometry::Custom(custom_roe);
     let custom_ric = roe_to_ric(&custom_roe, &chief);
     println!("\n  Custom perch (0.5 km R + 3 km I):");
     println!("    RIC: [{:.4}, {:.4}, {:.4}] km",
