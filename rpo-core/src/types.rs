@@ -303,6 +303,8 @@ pub struct ManeuverLeg {
     pub total_dv: f64,
     /// ROE state after departure burn
     pub post_departure_roe: QuasiNonsingularROE,
+    /// Chief mean Keplerian elements at departure epoch
+    pub departure_chief_mean: KeplerianElements,
     /// ROE state at arrival (before arrival burn)
     pub pre_arrival_roe: QuasiNonsingularROE,
     /// ROE state after arrival burn
@@ -374,7 +376,7 @@ pub struct TargetingConfig {
     pub initial_damping: f64,
     /// Cap on any Δv component (km/s) (default: 1.0)
     pub dv_cap_km_s: f64,
-    /// Number of trajectory steps per leg for output (default: 50)
+    /// Number of trajectory steps per leg for output (default: 200)
     pub trajectory_steps: usize,
 }
 
@@ -385,7 +387,7 @@ impl Default for TargetingConfig {
             position_tol_km: 1e-6,
             initial_damping: 1.0,
             dv_cap_km_s: 1.0,
-            trajectory_steps: 50,
+            trajectory_steps: 200,
         }
     }
 }

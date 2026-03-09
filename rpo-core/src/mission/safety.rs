@@ -73,6 +73,19 @@ pub fn analyze_safety(
 /// R/C separation and minimum 3D distance independently, then returns a
 /// composite with both worst-case values.
 ///
+/// # Sampling considerations
+///
+/// The **R/C separation** metric (D'Amico Eq. 2.22) is an analytic worst-case
+/// bound computed from instantaneous ROE. It varies slowly with secular J2
+/// drift and is **not** susceptible to temporal aliasing.
+///
+/// The **3D distance** (`‖RIC‖`) oscillates at 1× and 2× orbital frequency.
+/// Its minimum between sample points is subject to quantization error
+/// ≈ `sin(π/N) × amplitude`, where N = samples per orbit. The default 200
+/// trajectory steps gives ~1.6% quantization error per single-orbit leg.
+/// For safety-critical missions, increase `TargetingConfig::trajectory_steps`
+/// or `MissionPlanConfig::num_steps` to reduce this error further.
+///
 /// # Panics
 /// Panics if the trajectory is empty.
 #[must_use]
@@ -268,6 +281,46 @@ mod tests {
         assert!(
             metrics.min_distance_3d_km >= config.min_distance_3d_km,
             "3D distance should pass threshold"
+        );
+    }
+
+    /// Higher sampling density should find a tighter (or equal) 3D minimum.
+    #[test]
+    fn sampling_density_convergence() {
+        use crate::propagation::propagator::{J2StmPropagator, RelativePropagator};
+        use crate::test_helpers::test_epoch;
+
+        let chief = iss_like_elements();
+        let epoch = test_epoch();
+        let propagator = J2StmPropagator;
+        let period = std::f64::consts::TAU / chief.mean_motion();
+
+        // Formation with nonzero δe/δi so 3D distance oscillates
+        let roe = QuasiNonsingularROE {
+            da: 0.0,
+            dlambda: 0.001,
+            dex: 0.001,
+            dey: 0.0,
+            dix: 0.0,
+            diy: 0.001,
+        };
+
+        let coarse = propagator
+            .propagate_with_steps(&roe, &chief, epoch, period, 20)
+            .expect("coarse propagation should succeed");
+        let fine = propagator
+            .propagate_with_steps(&roe, &chief, epoch, period, 200)
+            .expect("fine propagation should succeed");
+
+        let coarse_metrics = analyze_trajectory_safety(&coarse);
+        let fine_metrics = analyze_trajectory_safety(&fine);
+
+        // Finer sampling can only find a tighter or equal minimum
+        assert!(
+            fine_metrics.min_distance_3d_km <= coarse_metrics.min_distance_3d_km + 1e-12,
+            "200-step minimum ({:.6} km) should be ≤ 20-step minimum ({:.6} km)",
+            fine_metrics.min_distance_3d_km,
+            coarse_metrics.min_distance_3d_km,
         );
     }
 

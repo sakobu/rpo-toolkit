@@ -7,7 +7,7 @@
 use hifitime::Duration;
 
 use crate::mission::targeting::{optimize_tof, solve_leg};
-use crate::propagation::propagator::{PropagatedState, RelativePropagator};
+use crate::propagation::propagator::{PropagatedState, PropagationError, RelativePropagator};
 use crate::types::{
     DepartureState, ManeuverLeg, MissionConfig, MissionError, SafetyConfig, SafetyMetrics,
     Waypoint, WaypointMission,
@@ -211,16 +211,20 @@ pub fn replan_from_waypoint(
     Ok(build_mission(all_legs, config.safety.as_ref()))
 }
 
-/// Get the propagated state at a given elapsed time into the mission.
+/// Evaluate the propagated state at a given elapsed time into the mission.
 ///
-/// Searches through all legs to find which leg contains the requested time,
-/// then interpolates within that leg's trajectory.
+/// Re-evaluates the closed-form propagation model at the exact query time,
+/// avoiding discretization error from sampled trajectory lookup. Uses the
+/// explicit initial conditions (`post_departure_roe`, `departure_chief_mean`,
+/// `departure_maneuver.epoch`) stored on each leg.
 ///
-/// Returns `None` if `elapsed_s` is outside the mission duration.
+/// Returns `None` exclusively when `elapsed_s` is out of bounds (negative
+/// or past the mission end).
 #[must_use]
 pub fn get_mission_state_at_time(
     mission: &WaypointMission,
     elapsed_s: f64,
+    propagator: &dyn RelativePropagator,
 ) -> Option<PropagatedState> {
     if elapsed_s < 0.0 {
         return None;
@@ -229,23 +233,44 @@ pub fn get_mission_state_at_time(
     let mut t_offset = 0.0;
     for leg in &mission.legs {
         if elapsed_s <= t_offset + leg.tof_s {
-            // This leg contains the requested time
             let local_t = elapsed_s - t_offset;
-            // Find closest trajectory point
-            return leg
-                .trajectory
-                .iter()
-                .min_by(|a, b| {
-                    let da = (a.elapsed_s - local_t).abs();
-                    let db = (b.elapsed_s - local_t).abs();
-                    da.partial_cmp(&db).unwrap_or(std::cmp::Ordering::Equal)
-                })
-                .cloned();
+            return Some(propagator.propagate(
+                &leg.post_departure_roe,
+                &leg.departure_chief_mean,
+                leg.departure_maneuver.epoch,
+                local_t,
+            ));
         }
         t_offset += leg.tof_s;
     }
 
     None
+}
+
+/// Resample a leg's trajectory at a specified number of steps using exact propagation.
+///
+/// Re-evaluates the closed-form propagation model at equally-spaced times,
+/// avoiding discretization error from the original sampled trajectory.
+/// Uses the explicit initial conditions on the leg, independent of the
+/// stored `trajectory` vector.
+///
+/// `n_steps` intervals produces `n_steps + 1` states, including both the
+/// t=0 and t=tof endpoints.
+///
+/// # Errors
+/// Returns `PropagationError::ZeroSteps` if `n_steps` is zero.
+pub fn resample_leg_trajectory(
+    leg: &ManeuverLeg,
+    n_steps: usize,
+    propagator: &dyn RelativePropagator,
+) -> Result<Vec<PropagatedState>, PropagationError> {
+    propagator.propagate_with_steps(
+        &leg.post_departure_roe,
+        &leg.departure_chief_mean,
+        leg.departure_maneuver.epoch,
+        leg.tof_s,
+        n_steps,
+    )
 }
 
 #[cfg(test)]
@@ -366,7 +391,7 @@ mod tests {
         );
     }
 
-    /// `get_mission_state_at_time` returns valid states.
+    /// `get_mission_state_at_time` returns exact state via propagator.
     #[test]
     fn get_state_at_time() {
         let departure = zero_departure();
@@ -384,17 +409,160 @@ mod tests {
             plan_waypoint_mission(&departure, &waypoints, &config, &propagator)
                 .expect("should succeed");
 
-        // Mid-mission should return a state
-        let state = get_mission_state_at_time(&mission, period / 2.0);
+        // Mid-mission should return a state with exact elapsed_s
+        let query_t = period / 2.0;
+        let state = get_mission_state_at_time(&mission, query_t, &propagator);
         assert!(state.is_some(), "Should find state at mid-mission");
+        let s = state.unwrap();
+        assert!(
+            (s.elapsed_s - query_t).abs() < 1e-12,
+            "elapsed_s should exactly match query time"
+        );
 
         // Before mission should return None
-        let state = get_mission_state_at_time(&mission, -1.0);
+        let state = get_mission_state_at_time(&mission, -1.0, &propagator);
         assert!(state.is_none(), "Should return None before mission");
 
         // After mission should return None
-        let state = get_mission_state_at_time(&mission, period * 2.0);
+        let state = get_mission_state_at_time(&mission, period * 2.0, &propagator);
         assert!(state.is_none(), "Should return None after mission");
+    }
+
+    /// Exact evaluation at leg endpoints matches trajectory start/end.
+    #[test]
+    fn exact_evaluation_at_endpoints() {
+        let departure = zero_departure();
+        let propagator = J2StmPropagator;
+        let config = default_config();
+        let period = std::f64::consts::TAU / departure.chief.mean_motion();
+
+        let waypoints = vec![Waypoint {
+            position: Vector3::new(0.0, 5.0, 0.0),
+            velocity: Vector3::zeros(),
+            tof_s: Some(period),
+        }];
+
+        let mission =
+            plan_waypoint_mission(&departure, &waypoints, &config, &propagator)
+                .expect("should succeed");
+
+        // At t=0, should match first trajectory point
+        let at_start = get_mission_state_at_time(&mission, 0.0, &propagator)
+            .expect("t=0 should be valid");
+        let first = &mission.legs[0].trajectory[0];
+        assert!(
+            (at_start.ric.position - first.ric.position).norm() < 1e-12,
+            "Start position should match trajectory[0]"
+        );
+
+        // At t=tof, should match last trajectory point
+        let at_end = get_mission_state_at_time(&mission, period, &propagator)
+            .expect("t=tof should be valid");
+        let last = mission.legs[0].trajectory.last().unwrap();
+        assert!(
+            (at_end.ric.position - last.ric.position).norm() < 1e-10,
+            "End position should match trajectory.last()"
+        );
+    }
+
+    /// Exact evaluation at an arbitrary mid-leg time returns exact elapsed_s.
+    #[test]
+    fn exact_evaluation_midpoint() {
+        let departure = zero_departure();
+        let propagator = J2StmPropagator;
+        let config = default_config();
+        let period = std::f64::consts::TAU / departure.chief.mean_motion();
+        let tof = period * 0.75;
+
+        let waypoints = vec![
+            Waypoint {
+                position: Vector3::new(0.0, 5.0, 0.0),
+                velocity: Vector3::zeros(),
+                tof_s: Some(tof),
+            },
+            Waypoint {
+                position: Vector3::new(2.0, 3.0, 0.0),
+                velocity: Vector3::zeros(),
+                tof_s: Some(tof),
+            },
+        ];
+
+        let mission =
+            plan_waypoint_mission(&departure, &waypoints, &config, &propagator)
+                .expect("should succeed");
+
+        // Query a point in the second leg
+        let query_t = tof + tof * 0.37; // 37% into second leg
+        let state = get_mission_state_at_time(&mission, query_t, &propagator)
+            .expect("mid-leg query should succeed");
+
+        // elapsed_s should be the local time within the second leg
+        let expected_local_t = tof * 0.37;
+        assert!(
+            (state.elapsed_s - expected_local_t).abs() < 1e-10,
+            "elapsed_s should be local time within leg: got {} expected {}",
+            state.elapsed_s,
+            expected_local_t,
+        );
+    }
+
+    /// Resample at higher density produces correct number of points.
+    #[test]
+    fn resample_leg_denser() {
+        let departure = zero_departure();
+        let propagator = J2StmPropagator;
+        let config = default_config();
+        let period = std::f64::consts::TAU / departure.chief.mean_motion();
+
+        let waypoints = vec![Waypoint {
+            position: Vector3::new(0.0, 5.0, 0.0),
+            velocity: Vector3::zeros(),
+            tof_s: Some(period),
+        }];
+
+        let mission =
+            plan_waypoint_mission(&departure, &waypoints, &config, &propagator)
+                .expect("should succeed");
+
+        let resampled = resample_leg_trajectory(&mission.legs[0], 1000, &propagator)
+            .expect("resample should succeed");
+
+        assert_eq!(resampled.len(), 1001, "1000 steps → 1001 points");
+
+        // First point should match trajectory[0]
+        let first_orig = &mission.legs[0].trajectory[0];
+        assert!(
+            (resampled[0].ric.position - first_orig.ric.position).norm() < 1e-12,
+            "Resampled first point should match original"
+        );
+    }
+
+    /// Out-of-bounds queries return None.
+    #[test]
+    fn evaluate_out_of_bounds() {
+        let departure = zero_departure();
+        let propagator = J2StmPropagator;
+        let config = default_config();
+        let period = std::f64::consts::TAU / departure.chief.mean_motion();
+
+        let waypoints = vec![Waypoint {
+            position: Vector3::new(0.0, 5.0, 0.0),
+            velocity: Vector3::zeros(),
+            tof_s: Some(period),
+        }];
+
+        let mission =
+            plan_waypoint_mission(&departure, &waypoints, &config, &propagator)
+                .expect("should succeed");
+
+        assert!(
+            get_mission_state_at_time(&mission, -1.0, &propagator).is_none(),
+            "Negative time should return None"
+        );
+        assert!(
+            get_mission_state_at_time(&mission, period + 1.0, &propagator).is_none(),
+            "Past-end time should return None"
+        );
     }
 
     /// Empty waypoints returns error.
@@ -683,6 +851,46 @@ mod tests {
             leg.from_position.norm() < 1e-6,
             "from_position should be near origin for zero ROE departure"
         );
+    }
+
+    /// Leg boundary ownership: intermediate and final boundaries are included.
+    #[test]
+    fn leg_boundary_ownership() {
+        let departure = zero_departure();
+        let propagator = J2StmPropagator;
+        let config = default_config();
+        let period = std::f64::consts::TAU / departure.chief.mean_motion();
+        let tof = period * 0.75;
+
+        let waypoints = vec![
+            Waypoint {
+                position: Vector3::new(0.0, 5.0, 0.0),
+                velocity: Vector3::zeros(),
+                tof_s: Some(tof),
+            },
+            Waypoint {
+                position: Vector3::new(2.0, 3.0, 0.0),
+                velocity: Vector3::zeros(),
+                tof_s: Some(tof),
+            },
+        ];
+
+        let mission =
+            plan_waypoint_mission(&departure, &waypoints, &config, &propagator)
+                .expect("should succeed");
+
+        // At exactly tof (end of leg 1 / start of leg 2): should return Some,
+        // owned by leg 1 (due to `elapsed_s <= t_offset + leg.tof_s`)
+        let at_boundary = get_mission_state_at_time(&mission, tof, &propagator);
+        assert!(at_boundary.is_some(), "Boundary at tof should be included");
+
+        // At exactly 2*tof (mission end): should return Some
+        let at_end = get_mission_state_at_time(&mission, 2.0 * tof, &propagator);
+        assert!(at_end.is_some(), "Mission endpoint should be included");
+
+        // At 2*tof + epsilon: should return None
+        let past_end = get_mission_state_at_time(&mission, 2.0 * tof + 1e-6, &propagator);
+        assert!(past_end.is_none(), "Past mission end should return None");
     }
 
     /// Serde roundtrip preserves new metadata fields.

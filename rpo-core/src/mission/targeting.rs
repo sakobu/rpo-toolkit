@@ -290,6 +290,7 @@ fn build_leg(
         tof_s,
         total_dv,
         post_departure_roe: solution.post_dep_roe,
+        departure_chief_mean: departure.chief,
         pre_arrival_roe: solution.arrival.roe,
         post_arrival_roe: post_arr_roe,
         arrival_chief_mean: solution.arrival.chief_mean,
