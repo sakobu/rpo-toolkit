@@ -292,7 +292,7 @@ fn perch_roe_to_keplerian(
 mod tests {
     use super::*;
     use crate::elements::conversions::keplerian_to_state;
-    use crate::elements::frames::roe_to_ric;
+    use crate::elements::ric::roe_to_ric;
     use crate::propagation::propagator::J2StmPropagator;
     use crate::elements::roe::compute_roe;
     use crate::test_helpers::{iss_like_elements, test_epoch};

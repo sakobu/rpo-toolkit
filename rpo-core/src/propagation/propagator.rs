@@ -4,7 +4,7 @@ use hifitime::{Duration, Epoch};
 use serde::{Deserialize, Serialize};
 
 use crate::propagation::drag_stm::propagate_roe_j2_drag;
-use crate::elements::frames::roe_to_ric;
+use crate::elements::ric::roe_to_ric;
 use crate::propagation::stm::propagate_roe_stm;
 use crate::types::{DragConfig, KeplerianElements, QuasiNonsingularROE, RICState};
 
@@ -217,14 +217,7 @@ mod tests {
         let prop = J2StmPropagator;
         let chief = iss_like_elements();
         let epoch = test_epoch();
-        let roe = QuasiNonsingularROE {
-            da: 0.0,
-            dlambda: 0.0,
-            dex: 0.0,
-            dey: 0.0,
-            dix: 0.0,
-            diy: 0.0,
-        };
+        let roe = QuasiNonsingularROE::default();
 
         let result = prop.propagate_with_steps(&roe, &chief, epoch, 3600.0, 0);
         assert!(result.is_err());
@@ -315,14 +308,7 @@ mod tests {
 
         let chief = iss_like_elements();
         let epoch = test_epoch();
-        let roe = QuasiNonsingularROE {
-            da: 0.0,
-            dlambda: 0.0,
-            dex: 0.0,
-            dey: 0.0,
-            dix: 0.0,
-            diy: 0.0,
-        };
+        let roe = QuasiNonsingularROE::default();
 
         let drag_prop = J2DragStmPropagator {
             drag: test_drag_config(),

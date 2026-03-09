@@ -210,14 +210,7 @@ mod tests {
     fn drag_stm_self_consistency() {
         let chief = iss_like_elements();
         let epoch = test_epoch();
-        let zero_roe = crate::types::QuasiNonsingularROE {
-            da: 0.0,
-            dlambda: 0.0,
-            dex: 0.0,
-            dey: 0.0,
-            dix: 0.0,
-            diy: 0.0,
-        };
+        let zero_roe = crate::types::QuasiNonsingularROE::default();
         let drag_config = test_drag_config();
         let period = std::f64::consts::TAU / chief.mean_motion();
 

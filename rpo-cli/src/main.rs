@@ -13,10 +13,11 @@ use rpo_core::{
     propagate_roe_stm, J2DragStmPropagator, J2StmPropagator, RelativePropagator,
     // Mission layer
     classify_separation, dimensionless_separation, plan_mission, plan_proximity_mission,
-    solve_lambert_with_config, LambertConfig, TransferDirection,
+    plan_waypoint_mission, solve_lambert_with_config, LambertConfig, TransferDirection,
     // Types
-    DragConfig, KeplerianElements, MissionPhase, MissionPlanConfig, PerchGeometry, ProximityConfig,
-    QuasiNonsingularROE, StateVector,
+    DepartureState, DragConfig, KeplerianElements, MissionPhase, MissionPlanConfig,
+    PerchGeometry, ProximityConfig, QuasiNonsingularROE, SafetyConfig, StateVector,
+    TargetingConfig, TofOptConfig, Waypoint,
 };
 
 // ---------------------------------------------------------------------------
@@ -37,6 +38,15 @@ enum Command {
     /// Plan a mission from user-provided ECI J2000 state vectors
     Run {
         /// Path to JSON input file
+        #[arg(short, long)]
+        input: PathBuf,
+        /// Output as JSON instead of human-readable text
+        #[arg(long)]
+        json: bool,
+    },
+    /// Waypoint-based maneuver targeting
+    Target {
+        /// Path to JSON input file with chief/deputy states + waypoints
         #[arg(short, long)]
         input: PathBuf,
         /// Output as JSON instead of human-readable text
@@ -84,17 +94,68 @@ enum PropagatorChoice {
 }
 
 // ---------------------------------------------------------------------------
+// Targeting input schema
+// ---------------------------------------------------------------------------
+
+#[derive(Deserialize)]
+struct TargetingInput {
+    chief: StateVector,
+    deputy: StateVector,
+    waypoints: Vec<WaypointInput>,
+    #[serde(default)]
+    targeting: Option<TargetingConfig>,
+    #[serde(default)]
+    tof_opt: Option<TofOptConfig>,
+    #[serde(default)]
+    safety: Option<SafetyConfig>,
+    #[serde(default)]
+    propagator: PropagatorChoice,
+    #[serde(default)]
+    drag: Option<DragConfig>,
+}
+
+#[derive(Deserialize)]
+struct WaypointInput {
+    position: [f64; 3],
+    #[serde(default)]
+    velocity: Option<[f64; 3]>,
+    tof_s: Option<f64>,
+}
+
+// ---------------------------------------------------------------------------
+// Propagator dispatch
+// ---------------------------------------------------------------------------
+
+/// Load and parse a JSON file into the given type.
+fn load_json<T: serde::de::DeserializeOwned>(path: &PathBuf) -> Result<T, Box<dyn Error>> {
+    let contents = std::fs::read_to_string(path)
+        .map_err(|e| format!("Failed to read {}: {e}", path.display()))?;
+    serde_json::from_str(&contents)
+        .map_err(|e| -> Box<dyn Error> { format!("Failed to parse JSON: {e}").into() })
+}
+
+fn make_propagator(
+    choice: PropagatorChoice,
+    drag: &Option<DragConfig>,
+) -> Box<dyn RelativePropagator> {
+    match (choice, drag) {
+        (PropagatorChoice::J2Drag, Some(d)) => Box::new(J2DragStmPropagator { drag: *d }),
+        (PropagatorChoice::J2Drag, None) => {
+            Box::new(J2DragStmPropagator { drag: DragConfig::zero() })
+        }
+        _ => Box::new(J2StmPropagator),
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Run mission from JSON input
 // ---------------------------------------------------------------------------
 
 fn run_mission(input_path: &PathBuf, json_output: bool) -> Result<(), Box<dyn Error>> {
-    let file_contents = std::fs::read_to_string(input_path)
-        .map_err(|e| format!("Failed to read {}: {e}", input_path.display()))?;
-    let input: MissionInput = serde_json::from_str(&file_contents)
-        .map_err(|e| format!("Failed to parse JSON: {e}"))?;
+    let input: MissionInput = load_json(input_path)?;
 
     let chief_ke = state_to_keplerian(&input.chief);
-    let period_s = std::f64::consts::TAU / chief_ke.mean_motion();
+    let period_s = chief_ke.period();
 
     let perch = input.config.perch.unwrap_or(PerchGeometry::VBar { along_track_km: 5.0 });
     let proximity = input.config.proximity.unwrap_or_default();
@@ -106,20 +167,10 @@ fn run_mission(input_path: &PathBuf, json_output: bool) -> Result<(), Box<dyn Er
         num_steps: overrides.num_steps.unwrap_or(40),
     };
 
-    let mission = match (input.config.propagator, &input.config.drag) {
-        (PropagatorChoice::J2Drag, Some(drag)) => {
-            let prop = J2DragStmPropagator { drag: *drag };
-            plan_mission(&input.chief, &input.deputy, &perch, &proximity, &prop, &plan_config)?
-        }
-        (PropagatorChoice::J2Drag, None) => {
-            let prop = J2DragStmPropagator { drag: DragConfig::zero() };
-            plan_mission(&input.chief, &input.deputy, &perch, &proximity, &prop, &plan_config)?
-        }
-        _ => {
-            let prop = J2StmPropagator;
-            plan_mission(&input.chief, &input.deputy, &perch, &proximity, &prop, &plan_config)?
-        }
-    };
+    let prop = make_propagator(input.config.propagator, &input.config.drag);
+    let mission = plan_mission(
+        &input.chief, &input.deputy, &perch, &proximity, prop.as_ref(), &plan_config,
+    )?;
 
     if json_output {
         println!("{}", serde_json::to_string_pretty(&mission)?);
@@ -171,6 +222,94 @@ fn run_mission(input_path: &PathBuf, json_output: bool) -> Result<(), Box<dyn Er
         1
     };
     print_trajectory_table(&mission.proximity_trajectory, sample);
+
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Waypoint targeting from JSON input
+// ---------------------------------------------------------------------------
+
+fn run_targeting(input_path: &PathBuf, json_output: bool) -> Result<(), Box<dyn Error>> {
+    let input: TargetingInput = load_json(input_path)?;
+
+    let chief_ke = state_to_keplerian(&input.chief);
+    let deputy_ke = state_to_keplerian(&input.deputy);
+    let roe = compute_roe(&chief_ke, &deputy_ke);
+
+    let waypoints: Vec<Waypoint> = input
+        .waypoints
+        .iter()
+        .map(|wp| {
+            let vel = wp.velocity.unwrap_or([0.0, 0.0, 0.0]);
+            Waypoint {
+                position: nalgebra::Vector3::new(wp.position[0], wp.position[1], wp.position[2]),
+                velocity: nalgebra::Vector3::new(vel[0], vel[1], vel[2]),
+                tof_s: wp.tof_s,
+            }
+        })
+        .collect();
+
+    let targeting_config = input.targeting.unwrap_or_default();
+    let tof_config = input.tof_opt.unwrap_or_default();
+    let safety_config = input.safety;
+
+    let departure = DepartureState {
+        roe,
+        chief: chief_ke,
+        epoch: input.chief.epoch,
+    };
+
+    let prop = make_propagator(input.propagator, &input.drag);
+    let mission = plan_waypoint_mission(
+        &departure, &waypoints,
+        &targeting_config, &tof_config, safety_config.as_ref(), prop.as_ref(),
+    )?;
+
+    if json_output {
+        println!("{}", serde_json::to_string_pretty(&mission)?);
+        return Ok(());
+    }
+
+    // --- Human-readable output ---
+    println!("Waypoint Mission Plan");
+    println!("=====================\n");
+
+    println!("Initial ROE:");
+    print_roe("  State", &roe, chief_ke.a);
+
+    println!("\n{} waypoint(s), {} leg(s)", waypoints.len(), mission.legs.len());
+    println!("Total Δv:       {:.6} km/s", mission.total_dv);
+    println!("Total duration: {:.1} s ({:.2} min)\n", mission.total_duration_s, mission.total_duration_s / 60.0);
+
+    println!(
+        "  {:>4}  {:>10}  {:>12}  {:>12}  {:>12}  {:>12}",
+        "Leg", "TOF (s)", "Δv1 (km/s)", "Δv2 (km/s)", "Total (km/s)", "Target I (km)"
+    );
+    println!("  {:-<4}  {:-<10}  {:-<12}  {:-<12}  {:-<12}  {:-<12}", "", "", "", "", "", "");
+    for (i, leg) in mission.legs.iter().enumerate() {
+        let dv1 = leg.departure_maneuver.dv.norm();
+        let dv2 = leg.arrival_maneuver.dv.norm();
+        let target_in = waypoints[i].position.y;
+        println!(
+            "  {:>4}  {:>10.1}  {:>12.6}  {:>12.6}  {:>12.6}  {:>12.4}",
+            i + 1,
+            leg.tof_s,
+            dv1,
+            dv2,
+            leg.total_dv,
+            target_in,
+        );
+    }
+
+    if let Some(ref safety) = mission.safety {
+        println!("\nSafety Analysis:");
+        println!("  Min R/C separation: {:.4} km", safety.min_radial_crosstrack_km);
+        println!("  δe magnitude:       {:.6e}", safety.de_magnitude);
+        println!("  δi magnitude:       {:.6e}", safety.di_magnitude);
+        println!("  e/i phase angle:    {:.2}°", safety.ei_phase_angle_rad.to_degrees());
+        println!("  Safe:               {}", if safety.is_safe { "YES" } else { "NO" });
+    }
 
     Ok(())
 }
@@ -720,5 +859,6 @@ fn main() -> Result<(), Box<dyn Error>> {
     match cli.command {
         None | Some(Command::Demo) => run_demo(),
         Some(Command::Run { input, json }) => run_mission(&input, json),
+        Some(Command::Target { input, json }) => run_targeting(&input, json),
     }
 }

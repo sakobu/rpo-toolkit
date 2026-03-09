@@ -42,6 +42,12 @@ impl KeplerianElements {
         (crate::constants::MU_EARTH / (self.a * self.a * self.a)).sqrt()
     }
 
+    /// Orbital period T = 2π/n (seconds).
+    #[must_use]
+    pub fn period(&self) -> f64 {
+        std::f64::consts::TAU / self.mean_motion()
+    }
+
     /// Solve Kepler's equation M = E - e*sin(E) for eccentric anomaly E,
     /// then compute true anomaly ν.
     #[must_use]
@@ -93,6 +99,19 @@ pub struct QuasiNonsingularROE {
     pub dix: f64,
     /// Relative inclination vector y-component
     pub diy: f64,
+}
+
+impl Default for QuasiNonsingularROE {
+    fn default() -> Self {
+        Self {
+            da: 0.0,
+            dlambda: 0.0,
+            dex: 0.0,
+            dey: 0.0,
+            dix: 0.0,
+            diy: 0.0,
+        }
+    }
 }
 
 impl QuasiNonsingularROE {
@@ -250,6 +269,156 @@ pub struct MissionPlan {
     pub proximity_trajectory: Vec<crate::propagation::propagator::PropagatedState>,
 }
 
+/// A target waypoint in RIC space for maneuver targeting.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct Waypoint {
+    /// Target position in RIC frame (km): [radial, in-track, cross-track]
+    pub position: Vector3<f64>,
+    /// Target velocity in RIC frame (km/s): [radial, in-track, cross-track]
+    pub velocity: Vector3<f64>,
+    /// Time of flight to this waypoint (seconds). If `None`, TOF will be optimized.
+    pub tof_s: Option<f64>,
+}
+
+/// A single impulsive maneuver (Δv) in the RIC frame.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
+pub struct Maneuver {
+    /// Δv in RIC frame (km/s): [radial, in-track, cross-track]
+    pub dv: Vector3<f64>,
+    /// Epoch at which the maneuver is applied
+    #[serde(with = "epoch_serde")]
+    pub epoch: Epoch,
+}
+
+/// A single leg of a waypoint transfer (two burns + coast).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ManeuverLeg {
+    /// Departure burn (applied at departure epoch)
+    pub departure_maneuver: Maneuver,
+    /// Arrival burn (applied at arrival epoch)
+    pub arrival_maneuver: Maneuver,
+    /// Time of flight for this leg (seconds)
+    pub tof_s: f64,
+    /// Total Δv for this leg (km/s)
+    pub total_dv: f64,
+    /// ROE state after departure burn
+    pub post_departure_roe: QuasiNonsingularROE,
+    /// ROE state at arrival (before arrival burn)
+    pub pre_arrival_roe: QuasiNonsingularROE,
+    /// ROE state after arrival burn
+    pub post_arrival_roe: QuasiNonsingularROE,
+    /// Chief mean Keplerian elements at arrival epoch
+    pub arrival_chief_mean: KeplerianElements,
+    /// Coast trajectory between burns
+    pub trajectory: Vec<crate::propagation::propagator::PropagatedState>,
+}
+
+/// A complete waypoint-based mission plan.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WaypointMission {
+    /// Ordered sequence of maneuver legs
+    pub legs: Vec<ManeuverLeg>,
+    /// Total Δv across all legs (km/s)
+    pub total_dv: f64,
+    /// Total mission duration (seconds)
+    pub total_duration_s: f64,
+    /// Safety metrics for the full mission (if computed)
+    pub safety: Option<SafetyMetrics>,
+}
+
+/// Passive safety metrics based on e/i vector separation.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
+pub struct SafetyMetrics {
+    /// Minimum radial/cross-track separation (km) from D'Amico Eq. 2.22
+    pub min_radial_crosstrack_km: f64,
+    /// Magnitude of relative eccentricity vector
+    pub de_magnitude: f64,
+    /// Magnitude of relative inclination vector
+    pub di_magnitude: f64,
+    /// Phase angle between e/i vectors (rad). Parallel = 0, anti-parallel = π.
+    pub ei_phase_angle_rad: f64,
+    /// Whether the formation meets the safety threshold
+    pub is_safe: bool,
+}
+
+/// Departure orbital state for targeting: groups ROE, chief elements, and epoch.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
+pub struct DepartureState {
+    /// Deputy quasi-nonsingular ROE relative to chief
+    pub roe: QuasiNonsingularROE,
+    /// Chief mean Keplerian elements
+    pub chief: KeplerianElements,
+    /// Epoch of this state
+    #[serde(with = "epoch_serde")]
+    pub epoch: Epoch,
+}
+
+/// Configuration for the Newton-Raphson targeting solver.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
+pub struct TargetingConfig {
+    /// Maximum Newton-Raphson iterations (default: 100)
+    pub max_iterations: u32,
+    /// Position convergence tolerance in km (default: 1e-6, i.e. 1 mm)
+    pub position_tol_km: f64,
+    /// Initial damping factor (default: 1.0)
+    pub initial_damping: f64,
+    /// Cap on any Δv component (km/s) (default: 1.0)
+    pub dv_cap_km_s: f64,
+    /// Number of trajectory steps per leg for output (default: 50)
+    pub trajectory_steps: usize,
+}
+
+impl Default for TargetingConfig {
+    fn default() -> Self {
+        Self {
+            max_iterations: 100,
+            position_tol_km: 1e-6,
+            initial_damping: 1.0,
+            dv_cap_km_s: 1.0,
+            trajectory_steps: 50,
+        }
+    }
+}
+
+/// Configuration for time-of-flight optimization.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
+pub struct TofOptConfig {
+    /// Minimum TOF as fraction of orbital period (default: 0.5)
+    pub min_periods: f64,
+    /// Maximum TOF as fraction of orbital period (default: 3.0)
+    pub max_periods: f64,
+    /// Number of initial TOF samples for multi-start (default: 5)
+    pub num_starts: u32,
+    /// Golden section convergence tolerance in seconds (default: 1.0)
+    pub tol_s: f64,
+}
+
+impl Default for TofOptConfig {
+    fn default() -> Self {
+        Self {
+            min_periods: 0.5,
+            max_periods: 3.0,
+            num_starts: 5,
+            tol_s: 1.0,
+        }
+    }
+}
+
+/// Configuration for passive safety analysis.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
+pub struct SafetyConfig {
+    /// Minimum radial/cross-track separation threshold (km) (default: 0.2)
+    pub min_separation_km: f64,
+}
+
+impl Default for SafetyConfig {
+    fn default() -> Self {
+        Self {
+            min_separation_km: 0.2,
+        }
+    }
+}
+
 /// Errors from mission planning.
 #[derive(Debug, Clone)]
 pub enum MissionError {
@@ -266,6 +435,26 @@ pub enum MissionError {
         /// Configured proximity threshold
         threshold: f64,
     },
+    /// Targeting solver failed to converge.
+    TargetingConvergence {
+        /// Final position error (km)
+        final_error_km: f64,
+        /// Number of iterations completed
+        iterations: u32,
+    },
+    /// Jacobian is singular and cannot be inverted.
+    SingularJacobian,
+    /// No waypoints provided.
+    EmptyWaypoints,
+    /// TOF optimization failed to find a valid solution.
+    TofOptimizationFailure {
+        /// Minimum TOF searched (seconds)
+        min_tof: f64,
+        /// Maximum TOF searched (seconds)
+        max_tof: f64,
+        /// Number of multi-start samples evaluated
+        num_starts: u32,
+    },
 }
 
 impl std::fmt::Display for MissionError {
@@ -277,6 +466,16 @@ impl std::fmt::Display for MissionError {
             Self::NotInProximity { delta_r_over_r, threshold } => write!(
                 f,
                 "MissionError: not in proximity — δr/r = {delta_r_over_r:.6} exceeds threshold {threshold:.6}"
+            ),
+            Self::TargetingConvergence { final_error_km, iterations } => write!(
+                f,
+                "MissionError: targeting failed to converge — error = {final_error_km:.6e} km after {iterations} iterations"
+            ),
+            Self::SingularJacobian => write!(f, "MissionError: singular Jacobian in targeting solver"),
+            Self::EmptyWaypoints => write!(f, "MissionError: no waypoints provided"),
+            Self::TofOptimizationFailure { min_tof, max_tof, num_starts } => write!(
+                f,
+                "MissionError: TOF optimization failed — no valid TOF in [{min_tof:.1}, {max_tof:.1}] s ({num_starts} starts)"
             ),
         }
     }

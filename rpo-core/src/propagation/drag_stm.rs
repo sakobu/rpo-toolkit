@@ -256,14 +256,7 @@ mod tests {
             dex_dot: 0.0,
             dey_dot: 0.0,
         };
-        let roe = QuasiNonsingularROE {
-            da: 0.0,
-            dlambda: 0.0,
-            dex: 0.0,
-            dey: 0.0,
-            dix: 0.0,
-            diy: 0.0,
-        };
+        let roe = QuasiNonsingularROE::default();
 
         let tau = 1000.0;
         let (roe_prop, _) = propagate_roe_j2_drag(&roe, &chief, &drag, tau);
@@ -287,14 +280,7 @@ mod tests {
             dex_dot: 0.0,
             dey_dot: 0.0,
         };
-        let roe = QuasiNonsingularROE {
-            da: 0.0,
-            dlambda: 0.0,
-            dex: 0.0,
-            dey: 0.0,
-            dix: 0.0,
-            diy: 0.0,
-        };
+        let roe = QuasiNonsingularROE::default();
 
         let tau = 1000.0;
         let (roe_1, _) = propagate_roe_j2_drag(&roe, &chief, &drag, tau);
@@ -318,14 +304,7 @@ mod tests {
             dex_dot,
             dey_dot,
         };
-        let roe = QuasiNonsingularROE {
-            da: 0.0,
-            dlambda: 0.0,
-            dex: 0.0,
-            dey: 0.0,
-            dix: 0.0,
-            diy: 0.0,
-        };
+        let roe = QuasiNonsingularROE::default();
 
         let tau = 1000.0;
         let (roe_prop, _) = propagate_roe_j2_drag(&roe, &chief, &drag, tau);

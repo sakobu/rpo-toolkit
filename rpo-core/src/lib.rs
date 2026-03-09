@@ -19,11 +19,16 @@ pub mod mission;
 pub mod propagation;
 pub mod types;
 
-pub use elements::{compute_roe, keplerian_to_state, roe_to_ric, state_to_keplerian};
+pub use elements::{
+    apply_maneuver, compute_b_matrix, compute_roe, compute_t_matrix, compute_t_position,
+    compute_t_velocity, keplerian_to_state, ric_position_to_roe, roe_to_ric, state_to_keplerian,
+};
 pub use mission::{
-    classify_separation, dimensionless_separation, eci_separation_km, plan_mission,
-    plan_proximity_mission, solve_lambert, solve_lambert_izzo, solve_lambert_with_config,
-    LambertConfig, LambertError, LambertTransfer, TransferDirection,
+    analyze_safety, analyze_trajectory_safety, check_ei_separation, classify_separation,
+    dimensionless_separation, eci_separation_km, get_mission_state_at_time, optimize_tof,
+    plan_mission, plan_proximity_mission, plan_waypoint_mission, solve_lambert, solve_lambert_izzo,
+    solve_lambert_with_config, solve_leg, LambertConfig, LambertError, LambertTransfer,
+    TransferDirection,
 };
 pub use propagation::{
     compute_j2_drag_stm, compute_j2_params, compute_stm, compute_stm_with_params,
@@ -31,8 +36,10 @@ pub use propagation::{
     PropagatedState, PropagationError, RelativePropagator,
 };
 pub use types::{
-    DragConfig, KeplerianElements, MissionError, MissionPhase, MissionPlan, MissionPlanConfig,
-    PerchGeometry, ProximityConfig, QuasiNonsingularROE, RICState, StateVector,
+    DepartureState, DragConfig, KeplerianElements, Maneuver, ManeuverLeg, MissionError,
+    MissionPhase, MissionPlan, MissionPlanConfig, PerchGeometry, ProximityConfig,
+    QuasiNonsingularROE, RICState, SafetyConfig, SafetyMetrics, StateVector, TargetingConfig,
+    TofOptConfig, Waypoint, WaypointMission,
 };
 
 #[cfg(test)]
