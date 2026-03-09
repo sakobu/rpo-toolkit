@@ -22,6 +22,7 @@ pub mod propagator;
 pub mod roe;
 pub mod stm;
 pub mod types;
+pub mod validation;
 
 pub use drag_stm::{compute_j2_drag_stm, propagate_roe_j2_drag};
 pub use elements::{keplerian_to_state, state_to_keplerian};
