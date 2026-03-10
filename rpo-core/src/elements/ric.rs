@@ -8,6 +8,25 @@ use nalgebra::{SMatrix, Vector3};
 
 use crate::types::{KeplerianElements, QuasiNonsingularROE, RICState};
 
+/// Errors from RIC ↔ ROE operations.
+#[derive(Debug, Clone)]
+pub enum RicError {
+    /// `T_pos` · `T_pos^T` is singular; cannot compute pseudo-inverse.
+    SingularPositionMatrix,
+}
+
+impl std::fmt::Display for RicError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::SingularPositionMatrix => {
+                write!(f, "T_pos · T_pos^T is singular; cannot compute pseudo-inverse")
+            }
+        }
+    }
+}
+
+impl std::error::Error for RicError {}
+
 /// Compute the full 6×6 ROE→RIC transformation matrix (D'Amico Eq. 2.17).
 ///
 /// Maps `[δa, δλ, δex, δey, δix, δiy]` → `[r_R, r_I, r_C, v_R, v_I, v_C]`.
@@ -74,24 +93,23 @@ pub fn compute_t_velocity(chief: &KeplerianElements) -> SMatrix<f64, 3, 6> {
 /// Since `T_pos` is 3x6 (under-determined), this finds the minimum-norm ROE
 /// that produces the given RIC position: `δα = T_pos^† · r_RIC`.
 ///
-/// # Panics
-/// Panics if `T_pos · T_pos^T` is singular (should not happen for valid chief elements).
+/// # Errors
+/// Returns `RicError::SingularPositionMatrix` if `T_pos · T_pos^T` is singular.
 ///
 /// # Arguments
 /// * `ric_pos` - Target position in RIC frame (km)
 /// * `chief` - Chief Keplerian elements
-#[must_use]
 pub fn ric_position_to_roe(
     ric_pos: &Vector3<f64>,
     chief: &KeplerianElements,
-) -> QuasiNonsingularROE {
+) -> Result<QuasiNonsingularROE, RicError> {
     let t_pos = compute_t_position(chief);
     // Pseudo-inverse: T^† = Tᵀ(T·Tᵀ)⁻¹
     let t_tt = t_pos * t_pos.transpose();
-    let t_tt_inv = t_tt.try_inverse().expect("T·Tᵀ should be invertible for valid chief elements");
+    let t_tt_inv = t_tt.try_inverse().ok_or(RicError::SingularPositionMatrix)?;
     let pseudo_inv = t_pos.transpose() * t_tt_inv;
     let roe_vec = pseudo_inv * ric_pos;
-    QuasiNonsingularROE::from_vector(&roe_vec.fixed_rows::<6>(0).into())
+    Ok(QuasiNonsingularROE::from_vector(&roe_vec.fixed_rows::<6>(0).into()))
 }
 
 /// Convert quasi-nonsingular ROEs to RIC-frame relative state (D'Amico Eq. 2.17).
@@ -299,7 +317,7 @@ mod tests {
         let chief = iss_like_elements();
         let target_pos = nalgebra::Vector3::new(1.0, 5.0, 0.5);
 
-        let roe = ric_position_to_roe(&target_pos, &chief);
+        let roe = ric_position_to_roe(&target_pos, &chief).unwrap();
         let t_pos = compute_t_position(&chief);
         let recovered_pos = t_pos * roe.to_vector();
 

@@ -23,14 +23,14 @@ pub use elements::{
     apply_maneuver, compute_b_matrix, compute_roe, compute_t_matrix, compute_t_position,
     compute_t_velocity, eci_to_ric_dcm, eci_to_ric_dv, eci_to_ric_relative, keplerian_to_state,
     ric_position_to_roe, ric_to_eci_dv, ric_to_eci_position, ric_to_eci_state, roe_to_ric,
-    state_to_keplerian,
+    state_to_keplerian, RicError,
 };
 pub use mission::{
     analyze_safety, analyze_trajectory_safety, classify_separation,
     dimensionless_separation, eci_separation_km, get_mission_state_at_time, optimize_tof,
     plan_mission, plan_waypoint_mission, replan_from_waypoint,
     resample_leg_trajectory, solve_lambert, solve_lambert_izzo, solve_lambert_with_config,
-    solve_leg, LambertConfig, LambertError, LambertTransfer, TransferDirection,
+    solve_leg, LambertConfig, LambertError, LambertTransfer, SafetyError, TransferDirection,
 };
 pub use propagation::{
     compute_j2_drag_stm, compute_j2_params, compute_stm, compute_stm_with_params,

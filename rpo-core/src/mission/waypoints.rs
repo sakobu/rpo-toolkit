@@ -37,7 +37,10 @@ fn compute_worst_safety(
                 cumulative_time += leg.tof_s;
                 continue;
             }
-            let m = crate::mission::safety::analyze_trajectory_safety(&leg.trajectory);
+            let Ok(m) = crate::mission::safety::analyze_trajectory_safety(&leg.trajectory) else {
+                cumulative_time += leg.tof_s;
+                continue;
+            };
             if m.min_rc_separation_km < overall_min_rc {
                 overall_min_rc = m.min_rc_separation_km;
                 rc_provenance = (i, cumulative_time + m.min_rc_elapsed_s, m.min_rc_ric_position_km);

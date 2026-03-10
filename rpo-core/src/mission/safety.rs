@@ -9,6 +9,23 @@ use nalgebra::Vector3;
 use crate::propagation::propagator::PropagatedState;
 use crate::types::{KeplerianElements, QuasiNonsingularROE, SafetyMetrics};
 
+/// Errors from safety analysis operations.
+#[derive(Debug, Clone)]
+pub enum SafetyError {
+    /// Trajectory slice is empty; cannot analyze safety.
+    EmptyTrajectory,
+}
+
+impl std::fmt::Display for SafetyError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::EmptyTrajectory => write!(f, "trajectory is empty; cannot analyze safety"),
+        }
+    }
+}
+
+impl std::error::Error for SafetyError {}
+
 /// Analyze passive safety of a single ROE state plus instantaneous RIC distances.
 ///
 /// Computes:
@@ -97,13 +114,14 @@ pub fn analyze_safety(
 /// The **e/i separation** (D'Amico Eq. 2.22) is an analytic orbit-averaged
 /// bound and varies slowly with secular J2 drift.
 ///
-/// # Panics
-/// Panics if the trajectory is empty.
-#[must_use]
+/// # Errors
+/// Returns `SafetyError::EmptyTrajectory` if the trajectory slice is empty.
 pub fn analyze_trajectory_safety(
     trajectory: &[PropagatedState],
-) -> SafetyMetrics {
-    assert!(!trajectory.is_empty(), "trajectory must not be empty");
+) -> Result<SafetyMetrics, SafetyError> {
+    if trajectory.is_empty() {
+        return Err(SafetyError::EmptyTrajectory);
+    }
 
     let first = &trajectory[0];
     let mut worst = analyze_safety(&first.roe, &first.chief_mean, &first.ric.position_ric_km);
@@ -142,7 +160,7 @@ pub fn analyze_trajectory_safety(
     worst.min_3d_ric_position_km = min_3d_ric_position_km;
     // leg_index stays 0 — set by compute_worst_safety
 
-    worst
+    Ok(worst)
 }
 
 #[cfg(test)]
@@ -348,8 +366,8 @@ mod tests {
             .propagate_with_steps(&roe, &chief, epoch, period, 200)
             .expect("fine propagation should succeed");
 
-        let coarse_metrics = analyze_trajectory_safety(&coarse);
-        let fine_metrics = analyze_trajectory_safety(&fine);
+        let coarse_metrics = analyze_trajectory_safety(&coarse).unwrap();
+        let fine_metrics = analyze_trajectory_safety(&fine).unwrap();
 
         // Finer sampling can only find a tighter or equal minimum
         assert!(
@@ -384,7 +402,7 @@ mod tests {
             .propagate_with_steps(&roe, &chief, epoch, period, 20)
             .expect("propagation should succeed");
 
-        let worst = analyze_trajectory_safety(&trajectory);
+        let worst = analyze_trajectory_safety(&trajectory).unwrap();
 
         // Should have valid metrics
         assert!(worst.de_magnitude > 0.0);
@@ -417,7 +435,7 @@ mod tests {
             .propagate_with_steps(&roe, &chief, epoch, period, 200)
             .expect("propagation should succeed");
 
-        let worst = analyze_trajectory_safety(&trajectory);
+        let worst = analyze_trajectory_safety(&trajectory).unwrap();
 
         // Elapsed times should be non-negative and within the trajectory span
         assert!(worst.min_rc_elapsed_s >= 0.0, "R/C elapsed_s should be non-negative");
