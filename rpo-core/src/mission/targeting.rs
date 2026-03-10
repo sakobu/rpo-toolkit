@@ -76,10 +76,10 @@ fn forward_model(
     dv1: &Vector3<f64>,
     tof_s: f64,
     propagator: &PropagationModel,
-) -> (PropagatedState, QuasiNonsingularROE) {
+) -> Result<(PropagatedState, QuasiNonsingularROE), MissionError> {
     let post_dv1_roe = apply_maneuver(&departure.roe, dv1, &departure.chief);
-    let state = propagator.propagate(&post_dv1_roe, &departure.chief, departure.epoch, tof_s);
-    (state, post_dv1_roe)
+    let state = propagator.propagate(&post_dv1_roe, &departure.chief, departure.epoch, tof_s)?;
+    Ok((state, post_dv1_roe))
 }
 
 /// Analytical 3×3 position Jacobian: `J = T_pos(chief_arr) · Φ(τ) · B(chief_dep)`.
@@ -90,13 +90,13 @@ fn forward_model(
 fn compute_analytical_jacobian(
     chief_dep: &KeplerianElements,
     tof_s: f64,
-) -> SMatrix<f64, 3, 3> {
-    let j2p = crate::propagation::j2_params::compute_j2_params(chief_dep);
+) -> Result<SMatrix<f64, 3, 3>, MissionError> {
+    let j2p = crate::propagation::j2_params::compute_j2_params(chief_dep)?;
     let phi = crate::propagation::stm::compute_stm_with_params(&j2p, chief_dep, tof_s);
     let chief_arr = crate::propagation::stm::propagate_chief_mean(chief_dep, &j2p, tof_s);
     let b = crate::elements::gve::compute_b_matrix(chief_dep);
     let t_pos = crate::elements::ric::compute_t_position(&chief_arr);
-    t_pos * phi * b
+    Ok(t_pos * phi * b)
 }
 
 /// Output of a converged Newton-Raphson iteration.
@@ -152,7 +152,7 @@ pub fn solve_leg(
 
     // Analytical Jacobian: constant w.r.t. Δv (affine forward model).
     // Computed once; pre-invert for direct Newton steps.
-    let jac = compute_analytical_jacobian(&departure.chief, tof_s);
+    let jac = compute_analytical_jacobian(&departure.chief, tof_s)?;
     let jac_inv = if let Some(inv) = jac.try_inverse() {
         inv
     } else {
@@ -165,7 +165,7 @@ pub fn solve_leg(
     let max_iter = f64::from(config.max_iterations.max(1));
 
     for iter in 0..config.max_iterations {
-        let (arrival, post_dep_roe) = forward_model(departure, &dv1, tof_s, propagator);
+        let (arrival, post_dep_roe) = forward_model(departure, &dv1, tof_s, propagator)?;
 
         // Position residual only — velocity corrected by arrival burn
         let pos_err = target_position - arrival.ric.position_ric_km;
@@ -222,7 +222,7 @@ fn solve_leg_cost_only(
         config.dv_cap_km_s,
     );
 
-    let jac = compute_analytical_jacobian(&departure.chief, tof_s);
+    let jac = compute_analytical_jacobian(&departure.chief, tof_s)?;
     let jac_inv = if let Some(inv) = jac.try_inverse() {
         inv
     } else {
@@ -235,7 +235,7 @@ fn solve_leg_cost_only(
     let max_iter = f64::from(config.max_iterations.max(1));
 
     for iter in 0..config.max_iterations {
-        let (arrival, _) = forward_model(departure, &dv1, tof_s, propagator);
+        let (arrival, _) = forward_model(departure, &dv1, tof_s, propagator)?;
 
         let pos_err = target_position - arrival.ric.position_ric_km;
         let pos_error_km = pos_err.norm();
@@ -523,7 +523,7 @@ mod tests {
 
         // Verify by propagating with the computed Δv
         let post_dep = apply_maneuver(&departure.roe, &leg.departure_maneuver.dv_ric_km_s, &chief);
-        let state = propagator.propagate(&post_dep, &chief, epoch, period);
+        let state = propagator.propagate(&post_dep, &chief, epoch, period).unwrap();
         let pos_err = (state.ric.position_ric_km - target_pos).norm();
 
         assert!(
@@ -669,7 +669,7 @@ mod tests {
         let fd_step = 1e-7;
 
         // Analytical Jacobian
-        let jac_analytical = compute_analytical_jacobian(&chief, tof_s);
+        let jac_analytical = compute_analytical_jacobian(&chief, tof_s).unwrap();
 
         // Central-difference FD Jacobian
         let mut jac_fd = SMatrix::<f64, 3, 3>::zeros();
@@ -679,8 +679,8 @@ mod tests {
             dv_plus[j] += fd_step;
             dv_minus[j] -= fd_step;
 
-            let (state_p, _) = forward_model(&departure, &dv_plus, tof_s, &propagator);
-            let (state_m, _) = forward_model(&departure, &dv_minus, tof_s, &propagator);
+            let (state_p, _) = forward_model(&departure, &dv_plus, tof_s, &propagator).unwrap();
+            let (state_m, _) = forward_model(&departure, &dv_minus, tof_s, &propagator).unwrap();
 
             let inv_2h = 1.0 / (2.0 * fd_step);
             for i in 0..3 {

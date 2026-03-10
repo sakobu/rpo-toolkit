@@ -125,7 +125,7 @@ mod tests {
         let config = ProximityConfig::default();
 
         // Phase classification
-        let phase = classify_separation(&chief, &deputy, &config);
+        let phase = classify_separation(&chief, &deputy, &config).unwrap();
         assert!(
             matches!(phase, MissionPhase::FarField { .. }),
             "200 km + inclination offset should be FarField, got {phase:?}"
@@ -186,7 +186,7 @@ mod tests {
 
         // J2-only propagator (zero ROE should stay near zero)
         let j2_prop = PropagationModel::J2Stm;
-        let j2_5 = j2_prop.propagate(&zero_roe, &chief, epoch, 5.0 * period);
+        let j2_5 = j2_prop.propagate(&zero_roe, &chief, epoch, 5.0 * period).unwrap();
         assert!(
             j2_5.roe.da.abs() < 1e-12,
             "J2-only da from zero ROE should stay near zero, got {}",
@@ -197,8 +197,8 @@ mod tests {
         let drag_prop = PropagationModel::J2DragStm {
             drag: drag_config,
         };
-        let drag_5 = drag_prop.propagate(&zero_roe, &chief, epoch, 5.0 * period);
-        let drag_10 = drag_prop.propagate(&zero_roe, &chief, epoch, 10.0 * period);
+        let drag_5 = drag_prop.propagate(&zero_roe, &chief, epoch, 5.0 * period).unwrap();
+        let drag_10 = drag_prop.propagate(&zero_roe, &chief, epoch, 10.0 * period).unwrap();
 
         // da drift should be approximately da_dot * t
         let t5 = 5.0 * period;
@@ -239,7 +239,7 @@ mod tests {
         let period = std::f64::consts::TAU / chief.mean_motion();
 
         let prop = PropagationModel::J2Stm;
-        let state_10 = prop.propagate(&roe_0, &chief, epoch, 10.0 * period);
+        let state_10 = prop.propagate(&roe_0, &chief, epoch, 10.0 * period).unwrap();
 
         // da should remain constant under J2 (no secular da drift)
         let da_change = (state_10.roe.da - roe_0.da).abs();
@@ -368,14 +368,14 @@ mod tests {
             .expect("deputy nyx propagation failed");
 
         // Compute ROEs from nyx final states
-        let chief_ke_final = state_to_keplerian(&chief_nyx);
-        let deputy_ke_final = state_to_keplerian(&deputy_nyx);
+        let chief_ke_final = state_to_keplerian(&chief_nyx).unwrap();
+        let deputy_ke_final = state_to_keplerian(&deputy_nyx).unwrap();
         let nyx_roe = compute_roe(&chief_ke_final, &deputy_ke_final);
 
         // Propagate with J2 STM
         let roe_0 = compute_roe(&chief_ke, &deputy_ke);
         let prop = PropagationModel::J2Stm;
-        let stm_state = prop.propagate(&roe_0, &chief_ke, epoch, duration);
+        let stm_state = prop.propagate(&roe_0, &chief_ke, epoch, duration).unwrap();
 
         // da should be constant in both (Keplerian preserves SMA)
         assert!(

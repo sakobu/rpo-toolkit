@@ -3,7 +3,7 @@
 use hifitime::Duration;
 
 use crate::constants::TWO_PI;
-use crate::elements::conversions::{keplerian_to_state, state_to_keplerian};
+use crate::elements::conversions::{keplerian_to_state, state_to_keplerian, ConversionError};
 use crate::types::StateVector;
 
 /// Propagate a state vector under two-body Keplerian dynamics, producing
@@ -14,18 +14,24 @@ use crate::types::StateVector;
 ///
 /// # Invariants
 /// - `initial` must represent a bound orbit (`e < 1`, `a > 0`)
-/// - `n_steps > 0` (`n_steps = 0` causes `0.0 / 0.0 = NaN` in step computation)
 /// - `duration_s` must be finite
-#[must_use]
+///
+/// # Errors
+/// Returns `ConversionError` if the initial state represents an unbound orbit
+/// or has a zero position vector.
 pub fn propagate_keplerian(
     initial: &StateVector,
     duration_s: f64,
     n_steps: usize,
-) -> Vec<StateVector> {
-    let ke = state_to_keplerian(initial);
+) -> Result<Vec<StateVector>, ConversionError> {
+    if n_steps == 0 {
+        return Ok(vec![initial.clone()]);
+    }
+
+    let ke = state_to_keplerian(initial)?;
     let n = ke.mean_motion();
 
-    (0..=n_steps)
+    Ok((0..=n_steps)
         .map(|k| {
             #[allow(clippy::cast_precision_loss)]
             let dt = duration_s * (k as f64) / (n_steps as f64);
@@ -37,7 +43,7 @@ pub fn propagate_keplerian(
             };
             keplerian_to_state(&ke_k, epoch_k)
         })
-        .collect()
+        .collect())
 }
 
 #[cfg(test)]
@@ -54,7 +60,7 @@ mod tests {
         let initial = keplerian_to_state(&ke, epoch);
         let period = ke.period();
 
-        let trajectory = propagate_keplerian(&initial, period, 100);
+        let trajectory = propagate_keplerian(&initial, period, 100).unwrap();
 
         assert_eq!(trajectory.len(), 101);
 
@@ -72,12 +78,26 @@ mod tests {
         let initial = keplerian_to_state(&ke, epoch);
         let period = ke.period();
 
-        let trajectory = propagate_keplerian(&initial, period, 100);
+        let trajectory = propagate_keplerian(&initial, period, 100).unwrap();
 
         let pos_err = (trajectory.last().unwrap().position_eci_km - initial.position_eci_km).norm();
         assert!(
             pos_err < 1e-10,
             "Eccentric orbit closure error: {pos_err} km"
+        );
+    }
+
+    #[test]
+    fn propagate_keplerian_zero_steps() {
+        let epoch = test_epoch();
+        let ke = iss_like_elements();
+        let initial = keplerian_to_state(&ke, epoch);
+
+        let trajectory = propagate_keplerian(&initial, 3600.0, 0).unwrap();
+        assert_eq!(trajectory.len(), 1, "n_steps=0 should return 1 state");
+        assert!(
+            (trajectory[0].position_eci_km - initial.position_eci_km).norm() < 1e-15,
+            "n_steps=0 should return the initial state"
         );
     }
 
@@ -88,7 +108,7 @@ mod tests {
         let initial = keplerian_to_state(&ke, epoch);
         let period = ke.period();
 
-        let trajectory = propagate_keplerian(&initial, period, 200);
+        let trajectory = propagate_keplerian(&initial, period, 200).unwrap();
 
         let energy_0 = {
             let r = initial.position_eci_km.norm();

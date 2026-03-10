@@ -33,6 +33,16 @@ pub enum PropagationError {
         /// The requested number of steps.
         n_steps: usize,
     },
+    /// Eccentricity out of range for J2 perturbation model.
+    InvalidEccentricity {
+        /// The invalid eccentricity value.
+        e: f64,
+    },
+    /// Semi-major axis must be positive.
+    InvalidSemiMajorAxis {
+        /// The invalid semi-major axis (km).
+        a_km: f64,
+    },
 }
 
 impl std::fmt::Display for PropagationError {
@@ -41,6 +51,12 @@ impl std::fmt::Display for PropagationError {
             Self::ZeroSteps => write!(f, "PropagationError: n_steps must be > 0"),
             Self::StepCountOverflow { n_steps } => {
                 write!(f, "PropagationError: n_steps = {n_steps} exceeds u32::MAX")
+            }
+            Self::InvalidEccentricity { e } => {
+                write!(f, "PropagationError: eccentricity = {e} out of range [0, 1)")
+            }
+            Self::InvalidSemiMajorAxis { a_km } => {
+                write!(f, "PropagationError: semi-major axis = {a_km} km must be positive")
             }
         }
     }
@@ -72,23 +88,25 @@ impl PropagationModel {
     /// - `chief_mean_0.a_km > 0` and `0 <= chief_mean_0.e < 1`
     /// - `chief_mean_0` must be **mean** Keplerian elements, not osculating
     /// - `dt_seconds` must be finite
-    #[must_use]
+    ///
+    /// # Errors
+    /// Returns `PropagationError` if eccentricity or SMA are out of range.
     pub fn propagate(
         &self,
         roe_0: &QuasiNonsingularROE,
         chief_mean_0: &KeplerianElements,
         epoch_0: Epoch,
         dt_seconds: f64,
-    ) -> PropagatedState {
+    ) -> Result<PropagatedState, PropagationError> {
         match self {
             Self::J2Stm => {
-                let (roe, chief_mean) = propagate_roe_stm(roe_0, chief_mean_0, dt_seconds);
-                make_propagated_state(roe, chief_mean, epoch_0, dt_seconds)
+                let (roe, chief_mean) = propagate_roe_stm(roe_0, chief_mean_0, dt_seconds)?;
+                Ok(make_propagated_state(roe, chief_mean, epoch_0, dt_seconds))
             }
             Self::J2DragStm { drag } => {
                 let (roe, chief_mean) =
-                    propagate_roe_j2_drag(roe_0, chief_mean_0, drag, dt_seconds);
-                make_propagated_state(roe, chief_mean, epoch_0, dt_seconds)
+                    propagate_roe_j2_drag(roe_0, chief_mean_0, drag, dt_seconds)?;
+                Ok(make_propagated_state(roe, chief_mean, epoch_0, dt_seconds))
             }
         }
     }
@@ -122,14 +140,14 @@ impl PropagationModel {
         let mut states = Vec::with_capacity(n_steps + 1);
 
         // Initial state at t=0
-        let initial = self.propagate(roe_0, chief_mean_0, epoch_0, 0.0);
+        let initial = self.propagate(roe_0, chief_mean_0, epoch_0, 0.0)?;
         states.push(initial);
 
         // Propagate each step from the original epoch
         let mut t = 0.0;
         for _ in 1..=n_steps {
             t += step;
-            let state = self.propagate(roe_0, chief_mean_0, epoch_0, t);
+            let state = self.propagate(roe_0, chief_mean_0, epoch_0, t)?;
             states.push(state);
         }
 
@@ -174,7 +192,7 @@ mod tests {
             diy: 0.0003,
         };
 
-        let state = prop.propagate(&roe, &chief, epoch, 0.0);
+        let state = prop.propagate(&roe, &chief, epoch, 0.0).unwrap();
         assert!((state.elapsed_s).abs() < 1e-15);
         assert!((state.roe.da - roe.da).abs() < 1e-10);
         assert_eq!(state.epoch, epoch);
@@ -230,8 +248,8 @@ mod tests {
             diy: 0.0,
         };
 
-        let s1 = prop.propagate(&roe, &chief, epoch, 1000.0);
-        let s2 = prop.propagate(&roe, &chief, epoch, 2000.0);
+        let s1 = prop.propagate(&roe, &chief, epoch, 1000.0).unwrap();
+        let s2 = prop.propagate(&roe, &chief, epoch, 2000.0).unwrap();
 
         // Along-track (y) should be growing in magnitude
         assert!(
@@ -261,8 +279,8 @@ mod tests {
         };
 
         let tau = 3600.0;
-        let s_j2 = j2_prop.propagate(&roe, &chief, epoch, tau);
-        let s_drag = drag_prop.propagate(&roe, &chief, epoch, tau);
+        let s_j2 = j2_prop.propagate(&roe, &chief, epoch, tau).unwrap();
+        let s_drag = drag_prop.propagate(&roe, &chief, epoch, tau).unwrap();
 
         assert!(
             (s_j2.roe.da - s_drag.roe.da).abs() < 1e-14,

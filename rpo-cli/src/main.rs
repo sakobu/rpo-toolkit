@@ -159,8 +159,8 @@ fn load_json<T: serde::de::DeserializeOwned>(path: &PathBuf) -> Result<T, Box<dy
 fn run_targeting(input_path: &PathBuf, json_output: bool) -> Result<(), Box<dyn Error>> {
     let input: TargetingInput = load_json(input_path)?;
 
-    let chief_ke = state_to_keplerian(&input.chief);
-    let deputy_ke = state_to_keplerian(&input.deputy);
+    let chief_ke = state_to_keplerian(&input.chief)?;
+    let deputy_ke = state_to_keplerian(&input.deputy)?;
     let roe = compute_roe(&chief_ke, &deputy_ke);
 
     let waypoints = convert_waypoints(&input.waypoints);
@@ -241,7 +241,7 @@ struct EndToEndOutput {
 fn run_end_to_end_mission(input_path: &PathBuf, json_output: bool) -> Result<(), Box<dyn Error>> {
     let input: EndToEndInput = load_json(input_path)?;
 
-    let chief_ke = state_to_keplerian(&input.chief);
+    let chief_ke = state_to_keplerian(&input.chief)?;
 
     let perch = input.perch.unwrap_or(PerchGeometry::VBar { along_track_km: 5.0 });
     let proximity = input.proximity.unwrap_or_default();
@@ -280,8 +280,8 @@ fn run_end_to_end_mission(input_path: &PathBuf, json_output: bool) -> Result<(),
         let n_arc_steps = 200;
         let (transfer_trajectory, chief_trajectory) = if let Some(ref transfer) = mission.transfer {
             (
-                transfer.densify_arc(n_arc_steps),
-                propagate_keplerian(&input.chief, transfer.tof_s, n_arc_steps),
+                transfer.densify_arc(n_arc_steps)?,
+                propagate_keplerian(&input.chief, transfer.tof_s, n_arc_steps)?,
             )
         } else {
             (vec![], vec![])

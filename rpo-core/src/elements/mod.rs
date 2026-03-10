@@ -6,7 +6,7 @@ pub mod gve;
 pub mod ric;
 pub mod roe;
 
-pub use conversions::{keplerian_to_state, state_to_keplerian};
+pub use conversions::{keplerian_to_state, state_to_keplerian, ConversionError};
 pub use frames::{
     eci_to_ric_dcm, eci_to_ric_dv, eci_to_ric_relative, ric_to_eci_dv, ric_to_eci_position,
     ric_to_eci_state,

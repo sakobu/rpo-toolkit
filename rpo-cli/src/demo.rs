@@ -99,7 +99,7 @@ pub(crate) fn run_demo() -> Result<(), Box<dyn Error>> {
         chief_sv.velocity_eci_km_s.x, chief_sv.velocity_eci_km_s.y, chief_sv.velocity_eci_km_s.z);
 
     // --- Roundtrip: ECI → Keplerian → ECI ---
-    let recovered = state_to_keplerian(&chief_sv);
+    let recovered = state_to_keplerian(&chief_sv)?;
     let recovered_sv = keplerian_to_state(&recovered, epoch);
     let pos_err = (chief_sv.position_eci_km - recovered_sv.position_eci_km).norm();
     let vel_err = (chief_sv.velocity_eci_km_s - recovered_sv.velocity_eci_km_s).norm();
@@ -119,7 +119,7 @@ pub(crate) fn run_demo() -> Result<(), Box<dyn Error>> {
     // --- Eccentric orbit ---
     let ecc = eccentric_orbit();
     let ecc_sv = keplerian_to_state(&ecc, epoch);
-    let ecc_recovered = state_to_keplerian(&ecc_sv);
+    let ecc_recovered = state_to_keplerian(&ecc_sv)?;
     let ecc_sv2 = keplerian_to_state(&ecc_recovered, epoch);
     let ecc_pos_err = (ecc_sv.position_eci_km - ecc_sv2.position_eci_km).norm();
     println!("\n  Eccentric orbit (e={:.2}, i={:.1}°, a={:.0} km):",
@@ -173,7 +173,7 @@ pub(crate) fn run_demo() -> Result<(), Box<dyn Error>> {
     println!("║  Section 3: J2 Perturbation Parameters          ║");
     println!("╚══════════════════════════════════════════════════╝\n");
 
-    let j2p = compute_j2_params(&chief);
+    let j2p = compute_j2_params(&chief)?;
 
     println!("J2 params for ISS-like chief (Koenig Eqs. 13-16):");
     println!("  Mean motion n:   {:.6e} rad/s", j2p.n);
@@ -203,7 +203,7 @@ pub(crate) fn run_demo() -> Result<(), Box<dyn Error>> {
 
     // --- STM structure ---
     println!("\n  J2 STM at τ = 1 orbit ({:.1} s):", period_s);
-    let stm = compute_stm(&chief, period_s);
+    let stm = compute_stm(&chief, period_s)?;
     println!("    Φ[0,0] = {:.6} (δa preserved — no secular drag)", stm[(0, 0)]);
     println!("    Φ[1,0] = {:.6} (along-track drift from δa)", stm[(1, 0)]);
     println!("    Φ[4,4] = {:.6} (δix preserved — no J2 coupling)", stm[(4, 4)]);
@@ -226,7 +226,7 @@ pub(crate) fn run_demo() -> Result<(), Box<dyn Error>> {
     let n_steps = 30 * n_orbits; // 30 steps per orbit
 
     // --- Standalone propagate_roe_stm ---
-    let (roe_1orbit, chief_1orbit) = propagate_roe_stm(&roe, &chief, period_s);
+    let (roe_1orbit, chief_1orbit) = propagate_roe_stm(&roe, &chief, period_s)?;
     println!("Standalone propagate_roe_stm() after 1 orbit:");
     print_roe("Propagated ROE", &roe_1orbit, chief.a_km);
     println!("    Chief RAAN drift: {:.6}°",
@@ -282,7 +282,7 @@ pub(crate) fn run_demo() -> Result<(), Box<dyn Error>> {
     )?;
 
     // --- Standalone propagate_roe_j2_drag ---
-    let (roe_drag_1orbit, _) = propagate_roe_j2_drag(&roe, &chief, &drag, period_s);
+    let (roe_drag_1orbit, _) = propagate_roe_j2_drag(&roe, &chief, &drag, period_s)?;
     println!("\n  Standalone propagate_roe_j2_drag() after 1 orbit:");
     println!("    δa = {:.6e} (vs J2-only: {:.6e})", roe_drag_1orbit.da, roe_1orbit.da);
 
@@ -290,7 +290,7 @@ pub(crate) fn run_demo() -> Result<(), Box<dyn Error>> {
     let zero_drag_prop = PropagationModel::J2DragStm { drag: DragConfig::zero() };
     let zero_drag_final = zero_drag_prop.propagate(
         &roe, &chief, epoch, total_time,
-    );
+    )?;
     let j2_only_final = &trajectory.last().unwrap();
     let zero_drag_diff = (zero_drag_final.ric.position_ric_km - j2_only_final.ric.position_ric_km).norm();
     println!("\n  DragConfig::zero() vs J2-only:");
@@ -331,7 +331,7 @@ pub(crate) fn run_demo() -> Result<(), Box<dyn Error>> {
 
     // --- Proximity case ---
     println!("Case A: Close deputy (+1 km SMA, small phase offset)");
-    let phase = classify_separation(&chief_sv, &deputy_sv, &config);
+    let phase = classify_separation(&chief_sv, &deputy_sv, &config)?;
     match &phase {
         MissionPhase::Proximity { separation_km, delta_r_over_r, .. } => {
             println!("  Classification: PROXIMITY");
@@ -350,7 +350,7 @@ pub(crate) fn run_demo() -> Result<(), Box<dyn Error>> {
     let far_sv = keplerian_to_state(&far_dep, epoch);
 
     println!("\nCase B: Distant deputy (+500 km SMA, different plane)");
-    let far_phase = classify_separation(&chief_sv, &far_sv, &config);
+    let far_phase = classify_separation(&chief_sv, &far_sv, &config)?;
     match &far_phase {
         MissionPhase::Proximity { .. } => println!("  Classification: PROXIMITY"),
         MissionPhase::FarField { separation_km, delta_r_over_r, .. } => {

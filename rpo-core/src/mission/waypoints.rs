@@ -249,37 +249,39 @@ pub fn replan_from_waypoint(
 /// explicit initial conditions (`post_departure_roe`, `departure_chief_mean`,
 /// `departure_maneuver.epoch`) stored on each leg.
 ///
-/// Returns `None` exclusively when `elapsed_s` is out of bounds (negative
+/// Returns `Ok(None)` exclusively when `elapsed_s` is out of bounds (negative
 /// or past the mission end).
 ///
 /// # Invariants
 /// - `elapsed_s` must be finite
 /// - `mission` must have been produced by `plan_waypoint_mission`
-#[must_use]
+///
+/// # Errors
+/// Returns `PropagationError` if propagation fails (e.g., invalid orbital elements).
 pub fn get_mission_state_at_time(
     mission: &WaypointMission,
     elapsed_s: f64,
     propagator: &PropagationModel,
-) -> Option<PropagatedState> {
+) -> Result<Option<PropagatedState>, PropagationError> {
     if elapsed_s < 0.0 {
-        return None;
+        return Ok(None);
     }
 
     let mut t_offset = 0.0;
     for leg in &mission.legs {
         if elapsed_s <= t_offset + leg.tof_s {
             let local_t = elapsed_s - t_offset;
-            return Some(propagator.propagate(
+            return Ok(Some(propagator.propagate(
                 &leg.post_departure_roe,
                 &leg.departure_chief_mean,
                 leg.departure_maneuver.epoch,
                 local_t,
-            ));
+            )?));
         }
         t_offset += leg.tof_s;
     }
 
-    None
+    Ok(None)
 }
 
 /// Resample a leg's trajectory at a specified number of steps using exact propagation.
@@ -450,7 +452,7 @@ mod tests {
 
         // Mid-mission should return a state with exact elapsed_s
         let query_t = period / 2.0;
-        let state = get_mission_state_at_time(&mission, query_t, &propagator);
+        let state = get_mission_state_at_time(&mission, query_t, &propagator).unwrap();
         assert!(state.is_some(), "Should find state at mid-mission");
         let s = state.unwrap();
         assert!(
@@ -459,11 +461,11 @@ mod tests {
         );
 
         // Before mission should return None
-        let state = get_mission_state_at_time(&mission, -1.0, &propagator);
+        let state = get_mission_state_at_time(&mission, -1.0, &propagator).unwrap();
         assert!(state.is_none(), "Should return None before mission");
 
         // After mission should return None
-        let state = get_mission_state_at_time(&mission, period * 2.0, &propagator);
+        let state = get_mission_state_at_time(&mission, period * 2.0, &propagator).unwrap();
         assert!(state.is_none(), "Should return None after mission");
     }
 
@@ -487,7 +489,7 @@ mod tests {
 
         // At t=0, should match first trajectory point
         let at_start = get_mission_state_at_time(&mission, 0.0, &propagator)
-            .expect("t=0 should be valid");
+            .unwrap().expect("t=0 should be valid");
         let first = &mission.legs[0].trajectory[0];
         assert!(
             (at_start.ric.position_ric_km - first.ric.position_ric_km).norm() < 1e-12,
@@ -496,7 +498,7 @@ mod tests {
 
         // At t=tof, should match last trajectory point
         let at_end = get_mission_state_at_time(&mission, period, &propagator)
-            .expect("t=tof should be valid");
+            .unwrap().expect("t=tof should be valid");
         let last = mission.legs[0].trajectory.last().unwrap();
         assert!(
             (at_end.ric.position_ric_km - last.ric.position_ric_km).norm() < 1e-10,
@@ -533,7 +535,7 @@ mod tests {
         // Query a point in the second leg
         let query_t = tof + tof * 0.37; // 37% into second leg
         let state = get_mission_state_at_time(&mission, query_t, &propagator)
-            .expect("mid-leg query should succeed");
+            .unwrap().expect("mid-leg query should succeed");
 
         // elapsed_s should be the local time within the second leg
         let expected_local_t = tof * 0.37;
@@ -595,11 +597,11 @@ mod tests {
                 .expect("should succeed");
 
         assert!(
-            get_mission_state_at_time(&mission, -1.0, &propagator).is_none(),
+            get_mission_state_at_time(&mission, -1.0, &propagator).unwrap().is_none(),
             "Negative time should return None"
         );
         assert!(
-            get_mission_state_at_time(&mission, period + 1.0, &propagator).is_none(),
+            get_mission_state_at_time(&mission, period + 1.0, &propagator).unwrap().is_none(),
             "Past-end time should return None"
         );
     }
@@ -920,15 +922,15 @@ mod tests {
 
         // At exactly tof (end of leg 1 / start of leg 2): should return Some,
         // owned by leg 1 (due to `elapsed_s <= t_offset + leg.tof_s`)
-        let at_boundary = get_mission_state_at_time(&mission, tof, &propagator);
+        let at_boundary = get_mission_state_at_time(&mission, tof, &propagator).unwrap();
         assert!(at_boundary.is_some(), "Boundary at tof should be included");
 
         // At exactly 2*tof (mission end): should return Some
-        let at_end = get_mission_state_at_time(&mission, 2.0 * tof, &propagator);
+        let at_end = get_mission_state_at_time(&mission, 2.0 * tof, &propagator).unwrap();
         assert!(at_end.is_some(), "Mission endpoint should be included");
 
         // At 2*tof + epsilon: should return None
-        let past_end = get_mission_state_at_time(&mission, 2.0 * tof + 1e-6, &propagator);
+        let past_end = get_mission_state_at_time(&mission, 2.0 * tof + 1e-6, &propagator).unwrap();
         assert!(past_end.is_none(), "Past mission end should return None");
     }
 

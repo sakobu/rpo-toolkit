@@ -66,8 +66,11 @@ impl LambertTransfer {
     ///
     /// # Invariants
     /// - `n_steps > 0` (delegates to `propagate_keplerian`; see its invariants)
-    #[must_use]
-    pub fn densify_arc(&self, n_steps: usize) -> Vec<StateVector> {
+    ///
+    /// # Errors
+    /// Returns `ConversionError` if the departure state cannot be converted
+    /// to Keplerian elements (should not happen for valid Lambert solutions).
+    pub fn densify_arc(&self, n_steps: usize) -> Result<Vec<StateVector>, crate::elements::conversions::ConversionError> {
         crate::propagation::keplerian::propagate_keplerian(&self.departure_state, self.tof_s, n_steps)
     }
 }
@@ -424,7 +427,7 @@ mod tests {
         );
 
         let transfer = solve_lambert(&dep, &arr).expect("Lambert should succeed");
-        let arc = transfer.densify_arc(100);
+        let arc = transfer.densify_arc(100).unwrap();
 
         let dep_err = (arc.first().unwrap().position_eci_km - transfer.departure_state.position_eci_km).norm();
         let arr_err = (arc.last().unwrap().position_eci_km - transfer.arrival_state.position_eci_km).norm();
@@ -446,7 +449,7 @@ mod tests {
         );
 
         let transfer = solve_lambert(&dep, &arr).expect("Lambert should succeed");
-        let arc = transfer.densify_arc(100);
+        let arc = transfer.densify_arc(100).unwrap();
 
         assert_eq!(arc.len(), 101, "Expected 101 points (100 steps + 1)");
     }
@@ -461,7 +464,7 @@ mod tests {
         );
 
         let transfer = solve_lambert(&dep, &arr).expect("Lambert should succeed");
-        let arc = transfer.densify_arc(50);
+        let arc = transfer.densify_arc(50).unwrap();
 
         for window in arc.windows(2) {
             let t0 = window[0].epoch;
@@ -485,7 +488,7 @@ mod tests {
         );
 
         let transfer = solve_lambert(&dep, &arr).expect("Lambert should succeed");
-        let arc = transfer.densify_arc(100);
+        let arc = transfer.densify_arc(100).unwrap();
 
         for (k, state) in arc.iter().enumerate() {
             let r = state.position_eci_km.norm();

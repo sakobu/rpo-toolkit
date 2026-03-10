@@ -6,6 +6,36 @@ use nalgebra::Vector3;
 use crate::constants::{ECC_TOL, INC_TOL, MU_EARTH, TWO_PI};
 use crate::types::{KeplerianElements, StateVector};
 
+/// Errors from ECI ↔ Keplerian conversions.
+#[derive(Debug, Clone)]
+pub enum ConversionError {
+    /// Position vector is zero; cannot compute orbital elements.
+    ZeroPositionVector,
+    /// Orbit is unbound (specific energy >= 0); semi-major axis would be negative.
+    UnboundOrbit {
+        /// Specific orbital energy (km²/s²).
+        energy_km2_s2: f64,
+    },
+}
+
+impl std::fmt::Display for ConversionError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::ZeroPositionVector => {
+                write!(f, "ConversionError: position vector is zero")
+            }
+            Self::UnboundOrbit { energy_km2_s2 } => {
+                write!(
+                    f,
+                    "ConversionError: unbound orbit — specific energy = {energy_km2_s2:.6e} km²/s² (must be negative)"
+                )
+            }
+        }
+    }
+}
+
+impl std::error::Error for ConversionError {}
+
 /// Convert an ECI state vector to Keplerian orbital elements.
 ///
 /// Handles edge cases:
@@ -14,18 +44,22 @@ use crate::types::{KeplerianElements, StateVector};
 ///
 /// # Invariants
 /// - `sv.position_eci_km` must be non-zero (zero position → division by zero)
-/// - Orbit must be bound (`e < 1`); escape trajectories are accepted silently
-///   and produce a negative semi-major axis
+/// - Orbit must be bound (`e < 1`); escape trajectories produce `Err(UnboundOrbit)`
 /// - Kepler's equation inversion (via `true_anomaly()`) may not converge for `e` near 1
-#[must_use]
+///
+/// # Errors
+/// Returns `ConversionError::ZeroPositionVector` if the position vector norm is < 1e-10 km.
+/// Returns `ConversionError::UnboundOrbit` if specific energy >= 0 (escape trajectory).
 #[allow(clippy::many_single_char_names)]
-pub fn state_to_keplerian(sv: &StateVector) -> KeplerianElements {
+pub fn state_to_keplerian(sv: &StateVector) -> Result<KeplerianElements, ConversionError> {
     let r_vec = sv.position_eci_km;
     let v_vec = sv.velocity_eci_km_s;
     let r = r_vec.norm();
     let v = v_vec.norm();
 
-    debug_assert!(r > 0.0, "position vector must be non-zero");
+    if r < 1e-10 {
+        return Err(ConversionError::ZeroPositionVector);
+    }
 
     // Specific angular momentum
     let h_vec = r_vec.cross(&v_vec);
@@ -42,6 +76,9 @@ pub fn state_to_keplerian(sv: &StateVector) -> KeplerianElements {
 
     // Semi-major axis (vis-viva)
     let energy = v * v / 2.0 - MU_EARTH / r;
+    if energy >= 0.0 {
+        return Err(ConversionError::UnboundOrbit { energy_km2_s2: energy });
+    }
     let a = -MU_EARTH / (2.0 * energy);
 
     // Inclination
@@ -103,14 +140,14 @@ pub fn state_to_keplerian(sv: &StateVector) -> KeplerianElements {
         * ((1.0 - e).sqrt() * (nu / 2.0).sin()).atan2((1.0 + e).sqrt() * (nu / 2.0).cos());
     let mean_anomaly = (ea - e * ea.sin()).rem_euclid(TWO_PI);
 
-    KeplerianElements {
+    Ok(KeplerianElements {
         a_km: a,
         e,
         i_rad: i,
         raan_rad: raan,
         aop_rad: aop,
         mean_anomaly_rad: mean_anomaly,
-    }
+    })
 }
 
 /// Convert Keplerian orbital elements to an ECI state vector.
@@ -181,7 +218,7 @@ mod tests {
         let epoch = test_epoch();
         let ke = iss_like_elements();
         let sv = keplerian_to_state(&ke, epoch);
-        let ke2 = state_to_keplerian(&sv);
+        let ke2 = state_to_keplerian(&sv).unwrap();
         let sv2 = keplerian_to_state(&ke2, sv.epoch);
 
         let pos_err = (sv.position_eci_km - sv2.position_eci_km).norm();
@@ -202,7 +239,7 @@ mod tests {
         let epoch = test_epoch();
         let ke = eccentric_elements();
         let sv = keplerian_to_state(&ke, epoch);
-        let ke2 = state_to_keplerian(&sv);
+        let ke2 = state_to_keplerian(&sv).unwrap();
         let sv2 = keplerian_to_state(&ke2, epoch);
 
         let pos_err = (sv.position_eci_km - sv2.position_eci_km).norm();
@@ -224,7 +261,7 @@ mod tests {
             mean_anomaly_rad: 90.0_f64.to_radians(),
         };
         let sv = keplerian_to_state(&ke, epoch);
-        let ke2 = state_to_keplerian(&sv);
+        let ke2 = state_to_keplerian(&sv).unwrap();
         let sv2 = keplerian_to_state(&ke2, epoch);
 
         let pos_err = (sv.position_eci_km - sv2.position_eci_km).norm();
@@ -246,7 +283,7 @@ mod tests {
             mean_anomaly_rad: 45.0_f64.to_radians(),
         };
         let sv = keplerian_to_state(&ke_orig, epoch);
-        let ke = state_to_keplerian(&sv);
+        let ke = state_to_keplerian(&sv).unwrap();
 
         assert!((ke.a_km - ke_orig.a_km).abs() < 1e-8, "SMA mismatch");
         assert!((ke.e - ke_orig.e).abs() < 1e-10, "Eccentricity mismatch");
@@ -256,6 +293,22 @@ mod tests {
         assert!(
             (ke.mean_anomaly_rad - ke_orig.mean_anomaly_rad).abs() < 1e-10,
             "Mean anomaly mismatch"
+        );
+    }
+
+    #[test]
+    fn unbound_orbit_returns_error() {
+        let epoch = test_epoch();
+        // Escape velocity at 7000 km altitude: v_escape = sqrt(2*mu/r) ≈ 10.7 km/s
+        let sv = StateVector {
+            epoch,
+            position_eci_km: nalgebra::Vector3::new(7000.0, 0.0, 0.0),
+            velocity_eci_km_s: nalgebra::Vector3::new(0.0, 15.0, 0.0), // well above escape velocity
+        };
+        let result = state_to_keplerian(&sv);
+        assert!(
+            matches!(result, Err(ConversionError::UnboundOrbit { .. })),
+            "Escape trajectory should return UnboundOrbit, got {result:?}"
         );
     }
 }

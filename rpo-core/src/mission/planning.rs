@@ -24,33 +24,36 @@ use crate::types::{
 /// - Both states must represent bound orbits (`e < 1`, `a > 0`)
 /// - Position vectors must be non-zero
 /// - `config.roe_threshold > 0`
-#[must_use]
+///
+/// # Errors
+/// Returns `MissionError::Conversion` if either state cannot be converted
+/// to Keplerian elements (e.g., escape trajectory or zero position).
 pub fn classify_separation(
     chief: &StateVector,
     deputy: &StateVector,
     config: &ProximityConfig,
-) -> MissionPhase {
-    let chief_elements = state_to_keplerian(chief);
-    let deputy_elements = state_to_keplerian(deputy);
+) -> Result<MissionPhase, MissionError> {
+    let chief_elements = state_to_keplerian(chief)?;
+    let deputy_elements = state_to_keplerian(deputy)?;
     let separation_km = eci_separation_km(chief, deputy);
     let roe = compute_roe(&chief_elements, &deputy_elements);
     let delta_r_over_r = roe.dimensionless_norm();
 
     if delta_r_over_r < config.roe_threshold {
-        MissionPhase::Proximity {
+        Ok(MissionPhase::Proximity {
             roe,
             chief_elements,
             deputy_elements,
             separation_km,
             delta_r_over_r,
-        }
+        })
     } else {
-        MissionPhase::FarField {
+        Ok(MissionPhase::FarField {
             chief_elements,
             deputy_elements,
             separation_km,
             delta_r_over_r,
-        }
+        })
     }
 }
 
@@ -159,7 +162,7 @@ pub fn plan_mission(
     config: &ProximityConfig,
     lambert_tof_s: f64,
 ) -> Result<MissionPlan, MissionError> {
-    let phase = classify_separation(chief, deputy, config);
+    let phase = classify_separation(chief, deputy, config)?;
 
     match phase {
         MissionPhase::Proximity {
@@ -264,7 +267,7 @@ mod tests {
         let deputy = keplerian_to_state(&deputy_ke, epoch);
         let config = ProximityConfig::default();
 
-        let phase = classify_separation(&chief, &deputy, &config);
+        let phase = classify_separation(&chief, &deputy, &config).unwrap();
         assert!(
             matches!(phase, MissionPhase::Proximity { .. }),
             "1 km offset should be Proximity, got {phase:?}"
@@ -288,7 +291,7 @@ mod tests {
         let deputy = keplerian_to_state(&deputy_ke, epoch);
         let config = ProximityConfig::default();
 
-        let phase = classify_separation(&chief, &deputy, &config);
+        let phase = classify_separation(&chief, &deputy, &config).unwrap();
         assert!(
             matches!(phase, MissionPhase::FarField { .. }),
             "500 km + inclination offset should be FarField, got {phase:?}"
@@ -340,11 +343,11 @@ mod tests {
         let config = ProximityConfig { roe_threshold: threshold };
 
         assert!(matches!(
-            classify_separation(&chief, &dep_below, &config),
+            classify_separation(&chief, &dep_below, &config).unwrap(),
             MissionPhase::Proximity { .. }
         ));
         assert!(matches!(
-            classify_separation(&chief, &dep_above, &config),
+            classify_separation(&chief, &dep_above, &config).unwrap(),
             MissionPhase::FarField { .. }
         ));
     }
@@ -362,14 +365,14 @@ mod tests {
         // Default threshold (0.005) should classify as FarField
         let strict = ProximityConfig::default();
         assert!(matches!(
-            classify_separation(&chief, &deputy, &strict),
+            classify_separation(&chief, &deputy, &strict).unwrap(),
             MissionPhase::FarField { .. }
         ));
 
         // Relaxed threshold (0.01) should classify as Proximity
         let relaxed = ProximityConfig { roe_threshold: 0.01 };
         assert!(matches!(
-            classify_separation(&chief, &deputy, &relaxed),
+            classify_separation(&chief, &deputy, &relaxed).unwrap(),
             MissionPhase::Proximity { .. }
         ));
     }
@@ -386,7 +389,7 @@ mod tests {
         let deputy = keplerian_to_state(&deputy_ke, epoch);
         let config = ProximityConfig::default();
 
-        let phase = classify_separation(&chief, &deputy, &config);
+        let phase = classify_separation(&chief, &deputy, &config).unwrap();
 
         if let MissionPhase::Proximity {
             roe,

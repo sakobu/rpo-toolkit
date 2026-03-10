@@ -8,6 +8,7 @@ use nalgebra::SMatrix;
 
 use crate::constants::TWO_PI;
 use crate::propagation::j2_params::{compute_j2_params, J2Params};
+use crate::propagation::propagator::PropagationError;
 use crate::types::{KeplerianElements, QuasiNonsingularROE};
 
 /// 6×6 matrix type alias.
@@ -27,10 +28,12 @@ type Matrix6 = SMatrix<f64, 6, 6>;
 /// - `0 <= chief_mean.e < 1`
 /// - `chief_mean` must be **mean** Keplerian elements, not osculating
 /// - `tau` must be finite
-#[must_use]
-pub fn compute_stm(chief_mean: &KeplerianElements, tau: f64) -> Matrix6 {
-    let j2p = compute_j2_params(chief_mean);
-    compute_stm_with_params(&j2p, chief_mean, tau)
+///
+/// # Errors
+/// Returns `PropagationError` if eccentricity or SMA are out of range.
+pub fn compute_stm(chief_mean: &KeplerianElements, tau: f64) -> Result<Matrix6, PropagationError> {
+    let j2p = compute_j2_params(chief_mean)?;
+    Ok(compute_stm_with_params(&j2p, chief_mean, tau))
 }
 
 /// Compute the J2-perturbed QNS STM using pre-computed [`J2Params`] (Koenig Eq. A6).
@@ -130,20 +133,22 @@ pub fn compute_stm_with_params(j2p: &J2Params, chief_mean: &KeplerianElements, t
 /// - `0 <= chief_mean.e < 1`
 /// - `chief_mean` must be **mean** Keplerian elements, not osculating
 /// - ROE must satisfy linearization validity (`dimensionless_norm() < ~0.01`)
-#[must_use]
+///
+/// # Errors
+/// Returns `PropagationError` if eccentricity or SMA are out of range.
 pub fn propagate_roe_stm(
     roe: &QuasiNonsingularROE,
     chief_mean: &KeplerianElements,
     tau: f64,
-) -> (QuasiNonsingularROE, KeplerianElements) {
-    let j2p = compute_j2_params(chief_mean);
+) -> Result<(QuasiNonsingularROE, KeplerianElements), PropagationError> {
+    let j2p = compute_j2_params(chief_mean)?;
     let stm = compute_stm_with_params(&j2p, chief_mean, tau);
     let roe_vec = roe.to_vector();
     let propagated = stm * roe_vec;
 
     let chief_prop = propagate_chief_mean(chief_mean, &j2p, tau);
 
-    (QuasiNonsingularROE::from_vector(&propagated), chief_prop)
+    Ok((QuasiNonsingularROE::from_vector(&propagated), chief_prop))
 }
 
 /// Advance chief mean elements by secular J2 rates.
@@ -179,7 +184,7 @@ mod tests {
     #[test]
     fn zero_tau_gives_near_identity() {
         let chief = iss_like_elements();
-        let stm = compute_stm(&chief, 0.0);
+        let stm = compute_stm(&chief, 0.0).unwrap();
         let identity = Matrix6::identity();
 
         let diff = (stm - identity).norm();
@@ -202,8 +207,8 @@ mod tests {
         };
 
         let tau = 3600.0; // 1 hour
-        let (roe_fwd, chief_fwd) = propagate_roe_stm(&roe, &chief, tau);
-        let (roe_back, _) = propagate_roe_stm(&roe_fwd, &chief_fwd, -tau);
+        let (roe_fwd, chief_fwd) = propagate_roe_stm(&roe, &chief, tau).unwrap();
+        let (roe_back, _) = propagate_roe_stm(&roe_fwd, &chief_fwd, -tau).unwrap();
 
         assert!(
             (roe_back.da - roe.da).abs() < 1e-8,
@@ -260,11 +265,11 @@ mod tests {
         let n = chief.mean_motion();
         let tau = 1000.0; // short enough to stay in linear regime
 
-        let (roe_prop, _) = propagate_roe_stm(&roe, &chief, tau);
+        let (roe_prop, _) = propagate_roe_stm(&roe, &chief, tau).unwrap();
 
         // Expected drift includes both Keplerian and J2 terms:
         // Φ[1,0] = -(3/2·n + 7/2·κ·E·P)·τ
-        let j2p = compute_j2_params(&chief);
+        let j2p = compute_j2_params(&chief).unwrap();
         let expected_dlambda =
             -(1.5 * n + 3.5 * j2p.kappa * j2p.big_e * j2p.big_p) * tau * da;
 
@@ -297,7 +302,7 @@ mod tests {
         };
 
         let period = TWO_PI / chief.mean_motion();
-        let (roe_prop, _) = propagate_roe_stm(&roe, &chief, period);
+        let (roe_prop, _) = propagate_roe_stm(&roe, &chief, period).unwrap();
 
         assert!(
             (roe_prop.da - da).abs() < 1e-8,

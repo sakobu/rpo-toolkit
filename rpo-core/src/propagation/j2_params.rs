@@ -3,6 +3,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::constants::{J2, R_EARTH};
+use crate::propagation::propagator::PropagationError;
 use crate::types::KeplerianElements;
 
 /// Precomputed J2 perturbation parameters for a mean orbit.
@@ -63,9 +64,19 @@ pub struct J2Params {
 /// - `mean.a_km > 0`
 /// - `0 <= mean.e < 1` (`e = 1` → `η = 0` → division by zero in `G = 1/(η²(1+η))`)
 /// - `mean` must be **mean** Keplerian elements, not osculating
-#[must_use]
+///
+/// # Errors
+/// Returns `PropagationError::InvalidEccentricity` if `e < 0` or `e >= 1`.
+/// Returns `PropagationError::InvalidSemiMajorAxis` if `a_km <= 0`.
 #[allow(clippy::many_single_char_names, clippy::similar_names)]
-pub fn compute_j2_params(mean: &KeplerianElements) -> J2Params {
+pub fn compute_j2_params(mean: &KeplerianElements) -> Result<J2Params, PropagationError> {
+    if mean.e < 0.0 || mean.e >= 1.0 {
+        return Err(PropagationError::InvalidEccentricity { e: mean.e });
+    }
+    if mean.a_km <= 0.0 {
+        return Err(PropagationError::InvalidSemiMajorAxis { a_km: mean.a_km });
+    }
+
     let a = mean.a_km;
     let e = mean.e;
     let i = mean.i_rad;
@@ -104,7 +115,7 @@ pub fn compute_j2_params(mean: &KeplerianElements) -> J2Params {
     let aop_dot = kappa * big_q;
     let m_dot = n + kappa * eta * big_p;
 
-    J2Params {
+    Ok(J2Params {
         n,
         kappa,
         eta,
@@ -126,7 +137,7 @@ pub fn compute_j2_params(mean: &KeplerianElements) -> J2Params {
         aop_dot,
         m_dot,
         p,
-    }
+    })
 }
 
 #[cfg(test)]
@@ -137,7 +148,7 @@ mod tests {
     #[test]
     fn iss_raan_rate() {
         let mean = iss_like_elements();
-        let j2p = compute_j2_params(&mean);
+        let j2p = compute_j2_params(&mean).unwrap();
 
         // ISS RAAN regression rate ≈ -5.1°/day
         let raan_deg_per_day = j2p.raan_dot.to_degrees() * 86400.0;
@@ -157,7 +168,7 @@ mod tests {
             aop_rad: 0.0,
             mean_anomaly_rad: 0.0,
         };
-        let j2p = compute_j2_params(&mean);
+        let j2p = compute_j2_params(&mean).unwrap();
         let raan_deg_per_day = j2p.raan_dot.to_degrees() * 86400.0;
 
         assert!(
@@ -169,7 +180,7 @@ mod tests {
     #[test]
     fn secular_rates_signs() {
         let mean = iss_like_elements();
-        let j2p = compute_j2_params(&mean);
+        let j2p = compute_j2_params(&mean).unwrap();
 
         assert!(j2p.raan_dot < 0.0, "RAAN should regress for prograde orbit");
         assert!(j2p.aop_dot > 0.0, "AoP should advance for ISS inclination");
@@ -177,9 +188,26 @@ mod tests {
     }
 
     #[test]
+    fn invalid_eccentricity_returns_error() {
+        let mean = KeplerianElements {
+            a_km: 7000.0,
+            e: 1.0,
+            i_rad: 0.9,
+            raan_rad: 0.0,
+            aop_rad: 0.0,
+            mean_anomaly_rad: 0.0,
+        };
+        let result = compute_j2_params(&mean);
+        assert!(
+            matches!(result, Err(PropagationError::InvalidEccentricity { .. })),
+            "e=1 should return InvalidEccentricity, got {result:?}"
+        );
+    }
+
+    #[test]
     fn koenig_auxiliaries_correct() {
         let mean = iss_like_elements();
-        let j2p = compute_j2_params(&mean);
+        let j2p = compute_j2_params(&mean).unwrap();
 
         // F = 4 + 3η, η ≈ 1 for near-circular → F ≈ 7
         assert!(

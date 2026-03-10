@@ -483,6 +483,8 @@ pub enum MissionError {
     Propagation(crate::propagation::propagator::PropagationError),
     /// Lambert solver failure during transfer phase.
     Lambert(crate::mission::lambert::LambertError),
+    /// ECI ↔ Keplerian conversion failure.
+    Conversion(crate::elements::conversions::ConversionError),
     /// V-bar perch offset must be nonzero.
     InvalidVBarOffset {
         /// The invalid along-track offset (km).
@@ -534,6 +536,7 @@ impl std::fmt::Display for MissionError {
         match self {
             Self::Propagation(e) => write!(f, "MissionError: {e}"),
             Self::Lambert(e) => write!(f, "MissionError: {e}"),
+            Self::Conversion(e) => write!(f, "MissionError: {e}"),
             Self::InvalidVBarOffset { along_track_km } => write!(
                 f,
                 "MissionError: invalid V-bar perch — along-track offset = {along_track_km:.6e} km (must be nonzero)"
@@ -575,6 +578,12 @@ impl From<crate::propagation::propagator::PropagationError> for MissionError {
 impl From<crate::mission::lambert::LambertError> for MissionError {
     fn from(e: crate::mission::lambert::LambertError) -> Self {
         Self::Lambert(e)
+    }
+}
+
+impl From<crate::elements::conversions::ConversionError> for MissionError {
+    fn from(e: crate::elements::conversions::ConversionError) -> Self {
+        Self::Conversion(e)
     }
 }
 

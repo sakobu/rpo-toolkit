@@ -8,6 +8,7 @@
 use nalgebra::{SMatrix, SVector};
 
 use crate::propagation::j2_params::{compute_j2_params, J2Params};
+use crate::propagation::propagator::PropagationError;
 use crate::propagation::stm::{compute_stm_with_params, propagate_chief_mean};
 use crate::types::{DragConfig, KeplerianElements, QuasiNonsingularROE};
 
@@ -30,14 +31,16 @@ type Matrix9 = SMatrix<f64, 9, 9>;
 /// - `tau` must be finite
 /// - `_drag` parameter is currently unused (placeholder); drag rates are
 ///   encoded in the augmented state vector at propagation time
-#[must_use]
+///
+/// # Errors
+/// Returns `PropagationError` if eccentricity or SMA are out of range.
 pub fn compute_j2_drag_stm(
     chief_mean: &KeplerianElements,
     _drag: &DragConfig,
     tau: f64,
-) -> Matrix9 {
-    let j2p = compute_j2_params(chief_mean);
-    compute_j2_drag_stm_with_params(&j2p, chief_mean, tau)
+) -> Result<Matrix9, PropagationError> {
+    let j2p = compute_j2_params(chief_mean)?;
+    Ok(compute_j2_drag_stm_with_params(&j2p, chief_mean, tau))
 }
 
 /// Compute the J2+drag 9×9 QNS STM using pre-computed [`J2Params`] (Koenig Appendix D).
@@ -147,14 +150,16 @@ pub fn compute_j2_drag_stm_with_params(
 /// - `chief_mean` must be **mean** Keplerian elements, not osculating
 /// - Drag rates in `drag` are assumed constant over the propagation interval
 /// - ROE must satisfy linearization validity (`dimensionless_norm() < ~0.01`)
-#[must_use]
+///
+/// # Errors
+/// Returns `PropagationError` if eccentricity or SMA are out of range.
 pub fn propagate_roe_j2_drag(
     roe: &QuasiNonsingularROE,
     chief_mean: &KeplerianElements,
     drag: &DragConfig,
     tau: f64,
-) -> (QuasiNonsingularROE, KeplerianElements) {
-    let j2p = compute_j2_params(chief_mean);
+) -> Result<(QuasiNonsingularROE, KeplerianElements), PropagationError> {
+    let j2p = compute_j2_params(chief_mean)?;
     let stm = compute_j2_drag_stm_with_params(&j2p, chief_mean, tau);
 
     // Build 9-element augmented state vector
@@ -177,7 +182,7 @@ pub fn propagate_roe_j2_drag(
 
     let chief_prop = propagate_chief_mean(chief_mean, &j2p, tau);
 
-    (roe_prop, chief_prop)
+    Ok((roe_prop, chief_prop))
 }
 
 #[cfg(test)]
@@ -192,8 +197,8 @@ mod tests {
         let tau = 3600.0;
         let drag = DragConfig::zero();
 
-        let stm_j2 = compute_stm(&chief, tau);
-        let stm_drag = compute_j2_drag_stm(&chief, &drag, tau);
+        let stm_j2 = compute_stm(&chief, tau).unwrap();
+        let stm_drag = compute_j2_drag_stm(&chief, &drag, tau).unwrap();
 
         // Upper-left 6x6 must match
         for r in 0..6 {
@@ -214,7 +219,7 @@ mod tests {
         let chief = iss_like_elements();
         let drag = test_drag_config();
 
-        let stm = compute_j2_drag_stm(&chief, &drag, 0.0);
+        let stm = compute_j2_drag_stm(&chief, &drag, 0.0).unwrap();
         let identity = Matrix9::identity();
 
         let diff = (stm - identity).norm();
@@ -238,8 +243,8 @@ mod tests {
         };
 
         let tau = 3600.0;
-        let (roe_fwd, chief_fwd) = propagate_roe_j2_drag(&roe, &chief, &drag, tau);
-        let (roe_back, _) = propagate_roe_j2_drag(&roe_fwd, &chief_fwd, &drag, -tau);
+        let (roe_fwd, chief_fwd) = propagate_roe_j2_drag(&roe, &chief, &drag, tau).unwrap();
+        let (roe_back, _) = propagate_roe_j2_drag(&roe_fwd, &chief_fwd, &drag, -tau).unwrap();
 
         assert!(
             (roe_back.da - roe.da).abs() < 1e-6,
@@ -279,7 +284,7 @@ mod tests {
         let roe = QuasiNonsingularROE::default();
 
         let tau = 1000.0;
-        let (roe_prop, _) = propagate_roe_j2_drag(&roe, &chief, &drag, tau);
+        let (roe_prop, _) = propagate_roe_j2_drag(&roe, &chief, &drag, tau).unwrap();
 
         // da(τ) ≈ da_dot * τ (linear drift from drag)
         let expected_da = da_dot * tau;
@@ -303,8 +308,8 @@ mod tests {
         let roe = QuasiNonsingularROE::default();
 
         let tau = 1000.0;
-        let (roe_1, _) = propagate_roe_j2_drag(&roe, &chief, &drag, tau);
-        let (roe_2, _) = propagate_roe_j2_drag(&roe, &chief, &drag, 2.0 * tau);
+        let (roe_1, _) = propagate_roe_j2_drag(&roe, &chief, &drag, tau).unwrap();
+        let (roe_2, _) = propagate_roe_j2_drag(&roe, &chief, &drag, 2.0 * tau).unwrap();
 
         // Quadratic: drift at 2τ ≈ 4× drift at τ
         let ratio = roe_2.dlambda / roe_1.dlambda;
@@ -327,7 +332,7 @@ mod tests {
         let roe = QuasiNonsingularROE::default();
 
         let tau = 1000.0;
-        let (roe_prop, _) = propagate_roe_j2_drag(&roe, &chief, &drag, tau);
+        let (roe_prop, _) = propagate_roe_j2_drag(&roe, &chief, &drag, tau).unwrap();
 
         // Eccentricity vector should have drifted from zero
         assert!(
@@ -348,8 +353,8 @@ mod tests {
         let tau = 3600.0;
         let drag = DragConfig::zero();
 
-        let stm_j2 = compute_stm(&chief, tau);
-        let stm_drag = compute_j2_drag_stm(&chief, &drag, tau);
+        let stm_j2 = compute_stm(&chief, tau).unwrap();
+        let stm_drag = compute_j2_drag_stm(&chief, &drag, tau).unwrap();
 
         for r in 0..6 {
             for c in 0..6 {
