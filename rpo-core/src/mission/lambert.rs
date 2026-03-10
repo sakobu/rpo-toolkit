@@ -58,6 +58,17 @@ pub struct LambertTransfer {
     pub direction: TransferDirection,
 }
 
+impl LambertTransfer {
+    /// Generate a dense ECI trajectory along the Lambert transfer arc.
+    ///
+    /// The arc is a two-body Keplerian orbit defined by `departure_state`.
+    /// Produces `n_steps + 1` states from departure to arrival.
+    #[must_use]
+    pub fn densify_arc(&self, n_steps: usize) -> Vec<StateVector> {
+        crate::propagation::keplerian::propagate_keplerian(&self.departure_state, self.tof, n_steps)
+    }
+}
+
 /// Errors from the Lambert solver.
 #[derive(Debug, Clone)]
 pub enum LambertError {
@@ -364,6 +375,92 @@ mod tests {
             solve_lambert_izzo(&dep, &arr, &config).expect("Long-way transfer should succeed");
         assert!(transfer.total_dv > 0.0, "Long-way Δv should be positive");
         assert_eq!(transfer.direction, TransferDirection::LongWay);
+    }
+
+    #[test]
+    fn densify_arc_endpoints_match() {
+        let epoch = test_epoch();
+        let dep = keplerian_to_state(&leo_400km_elements(), epoch);
+        let arr = keplerian_to_state(
+            &leo_800km_target_elements(),
+            epoch + Duration::from_seconds(2400.0),
+        );
+
+        let transfer = solve_lambert(&dep, &arr).expect("Lambert should succeed");
+        let arc = transfer.densify_arc(100);
+
+        let dep_err = (arc.first().unwrap().position - transfer.departure_state.position).norm();
+        let arr_err = (arc.last().unwrap().position - transfer.arrival_state.position).norm();
+
+        assert!(
+            dep_err < 1e-6,
+            "Departure position mismatch: {dep_err} km"
+        );
+        assert!(arr_err < 1e-6, "Arrival position mismatch: {arr_err} km");
+    }
+
+    #[test]
+    fn densify_arc_correct_count() {
+        let epoch = test_epoch();
+        let dep = keplerian_to_state(&leo_400km_elements(), epoch);
+        let arr = keplerian_to_state(
+            &leo_800km_target_elements(),
+            epoch + Duration::from_seconds(2400.0),
+        );
+
+        let transfer = solve_lambert(&dep, &arr).expect("Lambert should succeed");
+        let arc = transfer.densify_arc(100);
+
+        assert_eq!(arc.len(), 101, "Expected 101 points (100 steps + 1)");
+    }
+
+    #[test]
+    fn densify_arc_monotonic_epochs() {
+        let epoch = test_epoch();
+        let dep = keplerian_to_state(&leo_400km_elements(), epoch);
+        let arr = keplerian_to_state(
+            &leo_800km_target_elements(),
+            epoch + Duration::from_seconds(2400.0),
+        );
+
+        let transfer = solve_lambert(&dep, &arr).expect("Lambert should succeed");
+        let arc = transfer.densify_arc(50);
+
+        for window in arc.windows(2) {
+            let t0 = window[0].epoch;
+            let t1 = window[1].epoch;
+            assert!(
+                t1 > t0,
+                "Epochs not monotonically increasing: {t0} >= {t1}"
+            );
+        }
+    }
+
+    #[test]
+    fn densify_arc_orbit_radius_reasonable() {
+        use crate::constants::R_EARTH;
+
+        let epoch = test_epoch();
+        let dep = keplerian_to_state(&leo_400km_elements(), epoch);
+        let arr = keplerian_to_state(
+            &leo_800km_target_elements(),
+            epoch + Duration::from_seconds(2400.0),
+        );
+
+        let transfer = solve_lambert(&dep, &arr).expect("Lambert should succeed");
+        let arc = transfer.densify_arc(100);
+
+        for (k, state) in arc.iter().enumerate() {
+            let r = state.position.norm();
+            assert!(
+                r > R_EARTH,
+                "Point {k} below Earth surface: r = {r} km"
+            );
+            assert!(
+                r < R_EARTH + 2000.0,
+                "Point {k} radius too large for LEO: r = {r} km"
+            );
+        }
     }
 
     #[test]

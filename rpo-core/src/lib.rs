@@ -34,8 +34,8 @@ pub use mission::{
 };
 pub use propagation::{
     compute_j2_drag_stm, compute_j2_params, compute_stm, compute_stm_with_params,
-    propagate_roe_j2_drag, propagate_roe_stm, J2DragStmPropagator, J2Params, J2StmPropagator,
-    PropagatedState, PropagationError, RelativePropagator,
+    propagate_keplerian, propagate_roe_j2_drag, propagate_roe_stm, J2DragStmPropagator, J2Params,
+    J2StmPropagator, PropagatedState, PropagationError, RelativePropagator,
 };
 pub use types::{
     DepartureState, DragConfig, KeplerianElements, Maneuver, ManeuverLeg, MissionConfig,

@@ -2,11 +2,13 @@
 
 pub mod drag_stm;
 pub mod j2_params;
+pub mod keplerian;
 pub mod propagator;
 pub mod stm;
 
 pub use drag_stm::{compute_j2_drag_stm, propagate_roe_j2_drag};
 pub use j2_params::{compute_j2_params, J2Params};
+pub use keplerian::propagate_keplerian;
 pub use propagator::{
     J2DragStmPropagator, J2StmPropagator, PropagatedState, PropagationError, RelativePropagator,
 };
