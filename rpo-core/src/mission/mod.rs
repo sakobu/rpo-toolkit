@@ -13,7 +13,6 @@ pub use lambert::{
 };
 pub use planning::{
     classify_separation, dimensionless_separation, eci_separation_km, plan_mission,
-    plan_proximity_mission,
 };
 pub use safety::{analyze_safety, analyze_trajectory_safety};
 pub use targeting::{optimize_tof, solve_leg};

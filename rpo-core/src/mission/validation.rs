@@ -95,7 +95,7 @@ mod tests {
         test_epoch,
     };
     use crate::types::{
-        KeplerianElements, MissionPhase, MissionPlanConfig, PerchGeometry, ProximityConfig,
+        KeplerianElements, MissionPhase, PerchGeometry, ProximityConfig,
     };
 
     /// End-to-end mission pipeline: far-field classification → Lambert transfer →
@@ -125,18 +125,11 @@ mod tests {
         );
 
         // Full mission plan
-        let propagator = J2StmPropagator;
         let perch = PerchGeometry::VBar {
             along_track_km: 5.0,
         };
-        let period = std::f64::consts::TAU / chief_ke.mean_motion();
-        let plan_config = MissionPlanConfig {
-            transfer_tof_s: 3600.0,
-            proximity_duration_s: period,
-            num_steps: 50,
-        };
 
-        let plan = plan_mission(&chief, &deputy, &perch, &config, &propagator, &plan_config)
+        let plan = plan_mission(&chief, &deputy, &perch, &config, 3600.0)
             .expect("mission plan should succeed");
 
         // Lambert transfer assertions
@@ -171,36 +164,6 @@ mod tests {
         assert!(
             plan.perch_roe.dey.abs() < 1e-10,
             "V-bar perch dey should be near-zero"
-        );
-
-        // Trajectory assertions
-        assert_eq!(
-            plan.proximity_trajectory.len(),
-            51,
-            "50 steps + initial = 51 states"
-        );
-
-        // Bound check on RIC trajectory
-        let mut max_r = 0.0_f64;
-        let mut max_i = 0.0_f64;
-        let mut max_c = 0.0_f64;
-        for state in &plan.proximity_trajectory {
-            max_r = max_r.max(state.ric.position.x.abs());
-            max_i = max_i.max(state.ric.position.y.abs());
-            max_c = max_c.max(state.ric.position.z.abs());
-        }
-        assert!(max_r < 50.0, "radial RIC too large: {max_r} km");
-        assert!(max_i < 100.0, "in-track RIC too large: {max_i} km");
-        assert!(max_c < 50.0, "cross-track RIC too large: {max_c} km");
-
-        // Near-periodicity check: final RIC should be within 50% of max amplitude from initial
-        let initial = &plan.proximity_trajectory[0].ric;
-        let final_state = &plan.proximity_trajectory.last().unwrap().ric;
-        let dr = (final_state.position - initial.position).norm();
-        let max_amplitude = (max_r * max_r + max_i * max_i + max_c * max_c).sqrt();
-        assert!(
-            dr < 0.5 * max_amplitude,
-            "final RIC drift {dr} km exceeds 50% of max amplitude {max_amplitude} km"
         );
     }
 

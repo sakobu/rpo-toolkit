@@ -8,10 +8,9 @@
 //! (when available) with ROE-based proximity operations.
 
 use crate::elements::conversions::state_to_keplerian;
-use crate::propagation::propagator::RelativePropagator;
 use crate::elements::roe::compute_roe;
 use crate::types::{
-    KeplerianElements, MissionError, MissionPhase, MissionPlan, MissionPlanConfig, PerchGeometry,
+    KeplerianElements, MissionError, MissionPhase, MissionPlan, PerchGeometry,
     ProximityConfig, QuasiNonsingularROE, StateVector,
 };
 
@@ -123,66 +122,22 @@ pub fn perch_to_roe(
     }
 }
 
-/// Plan a proximity-only mission (no Lambert solver required).
-///
-/// Both spacecraft must be within ROE-valid range. Computes ROEs and
-/// propagates the relative trajectory analytically.
-///
-/// # Errors
-/// Returns `MissionError` if separation exceeds the threshold or propagation fails.
-pub fn plan_proximity_mission(
-    chief: &StateVector,
-    deputy: &StateVector,
-    config: &ProximityConfig,
-    propagator: &dyn RelativePropagator,
-    duration_s: f64,
-    num_steps: usize,
-) -> Result<MissionPlan, MissionError> {
-    let phase = classify_separation(chief, deputy, config);
-
-    let (roe, chief_elements) = match &phase {
-        MissionPhase::Proximity {
-            roe,
-            chief_elements,
-            ..
-        } => (*roe, *chief_elements),
-        MissionPhase::FarField { delta_r_over_r, .. } => {
-            return Err(MissionError::NotInProximity {
-                delta_r_over_r: *delta_r_over_r,
-                threshold: config.roe_threshold,
-            });
-        }
-    };
-
-    let trajectory =
-        propagator.propagate_with_steps(&roe, &chief_elements, chief.epoch, duration_s, num_steps)?;
-
-    Ok(MissionPlan {
-        phase,
-        transfer: None,
-        perch_roe: roe,
-        proximity_trajectory: trajectory,
-    })
-}
-
 /// Plan a complete mission with Lambert transfer support.
 ///
-/// If the spacecraft are in proximity, proceeds directly with ROE propagation.
-/// If far-field, computes a Lambert transfer to the perch orbit, then propagates
-/// the proximity phase from the perch ROE state.
+/// If the spacecraft are in proximity, computes the perch ROE directly.
+/// If far-field, computes a Lambert transfer to the perch orbit.
 ///
-/// `transfer_tof_s` is the time of flight for the Lambert transfer (seconds).
+/// `lambert_tof_s` is the time of flight for the Lambert transfer (seconds).
 /// It is only used when the spacecraft are in the far-field regime.
 ///
 /// # Errors
-/// Returns `MissionError` if the Lambert solver or propagation fails.
+/// Returns `MissionError` if the Lambert solver fails or the perch geometry is invalid.
 pub fn plan_mission(
     chief: &StateVector,
     deputy: &StateVector,
     perch: &PerchGeometry,
     config: &ProximityConfig,
-    propagator: &dyn RelativePropagator,
-    plan_config: &MissionPlanConfig,
+    lambert_tof_s: f64,
 ) -> Result<MissionPlan, MissionError> {
     let phase = classify_separation(chief, deputy, config);
 
@@ -192,20 +147,11 @@ pub fn plan_mission(
             ..
         } => {
             let perch_roe = perch_to_roe(perch, chief_elements)?;
-            let chief_ke = *chief_elements;
-            let trajectory = propagator.propagate_with_steps(
-                &perch_roe,
-                &chief_ke,
-                chief.epoch,
-                plan_config.proximity_duration_s,
-                plan_config.num_steps,
-            )?;
 
             Ok(MissionPlan {
                 phase,
                 transfer: None,
                 perch_roe,
-                proximity_trajectory: trajectory,
             })
         }
         MissionPhase::FarField {
@@ -217,27 +163,17 @@ pub fn plan_mission(
             // Convert perch ROE to a target Keplerian orbit for Lambert
             let target_ke = perch_roe_to_keplerian(&perch_roe, &chief_ke);
             let arrival_epoch =
-                deputy.epoch + hifitime::Duration::from_seconds(plan_config.transfer_tof_s);
+                deputy.epoch + hifitime::Duration::from_seconds(lambert_tof_s);
             let target_state =
                 crate::elements::conversions::keplerian_to_state(&target_ke, arrival_epoch);
 
             // Solve Lambert: deputy → perch
             let transfer = crate::mission::lambert::solve_lambert(deputy, &target_state)?;
 
-            // Propagate proximity phase from perch
-            let trajectory = propagator.propagate_with_steps(
-                &perch_roe,
-                &chief_ke,
-                arrival_epoch,
-                plan_config.proximity_duration_s,
-                plan_config.num_steps,
-            )?;
-
             Ok(MissionPlan {
                 phase,
                 transfer: Some(transfer),
                 perch_roe,
-                proximity_trajectory: trajectory,
             })
         }
     }
@@ -293,7 +229,6 @@ mod tests {
     use super::*;
     use crate::elements::conversions::keplerian_to_state;
     use crate::elements::ric::roe_to_ric;
-    use crate::propagation::propagator::J2StmPropagator;
     use crate::elements::roe::compute_roe;
     use crate::test_helpers::{iss_like_elements, test_epoch};
     use crate::types::KeplerianElements;
@@ -472,28 +407,6 @@ mod tests {
     }
 
     #[test]
-    fn proximity_mission_no_lambert() {
-        let epoch = test_epoch();
-        let chief_ke = iss_like_elements();
-        let mut deputy_ke = chief_ke;
-        deputy_ke.a += 1.0;
-        deputy_ke.mean_anomaly += 0.01;
-
-        let chief = keplerian_to_state(&chief_ke, epoch);
-        let deputy = keplerian_to_state(&deputy_ke, epoch);
-        let config = ProximityConfig::default();
-        let propagator = J2StmPropagator;
-
-        let period = std::f64::consts::TAU / chief_ke.mean_motion();
-        let plan = plan_proximity_mission(&chief, &deputy, &config, &propagator, period, 20)
-            .expect("proximity mission should succeed");
-
-        assert!(matches!(plan.phase, MissionPhase::Proximity { .. }));
-        assert_eq!(plan.proximity_trajectory.len(), 21); // 20 steps + initial
-        assert!(plan.perch_roe.da.abs() > 1e-6, "δa should be nonzero");
-    }
-
-    #[test]
     fn vbar_perch_gives_along_track_roe() {
         let chief = iss_like_elements();
         let perch = PerchGeometry::VBar {
@@ -608,30 +521,15 @@ mod tests {
         let chief = keplerian_to_state(&chief_ke, epoch);
         let deputy = keplerian_to_state(&deputy_ke, epoch);
         let config = ProximityConfig::default();
-        let propagator = J2StmPropagator;
         let perch = PerchGeometry::VBar {
             along_track_km: 5.0,
         };
 
-        let period = std::f64::consts::TAU / chief_ke.mean_motion();
-        let plan_config = crate::types::MissionPlanConfig {
-            transfer_tof_s: 3600.0, // 1 hour transfer
-            proximity_duration_s: period,
-            num_steps: 20,
-        };
-        let plan = plan_mission(
-            &chief,
-            &deputy,
-            &perch,
-            &config,
-            &propagator,
-            &plan_config,
-        )
-        .expect("far-field mission should succeed");
+        let plan = plan_mission(&chief, &deputy, &perch, &config, 3600.0)
+            .expect("far-field mission should succeed");
 
         assert!(matches!(plan.phase, MissionPhase::FarField { .. }));
         assert!(plan.transfer.is_some(), "should have Lambert transfer");
-        assert_eq!(plan.proximity_trajectory.len(), 21);
         assert!(
             plan.transfer.as_ref().unwrap().total_dv > 0.0,
             "Lambert Δv should be positive"
@@ -649,15 +547,8 @@ mod tests {
         let chief = keplerian_to_state(&chief_ke, epoch);
         let deputy = keplerian_to_state(&deputy_ke, epoch);
         let config = ProximityConfig::default();
-        let propagator = J2StmPropagator;
-        let period = std::f64::consts::TAU / chief_ke.mean_motion();
-        let plan_config = crate::types::MissionPlanConfig {
-            transfer_tof_s: 3600.0,
-            proximity_duration_s: period,
-            num_steps: 20,
-        };
 
-        let plan = plan_mission(&chief, &deputy, &perch, &config, &propagator, &plan_config)
+        let plan = plan_mission(&chief, &deputy, &perch, &config, 3600.0)
             .expect("proximity mission should succeed");
         (plan, chief_ke)
     }
@@ -702,19 +593,19 @@ mod tests {
         let chief = keplerian_to_state(&chief_ke, epoch);
         let deputy = keplerian_to_state(&deputy_ke, epoch);
         let config = ProximityConfig::default();
-        let propagator = J2StmPropagator;
-        let period = std::f64::consts::TAU / chief_ke.mean_motion();
+        let perch = PerchGeometry::VBar { along_track_km: 5.0 };
 
-        let plan = plan_proximity_mission(&chief, &deputy, &config, &propagator, period, 5)
+        let plan = plan_mission(&chief, &deputy, &perch, &config, 3600.0)
             .expect("mission should succeed");
 
         let json = serde_json::to_string(&plan).expect("serialize should work");
         let deserialized: MissionPlan =
             serde_json::from_str(&json).expect("deserialize should work");
 
-        assert_eq!(
-            plan.proximity_trajectory.len(),
-            deserialized.proximity_trajectory.len()
+        let expected_dlambda = 5.0 / chief_ke.a;
+        assert!(
+            (deserialized.perch_roe.dlambda - expected_dlambda).abs() < 1e-12,
+            "perch_roe should survive serde roundtrip"
         );
     }
 }

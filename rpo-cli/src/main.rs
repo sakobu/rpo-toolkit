@@ -8,11 +8,11 @@ use rpo_core::{
     // Elements layer
     compute_roe, state_to_keplerian,
     // Propagation layer
-    J2DragStmPropagator, J2StmPropagator, RelativePropagator,
+    propagate_keplerian, J2DragStmPropagator, J2StmPropagator, RelativePropagator,
     // Mission layer
     plan_mission, plan_waypoint_mission,
     // Types
-    DepartureState, DragConfig, MissionConfig, MissionPhase, MissionPlan, MissionPlanConfig,
+    DepartureState, DragConfig, MissionConfig, MissionPhase, MissionPlan,
     PerchGeometry, ProximityConfig, QuasiNonsingularROE, SafetyConfig, SafetyMetrics,
     StateVector, TargetingConfig, TofOptConfig, Waypoint, WaypointMission,
 };
@@ -34,15 +34,6 @@ struct Cli {
 enum Command {
     /// Run the built-in API demo
     Demo,
-    /// Plan a mission from user-provided ECI J2000 state vectors
-    Run {
-        /// Path to JSON input file
-        #[arg(short, long)]
-        input: PathBuf,
-        /// Output as JSON instead of human-readable text
-        #[arg(long)]
-        json: bool,
-    },
     /// Waypoint-based maneuver targeting
     Target {
         /// Path to JSON input file with chief/deputy states + waypoints
@@ -66,32 +57,6 @@ enum Command {
 // ---------------------------------------------------------------------------
 // Input schema (CLI-local)
 // ---------------------------------------------------------------------------
-
-#[derive(Deserialize)]
-struct MissionInput {
-    chief: StateVector,
-    deputy: StateVector,
-    #[serde(default)]
-    config: InputConfig,
-}
-
-#[derive(Deserialize, Default)]
-#[serde(default)]
-struct InputConfig {
-    perch: Option<PerchGeometry>,
-    proximity: Option<ProximityConfig>,
-    plan: Option<PlanOverrides>,
-    #[serde(flatten)]
-    prop: PropagatorConfig,
-}
-
-#[derive(Deserialize, Default)]
-#[serde(default)]
-struct PlanOverrides {
-    transfer_tof_s: Option<f64>,
-    proximity_duration_s: Option<f64>,
-    num_steps: Option<usize>,
-}
 
 #[derive(Deserialize, Default, Clone, Copy)]
 #[serde(rename_all = "snake_case")]
@@ -188,85 +153,6 @@ fn load_json<T: serde::de::DeserializeOwned>(path: &PathBuf) -> Result<T, Box<dy
 }
 
 // ---------------------------------------------------------------------------
-// Run mission from JSON input
-// ---------------------------------------------------------------------------
-
-fn run_mission(input_path: &PathBuf, json_output: bool) -> Result<(), Box<dyn Error>> {
-    let input: MissionInput = load_json(input_path)?;
-
-    let chief_ke = state_to_keplerian(&input.chief);
-    let period_s = chief_ke.period();
-
-    let perch = input.config.perch.unwrap_or(PerchGeometry::VBar { along_track_km: 5.0 });
-    let proximity = input.config.proximity.unwrap_or_default();
-    let overrides = input.config.plan.unwrap_or_default();
-
-    let plan_config = MissionPlanConfig {
-        transfer_tof_s: overrides.transfer_tof_s.unwrap_or(3600.0),
-        proximity_duration_s: overrides.proximity_duration_s.unwrap_or(period_s * 2.0),
-        num_steps: overrides.num_steps.unwrap_or(200),
-    };
-
-    let prop = input.config.prop.make_propagator();
-    let mission = plan_mission(
-        &input.chief, &input.deputy, &perch, &proximity, prop.as_ref(), &plan_config,
-    )?;
-
-    if json_output {
-        println!("{}", serde_json::to_string_pretty(&mission)?);
-        return Ok(());
-    }
-
-    // --- Human-readable output ---
-    println!("RPO Mission Plan");
-    println!("================\n");
-
-    // Phase classification
-    match &mission.phase {
-        MissionPhase::Proximity { separation_km, delta_r_over_r, roe, chief_elements, .. } => {
-            println!("Phase: PROXIMITY");
-            println!("  ECI separation:  {separation_km:.4} km");
-            println!("  δr/r:            {delta_r_over_r:.6e}");
-            println!();
-            print_roe("Initial ROE", roe, chief_elements.a);
-        }
-        MissionPhase::FarField { separation_km, delta_r_over_r, .. } => {
-            println!("Phase: FAR-FIELD (Lambert transfer required)");
-            println!("  ECI separation:  {separation_km:.4} km");
-            println!("  δr/r:            {delta_r_over_r:.6e}");
-        }
-    }
-
-    // Lambert transfer
-    if let Some(ref transfer) = mission.transfer {
-        println!("\nLambert Transfer:");
-        println!("  Total Δv:     {:.4} km/s", transfer.total_dv);
-        println!("  Departure Δv: {:.4} km/s", transfer.departure_dv.norm());
-        println!("  Arrival Δv:   {:.4} km/s", transfer.arrival_dv.norm());
-        println!("  TOF:          {:.1} s ({:.2} min)", transfer.tof, transfer.tof / 60.0);
-        if let Some(c3) = transfer.c3_km2_s2 {
-            println!("  C3:           {:.4} km²/s²", c3);
-        }
-        println!("  Direction:    {:?}", transfer.direction);
-    }
-
-    // Perch ROE
-    println!();
-    print_roe("Perch ROE", &mission.perch_roe, chief_ke.a);
-
-    // Trajectory table
-    println!("\nProximity Trajectory ({} points):", mission.proximity_trajectory.len());
-    let sample = if mission.proximity_trajectory.len() > 20 {
-        mission.proximity_trajectory.len() / 20
-    } else {
-        1
-    };
-    print_trajectory_table(&mission.proximity_trajectory, sample);
-
-    Ok(())
-}
-
-// ---------------------------------------------------------------------------
 // Waypoint targeting from JSON input
 // ---------------------------------------------------------------------------
 
@@ -344,6 +230,8 @@ fn run_targeting(input_path: &PathBuf, json_output: bool) -> Result<(), Box<dyn 
 struct EndToEndOutput {
     transfer_phase: MissionPlan,
     waypoint_phase: WaypointMission,
+    transfer_trajectory: Vec<StateVector>,
+    chief_trajectory: Vec<StateVector>,
     lambert_dv: f64,
     waypoint_dv: f64,
     total_dv: f64,
@@ -354,22 +242,15 @@ fn run_end_to_end_mission(input_path: &PathBuf, json_output: bool) -> Result<(),
     let input: EndToEndInput = load_json(input_path)?;
 
     let chief_ke = state_to_keplerian(&input.chief);
-    let period_s = chief_ke.period();
 
     let perch = input.perch.unwrap_or(PerchGeometry::VBar { along_track_km: 5.0 });
     let proximity = input.proximity.unwrap_or_default();
     let lambert_tof_s = input.lambert_tof_s.unwrap_or(3600.0);
 
-    let plan_config = MissionPlanConfig {
-        transfer_tof_s: lambert_tof_s,
-        proximity_duration_s: period_s,
-        num_steps: 200,
-    };
-
     // Phase 1: Classification + Lambert transfer
     let prop = input.prop.make_propagator();
     let mission = plan_mission(
-        &input.chief, &input.deputy, &perch, &proximity, prop.as_ref(), &plan_config,
+        &input.chief, &input.deputy, &perch, &proximity, lambert_tof_s,
     )?;
 
     let lambert_dv = mission.transfer.as_ref().map_or(0.0, |t| t.total_dv);
@@ -396,9 +277,21 @@ fn run_end_to_end_mission(input_path: &PathBuf, json_output: bool) -> Result<(),
     let total_duration_s = lambert_tof_s + wp_mission.total_duration_s;
 
     if json_output {
+        let n_arc_steps = 200;
+        let (transfer_trajectory, chief_trajectory) = if let Some(ref transfer) = mission.transfer {
+            (
+                transfer.densify_arc(n_arc_steps),
+                propagate_keplerian(&input.chief, transfer.tof, n_arc_steps),
+            )
+        } else {
+            (vec![], vec![])
+        };
+
         let output = EndToEndOutput {
             transfer_phase: mission,
             waypoint_phase: wp_mission,
+            transfer_trajectory,
+            chief_trajectory,
             lambert_dv,
             waypoint_dv,
             total_dv,
@@ -612,7 +505,6 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     match cli.command {
         None | Some(Command::Demo) => demo::run_demo(),
-        Some(Command::Run { input, json }) => run_mission(&input, json),
         Some(Command::Target { input, json }) => run_targeting(&input, json),
         Some(Command::Mission { input, json }) => run_end_to_end_mission(&input, json),
     }

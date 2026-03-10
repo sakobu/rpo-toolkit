@@ -265,8 +265,6 @@ pub struct MissionPlan {
     pub transfer: Option<crate::mission::lambert::LambertTransfer>,
     /// Perch orbit ROE state (transfer target / proximity start)
     pub perch_roe: QuasiNonsingularROE,
-    /// Proximity trajectory from perch (analytical propagation)
-    pub proximity_trajectory: Vec<crate::propagation::propagator::PropagatedState>,
 }
 
 /// A target waypoint in RIC space for maneuver targeting.
@@ -549,17 +547,6 @@ impl From<crate::mission::lambert::LambertError> for MissionError {
     fn from(e: crate::mission::lambert::LambertError) -> Self {
         Self::Lambert(e)
     }
-}
-
-/// Configuration for mission planning execution.
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
-pub struct MissionPlanConfig {
-    /// Time of flight for the Lambert transfer (seconds).
-    pub transfer_tof_s: f64,
-    /// Duration of proximity operations (seconds).
-    pub proximity_duration_s: f64,
-    /// Number of propagation steps for the proximity trajectory.
-    pub num_steps: usize,
 }
 
 /// Serde support for `hifitime::Epoch` (serialize as ISO 8601 string)

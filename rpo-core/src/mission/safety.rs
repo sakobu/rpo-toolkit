@@ -92,7 +92,7 @@ pub fn analyze_safety(
 /// ≈ `sin(π/N) × amplitude`, where N = samples per orbit. The default 200
 /// trajectory steps gives ~1.6% quantization error per single-orbit leg.
 /// For safety-critical missions, increase `TargetingConfig::trajectory_steps`
-/// or `MissionPlanConfig::num_steps` to reduce this error further.
+/// to reduce this error further.
 ///
 /// The **e/i separation** (D'Amico Eq. 2.22) is an analytic orbit-averaged
 /// bound and varies slowly with secular J2 drift.

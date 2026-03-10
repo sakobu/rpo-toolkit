@@ -28,7 +28,7 @@ pub use elements::{
 pub use mission::{
     analyze_safety, analyze_trajectory_safety, classify_separation,
     dimensionless_separation, eci_separation_km, get_mission_state_at_time, optimize_tof,
-    plan_mission, plan_proximity_mission, plan_waypoint_mission, replan_from_waypoint,
+    plan_mission, plan_waypoint_mission, replan_from_waypoint,
     resample_leg_trajectory, solve_lambert, solve_lambert_izzo, solve_lambert_with_config,
     solve_leg, LambertConfig, LambertError, LambertTransfer, TransferDirection,
 };
@@ -39,7 +39,7 @@ pub use propagation::{
 };
 pub use types::{
     DepartureState, DragConfig, KeplerianElements, Maneuver, ManeuverLeg, MissionConfig,
-    MissionError, MissionPhase, MissionPlan, MissionPlanConfig, PerchGeometry, ProximityConfig,
+    MissionError, MissionPhase, MissionPlan, PerchGeometry, ProximityConfig,
     QuasiNonsingularROE, RICState, SafetyConfig, SafetyMetrics, StateVector, TargetingConfig,
     TofOptConfig, Waypoint, WaypointMission,
 };

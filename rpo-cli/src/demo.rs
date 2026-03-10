@@ -9,10 +9,10 @@ use rpo_core::{
     compute_j2_params, compute_stm, compute_stm_with_params, propagate_roe_j2_drag,
     propagate_roe_stm, J2DragStmPropagator, J2StmPropagator, RelativePropagator,
     // Mission layer
-    classify_separation, dimensionless_separation, plan_mission, plan_proximity_mission,
+    classify_separation, dimensionless_separation, plan_mission,
     solve_lambert_with_config, LambertConfig, TransferDirection,
     // Types
-    DragConfig, KeplerianElements, MissionPhase, MissionPlanConfig, PerchGeometry,
+    DragConfig, KeplerianElements, MissionPhase, PerchGeometry,
     ProximityConfig, QuasiNonsingularROE,
 };
 
@@ -341,17 +341,9 @@ pub(crate) fn run_demo() -> Result<(), Box<dyn Error>> {
         MissionPhase::FarField { .. } => println!("  Classification: FAR-FIELD"),
     }
 
-    let prox_plan = plan_proximity_mission(
-        &chief_sv, &deputy_sv, &config, &j2_prop,
-        period_s * 2.0, // 2 orbits of proximity ops
-        40,
-    )?;
-
-    println!("\n  Proximity mission plan:");
-    print_roe("Perch ROE", &prox_plan.perch_roe, chief.a);
-    println!("    Trajectory: {} points over {:.0} s",
-        prox_plan.proximity_trajectory.len(),
-        prox_plan.proximity_trajectory.last().unwrap().elapsed_s);
+    let prox_roe = compute_roe(&chief, &deputy_kep);
+    println!("\n  Proximity ROE state:");
+    print_roe("ROE", &prox_roe, chief.a);
 
     // --- Far-field case ---
     let far_dep = far_deputy();
@@ -370,14 +362,9 @@ pub(crate) fn run_demo() -> Result<(), Box<dyn Error>> {
 
     // V-bar perch: deputy holds 5 km ahead along velocity vector
     let vbar_perch = PerchGeometry::VBar { along_track_km: 5.0 };
-    let mission_config = MissionPlanConfig {
-        transfer_tof_s: 3600.0,            // 1-hour Lambert transfer
-        proximity_duration_s: period_s * 2.0, // 2 orbits proximity ops
-        num_steps: 40,
-    };
 
     let mission = plan_mission(
-        &chief_sv, &far_sv, &vbar_perch, &config, &j2_prop, &mission_config,
+        &chief_sv, &far_sv, &vbar_perch, &config, 3600.0,
     )?;
 
     if let Some(ref transfer) = mission.transfer {
@@ -394,10 +381,6 @@ pub(crate) fn run_demo() -> Result<(), Box<dyn Error>> {
 
     println!("\n  Perch orbit (V-bar, 5 km ahead):");
     print_roe("Perch ROE state", &mission.perch_roe, chief.a);
-
-    let prox_final = mission.proximity_trajectory.last().unwrap();
-    println!("\n    Final proximity RIC: [{:.4}, {:.4}, {:.4}] km",
-        prox_final.ric.position.x, prox_final.ric.position.y, prox_final.ric.position.z);
 
     // ===================================================================
     // Section 7: Advanced Lambert & R-Bar Perch
@@ -455,14 +438,9 @@ pub(crate) fn run_demo() -> Result<(), Box<dyn Error>> {
     // --- R-bar perch geometry ---
     println!("\nR-bar perch geometry (deputy 2 km above chief):");
     let rbar_perch = PerchGeometry::RBar { radial_km: 2.0 };
-    let rbar_config = MissionPlanConfig {
-        transfer_tof_s: 3600.0,
-        proximity_duration_s: period_s * 2.0,
-        num_steps: 40,
-    };
 
     let rbar_mission = plan_mission(
-        &chief_sv, &far_sv, &rbar_perch, &config, &j2_prop, &rbar_config,
+        &chief_sv, &far_sv, &rbar_perch, &config, 3600.0,
     )?;
 
     println!("  R-bar perch ROE:");
@@ -499,7 +477,7 @@ pub(crate) fn run_demo() -> Result<(), Box<dyn Error>> {
         custom_ric.position.x, custom_ric.position.y, custom_ric.position.z);
 
     let custom_mission = plan_mission(
-        &chief_sv, &far_sv, &custom_perch, &config, &j2_prop, &rbar_config,
+        &chief_sv, &far_sv, &custom_perch, &config, 3600.0,
     )?;
     if let Some(ref transfer) = custom_mission.transfer {
         println!("    Lambert Δv to custom perch: {:.4} km/s", transfer.total_dv);
