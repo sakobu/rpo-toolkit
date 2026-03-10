@@ -174,7 +174,7 @@ mod tests {
         let chief = iss_like_elements();
         let epoch = test_epoch();
         let roe = QuasiNonsingularROE {
-            da: 1.0 / chief.a,
+            da: 1.0 / chief.a_km,
             dlambda: 0.001,
             dex: 0.0001,
             dey: 0.0001,
@@ -194,7 +194,7 @@ mod tests {
         let chief = iss_like_elements();
         let epoch = test_epoch();
         let roe = QuasiNonsingularROE {
-            da: 1.0 / chief.a,
+            da: 1.0 / chief.a_km,
             dlambda: 0.001,
             dex: 0.0001,
             dey: 0.0001,
@@ -230,7 +230,7 @@ mod tests {
         let chief = iss_like_elements();
         let epoch = test_epoch();
         let roe = QuasiNonsingularROE {
-            da: 1.0 / chief.a,
+            da: 1.0 / chief.a_km,
             dlambda: 0.0,
             dex: 0.0,
             dey: 0.0,
@@ -243,10 +243,10 @@ mod tests {
 
         // Along-track (y) should be growing in magnitude
         assert!(
-            s2.ric.position.y.abs() > s1.ric.position.y.abs(),
+            s2.ric.position_ric_km.y.abs() > s1.ric.position_ric_km.y.abs(),
             "Along-track drift should grow: {} vs {}",
-            s1.ric.position.y.abs(),
-            s2.ric.position.y.abs()
+            s1.ric.position_ric_km.y.abs(),
+            s2.ric.position_ric_km.y.abs()
         );
     }
 
@@ -255,7 +255,7 @@ mod tests {
         let chief = iss_like_elements();
         let epoch = test_epoch();
         let roe = QuasiNonsingularROE {
-            da: 1.0 / chief.a,
+            da: 1.0 / chief.a_km,
             dlambda: 0.001,
             dex: 0.0001,
             dey: 0.0001,
@@ -297,7 +297,7 @@ mod tests {
             "diy mismatch"
         );
         assert!(
-            (s_j2.ric.position - s_drag.ric.position).norm() < 1e-10,
+            (s_j2.ric.position_ric_km - s_drag.ric.position_ric_km).norm() < 1e-10,
             "RIC position mismatch"
         );
     }
@@ -324,7 +324,7 @@ mod tests {
         // Along-track drift should grow monotonically (drag causes secular drift)
         let mut prev_abs = 0.0_f64;
         for state in &states[1..] {
-            let curr_abs = state.ric.position.y.abs();
+            let curr_abs = state.ric.position_ric_km.y.abs();
             assert!(
                 curr_abs >= prev_abs * 0.9, // allow small oscillations
                 "Along-track drift should generally grow: {curr_abs} vs {prev_abs}"

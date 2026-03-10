@@ -11,23 +11,23 @@ pub fn compute_roe(
     chief: &KeplerianElements,
     deputy: &KeplerianElements,
 ) -> QuasiNonsingularROE {
-    debug_assert!(chief.a > 0.0, "chief semi-major axis must be positive, got {}", chief.a);
+    debug_assert!(chief.a_km > 0.0, "chief semi-major axis must be positive, got {}", chief.a_km);
 
-    let da = (deputy.a - chief.a) / chief.a;
+    let da = (deputy.a_km - chief.a_km) / chief.a_km;
 
     // δλ = (M_d + ω_d) - (M_c + ω_c) + (Ω_d - Ω_c) * cos(i_c)
-    let lambda_d = deputy.mean_anomaly + deputy.aop;
-    let lambda_c = chief.mean_anomaly + chief.aop;
-    let d_raan = deputy.raan - chief.raan;
-    let dlambda = wrap_angle(lambda_d - lambda_c + d_raan * chief.i.cos());
+    let lambda_d = deputy.mean_anomaly_rad + deputy.aop_rad;
+    let lambda_c = chief.mean_anomaly_rad + chief.aop_rad;
+    let d_raan = deputy.raan_rad - chief.raan_rad;
+    let dlambda = wrap_angle(lambda_d - lambda_c + d_raan * chief.i_rad.cos());
 
-    let (sin_aop_d, cos_aop_d) = deputy.aop.sin_cos();
-    let (sin_aop_c, cos_aop_c) = chief.aop.sin_cos();
+    let (sin_aop_d, cos_aop_d) = deputy.aop_rad.sin_cos();
+    let (sin_aop_c, cos_aop_c) = chief.aop_rad.sin_cos();
     let dex = deputy.e * cos_aop_d - chief.e * cos_aop_c;
     let dey = deputy.e * sin_aop_d - chief.e * sin_aop_c;
 
-    let dix = deputy.i - chief.i;
-    let diy = d_raan * chief.i.sin();
+    let dix = deputy.i_rad - chief.i_rad;
+    let diy = d_raan * chief.i_rad.sin();
 
     QuasiNonsingularROE {
         da,
@@ -70,15 +70,15 @@ mod tests {
     #[test]
     fn roe_sma_offset() {
         let chief = KeplerianElements {
-            a: 6786.0,
+            a_km: 6786.0,
             e: 0.001,
-            i: 51.6_f64.to_radians(),
-            raan: 30.0_f64.to_radians(),
-            aop: 0.0,
-            mean_anomaly: 0.0,
+            i_rad: 51.6_f64.to_radians(),
+            raan_rad: 30.0_f64.to_radians(),
+            aop_rad: 0.0,
+            mean_anomaly_rad: 0.0,
         };
         let mut deputy = chief;
-        deputy.a = 6787.0; // 1 km higher
+        deputy.a_km = 6787.0; // 1 km higher
 
         let roe = compute_roe(&chief, &deputy);
         let expected_da = 1.0 / 6786.0;
@@ -92,15 +92,15 @@ mod tests {
     #[test]
     fn roe_inclination_offset() {
         let chief = KeplerianElements {
-            a: 6786.0,
+            a_km: 6786.0,
             e: 0.001,
-            i: 51.6_f64.to_radians(),
-            raan: 30.0_f64.to_radians(),
-            aop: 0.0,
-            mean_anomaly: 0.0,
+            i_rad: 51.6_f64.to_radians(),
+            raan_rad: 30.0_f64.to_radians(),
+            aop_rad: 0.0,
+            mean_anomaly_rad: 0.0,
         };
         let mut deputy = chief;
-        deputy.i = chief.i + 0.001; // small inclination offset
+        deputy.i_rad = chief.i_rad + 0.001; // small inclination offset
 
         let roe = compute_roe(&chief, &deputy);
         assert!(

@@ -67,7 +67,7 @@ pub fn compute_j2_drag_stm_with_params(
     let big_q = j2p.big_q;
     let big_s = j2p.big_s;
 
-    let omega_f = chief_mean.aop + j2p.aop_dot * tau;
+    let omega_f = chief_mean.aop_rad + j2p.aop_dot * tau;
     let ex_f = e * omega_f.cos();
     let ey_f = e * omega_f.sin();
 
@@ -209,7 +209,7 @@ mod tests {
         let chief = iss_like_elements();
         let drag = test_drag_config();
         let roe = QuasiNonsingularROE {
-            da: 1.0 / chief.a,
+            da: 1.0 / chief.a_km,
             dlambda: 0.001,
             dex: 0.0001,
             dey: 0.0001,

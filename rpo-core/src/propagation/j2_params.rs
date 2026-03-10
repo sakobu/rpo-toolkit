@@ -61,9 +61,9 @@ pub struct J2Params {
 #[must_use]
 #[allow(clippy::many_single_char_names, clippy::similar_names)]
 pub fn compute_j2_params(mean: &KeplerianElements) -> J2Params {
-    let a = mean.a;
+    let a = mean.a_km;
     let e = mean.e;
-    let i = mean.i;
+    let i = mean.i_rad;
 
     let n = mean.mean_motion();
     let eta = (1.0 - e * e).sqrt();
@@ -84,8 +84,8 @@ pub fn compute_j2_params(mean: &KeplerianElements) -> J2Params {
     let big_g = 1.0 / (eta * eta * big_e);
 
     // Eccentricity vector components (Eq. A2)
-    let ex = e * mean.aop.cos();
-    let ey = e * mean.aop.sin();
+    let ex = e * mean.aop_rad.cos();
+    let ey = e * mean.aop_rad.sin();
 
     // Eq. 15 auxiliaries
     let big_p = 3.0 * cos2_i - 1.0;
@@ -145,12 +145,12 @@ mod tests {
     #[test]
     fn sun_synchronous_condition() {
         let mean = KeplerianElements {
-            a: 7158.0,
+            a_km: 7158.0,
             e: 0.001,
-            i: 98.6_f64.to_radians(),
-            raan: 0.0,
-            aop: 0.0,
-            mean_anomaly: 0.0,
+            i_rad: 98.6_f64.to_radians(),
+            raan_rad: 0.0,
+            aop_rad: 0.0,
+            mean_anomaly_rad: 0.0,
         };
         let j2p = compute_j2_params(&mean);
         let raan_deg_per_day = j2p.raan_dot.to_degrees() * 86400.0;

@@ -160,7 +160,7 @@ pub fn solve_leg(
         let (arrival, post_dep_roe) = forward_model(departure, &dv1, tof_s, propagator);
 
         // Position residual only — velocity corrected by arrival burn
-        let pos_err = target_position - arrival.ric.position;
+        let pos_err = target_position - arrival.ric.position_ric_km;
         let pos_error_km = pos_err.norm();
         last_error = pos_error_km;
 
@@ -229,12 +229,12 @@ fn solve_leg_cost_only(
     for iter in 0..config.max_iterations {
         let (arrival, _) = forward_model(departure, &dv1, tof_s, propagator);
 
-        let pos_err = target_position - arrival.ric.position;
+        let pos_err = target_position - arrival.ric.position_ric_km;
         let pos_error_km = pos_err.norm();
         last_error = pos_error_km;
 
         if pos_error_km < config.position_tol_km {
-            let dv2 = target_velocity - arrival.ric.velocity;
+            let dv2 = target_velocity - arrival.ric.velocity_ric_km_s;
             return Ok(dv1.norm() + dv2.norm());
         }
 
@@ -263,10 +263,10 @@ fn build_leg(
     let arrival_epoch = departure.epoch + hifitime::Duration::from_seconds(tof_s);
 
     // Arrival Δv corrects velocity mismatch
-    let dv2 = solution.target_velocity - solution.arrival.ric.velocity;
+    let dv2 = solution.target_velocity - solution.arrival.ric.velocity_ric_km_s;
     let post_arr_roe = apply_maneuver(&solution.arrival.roe, &dv2, &solution.arrival.chief_mean);
 
-    let total_dv = solution.dv1.norm() + dv2.norm();
+    let total_dv_km_s = solution.dv1.norm() + dv2.norm();
 
     let trajectory = propagator.propagate_with_steps(
         &solution.post_dep_roe,
@@ -276,28 +276,28 @@ fn build_leg(
         config.trajectory_steps,
     )?;
 
-    let from_position = crate::elements::ric::roe_to_ric(&departure.roe, &departure.chief).position;
+    let from_position_ric_km = crate::elements::ric::roe_to_ric(&departure.roe, &departure.chief).position_ric_km;
 
     Ok(ManeuverLeg {
         departure_maneuver: Maneuver {
-            dv: solution.dv1,
+            dv_ric_km_s: solution.dv1,
             epoch: departure.epoch,
         },
         arrival_maneuver: Maneuver {
-            dv: dv2,
+            dv_ric_km_s: dv2,
             epoch: arrival_epoch,
         },
         tof_s,
-        total_dv,
+        total_dv_km_s,
         post_departure_roe: solution.post_dep_roe,
         departure_chief_mean: departure.chief,
         pre_arrival_roe: solution.arrival.roe,
         post_arrival_roe: post_arr_roe,
         arrival_chief_mean: solution.arrival.chief_mean,
         trajectory,
-        from_position,
-        to_position: solution.target_position,
-        target_velocity: solution.target_velocity,
+        from_position_ric_km,
+        to_position_ric_km: solution.target_position,
+        target_velocity_ric_km_s: solution.target_velocity,
         iterations: solution.iterations,
         position_error_km: solution.position_error_km,
     })
@@ -435,8 +435,8 @@ mod tests {
         )
         .expect("V-bar to V-bar should converge");
 
-        assert!(leg.total_dv > 0.0, "Transfer should require nonzero Δv");
-        assert!(leg.total_dv < 0.1, "Δv should be small for 5 km transfer");
+        assert!(leg.total_dv_km_s > 0.0, "Transfer should require nonzero Δv");
+        assert!(leg.total_dv_km_s < 0.1, "Δv should be small for 5 km transfer");
     }
 
     /// V-bar to R-bar transfer (half-period TOF avoids CW singularity).
@@ -457,7 +457,7 @@ mod tests {
         )
         .expect("V-bar to R-bar should converge");
 
-        assert!(leg.total_dv > 0.0);
+        assert!(leg.total_dv_km_s > 0.0);
     }
 
     /// 3D target (all RIC components nonzero, 0.75-period TOF).
@@ -486,7 +486,7 @@ mod tests {
         )
         .expect("3D target should converge");
 
-        assert!(leg.total_dv > 0.0);
+        assert!(leg.total_dv_km_s > 0.0);
     }
 
     /// Verify convergence: arrival position matches target within tolerance.
@@ -508,9 +508,9 @@ mod tests {
         .expect("should converge");
 
         // Verify by propagating with the computed Δv
-        let post_dep = apply_maneuver(&departure.roe, &leg.departure_maneuver.dv, &chief);
+        let post_dep = apply_maneuver(&departure.roe, &leg.departure_maneuver.dv_ric_km_s, &chief);
         let state = propagator.propagate(&post_dep, &chief, epoch, period);
-        let pos_err = (state.ric.position - target_pos).norm();
+        let pos_err = (state.ric.position_ric_km - target_pos).norm();
 
         assert!(
             pos_err < config.position_tol_km * 10.0,
@@ -565,7 +565,7 @@ mod tests {
         .expect("should converge");
 
         assert!(
-            (leg1.total_dv - leg2.total_dv).abs() < 1e-14,
+            (leg1.total_dv_km_s - leg2.total_dv_km_s).abs() < 1e-14,
             "Same inputs should give same Δv"
         );
     }
@@ -595,10 +595,10 @@ mod tests {
             tof_config.min_periods * period, &config, &propagator,
         ) {
             assert!(
-                opt_leg.total_dv <= leg_min.total_dv * 1.01,
+                opt_leg.total_dv_km_s <= leg_min.total_dv_km_s * 1.01,
                 "Optimal Δv ({}) should be ≤ min-period Δv ({})",
-                opt_leg.total_dv,
-                leg_min.total_dv,
+                opt_leg.total_dv_km_s,
+                leg_min.total_dv_km_s,
             );
         }
         if let Ok(ref leg_max) = solve_leg(
@@ -606,10 +606,10 @@ mod tests {
             tof_config.max_periods * period, &config, &propagator,
         ) {
             assert!(
-                opt_leg.total_dv <= leg_max.total_dv * 1.01,
+                opt_leg.total_dv_km_s <= leg_max.total_dv_km_s * 1.01,
                 "Optimal Δv ({}) should be ≤ max-period Δv ({})",
-                opt_leg.total_dv,
-                leg_max.total_dv,
+                opt_leg.total_dv_km_s,
+                leg_max.total_dv_km_s,
             );
         }
 
@@ -670,7 +670,7 @@ mod tests {
 
             let inv_2h = 1.0 / (2.0 * fd_step);
             for i in 0..3 {
-                jac_fd[(i, j)] = (state_p.ric.position[i] - state_m.ric.position[i]) * inv_2h;
+                jac_fd[(i, j)] = (state_p.ric.position_ric_km[i] - state_m.ric.position_ric_km[i]) * inv_2h;
             }
         }
 

@@ -18,7 +18,7 @@ use crate::types::{KeplerianElements, QuasiNonsingularROE};
 /// * `chief` - Chief Keplerian elements (provides `a`, `n`, and `u`)
 #[must_use]
 pub fn compute_b_matrix(chief: &KeplerianElements) -> SMatrix<f64, 6, 3> {
-    let a = chief.a;
+    let a = chief.a_km;
     let n = chief.mean_motion();
     let u = chief.mean_arg_of_lat();
     let (sin_u, cos_u) = u.sin_cos();
@@ -161,7 +161,7 @@ mod tests {
     fn zero_dv_identity() {
         let chief = iss_like_elements();
         let roe = QuasiNonsingularROE {
-            da: 1.0 / chief.a,
+            da: 1.0 / chief.a_km,
             dlambda: 0.001,
             dex: 0.0002,
             dey: -0.0001,

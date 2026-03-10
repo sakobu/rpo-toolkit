@@ -40,13 +40,13 @@ fn compute_worst_safety(
             let m = crate::mission::safety::analyze_trajectory_safety(&leg.trajectory);
             if m.min_rc_separation_km < overall_min_rc {
                 overall_min_rc = m.min_rc_separation_km;
-                rc_provenance = (i, cumulative_time + m.min_rc_elapsed_s, m.min_rc_ric_position);
+                rc_provenance = (i, cumulative_time + m.min_rc_elapsed_s, m.min_rc_ric_position_km);
                 worst = Some(m);
             }
             overall_min_ei = overall_min_ei.min(m.min_ei_separation_km);
             if m.min_distance_3d_km < overall_min_3d {
                 overall_min_3d = m.min_distance_3d_km;
-                d3_provenance = (i, cumulative_time + m.min_3d_elapsed_s, m.min_3d_ric_position);
+                d3_provenance = (i, cumulative_time + m.min_3d_elapsed_s, m.min_3d_ric_position_km);
             }
             cumulative_time += leg.tof_s;
         }
@@ -57,10 +57,10 @@ fn compute_worst_safety(
             w.min_distance_3d_km = overall_min_3d;
             w.min_rc_leg_index = rc_provenance.0;
             w.min_rc_elapsed_s = rc_provenance.1;
-            w.min_rc_ric_position = rc_provenance.2;
+            w.min_rc_ric_position_km = rc_provenance.2;
             w.min_3d_leg_index = d3_provenance.0;
             w.min_3d_elapsed_s = d3_provenance.1;
-            w.min_3d_ric_position = d3_provenance.2;
+            w.min_3d_ric_position_km = d3_provenance.2;
             w
         })
     })
@@ -71,12 +71,12 @@ fn build_mission(
     legs: Vec<ManeuverLeg>,
     safety_config: Option<&SafetyConfig>,
 ) -> WaypointMission {
-    let total_dv: f64 = legs.iter().map(|l| l.total_dv).sum();
+    let total_dv_km_s: f64 = legs.iter().map(|l| l.total_dv_km_s).sum();
     let total_duration_s: f64 = legs.iter().map(|l| l.tof_s).sum();
     let safety = compute_worst_safety(&legs, safety_config);
     WaypointMission {
         legs,
-        total_dv,
+        total_dv_km_s,
         total_duration_s,
         safety,
     }
@@ -114,8 +114,8 @@ pub fn plan_waypoint_mission(
             // Fixed TOF
             solve_leg(
                 &current,
-                &wp.position,
-                &wp.velocity,
+                &wp.position_ric_km,
+                &wp.velocity_ric_km_s,
                 tof,
                 targeting_config,
                 propagator,
@@ -124,8 +124,8 @@ pub fn plan_waypoint_mission(
             // Optimize TOF
             let (_, leg) = optimize_tof(
                 &current,
-                &wp.position,
-                &wp.velocity,
+                &wp.position_ric_km,
+                &wp.velocity_ric_km_s,
                 targeting_config,
                 tof_config,
                 propagator,
@@ -319,8 +319,8 @@ mod tests {
         let period = std::f64::consts::TAU / departure.chief.mean_motion();
 
         let waypoints = vec![Waypoint {
-            position: Vector3::new(0.0, 5.0, 0.0),
-            velocity: Vector3::zeros(),
+            position_ric_km: Vector3::new(0.0, 5.0, 0.0),
+            velocity_ric_km_s: Vector3::zeros(),
             tof_s: Some(period),
         }];
 
@@ -329,7 +329,7 @@ mod tests {
                 .expect("single waypoint should succeed");
 
         assert_eq!(mission.legs.len(), 1);
-        assert!(mission.total_dv > 0.0);
+        assert!(mission.total_dv_km_s > 0.0);
         assert!(mission.total_duration_s > 0.0);
     }
 
@@ -344,18 +344,18 @@ mod tests {
 
         let waypoints = vec![
             Waypoint {
-                position: Vector3::new(0.0, 5.0, 0.0),
-                velocity: Vector3::zeros(),
+                position_ric_km: Vector3::new(0.0, 5.0, 0.0),
+                velocity_ric_km_s: Vector3::zeros(),
                 tof_s: Some(tof),
             },
             Waypoint {
-                position: Vector3::new(2.0, 3.0, 0.0),
-                velocity: Vector3::zeros(),
+                position_ric_km: Vector3::new(2.0, 3.0, 0.0),
+                velocity_ric_km_s: Vector3::zeros(),
                 tof_s: Some(tof),
             },
             Waypoint {
-                position: Vector3::new(0.0, 1.0, 0.0),
-                velocity: Vector3::zeros(),
+                position_ric_km: Vector3::new(0.0, 1.0, 0.0),
+                velocity_ric_km_s: Vector3::zeros(),
                 tof_s: Some(tof),
             },
         ];
@@ -365,7 +365,7 @@ mod tests {
                 .expect("3-waypoint chain should succeed");
 
         assert_eq!(mission.legs.len(), 3);
-        assert!(mission.total_dv > 0.0);
+        assert!(mission.total_dv_km_s > 0.0);
         // Total duration should be sum of leg TOFs
         let sum_tof: f64 = mission.legs.iter().map(|l| l.tof_s).sum();
         assert!(
@@ -385,13 +385,13 @@ mod tests {
 
         let waypoints = vec![
             Waypoint {
-                position: Vector3::new(0.0, 5.0, 0.0),
-                velocity: Vector3::zeros(),
+                position_ric_km: Vector3::new(0.0, 5.0, 0.0),
+                velocity_ric_km_s: Vector3::zeros(),
                 tof_s: Some(tof),
             },
             Waypoint {
-                position: Vector3::new(0.0, 3.0, 0.0),
-                velocity: Vector3::zeros(),
+                position_ric_km: Vector3::new(0.0, 3.0, 0.0),
+                velocity_ric_km_s: Vector3::zeros(),
                 tof_s: Some(tof),
             },
         ];
@@ -417,8 +417,8 @@ mod tests {
         let period = std::f64::consts::TAU / departure.chief.mean_motion();
 
         let waypoints = vec![Waypoint {
-            position: Vector3::new(0.0, 5.0, 0.0),
-            velocity: Vector3::zeros(),
+            position_ric_km: Vector3::new(0.0, 5.0, 0.0),
+            velocity_ric_km_s: Vector3::zeros(),
             tof_s: Some(period),
         }];
 
@@ -454,8 +454,8 @@ mod tests {
         let period = std::f64::consts::TAU / departure.chief.mean_motion();
 
         let waypoints = vec![Waypoint {
-            position: Vector3::new(0.0, 5.0, 0.0),
-            velocity: Vector3::zeros(),
+            position_ric_km: Vector3::new(0.0, 5.0, 0.0),
+            velocity_ric_km_s: Vector3::zeros(),
             tof_s: Some(period),
         }];
 
@@ -468,7 +468,7 @@ mod tests {
             .expect("t=0 should be valid");
         let first = &mission.legs[0].trajectory[0];
         assert!(
-            (at_start.ric.position - first.ric.position).norm() < 1e-12,
+            (at_start.ric.position_ric_km - first.ric.position_ric_km).norm() < 1e-12,
             "Start position should match trajectory[0]"
         );
 
@@ -477,7 +477,7 @@ mod tests {
             .expect("t=tof should be valid");
         let last = mission.legs[0].trajectory.last().unwrap();
         assert!(
-            (at_end.ric.position - last.ric.position).norm() < 1e-10,
+            (at_end.ric.position_ric_km - last.ric.position_ric_km).norm() < 1e-10,
             "End position should match trajectory.last()"
         );
     }
@@ -493,13 +493,13 @@ mod tests {
 
         let waypoints = vec![
             Waypoint {
-                position: Vector3::new(0.0, 5.0, 0.0),
-                velocity: Vector3::zeros(),
+                position_ric_km: Vector3::new(0.0, 5.0, 0.0),
+                velocity_ric_km_s: Vector3::zeros(),
                 tof_s: Some(tof),
             },
             Waypoint {
-                position: Vector3::new(2.0, 3.0, 0.0),
-                velocity: Vector3::zeros(),
+                position_ric_km: Vector3::new(2.0, 3.0, 0.0),
+                velocity_ric_km_s: Vector3::zeros(),
                 tof_s: Some(tof),
             },
         ];
@@ -532,8 +532,8 @@ mod tests {
         let period = std::f64::consts::TAU / departure.chief.mean_motion();
 
         let waypoints = vec![Waypoint {
-            position: Vector3::new(0.0, 5.0, 0.0),
-            velocity: Vector3::zeros(),
+            position_ric_km: Vector3::new(0.0, 5.0, 0.0),
+            velocity_ric_km_s: Vector3::zeros(),
             tof_s: Some(period),
         }];
 
@@ -549,7 +549,7 @@ mod tests {
         // First point should match trajectory[0]
         let first_orig = &mission.legs[0].trajectory[0];
         assert!(
-            (resampled[0].ric.position - first_orig.ric.position).norm() < 1e-12,
+            (resampled[0].ric.position_ric_km - first_orig.ric.position_ric_km).norm() < 1e-12,
             "Resampled first point should match original"
         );
     }
@@ -563,8 +563,8 @@ mod tests {
         let period = std::f64::consts::TAU / departure.chief.mean_motion();
 
         let waypoints = vec![Waypoint {
-            position: Vector3::new(0.0, 5.0, 0.0),
-            velocity: Vector3::zeros(),
+            position_ric_km: Vector3::new(0.0, 5.0, 0.0),
+            velocity_ric_km_s: Vector3::zeros(),
             tof_s: Some(period),
         }];
 
@@ -606,8 +606,8 @@ mod tests {
         let period = std::f64::consts::TAU / departure.chief.mean_motion();
 
         let waypoints = vec![Waypoint {
-            position: Vector3::new(0.0, 5.0, 0.0),
-            velocity: Vector3::zeros(),
+            position_ric_km: Vector3::new(0.0, 5.0, 0.0),
+            velocity_ric_km_s: Vector3::zeros(),
             tof_s: Some(period),
         }];
 
@@ -620,24 +620,24 @@ mod tests {
             serde_json::from_str(&json).expect("deserialize should work");
 
         assert_eq!(mission.legs.len(), deserialized.legs.len());
-        assert!((mission.total_dv - deserialized.total_dv).abs() < 1e-14);
+        assert!((mission.total_dv_km_s - deserialized.total_dv_km_s).abs() < 1e-14);
     }
 
     fn three_wp_waypoints(tof: f64) -> Vec<Waypoint> {
         vec![
             Waypoint {
-                position: Vector3::new(0.0, 5.0, 0.0),
-                velocity: Vector3::zeros(),
+                position_ric_km: Vector3::new(0.0, 5.0, 0.0),
+                velocity_ric_km_s: Vector3::zeros(),
                 tof_s: Some(tof),
             },
             Waypoint {
-                position: Vector3::new(2.0, 3.0, 0.0),
-                velocity: Vector3::zeros(),
+                position_ric_km: Vector3::new(2.0, 3.0, 0.0),
+                velocity_ric_km_s: Vector3::zeros(),
                 tof_s: Some(tof),
             },
             Waypoint {
-                position: Vector3::new(0.0, 1.0, 0.0),
-                velocity: Vector3::zeros(),
+                position_ric_km: Vector3::new(0.0, 1.0, 0.0),
+                velocity_ric_km_s: Vector3::zeros(),
                 tof_s: Some(tof),
             },
         ]
@@ -661,7 +661,7 @@ mod tests {
 
         assert_eq!(full.legs.len(), replanned.legs.len());
         assert!(
-            (full.total_dv - replanned.total_dv).abs() < 1e-14,
+            (full.total_dv_km_s - replanned.total_dv_km_s).abs() < 1e-14,
             "Total Δv should match"
         );
     }
@@ -682,7 +682,7 @@ mod tests {
 
         // Modify WP2 (index 2) — keep legs 0 and 1
         let mut modified_wps = waypoints.clone();
-        modified_wps[2].position = Vector3::new(1.0, 2.0, 0.0);
+        modified_wps[2].position_ric_km = Vector3::new(1.0, 2.0, 0.0);
 
         let replanned = replan_from_waypoint(
             &original, 2, &modified_wps, &departure, &config, &propagator,
@@ -693,7 +693,7 @@ mod tests {
         // First two legs should be identical
         for i in 0..2 {
             assert!(
-                (original.legs[i].total_dv - replanned.legs[i].total_dv).abs() < 1e-14,
+                (original.legs[i].total_dv_km_s - replanned.legs[i].total_dv_km_s).abs() < 1e-14,
                 "Kept leg {i} Δv should be identical"
             );
             assert!(
@@ -718,7 +718,7 @@ mod tests {
                 .expect("original should succeed");
 
         let mut modified_wps = waypoints.clone();
-        modified_wps[1].position = Vector3::new(1.0, 4.0, 0.0);
+        modified_wps[1].position_ric_km = Vector3::new(1.0, 4.0, 0.0);
 
         let replanned = replan_from_waypoint(
             &original, 1, &modified_wps, &departure, &config, &propagator,
@@ -748,7 +748,7 @@ mod tests {
                 .expect("original should succeed");
 
         let mut modified_wps = waypoints.clone();
-        modified_wps[1].position = Vector3::new(1.0, 4.0, 0.5);
+        modified_wps[1].position_ric_km = Vector3::new(1.0, 4.0, 0.5);
 
         let replanned = replan_from_waypoint(
             &original, 1, &modified_wps, &departure, &config, &propagator,
@@ -758,12 +758,12 @@ mod tests {
         assert_eq!(replanned.legs.len(), 3);
         // Leg 0 should be identical
         assert!(
-            (original.legs[0].total_dv - replanned.legs[0].total_dv).abs() < 1e-14,
+            (original.legs[0].total_dv_km_s - replanned.legs[0].total_dv_km_s).abs() < 1e-14,
             "Kept leg 0 should be identical"
         );
         // Leg 1 should differ (different target)
         assert!(
-            (original.legs[1].total_dv - replanned.legs[1].total_dv).abs() > 1e-10,
+            (original.legs[1].total_dv_km_s - replanned.legs[1].total_dv_km_s).abs() > 1e-10,
             "Replanned leg 1 should differ from original"
         );
     }
@@ -822,7 +822,7 @@ mod tests {
         // Both kept legs should be identical to original
         for i in 0..2 {
             assert!(
-                (original.legs[i].total_dv - replanned.legs[i].total_dv).abs() < 1e-14,
+                (original.legs[i].total_dv_km_s - replanned.legs[i].total_dv_km_s).abs() < 1e-14,
                 "Kept leg {i} should be identical"
             );
         }
@@ -838,8 +838,8 @@ mod tests {
 
         let target_pos = Vector3::new(0.0, 5.0, 0.0);
         let waypoints = vec![Waypoint {
-            position: target_pos,
-            velocity: Vector3::zeros(),
+            position_ric_km: target_pos,
+            velocity_ric_km_s: Vector3::zeros(),
             tof_s: Some(period),
         }];
 
@@ -853,20 +853,20 @@ mod tests {
             leg.position_error_km < config.targeting.position_tol_km,
             "Position error should be below tolerance"
         );
-        // to_position should match the target
+        // to_position_ric_km should match the target
         assert!(
-            (leg.to_position - target_pos).norm() < 1e-14,
-            "to_position should match target"
+            (leg.to_position_ric_km - target_pos).norm() < 1e-14,
+            "to_position_ric_km should match target"
         );
-        // target_velocity should be zeros
+        // target_velocity_ric_km_s should be zeros
         assert!(
-            leg.target_velocity.norm() < 1e-14,
-            "target_velocity should be zeros"
+            leg.target_velocity_ric_km_s.norm() < 1e-14,
+            "target_velocity_ric_km_s should be zeros"
         );
-        // from_position: departure ROE is zero → from_position should be near origin
+        // from_position_ric_km: departure ROE is zero → from_position_ric_km should be near origin
         assert!(
-            leg.from_position.norm() < 1e-6,
-            "from_position should be near origin for zero ROE departure"
+            leg.from_position_ric_km.norm() < 1e-6,
+            "from_position_ric_km should be near origin for zero ROE departure"
         );
     }
 
@@ -881,13 +881,13 @@ mod tests {
 
         let waypoints = vec![
             Waypoint {
-                position: Vector3::new(0.0, 5.0, 0.0),
-                velocity: Vector3::zeros(),
+                position_ric_km: Vector3::new(0.0, 5.0, 0.0),
+                velocity_ric_km_s: Vector3::zeros(),
                 tof_s: Some(tof),
             },
             Waypoint {
-                position: Vector3::new(2.0, 3.0, 0.0),
-                velocity: Vector3::zeros(),
+                position_ric_km: Vector3::new(2.0, 3.0, 0.0),
+                velocity_ric_km_s: Vector3::zeros(),
                 tof_s: Some(tof),
             },
         ];
@@ -919,8 +919,8 @@ mod tests {
         let period = std::f64::consts::TAU / departure.chief.mean_motion();
 
         let waypoints = vec![Waypoint {
-            position: Vector3::new(0.0, 5.0, 0.0),
-            velocity: Vector3::zeros(),
+            position_ric_km: Vector3::new(0.0, 5.0, 0.0),
+            velocity_ric_km_s: Vector3::zeros(),
             tof_s: Some(period),
         }];
 
@@ -938,12 +938,12 @@ mod tests {
             "position_error_km should survive roundtrip"
         );
         assert!(
-            (leg.to_position - mission.legs[0].to_position).norm() < 1e-14,
-            "to_position should survive roundtrip"
+            (leg.to_position_ric_km - mission.legs[0].to_position_ric_km).norm() < 1e-14,
+            "to_position_ric_km should survive roundtrip"
         );
         assert!(
-            (leg.from_position - mission.legs[0].from_position).norm() < 1e-14,
-            "from_position should survive roundtrip"
+            (leg.from_position_ric_km - mission.legs[0].from_position_ric_km).norm() < 1e-14,
+            "from_position_ric_km should survive roundtrip"
         );
     }
 
@@ -963,18 +963,18 @@ mod tests {
 
         let waypoints = vec![
             Waypoint {
-                position: Vector3::new(0.0, 5.0, 0.0),
-                velocity: Vector3::zeros(),
+                position_ric_km: Vector3::new(0.0, 5.0, 0.0),
+                velocity_ric_km_s: Vector3::zeros(),
                 tof_s: Some(tof),
             },
             Waypoint {
-                position: Vector3::new(2.0, 3.0, 0.0),
-                velocity: Vector3::zeros(),
+                position_ric_km: Vector3::new(2.0, 3.0, 0.0),
+                velocity_ric_km_s: Vector3::zeros(),
                 tof_s: Some(tof),
             },
             Waypoint {
-                position: Vector3::new(0.0, 1.0, 0.0),
-                velocity: Vector3::zeros(),
+                position_ric_km: Vector3::new(0.0, 1.0, 0.0),
+                velocity_ric_km_s: Vector3::zeros(),
                 tof_s: Some(tof),
             },
         ];
@@ -1023,7 +1023,7 @@ mod tests {
 
         // RIC positions should be nonzero (we have nonzero waypoints)
         assert!(
-            safety.min_3d_ric_position.norm() > 0.0,
+            safety.min_3d_ric_position_km.norm() > 0.0,
             "3D RIC position should be nonzero"
         );
     }

@@ -45,13 +45,13 @@ pub struct LambertTransfer {
     /// Arrival state (target position, computed arrival velocity).
     pub arrival_state: StateVector,
     /// Required Δv at departure (km/s, ECI).
-    pub departure_dv: Vector3<f64>,
+    pub departure_dv_eci_km_s: Vector3<f64>,
     /// Required Δv at arrival (km/s, ECI).
-    pub arrival_dv: Vector3<f64>,
+    pub arrival_dv_eci_km_s: Vector3<f64>,
     /// Total Δv magnitude (km/s).
-    pub total_dv: f64,
+    pub total_dv_km_s: f64,
     /// Time of flight (seconds).
-    pub tof: f64,
+    pub tof_s: f64,
     /// Characteristic energy C3 = v∞² (km²/s²).
     pub c3_km2_s2: Option<f64>,
     /// Transfer direction used.
@@ -65,7 +65,7 @@ impl LambertTransfer {
     /// Produces `n_steps + 1` states from departure to arrival.
     #[must_use]
     pub fn densify_arc(&self, n_steps: usize) -> Vec<StateVector> {
-        crate::propagation::keplerian::propagate_keplerian(&self.departure_state, self.tof, n_steps)
+        crate::propagation::keplerian::propagate_keplerian(&self.departure_state, self.tof_s, n_steps)
     }
 }
 
@@ -107,7 +107,7 @@ fn validate_inputs(
         ));
     }
 
-    let sep = (arrival.position - departure.position).norm();
+    let sep = (arrival.position_eci_km - departure.position_eci_km).norm();
     if sep < 1e-6 {
         return Err(LambertError::InvalidInput(
             "departure and arrival positions are identical".into(),
@@ -127,25 +127,25 @@ pub(crate) fn build_transfer(
     c3: Option<f64>,
     direction: TransferDirection,
 ) -> LambertTransfer {
-    let departure_dv = v1_vec - departure.velocity;
-    let arrival_dv = arrival.velocity - v2_vec;
+    let departure_dv = v1_vec - departure.velocity_eci_km_s;
+    let arrival_dv = arrival.velocity_eci_km_s - v2_vec;
     let total_dv = departure_dv.norm() + arrival_dv.norm();
 
     LambertTransfer {
         departure_state: StateVector {
             epoch: departure.epoch,
-            position: departure.position,
-            velocity: v1_vec,
+            position_eci_km: departure.position_eci_km,
+            velocity_eci_km_s: v1_vec,
         },
         arrival_state: StateVector {
             epoch: arrival.epoch,
-            position: arrival.position,
-            velocity: v2_vec,
+            position_eci_km: arrival.position_eci_km,
+            velocity_eci_km_s: v2_vec,
         },
-        departure_dv,
-        arrival_dv,
-        total_dv,
-        tof,
+        departure_dv_eci_km_s: departure_dv,
+        arrival_dv_eci_km_s: arrival_dv,
+        total_dv_km_s: total_dv,
+        tof_s: tof,
         c3_km2_s2: c3,
         direction,
     }
@@ -163,12 +163,12 @@ fn direction_to_kind(direction: TransferDirection) -> TransferKind {
 /// Convert a [`StateVector`] to an anise [`Orbit`].
 fn state_to_orbit(sv: &StateVector) -> Orbit {
     Orbit::new(
-        sv.position.x,
-        sv.position.y,
-        sv.position.z,
-        sv.velocity.x,
-        sv.velocity.y,
-        sv.velocity.z,
+        sv.position_eci_km.x,
+        sv.position_eci_km.y,
+        sv.position_eci_km.z,
+        sv.velocity_eci_km_s.x,
+        sv.velocity_eci_km_s.y,
+        sv.velocity_eci_km_s.z,
         sv.epoch,
         EARTH_J2000,
     )
@@ -291,9 +291,9 @@ mod tests {
         let transfer = solve_lambert_izzo(&dep, &arr, &config).expect("Izzo should succeed");
 
         assert!(
-            transfer.total_dv > 0.01 && transfer.total_dv < 5.0,
+            transfer.total_dv_km_s > 0.01 && transfer.total_dv_km_s < 5.0,
             "Izzo Δv = {} km/s seems unreasonable",
-            transfer.total_dv
+            transfer.total_dv_km_s
         );
     }
 
@@ -304,12 +304,12 @@ mod tests {
         let dep = keplerian_to_state(&leo_400km_elements(), epoch);
 
         let arr_ke = KeplerianElements {
-            a: 6378.137 + 500.0,
+            a_km: 6378.137 + 500.0,
             e: 0.001,
-            i: 51.6_f64.to_radians(),
-            raan: 10.0_f64.to_radians(),
-            aop: 0.0,
-            mean_anomaly: 2.0,
+            i_rad: 51.6_f64.to_radians(),
+            raan_rad: 10.0_f64.to_radians(),
+            aop_rad: 0.0,
+            mean_anomaly_rad: 2.0,
         };
         let arr = keplerian_to_state(&arr_ke, epoch + Duration::from_seconds(3600.0));
 
@@ -317,9 +317,9 @@ mod tests {
         let transfer = solve_lambert_izzo(&dep, &arr, &config).expect("Izzo non-coplanar failed");
 
         assert!(
-            transfer.total_dv > 0.1,
+            transfer.total_dv_km_s > 0.1,
             "Non-coplanar Δv should be significant, got {}",
-            transfer.total_dv
+            transfer.total_dv_km_s
         );
     }
 
@@ -329,12 +329,12 @@ mod tests {
         let dep = keplerian_to_state(&leo_400km_elements(), epoch);
 
         let arr_ke = KeplerianElements {
-            a: 6378.137 + 500.0,
+            a_km: 6378.137 + 500.0,
             e: 0.001,
-            i: 51.6_f64.to_radians(),
-            raan: 0.0,
-            aop: 0.0,
-            mean_anomaly: 90.0_f64.to_radians(),
+            i_rad: 51.6_f64.to_radians(),
+            raan_rad: 0.0,
+            aop_rad: 0.0,
+            mean_anomaly_rad: 90.0_f64.to_radians(),
         };
         // Long TOF to allow 1-rev solution (~2 orbital periods)
         let arr = keplerian_to_state(&arr_ke, epoch + Duration::from_seconds(12000.0));
@@ -346,7 +346,7 @@ mod tests {
 
         let transfer = solve_lambert_izzo(&dep, &arr, &config).expect("Multi-rev should succeed");
         assert!(
-            transfer.total_dv > 0.0,
+            transfer.total_dv_km_s > 0.0,
             "Multi-rev Δv should be positive"
         );
     }
@@ -357,12 +357,12 @@ mod tests {
         let dep = keplerian_to_state(&leo_400km_elements(), epoch);
 
         let arr_ke = KeplerianElements {
-            a: 6378.137 + 600.0,
+            a_km: 6378.137 + 600.0,
             e: 0.001,
-            i: 51.6_f64.to_radians(),
-            raan: 0.0,
-            aop: 0.0,
-            mean_anomaly: 90.0_f64.to_radians(),
+            i_rad: 51.6_f64.to_radians(),
+            raan_rad: 0.0,
+            aop_rad: 0.0,
+            mean_anomaly_rad: 90.0_f64.to_radians(),
         };
         let arr = keplerian_to_state(&arr_ke, epoch + Duration::from_seconds(3600.0));
 
@@ -373,7 +373,7 @@ mod tests {
 
         let transfer =
             solve_lambert_izzo(&dep, &arr, &config).expect("Long-way transfer should succeed");
-        assert!(transfer.total_dv > 0.0, "Long-way Δv should be positive");
+        assert!(transfer.total_dv_km_s > 0.0, "Long-way Δv should be positive");
         assert_eq!(transfer.direction, TransferDirection::LongWay);
     }
 
@@ -389,8 +389,8 @@ mod tests {
         let transfer = solve_lambert(&dep, &arr).expect("Lambert should succeed");
         let arc = transfer.densify_arc(100);
 
-        let dep_err = (arc.first().unwrap().position - transfer.departure_state.position).norm();
-        let arr_err = (arc.last().unwrap().position - transfer.arrival_state.position).norm();
+        let dep_err = (arc.first().unwrap().position_eci_km - transfer.departure_state.position_eci_km).norm();
+        let arr_err = (arc.last().unwrap().position_eci_km - transfer.arrival_state.position_eci_km).norm();
 
         assert!(
             dep_err < 1e-6,
@@ -451,7 +451,7 @@ mod tests {
         let arc = transfer.densify_arc(100);
 
         for (k, state) in arc.iter().enumerate() {
-            let r = state.position.norm();
+            let r = state.position_eci_km.norm();
             assert!(
                 r > R_EARTH,
                 "Point {k} below Earth surface: r = {r} km"

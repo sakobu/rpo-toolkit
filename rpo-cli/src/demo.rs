@@ -25,48 +25,48 @@ use crate::{print_roe, print_trajectory_table};
 /// ISS-like chief orbit (near-circular LEO, 51.6° inclination).
 fn iss_chief() -> KeplerianElements {
     KeplerianElements {
-        a: 6786.0,           // ~408 km altitude
-        e: 0.0001,           // near-circular
-        i: 51.6_f64.to_radians(),
-        raan: 30.0_f64.to_radians(),
-        aop: 0.0,
-        mean_anomaly: 0.0,
+        a_km: 6786.0,           // ~408 km altitude
+        e: 0.0001,              // near-circular
+        i_rad: 51.6_f64.to_radians(),
+        raan_rad: 30.0_f64.to_radians(),
+        aop_rad: 0.0,
+        mean_anomaly_rad: 0.0,
     }
 }
 
 /// Close deputy: 1 km higher, small phase offset — within ROE-valid range.
 fn close_deputy() -> KeplerianElements {
     KeplerianElements {
-        a: 6787.0,           // +1 km SMA → δa/a ≈ 1.5e-4
+        a_km: 6787.0,           // +1 km SMA → δa/a ≈ 1.5e-4
         e: 0.0001,
-        i: 51.6_f64.to_radians(),
-        raan: 30.0_f64.to_radians(),
-        aop: 0.0,
-        mean_anomaly: 0.01,  // small phase lead
+        i_rad: 51.6_f64.to_radians(),
+        raan_rad: 30.0_f64.to_radians(),
+        aop_rad: 0.0,
+        mean_anomaly_rad: 0.01,  // small phase lead
     }
 }
 
 /// Eccentric orbit for demonstrating conversions on non-circular cases.
 fn eccentric_orbit() -> KeplerianElements {
     KeplerianElements {
-        a: 8000.0,           // higher altitude
-        e: 0.15,             // moderate eccentricity (Molniya-like, but less extreme)
-        i: 63.4_f64.to_radians(), // critical inclination (ω̇ ≈ 0)
-        raan: 60.0_f64.to_radians(),
-        aop: 270.0_f64.to_radians(),
-        mean_anomaly: 45.0_f64.to_radians(),
+        a_km: 8000.0,           // higher altitude
+        e: 0.15,                // moderate eccentricity (Molniya-like, but less extreme)
+        i_rad: 63.4_f64.to_radians(), // critical inclination (ω̇ ≈ 0)
+        raan_rad: 60.0_f64.to_radians(),
+        aop_rad: 270.0_f64.to_radians(),
+        mean_anomaly_rad: 45.0_f64.to_radians(),
     }
 }
 
 /// Distant deputy — well outside ROE-valid range, requires Lambert transfer.
 fn far_deputy() -> KeplerianElements {
     KeplerianElements {
-        a: 6786.0 + 500.0,  // +500 km SMA
+        a_km: 6786.0 + 500.0,  // +500 km SMA
         e: 0.01,
-        i: 45.0_f64.to_radians(), // different plane
-        raan: 90.0_f64.to_radians(),
-        aop: 10.0_f64.to_radians(),
-        mean_anomaly: 180.0_f64.to_radians(),
+        i_rad: 45.0_f64.to_radians(), // different plane
+        raan_rad: 90.0_f64.to_radians(),
+        aop_rad: 10.0_f64.to_radians(),
+        mean_anomaly_rad: 180.0_f64.to_radians(),
     }
 }
 
@@ -92,17 +92,17 @@ pub(crate) fn run_demo() -> Result<(), Box<dyn Error>> {
     let chief_sv = keplerian_to_state(&chief, epoch);
     println!("ISS-like orbit (near-circular, 51.6° inclination):");
     println!("  Keplerian: a={:.1} km, e={:.4}, i={:.1}°",
-        chief.a, chief.e, chief.i.to_degrees());
+        chief.a_km, chief.e, chief.i_rad.to_degrees());
     println!("  ECI pos: [{:.3}, {:.3}, {:.3}] km",
-        chief_sv.position.x, chief_sv.position.y, chief_sv.position.z);
+        chief_sv.position_eci_km.x, chief_sv.position_eci_km.y, chief_sv.position_eci_km.z);
     println!("  ECI vel: [{:.6}, {:.6}, {:.6}] km/s",
-        chief_sv.velocity.x, chief_sv.velocity.y, chief_sv.velocity.z);
+        chief_sv.velocity_eci_km_s.x, chief_sv.velocity_eci_km_s.y, chief_sv.velocity_eci_km_s.z);
 
     // --- Roundtrip: ECI → Keplerian → ECI ---
     let recovered = state_to_keplerian(&chief_sv);
     let recovered_sv = keplerian_to_state(&recovered, epoch);
-    let pos_err = (chief_sv.position - recovered_sv.position).norm();
-    let vel_err = (chief_sv.velocity - recovered_sv.velocity).norm();
+    let pos_err = (chief_sv.position_eci_km - recovered_sv.position_eci_km).norm();
+    let vel_err = (chief_sv.velocity_eci_km_s - recovered_sv.velocity_eci_km_s).norm();
     println!("\n  Roundtrip ECI→Kep→ECI errors:");
     println!("    Position: {pos_err:.2e} km");
     println!("    Velocity: {vel_err:.2e} km/s");
@@ -121,9 +121,9 @@ pub(crate) fn run_demo() -> Result<(), Box<dyn Error>> {
     let ecc_sv = keplerian_to_state(&ecc, epoch);
     let ecc_recovered = state_to_keplerian(&ecc_sv);
     let ecc_sv2 = keplerian_to_state(&ecc_recovered, epoch);
-    let ecc_pos_err = (ecc_sv.position - ecc_sv2.position).norm();
+    let ecc_pos_err = (ecc_sv.position_eci_km - ecc_sv2.position_eci_km).norm();
     println!("\n  Eccentric orbit (e={:.2}, i={:.1}°, a={:.0} km):",
-        ecc.e, ecc.i.to_degrees(), ecc.a);
+        ecc.e, ecc.i_rad.to_degrees(), ecc.a_km);
     println!("    True anomaly:  {:.4}°", ecc.true_anomaly().to_degrees());
     println!("    Roundtrip pos error: {ecc_pos_err:.2e} km");
 
@@ -137,7 +137,7 @@ pub(crate) fn run_demo() -> Result<(), Box<dyn Error>> {
     let deputy = close_deputy();
     let roe = compute_roe(&chief, &deputy);
 
-    print_roe("ROE (chief → close deputy)", &roe, chief.a);
+    print_roe("ROE (chief → close deputy)", &roe, chief.a_km);
 
     // --- to_vector / from_vector roundtrip ---
     let roe_vec = roe.to_vector();
@@ -162,9 +162,9 @@ pub(crate) fn run_demo() -> Result<(), Box<dyn Error>> {
     println!("\n  ROE → RIC mapping (D'Amico Eq. 2.17):");
     println!("    RIC frame: R=radial, I=in-track (velocity direction), C=cross-track");
     println!("    Position: R={:.6} km, I={:.6} km, C={:.6} km",
-        ric.position.x, ric.position.y, ric.position.z);
+        ric.position_ric_km.x, ric.position_ric_km.y, ric.position_ric_km.z);
     println!("    Velocity: R={:.6e} km/s, I={:.6e} km/s, C={:.6e} km/s",
-        ric.velocity.x, ric.velocity.y, ric.velocity.z);
+        ric.velocity_ric_km_s.x, ric.velocity_ric_km_s.y, ric.velocity_ric_km_s.z);
 
     // ===================================================================
     // Section 3: J2 Perturbation Parameters
@@ -228,9 +228,9 @@ pub(crate) fn run_demo() -> Result<(), Box<dyn Error>> {
     // --- Standalone propagate_roe_stm ---
     let (roe_1orbit, chief_1orbit) = propagate_roe_stm(&roe, &chief, period_s);
     println!("Standalone propagate_roe_stm() after 1 orbit:");
-    print_roe("Propagated ROE", &roe_1orbit, chief.a);
+    print_roe("Propagated ROE", &roe_1orbit, chief.a_km);
     println!("    Chief RAAN drift: {:.6}°",
-        (chief_1orbit.raan - chief.raan).to_degrees());
+        (chief_1orbit.raan_rad - chief.raan_rad).to_degrees());
 
     // --- Full trajectory via J2StmPropagator trait ---
     let j2_prop = J2StmPropagator;
@@ -253,9 +253,9 @@ pub(crate) fn run_demo() -> Result<(), Box<dyn Error>> {
 
     // Along-track drift demonstration
     let final_j2 = trajectory.last().unwrap();
-    println!("\n  Along-track drift from δa ≈ {:.4} km:", roe.da * chief.a);
+    println!("\n  Along-track drift from δa ≈ {:.4} km:", roe.da * chief.a_km);
     println!("    After {n_orbits} orbits: I = {:.6} km (secular growth from Φ[1,0]·δa)",
-        final_j2.ric.position.y);
+        final_j2.ric.position_ric_km.y);
 
     // ===================================================================
     // Section 5: J2 + Drag Comparison
@@ -292,7 +292,7 @@ pub(crate) fn run_demo() -> Result<(), Box<dyn Error>> {
         &roe, &chief, epoch, total_time,
     );
     let j2_only_final = &trajectory.last().unwrap();
-    let zero_drag_diff = (zero_drag_final.ric.position - j2_only_final.ric.position).norm();
+    let zero_drag_diff = (zero_drag_final.ric.position_ric_km - j2_only_final.ric.position_ric_km).norm();
     println!("\n  DragConfig::zero() vs J2-only:");
     println!("    RIC position difference: {zero_drag_diff:.2e} km (should be ~0)");
 
@@ -301,14 +301,14 @@ pub(crate) fn run_demo() -> Result<(), Box<dyn Error>> {
     println!("\n  Side-by-side final states after {n_orbits} orbits:");
     println!("    {:>12}  {:>14}  {:>14}  {:>14}", "", "J2-only", "J2+drag", "Delta");
     println!("    {:>12}  {:>14.6}  {:>14.6}  {:>14.6}", "R (km)",
-        j2_only_final.ric.position.x, drag_final.ric.position.x,
-        drag_final.ric.position.x - j2_only_final.ric.position.x);
+        j2_only_final.ric.position_ric_km.x, drag_final.ric.position_ric_km.x,
+        drag_final.ric.position_ric_km.x - j2_only_final.ric.position_ric_km.x);
     println!("    {:>12}  {:>14.6}  {:>14.6}  {:>14.6}", "I (km)",
-        j2_only_final.ric.position.y, drag_final.ric.position.y,
-        drag_final.ric.position.y - j2_only_final.ric.position.y);
+        j2_only_final.ric.position_ric_km.y, drag_final.ric.position_ric_km.y,
+        drag_final.ric.position_ric_km.y - j2_only_final.ric.position_ric_km.y);
     println!("    {:>12}  {:>14.6}  {:>14.6}  {:>14.6}", "C (km)",
-        j2_only_final.ric.position.z, drag_final.ric.position.z,
-        drag_final.ric.position.z - j2_only_final.ric.position.z);
+        j2_only_final.ric.position_ric_km.z, drag_final.ric.position_ric_km.z,
+        drag_final.ric.position_ric_km.z - j2_only_final.ric.position_ric_km.z);
 
     println!("\n    {:>12}  {:>14}  {:>14}  {:>14}", "", "J2-only", "J2+drag", "Delta");
     println!("    {:>12}  {:>14.6e}  {:>14.6e}  {:>14.6e}", "δa",
@@ -343,7 +343,7 @@ pub(crate) fn run_demo() -> Result<(), Box<dyn Error>> {
 
     let prox_roe = compute_roe(&chief, &deputy_kep);
     println!("\n  Proximity ROE state:");
-    print_roe("ROE", &prox_roe, chief.a);
+    print_roe("ROE", &prox_roe, chief.a_km);
 
     // --- Far-field case ---
     let far_dep = far_deputy();
@@ -369,10 +369,10 @@ pub(crate) fn run_demo() -> Result<(), Box<dyn Error>> {
 
     if let Some(ref transfer) = mission.transfer {
         println!("\n  Lambert transfer (deputy → V-bar perch):");
-        println!("    Total Δv:     {:.4} km/s", transfer.total_dv);
-        println!("    Departure Δv: {:.4} km/s", transfer.departure_dv.norm());
-        println!("    Arrival Δv:   {:.4} km/s", transfer.arrival_dv.norm());
-        println!("    TOF:          {:.1} s ({:.2} min)", transfer.tof, transfer.tof / 60.0);
+        println!("    Total Δv:     {:.4} km/s", transfer.total_dv_km_s);
+        println!("    Departure Δv: {:.4} km/s", transfer.departure_dv_eci_km_s.norm());
+        println!("    Arrival Δv:   {:.4} km/s", transfer.arrival_dv_eci_km_s.norm());
+        println!("    TOF:          {:.1} s ({:.2} min)", transfer.tof_s, transfer.tof_s / 60.0);
         if let Some(c3) = transfer.c3_km2_s2 {
             println!("    C3:           {:.4} km²/s²", c3);
         }
@@ -380,7 +380,7 @@ pub(crate) fn run_demo() -> Result<(), Box<dyn Error>> {
     }
 
     println!("\n  Perch orbit (V-bar, 5 km ahead):");
-    print_roe("Perch ROE state", &mission.perch_roe, chief.a);
+    print_roe("Perch ROE state", &mission.perch_roe, chief.a_km);
 
     // ===================================================================
     // Section 7: Advanced Lambert & R-Bar Perch
@@ -395,12 +395,12 @@ pub(crate) fn run_demo() -> Result<(), Box<dyn Error>> {
     // Target: a point near the chief 1 hour later
     let arrival_epoch = epoch + hifitime::Duration::from_seconds(3600.0);
     let lambert_arr_ke = KeplerianElements {
-        a: chief.a + 5.0,  // slightly higher than chief (near perch)
+        a_km: chief.a_km + 5.0,  // slightly higher than chief (near perch)
         e: 0.001,
-        i: chief.i,
-        raan: chief.raan,
-        aop: 0.0,
-        mean_anomaly: 90.0_f64.to_radians(), // different position in orbit
+        i_rad: chief.i_rad,
+        raan_rad: chief.raan_rad,
+        aop_rad: 0.0,
+        mean_anomaly_rad: 90.0_f64.to_radians(), // different position in orbit
     };
     let lambert_arr_sv = keplerian_to_state(&lambert_arr_ke, arrival_epoch);
 
@@ -413,7 +413,7 @@ pub(crate) fn run_demo() -> Result<(), Box<dyn Error>> {
         &lambert_dep_sv, &lambert_arr_sv, &short_config,
     )?;
     println!("Short-way (prograde) transfer:");
-    println!("  Δv: {:.4} km/s, TOF: {:.1} s", short_transfer.total_dv, short_transfer.tof);
+    println!("  Δv: {:.4} km/s, TOF: {:.1} s", short_transfer.total_dv_km_s, short_transfer.tof_s);
     if let Some(c3) = short_transfer.c3_km2_s2 {
         println!("  C3: {:.4} km²/s²", c3);
     }
@@ -427,13 +427,13 @@ pub(crate) fn run_demo() -> Result<(), Box<dyn Error>> {
         &lambert_dep_sv, &lambert_arr_sv, &long_config,
     )?;
     println!("\nLong-way (retrograde) transfer:");
-    println!("  Δv: {:.4} km/s, TOF: {:.1} s", long_transfer.total_dv, long_transfer.tof);
+    println!("  Δv: {:.4} km/s, TOF: {:.1} s", long_transfer.total_dv_km_s, long_transfer.tof_s);
     if let Some(c3) = long_transfer.c3_km2_s2 {
         println!("  C3: {:.4} km²/s²", c3);
     }
 
     println!("\n  Short-way vs long-way Δv ratio: {:.2}x",
-        long_transfer.total_dv / short_transfer.total_dv);
+        long_transfer.total_dv_km_s / short_transfer.total_dv_km_s);
 
     // --- R-bar perch geometry ---
     println!("\nR-bar perch geometry (deputy 2 km above chief):");
@@ -444,11 +444,11 @@ pub(crate) fn run_demo() -> Result<(), Box<dyn Error>> {
     )?;
 
     println!("  R-bar perch ROE:");
-    print_roe("R-bar state", &rbar_mission.perch_roe, chief.a);
+    print_roe("R-bar state", &rbar_mission.perch_roe, chief.a_km);
 
     if let Some(ref transfer) = rbar_mission.transfer {
         println!("\n  Lambert to R-bar perch:");
-        println!("    Total Δv: {:.4} km/s", transfer.total_dv);
+        println!("    Total Δv: {:.4} km/s", transfer.total_dv_km_s);
     }
 
     // Compare V-bar vs R-bar perch
@@ -457,14 +457,14 @@ pub(crate) fn run_demo() -> Result<(), Box<dyn Error>> {
     println!("\n  Perch comparison (RIC at epoch):");
     println!("    {:>8}  {:>12}  {:>12}  {:>12}", "", "R (km)", "I (km)", "C (km)");
     println!("    {:>8}  {:>12.6}  {:>12.6}  {:>12.6}", "V-bar",
-        vbar_ric.position.x, vbar_ric.position.y, vbar_ric.position.z);
+        vbar_ric.position_ric_km.x, vbar_ric.position_ric_km.y, vbar_ric.position_ric_km.z);
     println!("    {:>8}  {:>12.6}  {:>12.6}  {:>12.6}", "R-bar",
-        rbar_ric.position.x, rbar_ric.position.y, rbar_ric.position.z);
+        rbar_ric.position_ric_km.x, rbar_ric.position_ric_km.y, rbar_ric.position_ric_km.z);
 
     // --- Custom perch geometry ---
     let custom_roe = QuasiNonsingularROE {
-        da: 0.5 / chief.a,      // 0.5 km radial
-        dlambda: 3.0 / chief.a,  // 3 km along-track
+        da: 0.5 / chief.a_km,      // 0.5 km radial
+        dlambda: 3.0 / chief.a_km,  // 3 km along-track
         dex: 0.0,
         dey: 0.0,
         dix: 0.0,
@@ -474,13 +474,13 @@ pub(crate) fn run_demo() -> Result<(), Box<dyn Error>> {
     let custom_ric = roe_to_ric(&custom_roe, &chief);
     println!("\n  Custom perch (0.5 km R + 3 km I):");
     println!("    RIC: [{:.4}, {:.4}, {:.4}] km",
-        custom_ric.position.x, custom_ric.position.y, custom_ric.position.z);
+        custom_ric.position_ric_km.x, custom_ric.position_ric_km.y, custom_ric.position_ric_km.z);
 
     let custom_mission = plan_mission(
         &chief_sv, &far_sv, &custom_perch, &config, 3600.0,
     )?;
     if let Some(ref transfer) = custom_mission.transfer {
-        println!("    Lambert Δv to custom perch: {:.4} km/s", transfer.total_dv);
+        println!("    Lambert Δv to custom perch: {:.4} km/s", transfer.total_dv_km_s);
     }
 
     // ===================================================================

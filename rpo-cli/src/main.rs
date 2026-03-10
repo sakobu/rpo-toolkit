@@ -188,10 +188,10 @@ fn run_targeting(input_path: &PathBuf, json_output: bool) -> Result<(), Box<dyn 
     println!("=====================\n");
 
     println!("Initial ROE:");
-    print_roe("  State", &roe, chief_ke.a);
+    print_roe("  State", &roe, chief_ke.a_km);
 
     println!("\n{} waypoint(s), {} leg(s)", waypoints.len(), mission.legs.len());
-    println!("Total Δv:       {:.6} km/s", mission.total_dv);
+    println!("Total Δv:       {:.6} km/s", mission.total_dv_km_s);
     println!("Total duration: {:.1} s ({:.2} min)\n", mission.total_duration_s, mission.total_duration_s / 60.0);
 
     println!(
@@ -200,16 +200,16 @@ fn run_targeting(input_path: &PathBuf, json_output: bool) -> Result<(), Box<dyn 
     );
     println!("  {:-<4}  {:-<10}  {:-<12}  {:-<12}  {:-<12}  {:-<12}", "", "", "", "", "", "");
     for (i, leg) in mission.legs.iter().enumerate() {
-        let dv1 = leg.departure_maneuver.dv.norm();
-        let dv2 = leg.arrival_maneuver.dv.norm();
-        let target_in = waypoints[i].position.y;
+        let dv1 = leg.departure_maneuver.dv_ric_km_s.norm();
+        let dv2 = leg.arrival_maneuver.dv_ric_km_s.norm();
+        let target_in = waypoints[i].position_ric_km.y;
         println!(
             "  {:>4}  {:>10.1}  {:>12.6}  {:>12.6}  {:>12.6}  {:>12.4}",
             i + 1,
             leg.tof_s,
             dv1,
             dv2,
-            leg.total_dv,
+            leg.total_dv_km_s,
             target_in,
         );
     }
@@ -232,9 +232,9 @@ struct EndToEndOutput {
     waypoint_phase: WaypointMission,
     transfer_trajectory: Vec<StateVector>,
     chief_trajectory: Vec<StateVector>,
-    lambert_dv: f64,
-    waypoint_dv: f64,
-    total_dv: f64,
+    lambert_dv_km_s: f64,
+    waypoint_dv_km_s: f64,
+    total_dv_km_s: f64,
     total_duration_s: f64,
 }
 
@@ -253,7 +253,7 @@ fn run_end_to_end_mission(input_path: &PathBuf, json_output: bool) -> Result<(),
         &input.chief, &input.deputy, &perch, &proximity, lambert_tof_s,
     )?;
 
-    let lambert_dv = mission.transfer.as_ref().map_or(0.0, |t| t.total_dv);
+    let lambert_dv_km_s = mission.transfer.as_ref().map_or(0.0, |t| t.total_dv_km_s);
 
     // Phase 2: Waypoint targeting from perch
     let arrival_epoch = input.chief.epoch + hifitime::Duration::from_seconds(lambert_tof_s);
@@ -272,8 +272,8 @@ fn run_end_to_end_mission(input_path: &PathBuf, json_output: bool) -> Result<(),
         &departure, &waypoints, &mission_config, prop.as_ref(),
     )?;
 
-    let waypoint_dv = wp_mission.total_dv;
-    let total_dv = lambert_dv + waypoint_dv;
+    let waypoint_dv_km_s = wp_mission.total_dv_km_s;
+    let total_dv_km_s = lambert_dv_km_s + waypoint_dv_km_s;
     let total_duration_s = lambert_tof_s + wp_mission.total_duration_s;
 
     if json_output {
@@ -281,7 +281,7 @@ fn run_end_to_end_mission(input_path: &PathBuf, json_output: bool) -> Result<(),
         let (transfer_trajectory, chief_trajectory) = if let Some(ref transfer) = mission.transfer {
             (
                 transfer.densify_arc(n_arc_steps),
-                propagate_keplerian(&input.chief, transfer.tof, n_arc_steps),
+                propagate_keplerian(&input.chief, transfer.tof_s, n_arc_steps),
             )
         } else {
             (vec![], vec![])
@@ -292,9 +292,9 @@ fn run_end_to_end_mission(input_path: &PathBuf, json_output: bool) -> Result<(),
             waypoint_phase: wp_mission,
             transfer_trajectory,
             chief_trajectory,
-            lambert_dv,
-            waypoint_dv,
-            total_dv,
+            lambert_dv_km_s,
+            waypoint_dv_km_s,
+            total_dv_km_s,
             total_duration_s,
         };
         println!("{}", serde_json::to_string_pretty(&output)?);
@@ -323,10 +323,10 @@ fn run_end_to_end_mission(input_path: &PathBuf, json_output: bool) -> Result<(),
 
     if let Some(ref transfer) = mission.transfer {
         println!("\n  Lambert Transfer:");
-        println!("    Total Δv:     {:.4} km/s", transfer.total_dv);
-        println!("    Departure Δv: {:.4} km/s", transfer.departure_dv.norm());
-        println!("    Arrival Δv:   {:.4} km/s", transfer.arrival_dv.norm());
-        println!("    TOF:          {:.1} s ({:.2} min)", transfer.tof, transfer.tof / 60.0);
+        println!("    Total Δv:     {:.4} km/s", transfer.total_dv_km_s);
+        println!("    Departure Δv: {:.4} km/s", transfer.departure_dv_eci_km_s.norm());
+        println!("    Arrival Δv:   {:.4} km/s", transfer.arrival_dv_eci_km_s.norm());
+        println!("    TOF:          {:.1} s ({:.2} min)", transfer.tof_s, transfer.tof_s / 60.0);
         if let Some(c3) = transfer.c3_km2_s2 {
             println!("    C3:           {:.4} km²/s²", c3);
         }
@@ -334,7 +334,7 @@ fn run_end_to_end_mission(input_path: &PathBuf, json_output: bool) -> Result<(),
     }
 
     println!();
-    print_roe("Perch ROE", &mission.perch_roe, chief_ke.a);
+    print_roe("Perch ROE", &mission.perch_roe, chief_ke.a_km);
 
     // Phase 2: Waypoint Targeting
     println!("\n\nPhase 2: Waypoint Targeting ({} legs)", wp_mission.legs.len());
@@ -348,8 +348,8 @@ fn run_end_to_end_mission(input_path: &PathBuf, json_output: bool) -> Result<(),
         "", "", "", "", "", ""
     );
     for (i, leg) in wp_mission.legs.iter().enumerate() {
-        let dv1 = leg.departure_maneuver.dv.norm();
-        let dv2 = leg.arrival_maneuver.dv.norm();
+        let dv1 = leg.departure_maneuver.dv_ric_km_s.norm();
+        let dv2 = leg.arrival_maneuver.dv_ric_km_s.norm();
         let label = input.waypoints[i]
             .label
             .as_deref()
@@ -360,7 +360,7 @@ fn run_end_to_end_mission(input_path: &PathBuf, json_output: bool) -> Result<(),
             leg.tof_s,
             dv1,
             dv2,
-            leg.total_dv,
+            leg.total_dv_km_s,
             label,
         );
     }
@@ -373,9 +373,9 @@ fn run_end_to_end_mission(input_path: &PathBuf, json_output: bool) -> Result<(),
 
     // Mission Summary
     println!("\nMission Summary:");
-    println!("  Lambert transfer Δv:   {:.4} km/s", lambert_dv);
-    println!("  Waypoint targeting Δv: {:.6} km/s", waypoint_dv);
-    println!("  Total mission Δv:      {:.4} km/s", total_dv);
+    println!("  Lambert transfer Δv:   {:.4} km/s", lambert_dv_km_s);
+    println!("  Waypoint targeting Δv: {:.6} km/s", waypoint_dv_km_s);
+    println!("  Total mission Δv:      {:.4} km/s", total_dv_km_s);
     println!("  Total mission time:    {:.1} s ({:.2} min)", total_duration_s, total_duration_s / 60.0);
 
     Ok(())
@@ -392,8 +392,8 @@ fn convert_waypoints(inputs: &[WaypointInput]) -> Vec<Waypoint> {
         .map(|wp| {
             let vel = wp.velocity.unwrap_or([0.0, 0.0, 0.0]);
             Waypoint {
-                position: nalgebra::Vector3::new(wp.position[0], wp.position[1], wp.position[2]),
-                velocity: nalgebra::Vector3::new(vel[0], vel[1], vel[2]),
+                position_ric_km: nalgebra::Vector3::new(wp.position[0], wp.position[1], wp.position[2]),
+                velocity_ric_km_s: nalgebra::Vector3::new(vel[0], vel[1], vel[2]),
                 tof_s: wp.tof_s,
             }
         })
@@ -430,9 +430,9 @@ fn print_safety_analysis(safety: &SafetyMetrics, config: &SafetyConfig) {
     );
     println!(
         "    RIC: [{:.4}, {:.4}, {:.4}] km",
-        safety.min_3d_ric_position.x,
-        safety.min_3d_ric_position.y,
-        safety.min_3d_ric_position.z,
+        safety.min_3d_ric_position_km.x,
+        safety.min_3d_ric_position_km.y,
+        safety.min_3d_ric_position_km.z,
     );
     println!(
         "  Overall:                  {}",
@@ -450,9 +450,9 @@ fn print_safety_analysis(safety: &SafetyMetrics, config: &SafetyConfig) {
     );
     println!(
         "    RIC: [{:.4}, {:.4}, {:.4}] km",
-        safety.min_rc_ric_position.x,
-        safety.min_rc_ric_position.y,
-        safety.min_rc_ric_position.z,
+        safety.min_rc_ric_position_km.x,
+        safety.min_rc_ric_position_km.y,
+        safety.min_rc_ric_position_km.z,
     );
     println!("  δe magnitude:             {:.6e}", safety.de_magnitude);
     println!("  δi magnitude:             {:.6e}", safety.di_magnitude);
@@ -488,9 +488,9 @@ pub(crate) fn print_trajectory_table(
             println!(
                 "  {:10.1}  {:12.6}  {:12.6}  {:12.6}",
                 state.elapsed_s,
-                state.ric.position.x,
-                state.ric.position.y,
-                state.ric.position.z,
+                state.ric.position_ric_km.x,
+                state.ric.position_ric_km.y,
+                state.ric.position_ric_km.z,
             );
         }
     }

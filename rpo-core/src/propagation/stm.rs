@@ -51,7 +51,7 @@ pub fn compute_stm_with_params(j2p: &J2Params, chief_mean: &KeplerianElements, t
 
     // Eq. A1: secular angle rates and propagated angles
     let omega_dot = j2p.aop_dot; // ω̇ = κQ
-    let omega_i = chief_mean.aop;
+    let omega_i = chief_mean.aop_rad;
     let omega_f = omega_i + omega_dot * tau;
     let d_omega = omega_dot * tau; // ω̇τ
 
@@ -139,12 +139,12 @@ pub fn propagate_chief_mean(
     tau: f64,
 ) -> KeplerianElements {
     KeplerianElements {
-        a: chief.a,
+        a_km: chief.a_km,
         e: chief.e,
-        i: chief.i,
-        raan: (chief.raan + j2p.raan_dot * tau).rem_euclid(TWO_PI),
-        aop: (chief.aop + j2p.aop_dot * tau).rem_euclid(TWO_PI),
-        mean_anomaly: (chief.mean_anomaly + j2p.m_dot * tau).rem_euclid(TWO_PI),
+        i_rad: chief.i_rad,
+        raan_rad: (chief.raan_rad + j2p.raan_dot * tau).rem_euclid(TWO_PI),
+        aop_rad: (chief.aop_rad + j2p.aop_dot * tau).rem_euclid(TWO_PI),
+        mean_anomaly_rad: (chief.mean_anomaly_rad + j2p.m_dot * tau).rem_euclid(TWO_PI),
     }
 }
 
@@ -171,7 +171,7 @@ mod tests {
     fn forward_backward_symmetry() {
         let chief = iss_like_elements();
         let roe = QuasiNonsingularROE {
-            da: 1.0 / chief.a,
+            da: 1.0 / chief.a_km,
             dlambda: 0.001,
             dex: 0.0001,
             dey: 0.0001,
@@ -217,15 +217,15 @@ mod tests {
     fn pure_da_keplerian_drift() {
         // Pure δa should produce along-track drift: δλ(t) ≈ δλ(0) - 3/2·n·δa·t
         let chief = KeplerianElements {
-            a: 7000.0,
+            a_km: 7000.0,
             e: 0.001,
-            i: 0.1_f64.to_radians(), // near-equatorial to minimize J2 coupling
-            raan: 0.0,
-            aop: 0.0,
-            mean_anomaly: 0.0,
+            i_rad: 0.1_f64.to_radians(), // near-equatorial to minimize J2 coupling
+            raan_rad: 0.0,
+            aop_rad: 0.0,
+            mean_anomaly_rad: 0.0,
         };
 
-        let da = 0.001 / chief.a; // very small δa to stay linear
+        let da = 0.001 / chief.a_km; // very small δa to stay linear
         let roe = QuasiNonsingularROE {
             da,
             dlambda: 0.0,
@@ -264,7 +264,7 @@ mod tests {
     #[test]
     fn stm_preserves_da() {
         let chief = iss_like_elements();
-        let da = 1.0 / chief.a;
+        let da = 1.0 / chief.a_km;
         let roe = QuasiNonsingularROE {
             da,
             dlambda: 0.0,

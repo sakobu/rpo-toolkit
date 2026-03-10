@@ -27,7 +27,7 @@ pub fn analyze_safety(
     chief: &KeplerianElements,
     ric_position: &Vector3<f64>,
 ) -> SafetyMetrics {
-    let sma = chief.a;
+    let sma = chief.a_km;
 
     // Relative eccentricity vector magnitude
     let ecc_mag = (roe.dex * roe.dex + roe.dey * roe.dey).sqrt();
@@ -71,10 +71,10 @@ pub fn analyze_safety(
         ei_phase_angle_rad: ei_phase,
         min_rc_leg_index: 0,
         min_rc_elapsed_s: 0.0,
-        min_rc_ric_position: *ric_position,
+        min_rc_ric_position_km: *ric_position,
         min_3d_leg_index: 0,
         min_3d_elapsed_s: 0.0,
-        min_3d_ric_position: *ric_position,
+        min_3d_ric_position_km: *ric_position,
     }
 }
 
@@ -106,23 +106,23 @@ pub fn analyze_trajectory_safety(
     assert!(!trajectory.is_empty(), "trajectory must not be empty");
 
     let first = &trajectory[0];
-    let mut worst = analyze_safety(&first.roe, &first.chief_mean, &first.ric.position);
+    let mut worst = analyze_safety(&first.roe, &first.chief_mean, &first.ric.position_ric_km);
     worst.min_rc_elapsed_s = first.elapsed_s;
     worst.min_3d_elapsed_s = first.elapsed_s;
     let mut min_rc = worst.min_rc_separation_km;
     let mut min_ei = worst.min_ei_separation_km;
     let mut min_3d = worst.min_distance_3d_km;
     let mut min_3d_elapsed_s = first.elapsed_s;
-    let mut min_3d_ric_position = first.ric.position;
+    let mut min_3d_ric_position_km = first.ric.position_ric_km;
 
     for state in &trajectory[1..] {
-        let metrics = analyze_safety(&state.roe, &state.chief_mean, &state.ric.position);
+        let metrics = analyze_safety(&state.roe, &state.chief_mean, &state.ric.position_ric_km);
         if metrics.min_rc_separation_km < min_rc {
             min_rc = metrics.min_rc_separation_km;
             // Keep the ROE-related fields from the worst R/C point
             worst = metrics;
             worst.min_rc_elapsed_s = state.elapsed_s;
-            worst.min_rc_ric_position = state.ric.position;
+            worst.min_rc_ric_position_km = state.ric.position_ric_km;
         }
         if metrics.min_ei_separation_km < min_ei {
             min_ei = metrics.min_ei_separation_km;
@@ -130,7 +130,7 @@ pub fn analyze_trajectory_safety(
         if metrics.min_distance_3d_km < min_3d {
             min_3d = metrics.min_distance_3d_km;
             min_3d_elapsed_s = state.elapsed_s;
-            min_3d_ric_position = state.ric.position;
+            min_3d_ric_position_km = state.ric.position_ric_km;
         }
     }
 
@@ -139,7 +139,7 @@ pub fn analyze_trajectory_safety(
     worst.min_ei_separation_km = min_ei;
     worst.min_distance_3d_km = min_3d;
     worst.min_3d_elapsed_s = min_3d_elapsed_s;
-    worst.min_3d_ric_position = min_3d_ric_position;
+    worst.min_3d_ric_position_km = min_3d_ric_position_km;
     // leg_index stays 0 — set by compute_worst_safety
 
     worst
@@ -437,7 +437,7 @@ mod tests {
         });
         assert!(rc_match.is_some(), "Should find trajectory point matching R/C elapsed_s");
         assert!(
-            (rc_match.unwrap().ric.position - worst.min_rc_ric_position).norm() < 1e-12,
+            (rc_match.unwrap().ric.position_ric_km - worst.min_rc_ric_position_km).norm() < 1e-12,
             "R/C RIC position should match trajectory point"
         );
 
@@ -446,7 +446,7 @@ mod tests {
         });
         assert!(d3_match.is_some(), "Should find trajectory point matching 3D elapsed_s");
         assert!(
-            (d3_match.unwrap().ric.position - worst.min_3d_ric_position).norm() < 1e-12,
+            (d3_match.unwrap().ric.position_ric_km - worst.min_3d_ric_position_km).norm() < 1e-12,
             "3D RIC position should match trajectory point"
         );
     }

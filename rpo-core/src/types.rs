@@ -13,33 +13,33 @@ pub struct StateVector {
     #[serde(with = "epoch_serde")]
     pub epoch: Epoch,
     /// Position vector in ECI frame (km)
-    pub position: Vector3<f64>,
+    pub position_eci_km: Vector3<f64>,
     /// Velocity vector in ECI frame (km/s)
-    pub velocity: Vector3<f64>,
+    pub velocity_eci_km_s: Vector3<f64>,
 }
 
 /// Classical Keplerian orbital elements
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
 pub struct KeplerianElements {
     /// Semi-major axis (km)
-    pub a: f64,
+    pub a_km: f64,
     /// Eccentricity
     pub e: f64,
     /// Inclination (rad)
-    pub i: f64,
+    pub i_rad: f64,
     /// Right ascension of ascending node (rad)
-    pub raan: f64,
+    pub raan_rad: f64,
     /// Argument of perigee (rad)
-    pub aop: f64,
+    pub aop_rad: f64,
     /// Mean anomaly (rad)
-    pub mean_anomaly: f64,
+    pub mean_anomaly_rad: f64,
 }
 
 impl KeplerianElements {
     /// Mean motion n = sqrt(μ/a³) (rad/s).
     #[must_use]
     pub fn mean_motion(&self) -> f64 {
-        (crate::constants::MU_EARTH / (self.a * self.a * self.a)).sqrt()
+        (crate::constants::MU_EARTH / (self.a_km * self.a_km * self.a_km)).sqrt()
     }
 
     /// Orbital period T = 2π/n (seconds).
@@ -54,7 +54,7 @@ impl KeplerianElements {
     pub fn true_anomaly(&self) -> f64 {
         debug_assert!(self.e >= 0.0 && self.e < 1.0, "eccentricity must be in [0, 1), got {}", self.e);
 
-        let m = self.mean_anomaly.rem_euclid(TWO_PI);
+        let m = self.mean_anomaly_rad.rem_euclid(TWO_PI);
         let e = self.e;
 
         // Newton's method for Kepler's equation
@@ -79,7 +79,7 @@ impl KeplerianElements {
     /// Mean argument of latitude u = ω + M
     #[must_use]
     pub fn mean_arg_of_lat(&self) -> f64 {
-        (self.aop + self.mean_anomaly).rem_euclid(TWO_PI)
+        (self.aop_rad + self.mean_anomaly_rad).rem_euclid(TWO_PI)
     }
 }
 
@@ -177,9 +177,9 @@ impl DragConfig {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct RICState {
     /// Relative position in RIC frame (km): [radial, in-track, cross-track]
-    pub position: Vector3<f64>,
+    pub position_ric_km: Vector3<f64>,
     /// Time derivative of relative position in the rotating RIC frame, ρ̇ (km/s)
-    pub velocity: Vector3<f64>,
+    pub velocity_ric_km_s: Vector3<f64>,
 }
 
 /// Configuration for mission flow decision-making.
@@ -271,9 +271,9 @@ pub struct MissionPlan {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Waypoint {
     /// Target position in RIC frame (km): [radial, in-track, cross-track]
-    pub position: Vector3<f64>,
+    pub position_ric_km: Vector3<f64>,
     /// Target velocity in RIC frame (km/s): [radial, in-track, cross-track]
-    pub velocity: Vector3<f64>,
+    pub velocity_ric_km_s: Vector3<f64>,
     /// Time of flight to this waypoint (seconds). If `None`, TOF will be optimized.
     pub tof_s: Option<f64>,
 }
@@ -282,7 +282,7 @@ pub struct Waypoint {
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
 pub struct Maneuver {
     /// Δv in RIC frame (km/s): [radial, in-track, cross-track]
-    pub dv: Vector3<f64>,
+    pub dv_ric_km_s: Vector3<f64>,
     /// Epoch at which the maneuver is applied
     #[serde(with = "epoch_serde")]
     pub epoch: Epoch,
@@ -298,7 +298,7 @@ pub struct ManeuverLeg {
     /// Time of flight for this leg (seconds)
     pub tof_s: f64,
     /// Total Δv for this leg (km/s)
-    pub total_dv: f64,
+    pub total_dv_km_s: f64,
     /// ROE state after departure burn
     pub post_departure_roe: QuasiNonsingularROE,
     /// Chief mean Keplerian elements at departure epoch
@@ -312,11 +312,11 @@ pub struct ManeuverLeg {
     /// Coast trajectory between burns
     pub trajectory: Vec<crate::propagation::propagator::PropagatedState>,
     /// Departure RIC position (km)
-    pub from_position: Vector3<f64>,
+    pub from_position_ric_km: Vector3<f64>,
     /// Target RIC position (km)
-    pub to_position: Vector3<f64>,
+    pub to_position_ric_km: Vector3<f64>,
     /// Target RIC velocity (km/s)
-    pub target_velocity: Vector3<f64>,
+    pub target_velocity_ric_km_s: Vector3<f64>,
     /// Number of Newton-Raphson iterations used
     pub iterations: u32,
     /// Final position error after convergence (km)
@@ -329,7 +329,7 @@ pub struct WaypointMission {
     /// Ordered sequence of maneuver legs
     pub legs: Vec<ManeuverLeg>,
     /// Total Δv across all legs (km/s)
-    pub total_dv: f64,
+    pub total_dv_km_s: f64,
     /// Total mission duration (seconds)
     pub total_duration_s: f64,
     /// Safety metrics for the full mission (if computed)
@@ -357,14 +357,14 @@ pub struct SafetyMetrics {
     /// Mission elapsed time (s) at minimum R/C separation.
     pub min_rc_elapsed_s: f64,
     /// RIC position (km) at minimum R/C separation.
-    pub min_rc_ric_position: Vector3<f64>,
+    pub min_rc_ric_position_km: Vector3<f64>,
 
     /// Leg index (0-based) where minimum 3D distance occurs.
     pub min_3d_leg_index: usize,
     /// Mission elapsed time (s) at minimum 3D distance.
     pub min_3d_elapsed_s: f64,
     /// RIC position (km) at minimum 3D distance.
-    pub min_3d_ric_position: Vector3<f64>,
+    pub min_3d_ric_position_km: Vector3<f64>,
 }
 
 /// Departure orbital state for targeting: groups ROE, chief elements, and epoch.

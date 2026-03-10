@@ -52,7 +52,7 @@ pub fn classify_separation(
 /// Compute ECI separation distance (km).
 #[must_use]
 pub fn eci_separation_km(chief: &StateVector, deputy: &StateVector) -> f64 {
-    (deputy.position - chief.position).norm()
+    (deputy.position_eci_km - chief.position_eci_km).norm()
 }
 
 /// Compute the dimensionless δr/r separation metric from Keplerian elements.
@@ -90,7 +90,7 @@ pub fn perch_to_roe(
             }
             // Along-track offset maps primarily to δλ
             // From D'Amico Eq. 2.17: along-track ≈ a * δλ (at u where sin/cos terms vanish)
-            let dlambda = along_track_km / chief.a;
+            let dlambda = along_track_km / chief.a_km;
             Ok(QuasiNonsingularROE {
                 da: 0.0,
                 dlambda,
@@ -108,7 +108,7 @@ pub fn perch_to_roe(
             }
             // Radial offset maps primarily to δa
             // From D'Amico Eq. 2.17: radial ≈ a * δa (at u where cos/sin terms vanish)
-            let da = radial_km / chief.a;
+            let da = radial_km / chief.a_km;
             Ok(QuasiNonsingularROE {
                 da,
                 dlambda: 0.0,
@@ -188,11 +188,11 @@ fn perch_roe_to_keplerian(
     roe: &QuasiNonsingularROE,
     chief: &KeplerianElements,
 ) -> KeplerianElements {
-    let a = chief.a * (1.0 + roe.da);
-    let i = chief.i + roe.dix;
+    let a = chief.a_km * (1.0 + roe.da);
+    let i = chief.i_rad + roe.dix;
 
     // Recover eccentricity vector components: ex = e*cos(ω), ey = e*sin(ω)
-    let (sin_aop, cos_aop) = chief.aop.sin_cos();
+    let (sin_aop, cos_aop) = chief.aop_rad.sin_cos();
     let ecc_x_chief = chief.e * cos_aop;
     let ecc_y_chief = chief.e * sin_aop;
     let ecc_x_dep = ecc_x_chief + roe.dex;
@@ -201,26 +201,26 @@ fn perch_roe_to_keplerian(
     let aop = ecc_y_dep.atan2(ecc_x_dep).rem_euclid(crate::constants::TWO_PI);
 
     // Recover RAAN from δiy = (Ω_d - Ω_c) * sin(i_c)
-    let raan = if chief.i.sin().abs() > 1e-10 {
-        chief.raan + roe.diy / chief.i.sin()
+    let raan = if chief.i_rad.sin().abs() > 1e-10 {
+        chief.raan_rad + roe.diy / chief.i_rad.sin()
     } else {
-        chief.raan
+        chief.raan_rad
     };
 
     // Recover mean anomaly from δλ definition
     // δλ = (M_d + ω_d) - (M_c + ω_c) + (Ω_d - Ω_c) * cos(i_c)
-    let d_raan = raan - chief.raan;
-    let lambda_c = chief.mean_anomaly + chief.aop;
-    let lambda_d = roe.dlambda + lambda_c - d_raan * chief.i.cos();
+    let d_raan = raan - chief.raan_rad;
+    let lambda_c = chief.mean_anomaly_rad + chief.aop_rad;
+    let lambda_d = roe.dlambda + lambda_c - d_raan * chief.i_rad.cos();
     let mean_anomaly = (lambda_d - aop).rem_euclid(crate::constants::TWO_PI);
 
     KeplerianElements {
-        a,
+        a_km: a,
         e,
-        i,
-        raan,
-        aop,
-        mean_anomaly,
+        i_rad: i,
+        raan_rad: raan,
+        aop_rad: aop,
+        mean_anomaly_rad: mean_anomaly,
     }
 }
 
@@ -238,7 +238,7 @@ mod tests {
         let epoch = test_epoch();
         let chief_ke = iss_like_elements();
         let mut deputy_ke = chief_ke;
-        deputy_ke.a += 1.0; // 1 km higher
+        deputy_ke.a_km += 1.0; // 1 km higher
 
         let chief = keplerian_to_state(&chief_ke, epoch);
         let deputy = keplerian_to_state(&deputy_ke, epoch);
@@ -256,12 +256,12 @@ mod tests {
         let epoch = test_epoch();
         let chief_ke = iss_like_elements();
         let deputy_ke = KeplerianElements {
-            a: chief_ke.a + 500.0, // 500 km higher
+            a_km: chief_ke.a_km + 500.0, // 500 km higher
             e: 0.01,
-            i: 45.0_f64.to_radians(), // different inclination
-            raan: 90.0_f64.to_radians(),
-            aop: 10.0_f64.to_radians(),
-            mean_anomaly: 180.0_f64.to_radians(),
+            i_rad: 45.0_f64.to_radians(), // different inclination
+            raan_rad: 90.0_f64.to_radians(),
+            aop_rad: 10.0_f64.to_radians(),
+            mean_anomaly_rad: 180.0_f64.to_radians(),
         };
 
         let chief = keplerian_to_state(&chief_ke, epoch);
@@ -280,8 +280,8 @@ mod tests {
         let chief = iss_like_elements();
         let mut deputy = chief;
         // Only change mean anomaly (affects δλ) and RAAN (affects δiy)
-        deputy.mean_anomaly += 0.5; // large δλ
-        deputy.raan += 0.1; // large δiy
+        deputy.mean_anomaly_rad += 0.5; // large δλ
+        deputy.raan_rad += 0.1; // large δiy
 
         // These should NOT increase dimensionless separation
         // because δλ and δiy are excluded
@@ -298,21 +298,21 @@ mod tests {
     fn threshold_edge_exactly_at_boundary() {
         let epoch = test_epoch();
         let chief_ke = KeplerianElements {
-            a: 7000.0,
+            a_km: 7000.0,
             e: 0.001,
-            i: 0.9,
-            raan: 0.0,
-            aop: 0.0,
-            mean_anomaly: 0.0,
+            i_rad: 0.9,
+            raan_rad: 0.0,
+            aop_rad: 0.0,
+            mean_anomaly_rad: 0.0,
         };
 
         // Set δa/a exactly at threshold
         let threshold = 0.005;
         let mut deputy_below = chief_ke;
-        deputy_below.a = chief_ke.a * (1.0 + threshold * 0.99); // just below
+        deputy_below.a_km = chief_ke.a_km * (1.0 + threshold * 0.99); // just below
 
         let mut deputy_above = chief_ke;
-        deputy_above.a = chief_ke.a * (1.0 + threshold * 1.01); // just above
+        deputy_above.a_km = chief_ke.a_km * (1.0 + threshold * 1.01); // just above
 
         let chief = keplerian_to_state(&chief_ke, epoch);
         let dep_below = keplerian_to_state(&deputy_below, epoch);
@@ -334,7 +334,7 @@ mod tests {
         let epoch = test_epoch();
         let chief_ke = iss_like_elements();
         let mut deputy_ke = chief_ke;
-        deputy_ke.a += 50.0; // 50 km higher → δa/a ≈ 0.0074
+        deputy_ke.a_km += 50.0; // 50 km higher → δa/a ≈ 0.0074
 
         let chief = keplerian_to_state(&chief_ke, epoch);
         let deputy = keplerian_to_state(&deputy_ke, epoch);
@@ -359,8 +359,8 @@ mod tests {
         let epoch = test_epoch();
         let chief_ke = iss_like_elements();
         let mut deputy_ke = chief_ke;
-        deputy_ke.a += 1.0;
-        deputy_ke.mean_anomaly += 0.01;
+        deputy_ke.a_km += 1.0;
+        deputy_ke.mean_anomaly_rad += 0.01;
 
         let chief = keplerian_to_state(&chief_ke, epoch);
         let deputy = keplerian_to_state(&deputy_ke, epoch);
@@ -415,7 +415,7 @@ mod tests {
         let roe = perch_to_roe(&perch, &chief).expect("V-bar perch should work");
 
         // V-bar maps to δλ only
-        let expected_dlambda = 5.0 / chief.a;
+        let expected_dlambda = 5.0 / chief.a_km;
         assert!(
             (roe.dlambda - expected_dlambda).abs() < 1e-12,
             "dlambda should be {expected_dlambda}, got {}",
@@ -429,9 +429,9 @@ mod tests {
         let ric = roe_to_ric(&roe, &chief);
         // Along-track ≈ a * δλ + oscillatory terms
         assert!(
-            ric.position.y.abs() > 1.0,
+            ric.position_ric_km.y.abs() > 1.0,
             "V-bar perch should have along-track offset, got {}",
-            ric.position.y
+            ric.position_ric_km.y
         );
     }
 
@@ -442,7 +442,7 @@ mod tests {
         let roe = perch_to_roe(&perch, &chief).expect("R-bar perch should work");
 
         // R-bar maps to δa only
-        let expected_da = 2.0 / chief.a;
+        let expected_da = 2.0 / chief.a_km;
         assert!(
             (roe.da - expected_da).abs() < 1e-12,
             "da should be {expected_da}, got {}",
@@ -455,7 +455,7 @@ mod tests {
     fn perch_roe_to_keplerian_roundtrip() {
         let chief = iss_like_elements();
         let original_roe = QuasiNonsingularROE {
-            da: 1.0 / chief.a,
+            da: 1.0 / chief.a_km,
             dlambda: 0.001,
             dex: 0.0001,
             dey: 0.0002,
@@ -510,12 +510,12 @@ mod tests {
         let epoch = test_epoch();
         let chief_ke = iss_like_elements();
         let deputy_ke = KeplerianElements {
-            a: chief_ke.a + 200.0,
+            a_km: chief_ke.a_km + 200.0,
             e: 0.005,
-            i: chief_ke.i + 0.05,
-            raan: chief_ke.raan,
-            aop: 0.0,
-            mean_anomaly: 2.0,
+            i_rad: chief_ke.i_rad + 0.05,
+            raan_rad: chief_ke.raan_rad,
+            aop_rad: 0.0,
+            mean_anomaly_rad: 2.0,
         };
 
         let chief = keplerian_to_state(&chief_ke, epoch);
@@ -531,7 +531,7 @@ mod tests {
         assert!(matches!(plan.phase, MissionPhase::FarField { .. }));
         assert!(plan.transfer.is_some(), "should have Lambert transfer");
         assert!(
-            plan.transfer.as_ref().unwrap().total_dv > 0.0,
+            plan.transfer.as_ref().unwrap().total_dv_km_s > 0.0,
             "Lambert Δv should be positive"
         );
     }
@@ -541,8 +541,8 @@ mod tests {
         let epoch = test_epoch();
         let chief_ke = iss_like_elements();
         let mut deputy_ke = chief_ke;
-        deputy_ke.a += 1.0; // 1 km higher → Proximity regime
-        deputy_ke.mean_anomaly += 0.01;
+        deputy_ke.a_km += 1.0; // 1 km higher → Proximity regime
+        deputy_ke.mean_anomaly_rad += 0.01;
 
         let chief = keplerian_to_state(&chief_ke, epoch);
         let deputy = keplerian_to_state(&deputy_ke, epoch);
@@ -561,7 +561,7 @@ mod tests {
         assert!(matches!(plan.phase, MissionPhase::Proximity { .. }));
         assert!(plan.transfer.is_none(), "proximity should have no Lambert transfer");
 
-        let expected_dlambda = 5.0 / chief_ke.a;
+        let expected_dlambda = 5.0 / chief_ke.a_km;
         assert!(plan.perch_roe.da.abs() < 1e-15,
             "V-bar perch should have δa = 0, got {}", plan.perch_roe.da);
         assert!((plan.perch_roe.dlambda - expected_dlambda).abs() < 1e-12,
@@ -576,7 +576,7 @@ mod tests {
         assert!(matches!(plan.phase, MissionPhase::Proximity { .. }));
         assert!(plan.transfer.is_none(), "proximity should have no Lambert transfer");
 
-        let expected_da = 2.0 / chief_ke.a;
+        let expected_da = 2.0 / chief_ke.a_km;
         assert!((plan.perch_roe.da - expected_da).abs() < 1e-12,
             "R-bar perch should have δa = {expected_da}, got {}", plan.perch_roe.da);
         assert!(plan.perch_roe.dlambda.abs() < 1e-15,
@@ -588,7 +588,7 @@ mod tests {
         let epoch = test_epoch();
         let chief_ke = iss_like_elements();
         let mut deputy_ke = chief_ke;
-        deputy_ke.a += 1.0;
+        deputy_ke.a_km += 1.0;
 
         let chief = keplerian_to_state(&chief_ke, epoch);
         let deputy = keplerian_to_state(&deputy_ke, epoch);
@@ -602,7 +602,7 @@ mod tests {
         let deserialized: MissionPlan =
             serde_json::from_str(&json).expect("deserialize should work");
 
-        let expected_dlambda = 5.0 / chief_ke.a;
+        let expected_dlambda = 5.0 / chief_ke.a_km;
         assert!(
             (deserialized.perch_roe.dlambda - expected_dlambda).abs() < 1e-12,
             "perch_roe should survive serde roundtrip"

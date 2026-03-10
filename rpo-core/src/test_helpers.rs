@@ -12,36 +12,36 @@ pub fn test_epoch() -> Epoch {
 /// ISS-like orbit: 408 km altitude, 51.6 deg inclination.
 pub fn iss_like_elements() -> KeplerianElements {
     KeplerianElements {
-        a: 6786.0,
+        a_km: 6786.0,
         e: 0.0001,
-        i: 51.6_f64.to_radians(),
-        raan: 30.0_f64.to_radians(),
-        aop: 45.0_f64.to_radians(),
-        mean_anomaly: 60.0_f64.to_radians(),
+        i_rad: 51.6_f64.to_radians(),
+        raan_rad: 30.0_f64.to_radians(),
+        aop_rad: 45.0_f64.to_radians(),
+        mean_anomaly_rad: 60.0_f64.to_radians(),
     }
 }
 
 /// Eccentric test orbit (e = 0.3).
 pub fn eccentric_elements() -> KeplerianElements {
     KeplerianElements {
-        a: 10000.0,
+        a_km: 10000.0,
         e: 0.3,
-        i: 45.0_f64.to_radians(),
-        raan: 120.0_f64.to_radians(),
-        aop: 200.0_f64.to_radians(),
-        mean_anomaly: 150.0_f64.to_radians(),
+        i_rad: 45.0_f64.to_radians(),
+        raan_rad: 120.0_f64.to_radians(),
+        aop_rad: 200.0_f64.to_radians(),
+        mean_anomaly_rad: 150.0_f64.to_radians(),
     }
 }
 
 /// LEO 400 km altitude orbit for Lambert tests: ISS-like inclination, near-circular.
 pub fn leo_400km_elements() -> KeplerianElements {
     KeplerianElements {
-        a: 6378.137 + 400.0,
+        a_km: 6378.137 + 400.0,
         e: 0.001,
-        i: 51.6_f64.to_radians(),
-        raan: 0.0,
-        aop: 0.0,
-        mean_anomaly: 0.0,
+        i_rad: 51.6_f64.to_radians(),
+        raan_rad: 0.0,
+        aop_rad: 0.0,
+        mean_anomaly_rad: 0.0,
     }
 }
 
@@ -49,12 +49,12 @@ pub fn leo_400km_elements() -> KeplerianElements {
 /// 120° mean anomaly offset.
 pub fn leo_800km_target_elements() -> KeplerianElements {
     KeplerianElements {
-        a: 6378.137 + 800.0,
+        a_km: 6378.137 + 800.0,
         e: 0.001,
-        i: 51.6_f64.to_radians(),
-        raan: 0.0,
-        aop: 0.0,
-        mean_anomaly: 120.0_f64.to_radians(),
+        i_rad: 51.6_f64.to_radians(),
+        raan_rad: 0.0,
+        aop_rad: 0.0,
+        mean_anomaly_rad: 120.0_f64.to_radians(),
     }
 }
 

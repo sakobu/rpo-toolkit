@@ -25,9 +25,9 @@ pub fn propagate_keplerian(
             #[allow(clippy::cast_precision_loss)]
             let dt = duration_s * (k as f64) / (n_steps as f64);
             let epoch_k = initial.epoch + Duration::from_seconds(dt);
-            let m_k = (ke.mean_anomaly + n * dt).rem_euclid(TWO_PI);
+            let m_k = (ke.mean_anomaly_rad + n * dt).rem_euclid(TWO_PI);
             let ke_k = crate::types::KeplerianElements {
-                mean_anomaly: m_k,
+                mean_anomaly_rad: m_k,
                 ..ke
             };
             keplerian_to_state(&ke_k, epoch_k)
@@ -53,7 +53,7 @@ mod tests {
 
         assert_eq!(trajectory.len(), 101);
 
-        let pos_err = (trajectory.last().unwrap().position - initial.position).norm();
+        let pos_err = (trajectory.last().unwrap().position_eci_km - initial.position_eci_km).norm();
         assert!(
             pos_err < 1e-10,
             "Circular orbit closure error: {pos_err} km"
@@ -69,7 +69,7 @@ mod tests {
 
         let trajectory = propagate_keplerian(&initial, period, 100);
 
-        let pos_err = (trajectory.last().unwrap().position - initial.position).norm();
+        let pos_err = (trajectory.last().unwrap().position_eci_km - initial.position_eci_km).norm();
         assert!(
             pos_err < 1e-10,
             "Eccentric orbit closure error: {pos_err} km"
@@ -86,14 +86,14 @@ mod tests {
         let trajectory = propagate_keplerian(&initial, period, 200);
 
         let energy_0 = {
-            let r = initial.position.norm();
-            let v = initial.velocity.norm();
+            let r = initial.position_eci_km.norm();
+            let v = initial.velocity_eci_km_s.norm();
             v * v / 2.0 - MU_EARTH / r
         };
 
         for (k, state) in trajectory.iter().enumerate() {
-            let r = state.position.norm();
-            let v = state.velocity.norm();
+            let r = state.position_eci_km.norm();
+            let v = state.velocity_eci_km_s.norm();
             let energy_k = v * v / 2.0 - MU_EARTH / r;
             let err = (energy_k - energy_0).abs();
             assert!(

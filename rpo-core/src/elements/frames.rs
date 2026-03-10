@@ -21,8 +21,8 @@ type Matrix3 = SMatrix<f64, 3, 3>;
 /// Multiply: `v_ric = DCM * v_eci`. Inverse: `v_eci = DCM^T * v_ric`.
 #[must_use]
 pub fn eci_to_ric_dcm(chief: &StateVector) -> Matrix3 {
-    let r = chief.position;
-    let v = chief.velocity;
+    let r = chief.position_eci_km;
+    let v = chief.velocity_eci_km_s;
     let r_norm = r.norm();
     let h = r.cross(&v);
     let h_norm = h.norm();
@@ -79,23 +79,23 @@ pub fn eci_to_ric_dv(dv_eci: &Vector3<f64>, chief: &StateVector) -> Vector3<f64>
 pub fn eci_to_ric_relative(chief: &StateVector, deputy: &StateVector) -> RICState {
     let dcm = eci_to_ric_dcm(chief);
 
-    let delta_r = deputy.position - chief.position;
-    let delta_v = deputy.velocity - chief.velocity;
+    let delta_r = deputy.position_eci_km - chief.position_eci_km;
+    let delta_v = deputy.velocity_eci_km_s - chief.velocity_eci_km_s;
 
     let rho = dcm * delta_r;
     let dv_ric_inertial = dcm * delta_v;
 
     // Rotating frame correction: ω = |h| / r²
-    let r = chief.position.norm();
-    let h = chief.position.cross(&chief.velocity);
+    let r = chief.position_eci_km.norm();
+    let h = chief.position_eci_km.cross(&chief.velocity_eci_km_s);
     let omega = h.norm() / (r * r);
 
     // ω × ρ in RIC = [0, 0, ω] × [R, I, C] = [-ω·I, ω·R, 0]
     let omega_cross_rho = Vector3::new(-omega * rho.y, omega * rho.x, 0.0);
 
     RICState {
-        position: rho,
-        velocity: dv_ric_inertial - omega_cross_rho,
+        position_ric_km: rho,
+        velocity_ric_km_s: dv_ric_inertial - omega_cross_rho,
     }
 }
 
@@ -105,7 +105,7 @@ pub fn eci_to_ric_relative(chief: &StateVector, deputy: &StateVector) -> RICStat
 #[must_use]
 pub fn ric_to_eci_position(chief: &StateVector, ric_offset: &Vector3<f64>) -> Vector3<f64> {
     let dcm = eci_to_ric_dcm(chief);
-    chief.position + dcm.transpose() * ric_offset
+    chief.position_eci_km + dcm.transpose() * ric_offset
 }
 
 /// Convert a chief ECI state and a relative RIC state to the deputy ECI state.
@@ -119,21 +119,21 @@ pub fn ric_to_eci_position(chief: &StateVector, ric_offset: &Vector3<f64>) -> Ve
 pub fn ric_to_eci_state(chief: &StateVector, ric_state: &RICState) -> StateVector {
     let dcm = eci_to_ric_dcm(chief);
 
-    let r = chief.position.norm();
-    let h = chief.position.cross(&chief.velocity);
+    let r = chief.position_eci_km.norm();
+    let h = chief.position_eci_km.cross(&chief.velocity_eci_km_s);
     let omega = h.norm() / (r * r);
 
     // ω × ρ in RIC = [-ω·I, ω·R, 0]
-    let rho = &ric_state.position;
+    let rho = &ric_state.position_ric_km;
     let omega_cross_rho = Vector3::new(-omega * rho.y, omega * rho.x, 0.0);
 
-    let position = chief.position + dcm.transpose() * ric_state.position;
-    let velocity = chief.velocity + dcm.transpose() * (ric_state.velocity + omega_cross_rho);
+    let position = chief.position_eci_km + dcm.transpose() * ric_state.position_ric_km;
+    let velocity = chief.velocity_eci_km_s + dcm.transpose() * (ric_state.velocity_ric_km_s + omega_cross_rho);
 
     StateVector {
         epoch: chief.epoch,
-        position,
-        velocity,
+        position_eci_km: position,
+        velocity_eci_km_s: velocity,
     }
 }
 
@@ -150,12 +150,12 @@ mod tests {
     #[test]
     fn dcm_equatorial_orbit() {
         let ke = KeplerianElements {
-            a: 7000.0,
+            a_km: 7000.0,
             e: 0.0,
-            i: 0.0,
-            raan: 0.0,
-            aop: 0.0,
-            mean_anomaly: 0.0, // at periapsis → r along x, v along y
+            i_rad: 0.0,
+            raan_rad: 0.0,
+            aop_rad: 0.0,
+            mean_anomaly_rad: 0.0, // at periapsis → r along x, v along y
         };
         let sv = keplerian_to_state(&ke, test_epoch());
         let dcm = eci_to_ric_dcm(&sv);
@@ -204,7 +204,7 @@ mod tests {
             assert!(
                 err < 1e-14,
                 "Δv roundtrip error = {err} km/s for orbit a={}, e={}",
-                ke.a,
+                ke.a_km,
                 ke.e
             );
         }
@@ -216,9 +216,9 @@ mod tests {
     fn eci_ric_relative_vs_roe_to_ric() {
         let chief_ke = iss_like_elements();
         let deputy_ke = KeplerianElements {
-            a: chief_ke.a + 1.0, // +1 km SMA offset
+            a_km: chief_ke.a_km + 1.0, // +1 km SMA offset
             e: chief_ke.e + 0.0001,
-            i: chief_ke.i + 0.0001,
+            i_rad: chief_ke.i_rad + 0.0001,
             ..chief_ke
         };
 
@@ -233,14 +233,14 @@ mod tests {
         let roe = compute_roe(&chief_ke, &deputy_ke);
         let ric_analytical = roe_to_ric(&roe, &chief_ke);
 
-        let pos_err = (ric_geometric.position - ric_analytical.position).norm();
+        let pos_err = (ric_geometric.position_ric_km - ric_analytical.position_ric_km).norm();
         assert!(
             pos_err < 0.010, // 10 m agreement
             "Geometric vs analytical RIC position disagree by {:.4} km (should be < 0.010 km)",
             pos_err
         );
 
-        let vel_err = (ric_geometric.velocity - ric_analytical.velocity).norm();
+        let vel_err = (ric_geometric.velocity_ric_km_s - ric_analytical.velocity_ric_km_s).norm();
         assert!(
             vel_err < 1e-4, // 0.1 m/s agreement
             "Geometric vs analytical RIC velocity disagree by {vel_err:.6} km/s",
@@ -252,8 +252,8 @@ mod tests {
     fn deputy_eci_reconstruction_roundtrip() {
         let chief_ke = iss_like_elements();
         let deputy_ke = KeplerianElements {
-            a: chief_ke.a + 0.5,
-            i: chief_ke.i + 0.0002,
+            a_km: chief_ke.a_km + 0.5,
+            i_rad: chief_ke.i_rad + 0.0002,
             ..chief_ke
         };
 
@@ -267,8 +267,8 @@ mod tests {
         // Inverse: RIC → ECI
         let deputy_reconstructed = ric_to_eci_state(&chief_sv, &ric);
 
-        let pos_err = (deputy_reconstructed.position - deputy_sv.position).norm();
-        let vel_err = (deputy_reconstructed.velocity - deputy_sv.velocity).norm();
+        let pos_err = (deputy_reconstructed.position_eci_km - deputy_sv.position_eci_km).norm();
+        let vel_err = (deputy_reconstructed.velocity_eci_km_s - deputy_sv.velocity_eci_km_s).norm();
 
         assert!(
             pos_err < 1e-12,
@@ -287,7 +287,7 @@ mod tests {
 
         for u_deg in [0.0_f64, 45.0, 90.0, 180.0, 270.0, 315.0] {
             let ke = KeplerianElements {
-                mean_anomaly: u_deg.to_radians(),
+                mean_anomaly_rad: u_deg.to_radians(),
                 ..base
             };
             let sv = keplerian_to_state(&ke, test_epoch());
@@ -295,7 +295,7 @@ mod tests {
 
             // Row 0 (R_hat) should be parallel to position
             let r_hat_from_dcm = Vector3::new(dcm[(0, 0)], dcm[(0, 1)], dcm[(0, 2)]);
-            let r_hat_expected = sv.position.normalize();
+            let r_hat_expected = sv.position_eci_km.normalize();
             let r_err = (r_hat_from_dcm - r_hat_expected).norm();
             assert!(
                 r_err < 1e-14,
@@ -304,8 +304,8 @@ mod tests {
 
             // Row 2 (C_hat) should be perpendicular to both r and v
             let c_hat = Vector3::new(dcm[(2, 0)], dcm[(2, 1)], dcm[(2, 2)]);
-            let dot_r = c_hat.dot(&sv.position);
-            let dot_v = c_hat.dot(&sv.velocity);
+            let dot_r = c_hat.dot(&sv.position_eci_km);
+            let dot_v = c_hat.dot(&sv.velocity_eci_km_s);
             assert!(
                 dot_r.abs() < 1e-10,
                 "C_hat not ⊥ to r at u={u_deg}°, dot={dot_r}"
@@ -326,7 +326,7 @@ mod tests {
     fn omega_correction_magnitude() {
         let chief_ke = iss_like_elements();
         let deputy_ke = KeplerianElements {
-            a: chief_ke.a + 1.0, // +1 km SMA offset → ~1 km radial + drift
+            a_km: chief_ke.a_km + 1.0, // +1 km SMA offset → ~1 km radial + drift
             ..chief_ke
         };
         let epoch = test_epoch();
@@ -335,9 +335,9 @@ mod tests {
 
         // Compute the ω×ρ correction magnitude directly
         let dcm = eci_to_ric_dcm(&chief_sv);
-        let rho = dcm * (deputy_sv.position - chief_sv.position);
-        let r = chief_sv.position.norm();
-        let h = chief_sv.position.cross(&chief_sv.velocity).norm();
+        let rho = dcm * (deputy_sv.position_eci_km - chief_sv.position_eci_km);
+        let r = chief_sv.position_eci_km.norm();
+        let h = chief_sv.position_eci_km.cross(&chief_sv.velocity_eci_km_s).norm();
         let omega = h / (r * r);
         let correction = Vector3::new(-omega * rho.y, omega * rho.x, 0.0);
         let correction_mag = correction.norm();

@@ -16,7 +16,7 @@ use crate::types::{KeplerianElements, QuasiNonsingularROE, RICState};
 /// * `chief` - Chief Keplerian elements
 #[must_use]
 pub fn compute_t_matrix(chief: &KeplerianElements) -> SMatrix<f64, 6, 6> {
-    let a = chief.a;
+    let a = chief.a_km;
     let n = chief.mean_motion();
     let u = chief.mean_arg_of_lat();
     let (sin_u, cos_u) = u.sin_cos();
@@ -103,12 +103,12 @@ pub fn ric_position_to_roe(
 /// * `chief` - Chief Keplerian elements (used for a and mean argument of latitude u)
 #[must_use]
 pub fn roe_to_ric(roe: &QuasiNonsingularROE, chief: &KeplerianElements) -> RICState {
-    debug_assert!(chief.a > 0.0, "chief semi-major axis must be positive");
+    debug_assert!(chief.a_km > 0.0, "chief semi-major axis must be positive");
     let t = compute_t_matrix(chief);
     let ric_vec = t * roe.to_vector();
     RICState {
-        position: Vector3::new(ric_vec[0], ric_vec[1], ric_vec[2]),
-        velocity: Vector3::new(ric_vec[3], ric_vec[4], ric_vec[5]),
+        position_ric_km: Vector3::new(ric_vec[0], ric_vec[1], ric_vec[2]),
+        velocity_ric_km_s: Vector3::new(ric_vec[3], ric_vec[4], ric_vec[5]),
     }
 }
 
@@ -122,29 +122,29 @@ mod tests {
     #[test]
     fn zero_roe_gives_zero_ric() {
         let chief = KeplerianElements {
-            a: 6786.0,
+            a_km: 6786.0,
             e: 0.001,
-            i: 51.6_f64.to_radians(),
-            raan: 30.0_f64.to_radians(),
-            aop: 0.0,
-            mean_anomaly: 0.0,
+            i_rad: 51.6_f64.to_radians(),
+            raan_rad: 30.0_f64.to_radians(),
+            aop_rad: 0.0,
+            mean_anomaly_rad: 0.0,
         };
         let roe = QuasiNonsingularROE::default();
         let ric = roe_to_ric(&roe, &chief);
-        assert!(ric.position.norm() < 1e-12);
-        assert!(ric.velocity.norm() < 1e-12);
+        assert!(ric.position_ric_km.norm() < 1e-12);
+        assert!(ric.velocity_ric_km_s.norm() < 1e-12);
     }
 
     #[test]
     fn pure_da_gives_radial_offset() {
         // A pure δa offset should produce a radial offset at u=0 and along-track drift
         let chief = KeplerianElements {
-            a: 6786.0,
+            a_km: 6786.0,
             e: 0.0,
-            i: 51.6_f64.to_radians(),
-            raan: 0.0,
-            aop: 0.0,
-            mean_anomaly: 0.0, // u = 0
+            i_rad: 51.6_f64.to_radians(),
+            raan_rad: 0.0,
+            aop_rad: 0.0,
+            mean_anomaly_rad: 0.0, // u = 0
         };
         let da = 1.0 / 6786.0; // ~1 km offset in SMA
         let roe = QuasiNonsingularROE {
@@ -159,23 +159,23 @@ mod tests {
 
         // Radial position should be a * da = 1 km
         assert!(
-            (ric.position.x - 1.0).abs() < 1e-8,
+            (ric.position_ric_km.x - 1.0).abs() < 1e-8,
             "Radial offset should be ~1 km, got {}",
-            ric.position.x
+            ric.position_ric_km.x
         );
         // Cross-track should be zero
-        assert!(ric.position.z.abs() < 1e-12);
+        assert!(ric.position_ric_km.z.abs() < 1e-12);
     }
 
     #[test]
     fn pure_dix_gives_cross_track() {
         let chief = KeplerianElements {
-            a: 6786.0,
+            a_km: 6786.0,
             e: 0.0,
-            i: 51.6_f64.to_radians(),
-            raan: 0.0,
-            aop: 0.0,
-            mean_anomaly: 90.0_f64.to_radians(), // u = π/2
+            i_rad: 51.6_f64.to_radians(),
+            raan_rad: 0.0,
+            aop_rad: 0.0,
+            mean_anomaly_rad: 90.0_f64.to_radians(), // u = π/2
         };
         let dix = 0.001_f64; // small inclination offset
         let roe = QuasiNonsingularROE {
@@ -189,11 +189,11 @@ mod tests {
         let ric = roe_to_ric(&roe, &chief);
 
         // At u=π/2, cross-track = a * dix * sin(u) = a * dix
-        let expected_cross = chief.a * dix;
+        let expected_cross = chief.a_km * dix;
         assert!(
-            (ric.position.z - expected_cross).abs() < 1e-8,
+            (ric.position_ric_km.z - expected_cross).abs() < 1e-8,
             "Cross-track should be ~{expected_cross} km, got {}",
-            ric.position.z
+            ric.position_ric_km.z
         );
     }
 
@@ -204,7 +204,7 @@ mod tests {
     fn t_matrix_matches_roe_to_ric() {
         let chief = iss_like_elements();
         let roe = QuasiNonsingularROE {
-            da: 1.0 / chief.a,
+            da: 1.0 / chief.a_km,
             dlambda: 0.001,
             dex: 0.0002,
             dey: -0.0001,
@@ -218,12 +218,12 @@ mod tests {
 
         let ric_ref = roe_to_ric(&roe, &chief);
 
-        assert!((ric_vec[0] - ric_ref.position.x).abs() < 1e-10, "R mismatch");
-        assert!((ric_vec[1] - ric_ref.position.y).abs() < 1e-10, "I mismatch");
-        assert!((ric_vec[2] - ric_ref.position.z).abs() < 1e-10, "C mismatch");
-        assert!((ric_vec[3] - ric_ref.velocity.x).abs() < 1e-10, "vR mismatch");
-        assert!((ric_vec[4] - ric_ref.velocity.y).abs() < 1e-10, "vI mismatch");
-        assert!((ric_vec[5] - ric_ref.velocity.z).abs() < 1e-10, "vC mismatch");
+        assert!((ric_vec[0] - ric_ref.position_ric_km.x).abs() < 1e-10, "R mismatch");
+        assert!((ric_vec[1] - ric_ref.position_ric_km.y).abs() < 1e-10, "I mismatch");
+        assert!((ric_vec[2] - ric_ref.position_ric_km.z).abs() < 1e-10, "C mismatch");
+        assert!((ric_vec[3] - ric_ref.velocity_ric_km_s.x).abs() < 1e-10, "vR mismatch");
+        assert!((ric_vec[4] - ric_ref.velocity_ric_km_s.y).abs() < 1e-10, "vI mismatch");
+        assert!((ric_vec[5] - ric_ref.velocity_ric_km_s.z).abs() < 1e-10, "vC mismatch");
     }
 
     /// T · roe matches roe_to_ric at multiple u values.
@@ -231,15 +231,15 @@ mod tests {
     fn t_matrix_matches_at_multiple_u() {
         for u_deg in [0.0_f64, 45.0, 90.0, 135.0, 180.0, 270.0, 350.0] {
             let chief = KeplerianElements {
-                a: 6786.0,
+                a_km: 6786.0,
                 e: 0.0001,
-                i: 51.6_f64.to_radians(),
-                raan: 30.0_f64.to_radians(),
-                aop: 0.0,
-                mean_anomaly: u_deg.to_radians(),
+                i_rad: 51.6_f64.to_radians(),
+                raan_rad: 30.0_f64.to_radians(),
+                aop_rad: 0.0,
+                mean_anomaly_rad: u_deg.to_radians(),
             };
             let roe = QuasiNonsingularROE {
-                da: 0.5 / chief.a,
+                da: 0.5 / chief.a_km,
                 dlambda: 0.002,
                 dex: 0.0003,
                 dey: -0.0002,
@@ -251,9 +251,9 @@ mod tests {
             let ric_vec = t * roe.to_vector();
             let ric_ref = roe_to_ric(&roe, &chief);
 
-            let pos_err = ((ric_vec[0] - ric_ref.position.x).powi(2)
-                + (ric_vec[1] - ric_ref.position.y).powi(2)
-                + (ric_vec[2] - ric_ref.position.z).powi(2))
+            let pos_err = ((ric_vec[0] - ric_ref.position_ric_km.x).powi(2)
+                + (ric_vec[1] - ric_ref.position_ric_km.y).powi(2)
+                + (ric_vec[2] - ric_ref.position_ric_km.z).powi(2))
             .sqrt();
             assert!(
                 pos_err < 1e-10,
@@ -277,7 +277,7 @@ mod tests {
     fn position_submatrix() {
         let chief = iss_like_elements();
         let roe = QuasiNonsingularROE {
-            da: 1.0 / chief.a,
+            da: 1.0 / chief.a_km,
             dlambda: 0.001,
             dex: 0.0001,
             dey: 0.0001,
@@ -288,9 +288,9 @@ mod tests {
         let pos = t_pos * roe.to_vector();
         let ric_ref = roe_to_ric(&roe, &chief);
 
-        assert!((pos[0] - ric_ref.position.x).abs() < 1e-10);
-        assert!((pos[1] - ric_ref.position.y).abs() < 1e-10);
-        assert!((pos[2] - ric_ref.position.z).abs() < 1e-10);
+        assert!((pos[0] - ric_ref.position_ric_km.x).abs() < 1e-10);
+        assert!((pos[1] - ric_ref.position_ric_km.y).abs() < 1e-10);
+        assert!((pos[2] - ric_ref.position_ric_km.z).abs() < 1e-10);
     }
 
     /// Pseudo-inverse roundtrip: ric_position_to_roe → T_pos·roe recovers position.

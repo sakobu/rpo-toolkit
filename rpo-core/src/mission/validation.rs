@@ -31,12 +31,12 @@ pub fn load_almanac() -> Arc<Almanac> {
 #[must_use]
 pub fn state_to_spacecraft(sv: &StateVector) -> Spacecraft {
     let orbit = Orbit::new(
-        sv.position.x,
-        sv.position.y,
-        sv.position.z,
-        sv.velocity.x,
-        sv.velocity.y,
-        sv.velocity.z,
+        sv.position_eci_km.x,
+        sv.position_eci_km.y,
+        sv.position_eci_km.z,
+        sv.velocity_eci_km_s.x,
+        sv.velocity_eci_km_s.y,
+        sv.velocity_eci_km_s.z,
         sv.epoch,
         EARTH_J2000,
     );
@@ -50,12 +50,12 @@ pub fn state_to_spacecraft(sv: &StateVector) -> Spacecraft {
 pub fn spacecraft_to_state(sc: &Spacecraft) -> StateVector {
     StateVector {
         epoch: sc.orbit.epoch,
-        position: Vector3::new(
+        position_eci_km: Vector3::new(
             sc.orbit.radius_km.x,
             sc.orbit.radius_km.y,
             sc.orbit.radius_km.z,
         ),
-        velocity: Vector3::new(
+        velocity_eci_km_s: Vector3::new(
             sc.orbit.velocity_km_s.x,
             sc.orbit.velocity_km_s.y,
             sc.orbit.velocity_km_s.z,
@@ -105,12 +105,12 @@ mod tests {
         let epoch = test_epoch();
         let chief_ke = iss_like_elements();
         let deputy_ke = KeplerianElements {
-            a: chief_ke.a + 200.0,
+            a_km: chief_ke.a_km + 200.0,
             e: 0.005,
-            i: chief_ke.i + 0.05,
-            raan: chief_ke.raan,
-            aop: 0.0,
-            mean_anomaly: 2.0,
+            i_rad: chief_ke.i_rad + 0.05,
+            raan_rad: chief_ke.raan_rad,
+            aop_rad: 0.0,
+            mean_anomaly_rad: 2.0,
         };
 
         let chief = keplerian_to_state(&chief_ke, epoch);
@@ -135,16 +135,16 @@ mod tests {
         // Lambert transfer assertions
         let transfer = plan.transfer.as_ref().expect("should have Lambert transfer");
         assert!(
-            transfer.total_dv > 0.1 && transfer.total_dv < 10.0,
+            transfer.total_dv_km_s > 0.1 && transfer.total_dv_km_s < 10.0,
             "total Δv = {} km/s unreasonable",
-            transfer.total_dv
+            transfer.total_dv_km_s
         );
         assert!(
-            transfer.departure_dv.norm() > 0.0,
+            transfer.departure_dv_eci_km_s.norm() > 0.0,
             "departure Δv should be nonzero"
         );
         assert!(
-            transfer.arrival_dv.norm() > 0.0,
+            transfer.arrival_dv_eci_km_s.norm() > 0.0,
             "arrival Δv should be nonzero"
         );
 
@@ -226,8 +226,8 @@ mod tests {
 
         // Deputy with 1 km SMA offset and 0.001 rad inclination offset
         let mut deputy = chief;
-        deputy.a += 1.0;
-        deputy.i += 0.001;
+        deputy.a_km += 1.0;
+        deputy.i_rad += 0.001;
         let roe_0 = compute_roe(&chief, &deputy);
         let period = std::f64::consts::TAU / chief.mean_motion();
 
@@ -286,13 +286,13 @@ mod tests {
             .expect("nyx propagation should succeed");
 
         // Position at arrival should match Lambert's arrival position
-        let pos_err = (propagated.position - arr.position).norm();
+        let pos_err = (propagated.position_eci_km - arr.position_eci_km).norm();
         assert!(
             pos_err < 1.0,
             "position error = {pos_err:.4} km (expected < 1.0 km)"
         );
 
-        let vel_err = (propagated.velocity - transfer.arrival_state.velocity).norm();
+        let vel_err = (propagated.velocity_eci_km_s - transfer.arrival_state.velocity_eci_km_s).norm();
         assert!(
             vel_err < 0.01,
             "velocity error = {vel_err:.6} km/s (expected < 0.01 km/s)"
@@ -307,12 +307,12 @@ mod tests {
 
         let dep = keplerian_to_state(&leo_400km_elements(), epoch);
         let arr_ke = KeplerianElements {
-            a: 6378.137 + 500.0,
+            a_km: 6378.137 + 500.0,
             e: 0.001,
-            i: 51.6_f64.to_radians(),
-            raan: 10.0_f64.to_radians(),
-            aop: 0.0,
-            mean_anomaly: 2.0,
+            i_rad: 51.6_f64.to_radians(),
+            raan_rad: 10.0_f64.to_radians(),
+            aop_rad: 0.0,
+            mean_anomaly_rad: 2.0,
         };
         let arr = keplerian_to_state(&arr_ke, epoch + hifitime::Duration::from_seconds(tof));
 
@@ -322,13 +322,13 @@ mod tests {
         let propagated = super::nyx_propagate_two_body(&transfer.departure_state, tof)
             .expect("nyx propagation should succeed");
 
-        let pos_err = (propagated.position - arr.position).norm();
+        let pos_err = (propagated.position_eci_km - arr.position_eci_km).norm();
         assert!(
             pos_err < 1.0,
             "position error = {pos_err:.4} km (expected < 1.0 km)"
         );
 
-        let vel_err = (propagated.velocity - transfer.arrival_state.velocity).norm();
+        let vel_err = (propagated.velocity_eci_km_s - transfer.arrival_state.velocity_eci_km_s).norm();
         assert!(
             vel_err < 0.01,
             "velocity error = {vel_err:.6} km/s (expected < 0.01 km/s)"
@@ -345,8 +345,8 @@ mod tests {
         let epoch = test_epoch();
         let chief_ke = iss_like_elements();
         let mut deputy_ke = chief_ke;
-        deputy_ke.a += 1.0;
-        deputy_ke.i += 0.001;
+        deputy_ke.a_km += 1.0;
+        deputy_ke.i_rad += 0.001;
 
         let chief_sv = keplerian_to_state(&chief_ke, epoch);
         let deputy_sv = keplerian_to_state(&deputy_ke, epoch);
