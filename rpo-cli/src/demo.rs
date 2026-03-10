@@ -176,10 +176,10 @@ pub(crate) fn run_demo() -> Result<(), Box<dyn Error>> {
     let j2p = compute_j2_params(&chief)?;
 
     println!("J2 params for ISS-like chief (Koenig Eqs. 13-16):");
-    println!("  Mean motion n:   {:.6e} rad/s", j2p.n);
+    println!("  Mean motion n:   {:.6e} rad/s", j2p.n_rad_s);
     println!("  κ (J2 freq):     {:.6e} rad/s", j2p.kappa);
     println!("  η (sqrt 1-e²)):  {:.10}", j2p.eta);
-    println!("  p (semi-latus):  {:.4} km", j2p.p);
+    println!("  p (semi-latus):  {:.4} km", j2p.p_km);
 
     println!("\n  Koenig auxiliaries (Eq. 14):");
     println!("    E = 1+η:       {:.10}", j2p.big_e);
@@ -194,12 +194,12 @@ pub(crate) fn run_demo() -> Result<(), Box<dyn Error>> {
     println!("    T = sin²i:     {:.10}", j2p.big_t);
 
     // Secular rates in intuitive units
-    let raan_deg_day = j2p.raan_dot.to_degrees() * 86400.0;
-    let aop_deg_day = j2p.aop_dot.to_degrees() * 86400.0;
+    let raan_deg_day = j2p.raan_dot_rad_s.to_degrees() * 86400.0;
+    let aop_deg_day = j2p.aop_dot_rad_s.to_degrees() * 86400.0;
     println!("\n  Secular rates:");
-    println!("    dΩ/dt = {:.6e} rad/s  ({raan_deg_day:+.3}°/day — RAAN regression)", j2p.raan_dot);
-    println!("    dω/dt = {:.6e} rad/s  ({aop_deg_day:+.3}°/day — apsidal advance)", j2p.aop_dot);
-    println!("    dM/dt = {:.6e} rad/s  (n + J2 correction)", j2p.m_dot);
+    println!("    dΩ/dt = {:.6e} rad/s  ({raan_deg_day:+.3}°/day — RAAN regression)", j2p.raan_dot_rad_s);
+    println!("    dω/dt = {:.6e} rad/s  ({aop_deg_day:+.3}°/day — apsidal advance)", j2p.aop_dot_rad_s);
+    println!("    dM/dt = {:.6e} rad/s  (n + J2 correction)", j2p.m_dot_rad_s);
 
     // --- STM structure ---
     println!("\n  J2 STM at τ = 1 orbit ({:.1} s):", period_s);
@@ -373,9 +373,7 @@ pub(crate) fn run_demo() -> Result<(), Box<dyn Error>> {
         println!("    Departure Δv: {:.4} km/s", transfer.departure_dv_eci_km_s.norm());
         println!("    Arrival Δv:   {:.4} km/s", transfer.arrival_dv_eci_km_s.norm());
         println!("    TOF:          {:.1} s ({:.2} min)", transfer.tof_s, transfer.tof_s / 60.0);
-        if let Some(c3) = transfer.c3_km2_s2 {
-            println!("    C3:           {:.4} km²/s²", c3);
-        }
+        println!("    C3:           {:.4} km²/s²", transfer.c3_km2_s2);
         println!("    Direction:    {:?}", transfer.direction);
     }
 
@@ -414,9 +412,7 @@ pub(crate) fn run_demo() -> Result<(), Box<dyn Error>> {
     )?;
     println!("Short-way (prograde) transfer:");
     println!("  Δv: {:.4} km/s, TOF: {:.1} s", short_transfer.total_dv_km_s, short_transfer.tof_s);
-    if let Some(c3) = short_transfer.c3_km2_s2 {
-        println!("  C3: {:.4} km²/s²", c3);
-    }
+    println!("  C3: {:.4} km²/s²", short_transfer.c3_km2_s2);
 
     // --- Long-way transfer ---
     let long_config = LambertConfig {
@@ -428,9 +424,7 @@ pub(crate) fn run_demo() -> Result<(), Box<dyn Error>> {
     )?;
     println!("\nLong-way (retrograde) transfer:");
     println!("  Δv: {:.4} km/s, TOF: {:.1} s", long_transfer.total_dv_km_s, long_transfer.tof_s);
-    if let Some(c3) = long_transfer.c3_km2_s2 {
-        println!("  C3: {:.4} km²/s²", c3);
-    }
+    println!("  C3: {:.4} km²/s²", long_transfer.c3_km2_s2);
 
     println!("\n  Short-way vs long-way Δv ratio: {:.2}x",
         long_transfer.total_dv_km_s / short_transfer.total_dv_km_s);

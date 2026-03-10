@@ -13,7 +13,7 @@ use crate::types::KeplerianElements;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct J2Params {
     /// Mean motion n = sqrt(μ/a³) (rad/s)
-    pub n: f64,
+    pub n_rad_s: f64,
     /// J2 perturbation frequency parameter κ = `(3/4)·n·J2·(R_E/p)²`
     pub kappa: f64,
     /// η = sqrt(1 - e²)
@@ -47,13 +47,13 @@ pub struct J2Params {
     /// sin²(i)
     pub sin2_i: f64,
     /// Secular rate of RAAN (rad/s): dΩ/dt = -2κR
-    pub raan_dot: f64,
+    pub raan_dot_rad_s: f64,
     /// Secular rate of argument of perigee (rad/s): dω/dt = κQ
-    pub aop_dot: f64,
+    pub aop_dot_rad_s: f64,
     /// Secular rate of mean anomaly (rad/s): dM/dt = n + κηP
-    pub m_dot: f64,
+    pub m_dot_rad_s: f64,
     /// Semi-latus rectum p = a(1 - e²)
-    pub p: f64,
+    pub p_km: f64,
 }
 
 /// Compute J2 perturbation parameters from mean Keplerian elements.
@@ -116,7 +116,7 @@ pub fn compute_j2_params(mean: &KeplerianElements) -> Result<J2Params, Propagati
     let m_dot = n + kappa * eta * big_p;
 
     Ok(J2Params {
-        n,
+        n_rad_s: n,
         kappa,
         eta,
         big_e,
@@ -133,10 +133,10 @@ pub fn compute_j2_params(mean: &KeplerianElements) -> Result<J2Params, Propagati
         sin_i,
         cos2_i,
         sin2_i,
-        raan_dot,
-        aop_dot,
-        m_dot,
-        p,
+        raan_dot_rad_s: raan_dot,
+        aop_dot_rad_s: aop_dot,
+        m_dot_rad_s: m_dot,
+        p_km: p,
     })
 }
 
@@ -153,7 +153,7 @@ mod tests {
         let j2p = compute_j2_params(&mean).unwrap();
 
         // ISS RAAN regression rate ≈ -5.1°/day
-        let raan_deg_per_day = j2p.raan_dot.to_degrees() * 86400.0;
+        let raan_deg_per_day = j2p.raan_dot_rad_s.to_degrees() * 86400.0;
         assert!(
             (raan_deg_per_day - (-5.1)).abs() < 0.5,
             "ISS RAAN rate should be ~-5.1 deg/day, got {raan_deg_per_day}"
@@ -171,7 +171,7 @@ mod tests {
             mean_anomaly_rad: 0.0,
         };
         let j2p = compute_j2_params(&mean).unwrap();
-        let raan_deg_per_day = j2p.raan_dot.to_degrees() * 86400.0;
+        let raan_deg_per_day = j2p.raan_dot_rad_s.to_degrees() * 86400.0;
 
         assert!(
             (raan_deg_per_day - 0.9856).abs() < 0.05,
@@ -184,9 +184,107 @@ mod tests {
         let mean = iss_like_elements();
         let j2p = compute_j2_params(&mean).unwrap();
 
-        assert!(j2p.raan_dot < 0.0, "RAAN should regress for prograde orbit");
-        assert!(j2p.aop_dot > 0.0, "AoP should advance for ISS inclination");
-        assert!(j2p.m_dot > 0.0, "Mean motion rate must be positive");
+        assert!(j2p.raan_dot_rad_s < 0.0, "RAAN should regress for prograde orbit");
+        assert!(j2p.aop_dot_rad_s > 0.0, "AoP should advance for ISS inclination");
+        assert!(j2p.m_dot_rad_s > 0.0, "Mean motion rate must be positive");
+    }
+
+    #[test]
+    fn invalid_sma_returns_error() {
+        let mean = KeplerianElements {
+            a_km: -100.0,
+            e: 0.001,
+            i_rad: 0.9,
+            raan_rad: 0.0,
+            aop_rad: 0.0,
+            mean_anomaly_rad: 0.0,
+        };
+        let result = compute_j2_params(&mean);
+        assert!(
+            matches!(result, Err(PropagationError::InvalidSemiMajorAxis { .. })),
+            "a_km <= 0 should return InvalidSemiMajorAxis, got {result:?}"
+        );
+    }
+
+    #[test]
+    fn zero_sma_returns_error() {
+        let mean = KeplerianElements {
+            a_km: 0.0,
+            e: 0.001,
+            i_rad: 0.9,
+            raan_rad: 0.0,
+            aop_rad: 0.0,
+            mean_anomaly_rad: 0.0,
+        };
+        let result = compute_j2_params(&mean);
+        assert!(
+            matches!(result, Err(PropagationError::InvalidSemiMajorAxis { .. })),
+            "a_km = 0 should return InvalidSemiMajorAxis, got {result:?}"
+        );
+    }
+
+    /// Edge case: circular orbit (e=0) should produce valid J2 params.
+    /// η=1, G=1/2, ex=ey=0 exactly.
+    #[test]
+    fn circular_orbit_e_zero() {
+        let mean = KeplerianElements {
+            a_km: 7000.0,
+            e: 0.0,
+            i_rad: 51.6_f64.to_radians(),
+            raan_rad: 0.0,
+            aop_rad: 0.0,
+            mean_anomaly_rad: 0.0,
+        };
+        let j2p = compute_j2_params(&mean).unwrap();
+
+        // η = sqrt(1 - 0) = 1.0 exactly
+        assert!(
+            (j2p.eta - 1.0).abs() < 1e-15,
+            "eta should be 1.0 for circular orbit, got {}", j2p.eta
+        );
+        // G = 1/(1·2) = 0.5
+        assert!(
+            (j2p.big_g - 0.5).abs() < 1e-15,
+            "G should be 0.5 for circular orbit, got {}", j2p.big_g
+        );
+        // ex = ey = 0
+        assert!(j2p.ex.abs() < 1e-15, "ex should be 0 for e=0");
+        assert!(j2p.ey.abs() < 1e-15, "ey should be 0 for e=0");
+    }
+
+    /// Edge case: near-polar orbit (i≈90°).
+    /// cos(i)≈0, P≈-1, Q≈-1, R≈0, S≈0, T≈1.
+    #[test]
+    fn near_polar_orbit() {
+        let mean = KeplerianElements {
+            a_km: 7000.0,
+            e: 0.001,
+            i_rad: 90.0_f64.to_radians(),
+            raan_rad: 0.0,
+            aop_rad: 0.0,
+            mean_anomaly_rad: 0.0,
+        };
+        let j2p = compute_j2_params(&mean).unwrap();
+
+        // At i=90°: P = 3·0 - 1 = -1, Q = 5·0 - 1 = -1
+        assert!(
+            (j2p.big_p - (-1.0)).abs() < 1e-12,
+            "P should be -1.0 at i=90°, got {}", j2p.big_p
+        );
+        assert!(
+            (j2p.big_q - (-1.0)).abs() < 1e-12,
+            "Q should be -1.0 at i=90°, got {}", j2p.big_q
+        );
+        // RAAN rate should be ~0 (R=cos(90°)≈0)
+        assert!(
+            j2p.raan_dot_rad_s.abs() < 1e-14,
+            "RAAN rate should be ~0 at i=90°, got {}", j2p.raan_dot_rad_s
+        );
+        // AoP rate should be negative (Q = -1, κQ < 0)
+        assert!(
+            j2p.aop_dot_rad_s < 0.0,
+            "AoP rate should be negative at i=90° (Q=-1), got {}", j2p.aop_dot_rad_s
+        );
     }
 
     #[test]
@@ -325,14 +423,14 @@ mod tests {
         // Secular rates (Koenig Eq. 13)
         let expected_raan_dot = -2.0 * expected_kappa * j2p.cos_i;
         assert!(
-            (j2p.raan_dot - expected_raan_dot).abs() < 1e-15,
-            "raan_dot: got {}, expected {expected_raan_dot}", j2p.raan_dot
+            (j2p.raan_dot_rad_s - expected_raan_dot).abs() < 1e-15,
+            "raan_dot_rad_s: got {}, expected {expected_raan_dot}", j2p.raan_dot_rad_s
         );
 
         let expected_aop_dot = expected_kappa * 2.75;
         assert!(
-            (j2p.aop_dot - expected_aop_dot).abs() < 1e-15,
-            "aop_dot: got {}, expected {expected_aop_dot}", j2p.aop_dot
+            (j2p.aop_dot_rad_s - expected_aop_dot).abs() < 1e-15,
+            "aop_dot_rad_s: got {}, expected {expected_aop_dot}", j2p.aop_dot_rad_s
         );
     }
 

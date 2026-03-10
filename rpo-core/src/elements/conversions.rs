@@ -1,4 +1,8 @@
 //! Conversions between ECI state vectors and Keplerian orbital elements.
+//!
+//! Implements the standard Keplerian↔ECI transformations from Vallado,
+//! "Fundamentals of Astrodynamics and Applications", 4th ed., Algorithms 9 and 10.
+//! Edge-case handling for circular and equatorial orbits follows Vallado Sec. 2.6.
 
 use hifitime::Epoch;
 use nalgebra::{Matrix3, Vector3};

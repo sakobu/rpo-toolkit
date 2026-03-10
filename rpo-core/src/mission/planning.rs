@@ -480,6 +480,28 @@ mod tests {
     }
 
     #[test]
+    fn vbar_zero_offset_returns_error() {
+        let chief = iss_like_elements();
+        let perch = PerchGeometry::VBar { along_track_km: 0.0 };
+        let result = perch_to_roe(&perch, &chief);
+        assert!(
+            matches!(result, Err(MissionError::InvalidVBarOffset { .. })),
+            "Zero V-bar offset should return InvalidVBarOffset, got {result:?}"
+        );
+    }
+
+    #[test]
+    fn rbar_zero_offset_returns_error() {
+        let chief = iss_like_elements();
+        let perch = PerchGeometry::RBar { radial_km: 0.0 };
+        let result = perch_to_roe(&perch, &chief);
+        assert!(
+            matches!(result, Err(MissionError::InvalidRBarOffset { .. })),
+            "Zero R-bar offset should return InvalidRBarOffset, got {result:?}"
+        );
+    }
+
+    #[test]
     fn perch_roe_to_keplerian_roundtrip() {
         let chief = iss_like_elements();
         let original_roe = QuasiNonsingularROE {

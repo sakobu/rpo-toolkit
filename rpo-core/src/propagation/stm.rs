@@ -52,7 +52,7 @@ pub fn compute_stm(chief_mean: &KeplerianElements, tau: f64) -> Result<Matrix6, 
 #[must_use]
 #[allow(clippy::similar_names)]
 pub fn compute_stm_with_params(j2p: &J2Params, chief_mean: &KeplerianElements, tau: f64) -> Matrix6 {
-    let n = j2p.n;
+    let n = j2p.n_rad_s;
     let kappa = j2p.kappa;
     let e = chief_mean.e;
     let big_e = j2p.big_e;
@@ -64,7 +64,7 @@ pub fn compute_stm_with_params(j2p: &J2Params, chief_mean: &KeplerianElements, t
     let big_t = j2p.big_t; // T = sin²(i)
 
     // Eq. A1: secular angle rates and propagated angles
-    let omega_dot = j2p.aop_dot; // ω̇ = κQ
+    let omega_dot = j2p.aop_dot_rad_s; // ω̇ = κQ
     let omega_i = chief_mean.aop_rad;
     let omega_f = omega_i + omega_dot * tau;
     let d_omega = omega_dot * tau; // ω̇τ
@@ -169,9 +169,9 @@ pub fn propagate_chief_mean(
         a_km: chief.a_km,
         e: chief.e,
         i_rad: chief.i_rad,
-        raan_rad: (chief.raan_rad + j2p.raan_dot * tau).rem_euclid(TWO_PI),
-        aop_rad: (chief.aop_rad + j2p.aop_dot * tau).rem_euclid(TWO_PI),
-        mean_anomaly_rad: (chief.mean_anomaly_rad + j2p.m_dot * tau).rem_euclid(TWO_PI),
+        raan_rad: (chief.raan_rad + j2p.raan_dot_rad_s * tau).rem_euclid(TWO_PI),
+        aop_rad: (chief.aop_rad + j2p.aop_dot_rad_s * tau).rem_euclid(TWO_PI),
+        mean_anomaly_rad: (chief.mean_anomaly_rad + j2p.m_dot_rad_s * tau).rem_euclid(TWO_PI),
     }
 }
 
@@ -340,7 +340,7 @@ mod tests {
         }
 
         // phi[1,0] = -(1.5·n + 3.5·κ·E·P)·τ
-        let expected_10 = -(1.5 * j2p.n + 3.5 * j2p.kappa * j2p.big_e * j2p.big_p) * period;
+        let expected_10 = -(1.5 * j2p.n_rad_s + 3.5 * j2p.kappa * j2p.big_e * j2p.big_p) * period;
         assert!(
             (stm[(1, 0)] - expected_10).abs() < 1e-6,
             "phi[1,0]: got {}, expected {expected_10}", stm[(1, 0)]
@@ -354,7 +354,7 @@ mod tests {
         );
 
         // phi[2,2] ≈ cos(ω̇·τ) at leading order (ey_i ≈ 0 so secular term vanishes)
-        let d_omega = j2p.aop_dot * period;
+        let d_omega = j2p.aop_dot_rad_s * period;
         assert!(
             (stm[(2, 2)] - d_omega.cos()).abs() < 1e-4,
             "phi[2,2]: got {}, expected ~cos(dω)={}", stm[(2, 2)], d_omega.cos()
@@ -370,7 +370,7 @@ mod tests {
 
         // phi[2,3] = -sin(ω̇τ) - 4κ·ey_i·ey_f·G·Q·τ
         // Since ey_i ≈ 0 (aop=180°), the secular term vanishes: phi[2,3] ≈ -sin(dω)
-        let omega_dot = j2p.aop_dot;
+        let omega_dot = j2p.aop_dot_rad_s;
         let omega_f = chief.aop_rad + omega_dot * period;
         let ey_f = chief.e * omega_f.sin();
         let ex_f = chief.e * omega_f.cos();

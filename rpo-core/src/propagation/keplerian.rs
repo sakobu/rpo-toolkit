@@ -1,4 +1,8 @@
 //! Two-body Keplerian propagation for ECI trajectory generation.
+//!
+//! Uses the exact two-body solution: advance mean anomaly by `n·Δt` (Kepler's equation),
+//! then convert back to ECI via the perifocal rotation. See Vallado Sec. 2.2–2.3 for the
+//! underlying Kepler equation and vis-viva derivation.
 
 use hifitime::Duration;
 
@@ -124,6 +128,32 @@ mod tests {
             assert!(
                 err < 1e-10,
                 "Energy conservation violated at step {k}: error = {err} km²/s²"
+            );
+        }
+    }
+
+    /// Angular momentum conservation: h = r × v should be constant under two-body dynamics.
+    /// This complements the energy conservation test — together they fully constrain
+    /// the two-body solution (energy + angular momentum = unique Keplerian orbit).
+    #[test]
+    fn propagate_keplerian_angular_momentum_conservation() {
+        let epoch = test_epoch();
+        let ke = eccentric_elements();
+        let initial = keplerian_to_state(&ke, epoch).unwrap();
+        let period = ke.period();
+
+        let trajectory = propagate_keplerian(&initial, period, 200).unwrap();
+
+        let h_0 = initial.position_eci_km.cross(&initial.velocity_eci_km_s);
+
+        for (k, state) in trajectory.iter().enumerate() {
+            let h_k = state.position_eci_km.cross(&state.velocity_eci_km_s);
+            // 1e-10 km²/s: limited by Kepler equation convergence tolerance (1e-14 rad)
+            // propagated through the vis-viva equation and PQW→ECI rotation
+            let err = (h_k - h_0).norm();
+            assert!(
+                err < 1e-10,
+                "Angular momentum conservation violated at step {k}: error = {err} km²/s"
             );
         }
     }

@@ -242,7 +242,43 @@ mod tests {
         let roe = QuasiNonsingularROE::default();
 
         let result = prop.propagate_with_steps(&roe, &chief, epoch, 3600.0, 0);
-        assert!(result.is_err());
+        assert!(
+            matches!(result, Err(PropagationError::ZeroSteps)),
+            "n_steps=0 should return ZeroSteps, got {result:?}"
+        );
+    }
+
+    /// StepCountOverflow: requesting more than u32::MAX steps.
+    #[test]
+    fn propagator_step_count_overflow() {
+        let prop = PropagationModel::J2Stm;
+        let chief = iss_like_elements();
+        let epoch = test_epoch();
+        let roe = QuasiNonsingularROE::default();
+
+        // usize::MAX > u32::MAX on 64-bit platforms
+        let huge_steps = u32::MAX as usize + 1;
+        let result = prop.propagate_with_steps(&roe, &chief, epoch, 3600.0, huge_steps);
+        assert!(
+            matches!(result, Err(PropagationError::StepCountOverflow { .. })),
+            "Huge step count should return StepCountOverflow, got {result:?}"
+        );
+    }
+
+    /// Invalid eccentricity in chief elements should return PropagationError.
+    #[test]
+    fn propagator_invalid_eccentricity() {
+        let prop = PropagationModel::J2Stm;
+        let mut chief = iss_like_elements();
+        chief.e = 1.0; // parabolic
+        let epoch = test_epoch();
+        let roe = QuasiNonsingularROE::default();
+
+        let result = prop.propagate(&roe, &chief, epoch, 3600.0);
+        assert!(
+            matches!(result, Err(PropagationError::InvalidEccentricity { .. })),
+            "e=1.0 should return InvalidEccentricity, got {result:?}"
+        );
     }
 
     #[test]

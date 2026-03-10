@@ -48,7 +48,11 @@ pub fn compute_roe(
     })
 }
 
-/// Wrap angle to [-π, π]
+/// Wrap angle to [-π, π].
+///
+/// # Invariants
+/// - `angle` must be finite (NaN/Inf inputs produce undefined results)
+/// - Output is in the half-open interval `(-π, π]`
 #[must_use]
 pub fn wrap_angle(angle: f64) -> f64 {
     let a = angle.rem_euclid(TWO_PI);
@@ -156,6 +160,32 @@ mod tests {
         assert!(
             (computed_roe.diy - expected_roe.diy).abs() < 1e-10,
             "δiy: computed={}, expected={}", computed_roe.diy, expected_roe.diy
+        );
+    }
+
+    /// Near-equatorial orbits: diy degrades as sin(i) → 0.
+    /// Verify that δiy is still computed (no panic/NaN) but may lose precision.
+    #[test]
+    fn near_equatorial_diy_degrades() {
+        let chief = KeplerianElements {
+            a_km: 7000.0,
+            e: 0.001,
+            i_rad: 0.001_f64.to_radians(), // 0.001° ≈ near-equatorial
+            raan_rad: 0.0,
+            aop_rad: 0.0,
+            mean_anomaly_rad: 0.0,
+        };
+        let mut deputy = chief;
+        deputy.raan_rad = 0.01; // small RAAN offset
+
+        let roe = compute_roe(&chief, &deputy).unwrap();
+
+        // δiy = ΔΩ·sin(i_c) — for very small i, this is ≈ 0 even with substantial ΔΩ
+        // The result should be finite (no NaN/Inf) but very small
+        assert!(roe.diy.is_finite(), "diy should be finite for near-equatorial");
+        assert!(
+            roe.diy.abs() < 1e-4,
+            "diy should be small for near-equatorial orbit (sin(i)≈0), got {}", roe.diy
         );
     }
 

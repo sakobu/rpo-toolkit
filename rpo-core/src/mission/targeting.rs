@@ -715,6 +715,33 @@ mod tests {
         }
     }
 
+    /// TargetingConvergence: max_iterations=1 with a large target should not converge.
+    #[test]
+    fn targeting_convergence_failure() {
+        let chief = iss_like_elements();
+        let epoch = test_epoch();
+        let period = std::f64::consts::TAU / chief.mean_motion();
+        let propagator = PropagationModel::J2Stm;
+        let config = TargetingConfig {
+            max_iterations: 1,
+            position_tol_km: 1e-12, // extremely tight tolerance
+            ..TargetingConfig::default()
+        };
+        let departure = DepartureState { roe: zero_roe(), chief, epoch };
+
+        // Large target far from CW initial guess
+        let target_pos = Vector3::new(50.0, 100.0, 20.0);
+        let target_vel = Vector3::zeros();
+
+        let result = solve_leg(
+            &departure, &target_pos, &target_vel, period * 0.75, &config, &propagator,
+        );
+        assert!(
+            matches!(result, Err(MissionError::TargetingConvergence { .. })),
+            "Should fail to converge with max_iterations=1 and tight tolerance, got {result:?}"
+        );
+    }
+
     /// J2 propagator converges in exactly 1 Newton correction (linear system).
     ///
     /// `max_iterations: 2` because iteration 0 computes the correction and

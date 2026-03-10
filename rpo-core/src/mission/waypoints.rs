@@ -792,6 +792,31 @@ mod tests {
         );
     }
 
+    /// Second bounds check: modified_index exceeds existing legs count.
+    #[test]
+    fn replan_index_exceeds_existing_legs() {
+        let departure = zero_departure();
+        let propagator = PropagationModel::J2Stm;
+        let config = default_config();
+        let period = std::f64::consts::TAU / departure.chief.mean_motion();
+        let waypoints = three_wp_waypoints(period * 0.75);
+
+        // Plan a 1-waypoint mission (1 leg)
+        let short_mission =
+            plan_waypoint_mission(&departure, &[waypoints[0].clone()], &config, &propagator)
+                .expect("should succeed");
+
+        // Try to replan from index 2, but only 1 leg exists
+        let result = replan_from_waypoint(
+            &short_mission, 2, &waypoints, &departure, &config, &propagator,
+        );
+
+        assert!(
+            matches!(result, Err(MissionError::InvalidReplanIndex { index: 2, num_waypoints: 1 })),
+            "Should return InvalidReplanIndex when index exceeds existing legs, got {result:?}"
+        );
+    }
+
     /// Invalid replan index returns error.
     #[test]
     fn replan_invalid_index() {

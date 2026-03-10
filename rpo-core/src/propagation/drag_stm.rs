@@ -75,7 +75,7 @@ pub fn compute_j2_drag_stm_with_params(
 ) -> Matrix9 {
     let kappa = j2p.kappa;
     let e = chief_mean.e;
-    let n = j2p.n;
+    let n = j2p.n_rad_s;
     let big_e = j2p.big_e;
     let big_f = j2p.big_f;
     let big_g = j2p.big_g;
@@ -83,7 +83,7 @@ pub fn compute_j2_drag_stm_with_params(
     let big_q = j2p.big_q;
     let big_s = j2p.big_s;
 
-    let omega_f = chief_mean.aop_rad + j2p.aop_dot * tau;
+    let omega_f = chief_mean.aop_rad + j2p.aop_dot_rad_s * tau;
     let ex_f = e * omega_f.cos();
     let ey_f = e * omega_f.sin();
 
@@ -397,7 +397,7 @@ mod tests {
 
         // phi[1,6] = -(0.75·n + 1.75·κ·E·P)·τ²
         let tau2 = period * period;
-        let expected_16 = -(0.75 * j2p.n + 1.75 * j2p.kappa * j2p.big_e * j2p.big_p) * tau2;
+        let expected_16 = -(0.75 * j2p.n_rad_s + 1.75 * j2p.kappa * j2p.big_e * j2p.big_p) * tau2;
         assert!(
             (stm[(1, 6)] - expected_16).abs() < 1e-2,
             "phi[1,6]: got {}, expected {expected_16}", stm[(1, 6)]
@@ -448,11 +448,172 @@ mod tests {
         // Verify coefficient: δλ ≈ coeff · δȧ · τ²
         // coeff = -(0.75·n + 1.75·κ·E·P)
         let j2p = compute_j2_params(&chief).unwrap();
-        let expected_coeff = -(0.75 * j2p.n + 1.75 * j2p.kappa * j2p.big_e * j2p.big_p);
+        let expected_coeff = -(0.75 * j2p.n_rad_s + 1.75 * j2p.kappa * j2p.big_e * j2p.big_p);
         let actual_coeff = roe_1t.dlambda / (da_dot * period * period);
         assert!(
             (actual_coeff - expected_coeff).abs() / expected_coeff.abs() < 1e-6,
             "Quadratic coefficient: got {actual_coeff}, expected {expected_coeff}"
+        );
+    }
+
+    // --- Koenig Table 3 regression tests (J2+drag STM physical validation) ---
+
+    /// Koenig Table 3 structural validation: δȧ-driven drift over 1, 5, 10 orbital periods.
+    ///
+    /// Uses the Koenig Table 2 Case 1 chief orbit (a=6812 km, e=0.005, i=30°) with a
+    /// differential drag rate δȧ = -1e-10 /s applied to an otherwise zero ROE.
+    ///
+    /// Physical properties verified (Koenig Sec. VIII):
+    /// 1. δa drift is linear in time: δa(τ) ≈ δȧ·τ within 1%
+    /// 2. δλ drift is quadratic: δλ(10T)/δλ(5T) ≈ 4.0 within 10%
+    /// 3. δix is unaffected by differential drag: remains ≡ 0 for zero initial ROE
+    #[test]
+    fn koenig_table3_drag_drift_physical_properties() {
+        use crate::propagation::j2_params::compute_j2_params;
+        use crate::test_helpers::koenig_table2_case1;
+
+        let chief = koenig_table2_case1();
+        let da_dot = -1e-10_f64; // differential drag rate on SMA (1/s)
+        let drag = DragConfig {
+            da_dot,
+            dex_dot: 0.0,
+            dey_dot: 0.0,
+        };
+        let roe0 = QuasiNonsingularROE::default();
+        let period = chief.period();
+
+        // Propagate to 1, 5, and 10 orbital periods
+        let tau_1t = period;
+        let tau_5t = 5.0 * period;
+        let tau_10t = 10.0 * period;
+
+        let (roe_1t, _) = propagate_roe_j2_drag(&roe0, &chief, &drag, tau_1t).unwrap();
+        let (roe_5t, _) = propagate_roe_j2_drag(&roe0, &chief, &drag, tau_5t).unwrap();
+        let (roe_10t, _) = propagate_roe_j2_drag(&roe0, &chief, &drag, tau_10t).unwrap();
+
+        // 1. δa drift is linear: δa(τ) ≈ δȧ·τ  (phi[0,6] = τ)
+        //    Tolerance: 1% relative error at each epoch
+        let expected_da_1t = da_dot * tau_1t;
+        let expected_da_5t = da_dot * tau_5t;
+        let expected_da_10t = da_dot * tau_10t;
+
+        let rel_err_da_1t = ((roe_1t.da - expected_da_1t) / expected_da_1t).abs();
+        let rel_err_da_5t = ((roe_5t.da - expected_da_5t) / expected_da_5t).abs();
+        let rel_err_da_10t = ((roe_10t.da - expected_da_10t) / expected_da_10t).abs();
+
+        assert!(
+            rel_err_da_1t < 0.01,
+            "δa linear drift at 1T: got {}, expected {expected_da_1t}, rel_err={rel_err_da_1t}",
+            roe_1t.da
+        );
+        assert!(
+            rel_err_da_5t < 0.01,
+            "δa linear drift at 5T: got {}, expected {expected_da_5t}, rel_err={rel_err_da_5t}",
+            roe_5t.da
+        );
+        assert!(
+            rel_err_da_10t < 0.01,
+            "δa linear drift at 10T: got {}, expected {expected_da_10t}, rel_err={rel_err_da_10t}",
+            roe_10t.da
+        );
+
+        // 2. δλ drift is quadratic in time.
+        //    For pure δȧ input: δλ(τ) = -(0.75·n + 1.75·κ·E·P)·δȧ·τ²
+        //    Quadratic scaling implies δλ(10T)/δλ(5T) = (10T)²/(5T)² = 4.0
+        //    Tolerance: 10% (allows for any small non-quadratic J2-driven cross-coupling)
+        let ratio_dlambda = roe_10t.dlambda / roe_5t.dlambda;
+        assert!(
+            (ratio_dlambda - 4.0).abs() < 0.4,
+            "δλ quadratic scaling: δλ(10T)/δλ(5T) = {ratio_dlambda}, expected ~4.0 (within 10%)"
+        );
+
+        // Also verify sign: negative δȧ with negative coupling coefficient → positive δλ.
+        // phi[1,6] = -(0.75·n + 1.75·κ·E·P)·τ²  which is negative for i=30° (P=1.25 > 0).
+        // δλ = phi[1,6] · δȧ = (negative) · (negative) = positive.
+        // Physical meaning: SMA decay (lower orbit) causes along-track advancement.
+        let j2p = compute_j2_params(&chief).unwrap();
+        let dlambda_coeff = -(0.75 * j2p.n_rad_s + 1.75 * j2p.kappa * j2p.big_e * j2p.big_p);
+        assert!(
+            dlambda_coeff < 0.0,
+            "δλ coupling coefficient must be negative for positive n and P (i=30° < 63.4°)"
+        );
+        assert!(
+            roe_10t.dlambda > 0.0,
+            "δλ should be positive for negative δȧ and negative coupling coefficient; got {}",
+            roe_10t.dlambda
+        );
+
+        // 3. δix is unaffected by differential drag (Koenig Eq. D2, row 4 has no drag columns)
+        //    The drag coupling block has phi[4, 6..9] = 0 by construction.
+        //    Starting from zero ROE, δix must remain zero to machine precision.
+        assert!(
+            roe_1t.dix.abs() < 1e-30,
+            "δix must remain 0 at 1T under pure drag input; got {}", roe_1t.dix
+        );
+        assert!(
+            roe_10t.dix.abs() < 1e-30,
+            "δix must remain 0 at 10T under pure drag input; got {}", roe_10t.dix
+        );
+    }
+
+    /// Koenig Table 3 coefficient verification: phi[0,6] and phi[1,6] entries.
+    ///
+    /// Uses the Koenig Table 2 Case 1 chief orbit (a=6812 km, e=0.005, i=30°).
+    ///
+    /// Validates the analytical drag coupling coefficients from Koenig Appendix D
+    /// against the directly assembled STM entries:
+    /// - phi[0,6] = τ  (linear δȧ → δa coupling)
+    /// - phi[1,6] = -(3/4·n + 7/4·κ·E·P)·τ²  (quadratic δȧ → δλ coupling)
+    #[test]
+    fn koenig_table3_coefficient_verification() {
+        use crate::propagation::j2_params::compute_j2_params;
+        use crate::test_helpers::koenig_table2_case1;
+
+        let chief = koenig_table2_case1();
+        let j2p = compute_j2_params(&chief).unwrap();
+        let period = chief.period();
+
+        // Build the STM directly for tau = 1 orbital period
+        let drag = DragConfig::zero();
+        let stm = compute_j2_drag_stm(&chief, &drag, period).unwrap();
+
+        // phi[0,6] = τ  (Koenig Appendix D, Eq. D2, row 0)
+        // The δȧ coupling to δa is purely linear, with no J2 corrections.
+        let expected_phi_0_6 = period;
+        assert!(
+            (stm[(0, 6)] - expected_phi_0_6).abs() < 1e-9,
+            "phi[0,6] = tau: got {}, expected {expected_phi_0_6}",
+            stm[(0, 6)]
+        );
+
+        // phi[1,6] = -(3/4·n + 7/4·κ·E·P)·τ²  (Koenig Appendix D, Eq. D2, row 1)
+        // Note: the factor is written as -(0.75·n + 1.75·κ·E·P) in the implementation,
+        // which matches the Koenig expression 3/4·n + 7/4·κ·E·P exactly.
+        let tau2 = period * period;
+        let expected_phi_1_6 =
+            -(0.75 * j2p.n_rad_s + 1.75 * j2p.kappa * j2p.big_e * j2p.big_p) * tau2;
+        assert!(
+            (stm[(1, 6)] - expected_phi_1_6).abs() < 1e-4,
+            "phi[1,6] = -(3/4·n + 7/4·κ·E·P)·τ²: got {}, expected {expected_phi_1_6}",
+            stm[(1, 6)]
+        );
+
+        // Verify the sign of phi[1,6]: must be negative for i=30° (P=1.25 > 0) and
+        // positive n, kappa. This is the fundamental along-track drift direction.
+        assert!(
+            stm[(1, 6)] < 0.0,
+            "phi[1,6] must be negative for i=30° (prograde LEO); got {}",
+            stm[(1, 6)]
+        );
+
+        // Verify the ratio of phi[1,6] to phi[0,6] reveals the characteristic
+        // frequency scale: ratio = -(3/4·n + 7/4·κ·E·P)·τ
+        let ratio = stm[(1, 6)] / stm[(0, 6)];
+        let expected_ratio =
+            -(0.75 * j2p.n_rad_s + 1.75 * j2p.kappa * j2p.big_e * j2p.big_p) * period;
+        assert!(
+            (ratio - expected_ratio).abs() / expected_ratio.abs() < 1e-9,
+            "phi[1,6]/phi[0,6] ratio: got {ratio}, expected {expected_ratio}"
         );
     }
 }

@@ -181,6 +181,16 @@ mod tests {
     use crate::test_helpers::{damico_table21_case1_roe, damico_table21_chief, iss_like_elements};
     use crate::types::SafetyConfig;
 
+    /// Empty trajectory returns `SafetyError::EmptyTrajectory`.
+    #[test]
+    fn empty_trajectory_returns_error() {
+        let result = analyze_trajectory_safety(&[]);
+        assert!(
+            matches!(result, Err(SafetyError::EmptyTrajectory)),
+            "Empty trajectory should return EmptyTrajectory, got {result:?}"
+        );
+    }
+
     /// Zero ROE should be unsafe (zero separation).
     #[test]
     fn zero_roe_unsafe() {

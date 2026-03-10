@@ -55,8 +55,8 @@ pub struct LambertTransfer {
     pub total_dv_km_s: f64,
     /// Time of flight (seconds).
     pub tof_s: f64,
-    /// Characteristic energy C3 = v∞² (km²/s²).
-    pub c3_km2_s2: Option<f64>,
+    /// Characteristic energy C3 = v∞² (km²/s²). Always populated by Izzo.
+    pub c3_km2_s2: f64,
     /// Transfer direction used.
     pub direction: TransferDirection,
 }
@@ -92,11 +92,19 @@ pub enum LambertError {
         separation_km: f64,
     },
     /// Invalid input from nyx-space (opaque upstream error).
+    ///
+    /// The nyx-space Lambert API does not expose structured error data (iteration count,
+    /// residual, etc.), so this variant carries the formatted upstream message string.
+    /// If nyx ever surfaces structured errors, migrate to dedicated fields here.
     InvalidInput {
         /// Formatted upstream error message.
         details: String,
     },
     /// Izzo solver failed to converge (opaque upstream error).
+    ///
+    /// The nyx-space Izzo implementation does not expose iteration count or residual
+    /// values in its error type, so structured fields cannot be populated. The
+    /// formatted message is the best available diagnostic from the upstream crate.
     IzzoConvergenceFailure {
         /// Formatted upstream error message.
         details: String,
@@ -151,7 +159,7 @@ pub(crate) fn build_transfer(
     v1_vec: Vector3<f64>,
     v2_vec: Vector3<f64>,
     tof: f64,
-    c3: Option<f64>,
+    c3: f64,
     direction: TransferDirection,
 ) -> LambertTransfer {
     let departure_dv = v1_vec - departure.velocity_eci_km_s;
@@ -218,7 +226,7 @@ fn transfer_from_solution(
         v1_vec,
         v2_vec,
         tof,
-        Some(solution.c3_km2_s2()),
+        solution.c3_km2_s2(),
         direction,
     )
 }
@@ -509,10 +517,92 @@ mod tests {
 
         let config = LambertConfig::default();
         let izzo = solve_lambert_izzo(&dep, &arr, &config).expect("Izzo failed");
-        assert!(izzo.c3_km2_s2.is_some(), "Izzo should populate C3");
         assert!(
-            izzo.c3_km2_s2.unwrap() >= 0.0,
-            "C3 should be non-negative"
+            izzo.c3_km2_s2 >= 0.0,
+            "C3 should be non-negative, got {}",
+            izzo.c3_km2_s2
         );
+    }
+
+    /// Verify `NonPositiveTimeOfFlight` is returned when arrival precedes departure.
+    #[test]
+    fn error_non_positive_tof() {
+        let epoch = test_epoch();
+        let dep = keplerian_to_state(&leo_400km_elements(), epoch).unwrap();
+        // Arrival epoch is in the past relative to departure
+        let arr = keplerian_to_state(
+            &leo_800km_target_elements(),
+            epoch - Duration::from_seconds(60.0),
+        ).unwrap();
+
+        let result = solve_lambert(&dep, &arr);
+        match result {
+            Err(LambertError::NonPositiveTimeOfFlight { tof_s }) => {
+                assert!(tof_s < 0.0, "Expected negative TOF, got {tof_s}");
+            }
+            other => panic!("Expected NonPositiveTimeOfFlight, got {other:?}"),
+        }
+    }
+
+    /// Verify `IdenticalPositions` is returned when departure and arrival share the same position.
+    #[test]
+    fn error_identical_positions() {
+        let epoch = test_epoch();
+        let dep = keplerian_to_state(&leo_400km_elements(), epoch).unwrap();
+        // Arrival state has the same ECI position as departure but a later epoch
+        let mut arr = dep.clone();
+        arr.epoch = epoch + Duration::from_seconds(60.0);
+
+        let result = solve_lambert(&dep, &arr);
+        match result {
+            Err(LambertError::IdenticalPositions { separation_km }) => {
+                assert!(
+                    separation_km < LAMBERT_MIN_SEPARATION_KM,
+                    "Expected near-zero separation, got {separation_km} km"
+                );
+            }
+            other => panic!("Expected IdenticalPositions, got {other:?}"),
+        }
+    }
+
+    /// Near-180° transfer (degenerate geometry): transfer angle close to π.
+    ///
+    /// Constructs a departure and arrival where the transfer angle is ~179°.
+    /// The Izzo solver may either succeed or return an error for near-degenerate cases.
+    /// This test verifies that the solver does not panic.
+    #[test]
+    fn near_180_degree_transfer() {
+        let epoch = test_epoch();
+        let dep_ke = leo_400km_elements();
+        let dep = keplerian_to_state(&dep_ke, epoch).unwrap();
+
+        // Arrival orbit offset by ~179° in mean anomaly on a slightly different altitude,
+        // producing a near-180° transfer angle
+        let arr_ke = KeplerianElements {
+            a_km: 6378.137 + 450.0,
+            e: 0.001,
+            i_rad: 51.6_f64.to_radians(),
+            raan_rad: 0.0,
+            aop_rad: 0.0,
+            mean_anomaly_rad: 179.0_f64.to_radians(),
+        };
+        let arr = keplerian_to_state(&arr_ke, epoch + Duration::from_seconds(2700.0)).unwrap();
+
+        let config = LambertConfig::default();
+        // Accept either a valid solution or a solver error — must not panic.
+        match solve_lambert_izzo(&dep, &arr, &config) {
+            Ok(transfer) => {
+                // Near-180° geometry may produce large but finite Δv
+                assert!(
+                    transfer.total_dv_km_s.is_finite() && transfer.total_dv_km_s >= 0.0,
+                    "Δv must be finite and non-negative for near-180° transfer, got {}",
+                    transfer.total_dv_km_s
+                );
+            }
+            Err(LambertError::InvalidInput { .. } | LambertError::IzzoConvergenceFailure { .. }) => {
+                // Degenerate geometry is an acceptable failure mode for near-180° transfers.
+            }
+            Err(e) => panic!("Unexpected error type for near-180° transfer: {e}"),
+        }
     }
 }

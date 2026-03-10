@@ -327,9 +327,7 @@ fn run_end_to_end_mission(input_path: &PathBuf, json_output: bool) -> Result<(),
         println!("    Departure Δv: {:.4} km/s", transfer.departure_dv_eci_km_s.norm());
         println!("    Arrival Δv:   {:.4} km/s", transfer.arrival_dv_eci_km_s.norm());
         println!("    TOF:          {:.1} s ({:.2} min)", transfer.tof_s, transfer.tof_s / 60.0);
-        if let Some(c3) = transfer.c3_km2_s2 {
-            println!("    C3:           {:.4} km²/s²", c3);
-        }
+        println!("    C3:           {:.4} km²/s²", transfer.c3_km2_s2);
         println!("    Direction:    {:?}", transfer.direction);
     }
 

@@ -181,6 +181,7 @@ pub fn koenig_table2_case3_roe() -> QuasiNonsingularROE {
 ///
 /// # Panics
 /// Panics if chief inclination is near zero (`sin(i) < 1e-10`), making diy inversion singular.
+/// This is a test-only function; panicking is acceptable for test fixtures.
 #[allow(clippy::similar_names)]
 pub fn deputy_from_roe(chief: &KeplerianElements, roe: &QuasiNonsingularROE) -> KeplerianElements {
     let a_d = chief.a_km * (1.0 + roe.da);
