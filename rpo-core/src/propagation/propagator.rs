@@ -28,21 +28,19 @@ pub struct PropagatedState {
 pub enum PropagationError {
     /// Number of steps must be greater than zero.
     ZeroSteps,
-    /// Iterative solver failed to converge.
-    ConvergenceFailure(String),
-    /// Invalid configuration parameters.
-    InvalidConfiguration(String),
+    /// Step count exceeds representable range.
+    StepCountOverflow {
+        /// The requested number of steps.
+        n_steps: usize,
+    },
 }
 
 impl std::fmt::Display for PropagationError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::ZeroSteps => write!(f, "PropagationError: n_steps must be > 0"),
-            Self::ConvergenceFailure(msg) => {
-                write!(f, "PropagationError: convergence failure — {msg}")
-            }
-            Self::InvalidConfiguration(msg) => {
-                write!(f, "PropagationError: invalid configuration — {msg}")
+            Self::StepCountOverflow { n_steps } => {
+                write!(f, "PropagationError: n_steps = {n_steps} exceeds u32::MAX")
             }
         }
     }
@@ -81,7 +79,7 @@ pub trait RelativePropagator: Send + Sync {
         }
 
         let n_steps_u32 = u32::try_from(n_steps).map_err(|_| {
-            PropagationError::InvalidConfiguration("n_steps exceeds u32::MAX".into())
+            PropagationError::StepCountOverflow { n_steps }
         })?;
         let step = dt_seconds / f64::from(n_steps_u32);
         let mut states = Vec::with_capacity(n_steps + 1);

@@ -72,20 +72,42 @@ impl LambertTransfer {
 /// Errors from the Lambert solver.
 #[derive(Debug, Clone)]
 pub enum LambertError {
-    /// The solver failed to converge.
-    ConvergenceFailure(String),
-    /// Invalid input (e.g., identical positions, non-positive TOF).
-    InvalidInput(String),
+    /// Time of flight must be positive.
+    NonPositiveTimeOfFlight {
+        /// The non-positive TOF value (seconds).
+        tof_s: f64,
+    },
+    /// Departure and arrival positions are too close.
+    IdenticalPositions {
+        /// The separation distance (km).
+        separation_km: f64,
+    },
+    /// Invalid input from nyx-space (opaque upstream error).
+    InvalidInput {
+        /// Formatted upstream error message.
+        details: String,
+    },
+    /// Izzo solver failed to converge (opaque upstream error).
+    IzzoConvergenceFailure {
+        /// Formatted upstream error message.
+        details: String,
+    },
 }
 
 impl std::fmt::Display for LambertError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::ConvergenceFailure(msg) => {
-                write!(f, "LambertError: convergence failure — {msg}")
+            Self::NonPositiveTimeOfFlight { tof_s } => {
+                write!(f, "LambertError: non-positive time of flight — tof = {tof_s:.6} s")
             }
-            Self::InvalidInput(msg) => {
-                write!(f, "LambertError: invalid input — {msg}")
+            Self::IdenticalPositions { separation_km } => {
+                write!(f, "LambertError: identical positions — separation = {separation_km:.6e} km")
+            }
+            Self::InvalidInput { details } => {
+                write!(f, "LambertError: invalid input — {details}")
+            }
+            Self::IzzoConvergenceFailure { details } => {
+                write!(f, "LambertError: Izzo convergence failure — {details}")
             }
         }
     }
@@ -102,16 +124,12 @@ fn validate_inputs(
 ) -> Result<f64, LambertError> {
     let tof = (arrival.epoch - departure.epoch).to_seconds();
     if tof <= 0.0 {
-        return Err(LambertError::InvalidInput(
-            "arrival epoch must be after departure epoch".into(),
-        ));
+        return Err(LambertError::NonPositiveTimeOfFlight { tof_s: tof });
     }
 
     let sep = (arrival.position_eci_km - departure.position_eci_km).norm();
     if sep < 1e-6 {
-        return Err(LambertError::InvalidInput(
-            "departure and arrival positions are identical".into(),
-        ));
+        return Err(LambertError::IdenticalPositions { separation_km: sep });
     }
 
     Ok(tof)
@@ -250,7 +268,7 @@ pub fn solve_lambert_izzo(
     let arr_orbit = state_to_orbit(arrival);
 
     let input = LambertInput::from_planetary_states(dep_orbit, arr_orbit)
-        .map_err(|e| LambertError::InvalidInput(format!("{e}")))?;
+        .map_err(|e| LambertError::InvalidInput { details: format!("{e}") })?;
 
     let kind = if config.revolutions > 0 {
         TransferKind::NRevs(config.revolutions)
@@ -259,7 +277,7 @@ pub fn solve_lambert_izzo(
     };
 
     let solution = lambert::izzo(input, kind)
-        .map_err(|e| LambertError::ConvergenceFailure(format!("{e}")))?;
+        .map_err(|e| LambertError::IzzoConvergenceFailure { details: format!("{e}") })?;
 
     Ok(transfer_from_solution(
         departure,

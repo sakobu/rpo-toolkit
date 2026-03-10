@@ -469,8 +469,16 @@ pub enum MissionError {
     Propagation(crate::propagation::propagator::PropagationError),
     /// Lambert solver failure during transfer phase.
     Lambert(crate::mission::lambert::LambertError),
-    /// Invalid perch geometry configuration.
-    InvalidPerch(String),
+    /// V-bar perch offset must be nonzero.
+    InvalidVBarOffset {
+        /// The invalid along-track offset (km).
+        along_track_km: f64,
+    },
+    /// R-bar perch offset must be nonzero.
+    InvalidRBarOffset {
+        /// The invalid radial offset (km).
+        radial_km: f64,
+    },
     /// Spacecraft are not in proximity for ROE-based operations.
     NotInProximity {
         /// Actual dimensionless separation δr/r
@@ -512,7 +520,14 @@ impl std::fmt::Display for MissionError {
         match self {
             Self::Propagation(e) => write!(f, "MissionError: {e}"),
             Self::Lambert(e) => write!(f, "MissionError: {e}"),
-            Self::InvalidPerch(msg) => write!(f, "MissionError: invalid perch — {msg}"),
+            Self::InvalidVBarOffset { along_track_km } => write!(
+                f,
+                "MissionError: invalid V-bar perch — along-track offset = {along_track_km:.6e} km (must be nonzero)"
+            ),
+            Self::InvalidRBarOffset { radial_km } => write!(
+                f,
+                "MissionError: invalid R-bar perch — radial offset = {radial_km:.6e} km (must be nonzero)"
+            ),
             Self::NotInProximity { delta_r_over_r, threshold } => write!(
                 f,
                 "MissionError: not in proximity — δr/r = {delta_r_over_r:.6} exceeds threshold {threshold:.6}"

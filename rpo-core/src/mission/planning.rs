@@ -84,9 +84,9 @@ pub fn perch_to_roe(
     match perch {
         PerchGeometry::VBar { along_track_km } => {
             if along_track_km.abs() < 1e-10 {
-                return Err(MissionError::InvalidPerch(
-                    "V-bar offset must be nonzero".into(),
-                ));
+                return Err(MissionError::InvalidVBarOffset {
+                    along_track_km: *along_track_km,
+                });
             }
             // Along-track offset maps primarily to δλ
             // From D'Amico Eq. 2.17: along-track ≈ a * δλ (at u where sin/cos terms vanish)
@@ -102,9 +102,9 @@ pub fn perch_to_roe(
         }
         PerchGeometry::RBar { radial_km } => {
             if radial_km.abs() < 1e-10 {
-                return Err(MissionError::InvalidPerch(
-                    "R-bar offset must be nonzero".into(),
-                ));
+                return Err(MissionError::InvalidRBarOffset {
+                    radial_km: *radial_km,
+                });
             }
             // Radial offset maps primarily to δa
             // From D'Amico Eq. 2.17: radial ≈ a * δa (at u where cos/sin terms vanish)
