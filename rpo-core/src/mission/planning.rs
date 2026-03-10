@@ -19,6 +19,11 @@ use crate::types::{
 /// Converts both states to Keplerian elements, computes the dimensionless
 /// separation metric, and classifies as `Proximity` or `FarField` based
 /// on the configured threshold.
+///
+/// # Invariants
+/// - Both states must represent bound orbits (`e < 1`, `a > 0`)
+/// - Position vectors must be non-zero
+/// - `config.roe_threshold > 0`
 #[must_use]
 pub fn classify_separation(
     chief: &StateVector,
@@ -50,6 +55,9 @@ pub fn classify_separation(
 }
 
 /// Compute ECI separation distance (km).
+///
+/// # Invariants
+/// - Both states should be at the same epoch for meaningful results
 #[must_use]
 pub fn eci_separation_km(chief: &StateVector, deputy: &StateVector) -> f64 {
     (deputy.position_eci_km - chief.position_eci_km).norm()
@@ -63,6 +71,10 @@ pub fn eci_separation_km(chief: &StateVector, deputy: &StateVector) -> f64 {
 ///
 /// Here δa = (`a_d` - `a_c`) / `a_c`, and δex, δey, δix are the ROE components
 /// (already dimensionless, normalized by chief SMA).
+///
+/// # Invariants
+/// - `chief.a_km > 0` (used as normalizing denominator in ROE computation)
+/// - Both elements must be at the same epoch
 #[must_use]
 pub fn dimensionless_separation(
     chief: &KeplerianElements,
@@ -74,9 +86,12 @@ pub fn dimensionless_separation(
 
 /// Convert a [`PerchGeometry`] to a [`QuasiNonsingularROE`] state relative to the chief.
 ///
+/// # Invariants
+/// - `chief.a_km > 0` (used as normalizing denominator)
+///
 /// # Errors
-/// Returns `MissionError::InvalidPerch` if the perch geometry is invalid
-/// (e.g., zero offset).
+/// Returns `MissionError::InvalidVBarOffset` or `MissionError::InvalidRBarOffset`
+/// if the perch geometry has a zero offset.
 pub fn perch_to_roe(
     perch: &PerchGeometry,
     chief: &KeplerianElements,
@@ -129,6 +144,11 @@ pub fn perch_to_roe(
 ///
 /// `lambert_tof_s` is the time of flight for the Lambert transfer (seconds).
 /// It is only used when the spacecraft are in the far-field regime.
+///
+/// # Invariants
+/// - Both states must represent bound orbits (`e < 1`, `a > 0`)
+/// - `lambert_tof_s > 0` (when used in far-field regime)
+/// - Position vectors must be non-zero
 ///
 /// # Errors
 /// Returns `MissionError` if the Lambert solver fails or the perch geometry is invalid.

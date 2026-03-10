@@ -123,6 +123,14 @@ struct ConvergedSolution {
 /// target velocity). The departure burn is optimized via Newton-Raphson on
 /// the position residual; the arrival burn corrects the remaining velocity error.
 ///
+/// # Invariants
+/// - `tof_s > 0` (non-positive TOF produces undefined propagation)
+/// - `departure.chief.a_km > 0` and `0 <= departure.chief.e < 1`
+/// - `departure.chief` must be **mean** Keplerian elements, not osculating
+/// - `config.max_iterations > 0`
+/// - CW STM is singular at integer orbital periods for radial/cross-track
+///   targets; use non-integer period TOFs to avoid singular Jacobian
+///
 /// # Errors
 /// Returns `MissionError::TargetingConvergence` if the solver fails to converge,
 /// or `MissionError::SingularJacobian` if the Jacobian cannot be inverted.
@@ -306,6 +314,12 @@ fn build_leg(
 /// Optimize the time of flight for a transfer leg using golden section search.
 ///
 /// Searches over `[min_periods, max_periods]` orbital periods with multi-start.
+///
+/// # Invariants
+/// - `departure.chief.a_km > 0` and `0 <= departure.chief.e < 1`
+/// - `departure.chief` must be **mean** Keplerian elements, not osculating
+/// - `tof_config.min_periods > 0` and `tof_config.max_periods > tof_config.min_periods`
+/// - `tof_config.num_starts > 0`
 ///
 /// # Errors
 /// Returns `MissionError::TofOptimizationFailure` if no valid TOF is found.

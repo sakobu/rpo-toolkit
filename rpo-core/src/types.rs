@@ -37,12 +37,18 @@ pub struct KeplerianElements {
 
 impl KeplerianElements {
     /// Mean motion n = sqrt(μ/a³) (rad/s).
+    ///
+    /// # Invariants
+    /// - `self.a_km > 0` (negative or zero SMA produces NaN)
     #[must_use]
     pub fn mean_motion(&self) -> f64 {
         (crate::constants::MU_EARTH / (self.a_km * self.a_km * self.a_km)).sqrt()
     }
 
     /// Orbital period T = 2π/n (seconds).
+    ///
+    /// # Invariants
+    /// - `self.a_km > 0` (delegates to `mean_motion()`)
     #[must_use]
     pub fn period(&self) -> f64 {
         std::f64::consts::TAU / self.mean_motion()
@@ -50,6 +56,11 @@ impl KeplerianElements {
 
     /// Solve Kepler's equation M = E - e*sin(E) for eccentric anomaly E,
     /// then compute true anomaly ν.
+    ///
+    /// # Invariants
+    /// - `0 <= self.e < 1` (parabolic/hyperbolic orbits produce incorrect results)
+    /// - Newton-Raphson iteration is capped at `KEPLER_MAX_ITER`; non-convergence
+    ///   for high-eccentricity orbits is silent (returns last iterate)
     #[must_use]
     pub fn true_anomaly(&self) -> f64 {
         debug_assert!(self.e >= 0.0 && self.e < 1.0, "eccentricity must be in [0, 1), got {}", self.e);
@@ -77,6 +88,9 @@ impl KeplerianElements {
     }
 
     /// Mean argument of latitude u = ω + M
+    ///
+    /// # Invariants
+    /// - Angles `aop_rad` and `mean_anomaly_rad` should be in radians
     #[must_use]
     pub fn mean_arg_of_lat(&self) -> f64 {
         (self.aop_rad + self.mean_anomaly_rad).rem_euclid(TWO_PI)

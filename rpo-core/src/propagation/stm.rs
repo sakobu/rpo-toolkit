@@ -21,6 +21,12 @@ type Matrix6 = SMatrix<f64, 6, 6>;
 /// # Arguments
 /// * `chief_mean` - Chief mean Keplerian elements at epoch
 /// * `tau` - Propagation time (seconds)
+///
+/// # Invariants
+/// - `chief_mean.a_km > 0`
+/// - `0 <= chief_mean.e < 1`
+/// - `chief_mean` must be **mean** Keplerian elements, not osculating
+/// - `tau` must be finite
 #[must_use]
 pub fn compute_stm(chief_mean: &KeplerianElements, tau: f64) -> Matrix6 {
     let j2p = compute_j2_params(chief_mean);
@@ -35,6 +41,11 @@ pub fn compute_stm(chief_mean: &KeplerianElements, tau: f64) -> Matrix6 {
 /// * `j2p` - Pre-computed J2 perturbation parameters
 /// * `chief_mean` - Chief mean Keplerian elements at epoch
 /// * `tau` - Propagation time (seconds)
+///
+/// # Invariants
+/// - `j2p` must correspond to `chief_mean` (caller responsibility)
+/// - `chief_mean` must be **mean** Keplerian elements, not osculating
+/// - `tau` must be finite
 #[must_use]
 #[allow(clippy::similar_names)]
 pub fn compute_stm_with_params(j2p: &J2Params, chief_mean: &KeplerianElements, tau: f64) -> Matrix6 {
@@ -113,6 +124,12 @@ pub fn compute_stm_with_params(j2p: &J2Params, chief_mean: &KeplerianElements, t
 /// * `roe` - Initial quasi-nonsingular ROE
 /// * `chief_mean` - Chief mean Keplerian elements at epoch
 /// * `tau` - Propagation time (seconds)
+///
+/// # Invariants
+/// - `chief_mean.a_km > 0`
+/// - `0 <= chief_mean.e < 1`
+/// - `chief_mean` must be **mean** Keplerian elements, not osculating
+/// - ROE must satisfy linearization validity (`dimensionless_norm() < ~0.01`)
 #[must_use]
 pub fn propagate_roe_stm(
     roe: &QuasiNonsingularROE,
@@ -132,6 +149,11 @@ pub fn propagate_roe_stm(
 /// Advance chief mean elements by secular J2 rates.
 ///
 /// Updates M, ω, Ω using the secular rates from J2 perturbations.
+///
+/// # Invariants
+/// - `j2p` must correspond to `chief` (caller responsibility)
+/// - `chief` must be **mean** Keplerian elements, not osculating
+/// - `tau` must be finite
 #[must_use]
 pub fn propagate_chief_mean(
     chief: &KeplerianElements,

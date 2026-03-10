@@ -67,6 +67,11 @@ pub enum PropagationModel {
 
 impl PropagationModel {
     /// Propagate ROE forward by `dt_seconds` from `epoch_0`.
+    ///
+    /// # Invariants
+    /// - `chief_mean_0.a_km > 0` and `0 <= chief_mean_0.e < 1`
+    /// - `chief_mean_0` must be **mean** Keplerian elements, not osculating
+    /// - `dt_seconds` must be finite
     #[must_use]
     pub fn propagate(
         &self,
@@ -89,6 +94,12 @@ impl PropagationModel {
     }
 
     /// Propagate with intermediate steps, returning a trajectory.
+    ///
+    /// # Invariants
+    /// - `chief_mean_0.a_km > 0` and `0 <= chief_mean_0.e < 1`
+    /// - `chief_mean_0` must be **mean** Keplerian elements, not osculating
+    /// - `n_steps > 0`
+    /// - `dt_seconds` must be finite
     ///
     /// # Errors
     /// Returns `PropagationError` if `n_steps` is zero.

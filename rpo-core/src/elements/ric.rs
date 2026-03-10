@@ -33,6 +33,10 @@ impl std::error::Error for RicError {}
 ///
 /// # Arguments
 /// * `chief` - Chief Keplerian elements
+///
+/// # Invariants
+/// - `chief.a_km > 0`
+/// - Near-circular assumption: accurate for `e < ~0.1`
 #[must_use]
 pub fn compute_t_matrix(chief: &KeplerianElements) -> SMatrix<f64, 6, 6> {
     let a = chief.a_km;
@@ -75,6 +79,9 @@ pub fn compute_t_matrix(chief: &KeplerianElements) -> SMatrix<f64, 6, 6> {
 }
 
 /// Compute the 3×6 position submatrix of the T matrix (top 3 rows).
+///
+/// # Invariants
+/// - `chief.a_km > 0`
 #[must_use]
 pub fn compute_t_position(chief: &KeplerianElements) -> SMatrix<f64, 3, 6> {
     let t = compute_t_matrix(chief);
@@ -82,6 +89,9 @@ pub fn compute_t_position(chief: &KeplerianElements) -> SMatrix<f64, 3, 6> {
 }
 
 /// Compute the 3×6 velocity submatrix of the T matrix (bottom 3 rows).
+///
+/// # Invariants
+/// - `chief.a_km > 0`
 #[must_use]
 pub fn compute_t_velocity(chief: &KeplerianElements) -> SMatrix<f64, 3, 6> {
     let t = compute_t_matrix(chief);
@@ -93,12 +103,16 @@ pub fn compute_t_velocity(chief: &KeplerianElements) -> SMatrix<f64, 3, 6> {
 /// Since `T_pos` is 3x6 (under-determined), this finds the minimum-norm ROE
 /// that produces the given RIC position: `δα = T_pos^† · r_RIC`.
 ///
-/// # Errors
-/// Returns `RicError::SingularPositionMatrix` if `T_pos · T_pos^T` is singular.
-///
 /// # Arguments
 /// * `ric_pos` - Target position in RIC frame (km)
 /// * `chief` - Chief Keplerian elements
+///
+/// # Invariants
+/// - `chief.a_km > 0`
+/// - Result is the minimum-norm ROE; other valid ROE solutions exist
+///
+/// # Errors
+/// Returns `RicError::SingularPositionMatrix` if `T_pos · T_pos^T` is singular.
 pub fn ric_position_to_roe(
     ric_pos: &Vector3<f64>,
     chief: &KeplerianElements,
@@ -119,6 +133,10 @@ pub fn ric_position_to_roe(
 /// # Arguments
 /// * `roe` - Quasi-nonsingular relative orbital elements
 /// * `chief` - Chief Keplerian elements (used for a and mean argument of latitude u)
+///
+/// # Invariants
+/// - `chief.a_km > 0`
+/// - ROE must satisfy linearization validity (`dimensionless_norm() < ~0.01`)
 #[must_use]
 pub fn roe_to_ric(roe: &QuasiNonsingularROE, chief: &KeplerianElements) -> RICState {
     debug_assert!(chief.a_km > 0.0, "chief semi-major axis must be positive");

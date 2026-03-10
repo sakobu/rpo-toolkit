@@ -58,6 +58,11 @@ pub struct J2Params {
 /// Compute J2 perturbation parameters from mean Keplerian elements.
 ///
 /// Implements Koenig Eqs. 13-16 for secular J2 rates and auxiliary quantities.
+///
+/// # Invariants
+/// - `mean.a_km > 0`
+/// - `0 <= mean.e < 1` (`e = 1` → `η = 0` → division by zero in `G = 1/(η²(1+η))`)
+/// - `mean` must be **mean** Keplerian elements, not osculating
 #[must_use]
 #[allow(clippy::many_single_char_names, clippy::similar_names)]
 pub fn compute_j2_params(mean: &KeplerianElements) -> J2Params {

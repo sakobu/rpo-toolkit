@@ -28,6 +28,9 @@ pub fn load_almanac() -> Arc<Almanac> {
 ///
 /// Creates an `Orbit` in the `EARTH_J2000` frame, then wraps it in a
 /// minimal `Spacecraft` (default mass, no SRP/drag).
+///
+/// # Invariants
+/// - `sv` must represent a valid ECI state (non-zero position for bound orbit)
 #[must_use]
 pub fn state_to_spacecraft(sv: &StateVector) -> Spacecraft {
     let orbit = Orbit::new(
@@ -67,6 +70,10 @@ pub fn spacecraft_to_state(sc: &Spacecraft) -> StateVector {
 ///
 /// Builds an `OrbitalDynamics::two_body()` model (no perturbations),
 /// wraps it in `SpacecraftDynamics`, and propagates with an RK89 integrator.
+///
+/// # Invariants
+/// - `sv` must represent a bound orbit (`e < 1`, `a > 0`)
+/// - `duration_s` must be finite
 ///
 /// # Errors
 /// Returns an error if almanac loading or propagation fails.

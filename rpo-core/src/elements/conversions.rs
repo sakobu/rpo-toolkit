@@ -11,6 +11,12 @@ use crate::types::{KeplerianElements, StateVector};
 /// Handles edge cases:
 /// - Near-circular orbits (e < `ECC_TOL`): ω set to 0, true anomaly measured from ascending node
 /// - Near-equatorial orbits (i < `INC_TOL`): Ω set to 0, ω measured from x-axis
+///
+/// # Invariants
+/// - `sv.position_eci_km` must be non-zero (zero position → division by zero)
+/// - Orbit must be bound (`e < 1`); escape trajectories are accepted silently
+///   and produce a negative semi-major axis
+/// - Kepler's equation inversion (via `true_anomaly()`) may not converge for `e` near 1
 #[must_use]
 #[allow(clippy::many_single_char_names)]
 pub fn state_to_keplerian(sv: &StateVector) -> KeplerianElements {
@@ -108,6 +114,11 @@ pub fn state_to_keplerian(sv: &StateVector) -> KeplerianElements {
 }
 
 /// Convert Keplerian orbital elements to an ECI state vector.
+///
+/// # Invariants
+/// - `ke.a_km > 0` (negative SMA produces invalid geometry)
+/// - `0 <= ke.e < 1` (parabolic/hyperbolic elements are not supported)
+/// - Delegates to `true_anomaly()` for Kepler's equation; see its invariants
 #[must_use]
 pub fn keplerian_to_state(ke: &KeplerianElements, epoch: Epoch) -> StateVector {
     debug_assert!(ke.a_km > 0.0, "semi-major axis must be positive, got {}", ke.a_km);

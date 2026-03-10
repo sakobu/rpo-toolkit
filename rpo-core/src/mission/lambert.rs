@@ -63,6 +63,9 @@ impl LambertTransfer {
     ///
     /// The arc is a two-body Keplerian orbit defined by `departure_state`.
     /// Produces `n_steps + 1` states from departure to arrival.
+    ///
+    /// # Invariants
+    /// - `n_steps > 0` (delegates to `propagate_keplerian`; see its invariants)
     #[must_use]
     pub fn densify_arc(&self, n_steps: usize) -> Vec<StateVector> {
         crate::propagation::keplerian::propagate_keplerian(&self.departure_state, self.tof_s, n_steps)
@@ -226,6 +229,11 @@ fn transfer_from_solution(
 ///
 /// Uses Izzo's method (nyx-space) with default configuration.
 ///
+/// # Invariants
+/// - `arrival.epoch > departure.epoch` (positive time of flight)
+/// - Departure and arrival positions must be non-degenerate (separation > 1e-6 km)
+/// - Transfer angle must not be exactly 0 or π (degenerate geometry)
+///
 /// # Errors
 /// Returns `LambertError` if the solver fails or inputs are invalid.
 pub fn solve_lambert(
@@ -239,6 +247,12 @@ pub fn solve_lambert(
 ///
 /// Uses Izzo's method (nyx-space), which supports all config options
 /// including multi-revolution transfers and transfer direction selection.
+///
+/// # Invariants
+/// - `arrival.epoch > departure.epoch` (positive time of flight)
+/// - Departure and arrival positions must be non-degenerate (separation > 1e-6 km)
+/// - For multi-rev (`config.revolutions > 0`), TOF must be long enough to
+///   accommodate the requested number of revolutions
 ///
 /// # Errors
 /// Returns `LambertError` if the solver fails or inputs are invalid.
@@ -254,6 +268,11 @@ pub fn solve_lambert_with_config(
 ///
 /// Supports multi-revolution transfers (`config.revolutions > 0`) and
 /// all transfer directions. Populates C3 from the solution.
+///
+/// # Invariants
+/// - `arrival.epoch > departure.epoch` (positive time of flight)
+/// - Departure and arrival positions must be non-degenerate (separation > 1e-6 km)
+/// - `mu > 0` (uses `EARTH_J2000` gravitational parameter internally)
 ///
 /// # Errors
 /// Returns `LambertError` if the solver fails or inputs are invalid.

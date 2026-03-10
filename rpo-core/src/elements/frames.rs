@@ -19,6 +19,10 @@ type Matrix3 = SMatrix<f64, 3, 3>;
 /// - `I_hat = C_hat × R_hat` (in-track, completes right-hand triad)
 ///
 /// Multiply: `v_ric = DCM * v_eci`. Inverse: `v_eci = DCM^T * v_ric`.
+///
+/// # Invariants
+/// - `chief.position_eci_km` must be non-zero (degenerate at origin)
+/// - `chief` angular momentum `r × v` must be non-zero (rectilinear orbits unsupported)
 #[must_use]
 pub fn eci_to_ric_dcm(chief: &StateVector) -> Matrix3 {
     let r = chief.position_eci_km;
@@ -45,6 +49,10 @@ pub fn eci_to_ric_dcm(chief: &StateVector) -> Matrix3 {
 /// Transform a Δv from RIC frame to ECI frame.
 ///
 /// `dv_eci = DCM^T * dv_ric`
+///
+/// # Invariants
+/// - `chief.position_eci_km` must be non-zero
+/// - `chief` angular momentum must be non-zero
 #[must_use]
 pub fn ric_to_eci_dv(dv_ric: &Vector3<f64>, chief: &StateVector) -> Vector3<f64> {
     let dcm = eci_to_ric_dcm(chief);
@@ -54,6 +62,10 @@ pub fn ric_to_eci_dv(dv_ric: &Vector3<f64>, chief: &StateVector) -> Vector3<f64>
 /// Transform a Δv from ECI frame to RIC frame.
 ///
 /// `dv_ric = DCM * dv_eci`
+///
+/// # Invariants
+/// - `chief.position_eci_km` must be non-zero
+/// - `chief` angular momentum must be non-zero
 #[must_use]
 pub fn eci_to_ric_dv(dv_eci: &Vector3<f64>, chief: &StateVector) -> Vector3<f64> {
     let dcm = eci_to_ric_dcm(chief);
@@ -75,6 +87,11 @@ pub fn eci_to_ric_dv(dv_eci: &Vector3<f64>, chief: &StateVector) -> Vector3<f64>
 ///
 /// This is the exact instantaneous kinematic relation for the RIC frame
 /// defined by the chief position and velocity.
+///
+/// # Invariants
+/// - `chief.position_eci_km` must be non-zero
+/// - `chief` angular momentum must be non-zero
+/// - Both states must be at the same epoch
 #[must_use]
 pub fn eci_to_ric_relative(chief: &StateVector, deputy: &StateVector) -> RICState {
     let dcm = eci_to_ric_dcm(chief);
@@ -102,6 +119,10 @@ pub fn eci_to_ric_relative(chief: &StateVector, deputy: &StateVector) -> RICStat
 /// Convert a RIC position offset to an ECI position.
 ///
 /// `r_deputy_eci = r_chief_eci + DCM^T * ric_offset`
+///
+/// # Invariants
+/// - `chief.position_eci_km` must be non-zero
+/// - `chief` angular momentum must be non-zero
 #[must_use]
 pub fn ric_to_eci_position(chief: &StateVector, ric_offset: &Vector3<f64>) -> Vector3<f64> {
     let dcm = eci_to_ric_dcm(chief);
@@ -115,6 +136,10 @@ pub fn ric_to_eci_position(chief: &StateVector, ric_offset: &Vector3<f64>) -> Ve
 ///
 /// Position: `r_chief + C^T · ρ`
 /// Velocity: `v_chief + C^T · (ρ̇ + ω × ρ)`
+///
+/// # Invariants
+/// - `chief.position_eci_km` must be non-zero
+/// - `chief` angular momentum must be non-zero
 #[must_use]
 pub fn ric_to_eci_state(chief: &StateVector, ric_state: &RICState) -> StateVector {
     let dcm = eci_to_ric_dcm(chief);

@@ -22,6 +22,14 @@ type Matrix9 = SMatrix<f64, 9, 9>;
 /// * `chief_mean` - Chief mean Keplerian elements at epoch
 /// * `drag` - DMF differential drag configuration
 /// * `tau` - Propagation time (seconds)
+///
+/// # Invariants
+/// - `chief_mean.a_km > 0`
+/// - `0 <= chief_mean.e < 1`
+/// - `chief_mean` must be **mean** Keplerian elements, not osculating
+/// - `tau` must be finite
+/// - `_drag` parameter is currently unused (placeholder); drag rates are
+///   encoded in the augmented state vector at propagation time
 #[must_use]
 pub fn compute_j2_drag_stm(
     chief_mean: &KeplerianElements,
@@ -50,6 +58,11 @@ pub fn compute_j2_drag_stm(
 /// * `j2p` - Pre-computed J2 perturbation parameters
 /// * `chief_mean` - Chief mean Keplerian elements at epoch
 /// * `tau` - Propagation time (seconds)
+///
+/// # Invariants
+/// - `j2p` must correspond to `chief_mean` (caller responsibility)
+/// - `chief_mean` must be **mean** Keplerian elements, not osculating
+/// - `tau` must be finite
 #[must_use]
 #[allow(clippy::similar_names)]
 pub fn compute_j2_drag_stm_with_params(
@@ -127,6 +140,13 @@ pub fn compute_j2_drag_stm_with_params(
 /// * `chief_mean` - Chief mean Keplerian elements at epoch
 /// * `drag` - DMF differential drag configuration
 /// * `tau` - Propagation time (seconds)
+///
+/// # Invariants
+/// - `chief_mean.a_km > 0`
+/// - `0 <= chief_mean.e < 1`
+/// - `chief_mean` must be **mean** Keplerian elements, not osculating
+/// - Drag rates in `drag` are assumed constant over the propagation interval
+/// - ROE must satisfy linearization validity (`dimensionless_norm() < ~0.01`)
 #[must_use]
 pub fn propagate_roe_j2_drag(
     roe: &QuasiNonsingularROE,

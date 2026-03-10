@@ -6,6 +6,11 @@ use crate::types::{KeplerianElements, QuasiNonsingularROE};
 /// Compute quasi-nonsingular relative orbital elements (Koenig Eq. 2).
 ///
 /// The ROEs are normalized by the chief semi-major axis.
+///
+/// # Invariants
+/// - `chief.a_km > 0` (used as normalizing denominator)
+/// - Both elements must be at the same epoch
+/// - Near-equatorial orbits (`i ≈ 0`): `diy` degrades as `sin(i) → 0`
 #[must_use]
 pub fn compute_roe(
     chief: &KeplerianElements,

@@ -92,6 +92,12 @@ fn build_mission(
 /// becomes the departure ROE of leg N+1, and the chief/epoch advance
 /// with the time of flight.
 ///
+/// # Invariants
+/// - `initial.chief.a_km > 0` and `0 <= initial.chief.e < 1`
+/// - `initial.chief` must be **mean** Keplerian elements, not osculating
+/// - Each `Waypoint.tof_s`, if `Some`, must be > 0
+/// - All epochs must be consistent (no backward time jumps)
+///
 /// # Errors
 /// Returns `MissionError::EmptyWaypoints` if no waypoints are provided,
 /// or propagates targeting/propagation errors from individual legs.
@@ -161,6 +167,11 @@ pub fn plan_waypoint_mission(
 /// - `new_waypoints` — full new waypoint list (must cover indices `modified_index..`)
 /// - `initial` — the original departure state (used if `modified_index == 0`)
 /// - Other params — same as [`plan_waypoint_mission`]
+///
+/// # Invariants
+/// - `initial.chief` must be **mean** Keplerian elements, not osculating
+/// - `modified_index <= new_waypoints.len()` and `modified_index <= existing.legs.len()`
+/// - `existing` must have been produced by `plan_waypoint_mission` with the same `initial`
 ///
 /// # Errors
 /// Returns `MissionError::InvalidReplanIndex` if `modified_index > new_waypoints.len()`,
@@ -240,6 +251,10 @@ pub fn replan_from_waypoint(
 ///
 /// Returns `None` exclusively when `elapsed_s` is out of bounds (negative
 /// or past the mission end).
+///
+/// # Invariants
+/// - `elapsed_s` must be finite
+/// - `mission` must have been produced by `plan_waypoint_mission`
 #[must_use]
 pub fn get_mission_state_at_time(
     mission: &WaypointMission,
@@ -276,6 +291,10 @@ pub fn get_mission_state_at_time(
 ///
 /// `n_steps` intervals produces `n_steps + 1` states, including both the
 /// t=0 and t=tof endpoints.
+///
+/// # Invariants
+/// - `n_steps > 0`
+/// - `leg` must have been produced by `solve_leg` or `plan_waypoint_mission`
 ///
 /// # Errors
 /// Returns `PropagationError::ZeroSteps` if `n_steps` is zero.

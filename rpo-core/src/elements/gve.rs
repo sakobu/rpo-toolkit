@@ -16,6 +16,10 @@ use crate::types::{KeplerianElements, QuasiNonsingularROE};
 ///
 /// # Arguments
 /// * `chief` - Chief Keplerian elements (provides `a`, `n`, and `u`)
+///
+/// # Invariants
+/// - `chief.a_km > 0` (appears as `n * a` in denominator; zero → division by zero)
+/// - Near-circular assumption: derived for `e ≈ 0`; accuracy degrades for `e > 0.1`
 #[must_use]
 pub fn compute_b_matrix(chief: &KeplerianElements) -> SMatrix<f64, 6, 3> {
     let a = chief.a_km;
@@ -63,6 +67,11 @@ pub fn compute_b_matrix(chief: &KeplerianElements) -> SMatrix<f64, 6, 3> {
 /// * `roe` - Pre-maneuver ROE state
 /// * `dv_ric` - Δv in RIC frame (km/s): [radial, in-track, cross-track]
 /// * `chief` - Chief Keplerian elements at maneuver epoch
+///
+/// # Invariants
+/// - `chief.a_km > 0` (delegates to `compute_b_matrix`)
+/// - Near-circular assumption: accurate for `chief.e < ~0.1`
+/// - `chief` must be at the maneuver epoch
 #[must_use]
 pub fn apply_maneuver(
     roe: &QuasiNonsingularROE,

@@ -11,6 +11,11 @@ use crate::types::StateVector;
 ///
 /// Uses the exact two-body solution: convert to Keplerian elements, advance
 /// mean anomaly by `n · dt`, convert back to ECI.
+///
+/// # Invariants
+/// - `initial` must represent a bound orbit (`e < 1`, `a > 0`)
+/// - `n_steps > 0` (`n_steps = 0` causes `0.0 / 0.0 = NaN` in step computation)
+/// - `duration_s` must be finite
 #[must_use]
 pub fn propagate_keplerian(
     initial: &StateVector,

@@ -38,6 +38,10 @@ impl std::error::Error for SafetyError {}
 /// * `roe` - Quasi-nonsingular ROE state
 /// * `chief` - Chief Keplerian elements (provides semi-major axis `a`)
 /// * `ric_position` - Relative position in RIC frame (km)
+///
+/// # Invariants
+/// - `chief.a_km > 0` (used as scaling factor for e/i separation)
+/// - ROE and `ric_position` must be at the same epoch
 #[must_use]
 pub fn analyze_safety(
     roe: &QuasiNonsingularROE,
@@ -113,6 +117,10 @@ pub fn analyze_safety(
 ///
 /// The **e/i separation** (D'Amico Eq. 2.22) is an analytic orbit-averaged
 /// bound and varies slowly with secular J2 drift.
+///
+/// # Invariants
+/// - Trajectory states must be time-ordered
+/// - Each state's ROE and RIC position must be self-consistent
 ///
 /// # Errors
 /// Returns `SafetyError::EmptyTrajectory` if the trajectory slice is empty.
