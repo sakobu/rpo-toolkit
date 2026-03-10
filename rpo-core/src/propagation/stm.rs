@@ -365,6 +365,58 @@ mod tests {
             stm[(1, 3)].abs() < 1e-12,
             "phi[1,3] should be ~0 (ey_i≈0), got {}", stm[(1, 3)]
         );
+
+        // --- Velocity block entries (Eq. A6 rows 2-3, 5) ---
+
+        // phi[2,3] = -sin(ω̇τ) - 4κ·ey_i·ey_f·G·Q·τ
+        // Since ey_i ≈ 0 (aop=180°), the secular term vanishes: phi[2,3] ≈ -sin(dω)
+        let omega_dot = j2p.aop_dot;
+        let omega_f = chief.aop_rad + omega_dot * period;
+        let ey_f = chief.e * omega_f.sin();
+        let ex_f = chief.e * omega_f.cos();
+
+        let expected_23 = -d_omega.sin()
+            - 4.0 * j2p.kappa * j2p.ey * ey_f * j2p.big_g * j2p.big_q * period;
+        assert!(
+            (stm[(2, 3)] - expected_23).abs() < 1e-6,
+            "phi[2,3]: got {}, expected {expected_23}", stm[(2, 3)]
+        );
+
+        // phi[3,2] = sin(ω̇τ) + 4κ·ex_i·ex_f·G·Q·τ
+        let expected_32 = d_omega.sin()
+            + 4.0 * j2p.kappa * j2p.ex * ex_f * j2p.big_g * j2p.big_q * period;
+        assert!(
+            (stm[(3, 2)] - expected_32).abs() < 1e-6,
+            "phi[3,2]: got {}, expected {expected_32}", stm[(3, 2)]
+        );
+
+        // phi[3,3] = cos(ω̇τ) + 4κ·ey_i·ex_f·G·Q·τ
+        let expected_33 = d_omega.cos()
+            + 4.0 * j2p.kappa * j2p.ey * ex_f * j2p.big_g * j2p.big_q * period;
+        assert!(
+            (stm[(3, 3)] - expected_33).abs() < 1e-6,
+            "phi[3,3]: got {}, expected {expected_33}", stm[(3, 3)]
+        );
+
+        // phi[5,5] = 1.0 (δiy diagonal, identity)
+        assert!(
+            (stm[(5, 5)] - 1.0).abs() < 1e-14,
+            "phi[5,5] should be 1.0, got {}", stm[(5, 5)]
+        );
+
+        // phi[5,2] = -4κ·ex_i·G·S·τ
+        let expected_52 = -4.0 * j2p.kappa * j2p.ex * j2p.big_g * j2p.big_s * period;
+        assert!(
+            (stm[(5, 2)] - expected_52).abs() < 1e-6,
+            "phi[5,2]: got {}, expected {expected_52}", stm[(5, 2)]
+        );
+
+        // phi[5,3] = -4κ·ey_i·G·S·τ ≈ 0 (ey_i ≈ 0)
+        let expected_53 = -4.0 * j2p.kappa * j2p.ey * j2p.big_g * j2p.big_s * period;
+        assert!(
+            (stm[(5, 3)] - expected_53).abs() < 1e-12,
+            "phi[5,3]: got {}, expected ~0 (ey_i≈0)", stm[(5, 3)]
+        );
     }
 
     /// Koenig Eq. A6: STM for Table 2 Case 2 (e=0.2, aop=120°).

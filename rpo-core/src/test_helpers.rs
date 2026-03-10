@@ -146,3 +146,70 @@ pub fn damico_table21_case1_roe() -> QuasiNonsingularROE {
         diy: 0.200 / a_km,
     }
 }
+
+/// Koenig Table 2 Case 2 initial ROE: a=8348 km.
+/// a·δa=25m, a·δλ=4000m, a·δex=-1000m, a·δey=1000m, a·δix=1000m, a·δiy=0m.
+pub fn koenig_table2_case2_roe() -> QuasiNonsingularROE {
+    let a_km = 8348.0;
+    QuasiNonsingularROE {
+        da: 25.0 / a_km,
+        dlambda: 4000.0 / a_km,
+        dex: -1000.0 / a_km,
+        dey: 1000.0 / a_km,
+        dix: 1000.0 / a_km,
+        diy: 0.0,
+    }
+}
+
+/// Koenig Table 2 Case 3 initial ROE: a=13256 km.
+/// a·δa=100m, a·δλ=5000m, a·δex=5000m, a·δey=5000m, a·δix=-5000m, a·δiy=20000m.
+pub fn koenig_table2_case3_roe() -> QuasiNonsingularROE {
+    let a_km = 13256.0;
+    QuasiNonsingularROE {
+        da: 100.0 / a_km,
+        dlambda: 5000.0 / a_km,
+        dex: 5000.0 / a_km,
+        dey: 5000.0 / a_km,
+        dix: -5000.0 / a_km,
+        diy: 20000.0 / a_km,
+    }
+}
+
+/// Construct deputy Keplerian elements from chief + ROE by inverting the QNS ROE formulas.
+///
+/// Inverts Koenig Eq. 2 to recover deputy elements from chief elements and ROE.
+///
+/// # Panics
+/// Panics if chief inclination is near zero (`sin(i) < 1e-10`), making diy inversion singular.
+#[allow(clippy::similar_names)]
+pub fn deputy_from_roe(chief: &KeplerianElements, roe: &QuasiNonsingularROE) -> KeplerianElements {
+    let a_d = chief.a_km * (1.0 + roe.da);
+    let i_d = chief.i_rad + roe.dix;
+
+    assert!(
+        chief.i_rad.sin().abs() > 1e-10,
+        "deputy_from_roe: chief inclination too close to zero for δiy inversion"
+    );
+    let d_raan = roe.diy / chief.i_rad.sin();
+    let raan_d = chief.raan_rad + d_raan;
+
+    let ex_c = chief.e * chief.aop_rad.cos();
+    let ey_c = chief.e * chief.aop_rad.sin();
+    let ex_d = ex_c + roe.dex;
+    let ey_d = ey_c + roe.dey;
+    let e_d = (ex_d * ex_d + ey_d * ey_d).sqrt();
+    let aop_d = ey_d.atan2(ex_d);
+
+    let lambda_c = chief.mean_anomaly_rad + chief.aop_rad;
+    let lambda_d = lambda_c + roe.dlambda - d_raan * chief.i_rad.cos();
+    let m_d = lambda_d - aop_d;
+
+    KeplerianElements {
+        a_km: a_d,
+        e: e_d,
+        i_rad: i_d,
+        raan_rad: raan_d,
+        aop_rad: aop_d.rem_euclid(crate::constants::TWO_PI),
+        mean_anomaly_rad: m_d.rem_euclid(crate::constants::TWO_PI),
+    }
+}

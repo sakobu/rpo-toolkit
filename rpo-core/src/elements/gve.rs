@@ -189,6 +189,71 @@ mod tests {
         assert!(b[(3, 2)].abs() < 1e-15);
     }
 
+    /// D'Amico Eq. 2.52: optimal two-impulse Δv for eccentricity change.
+    /// At u=0: along-track Δv gives `δex = 2·Δv/(n·a)`, so `Δv = n·a·δex/2`.
+    /// Verifies B-matrix application matches the analytical formula.
+    #[test]
+    fn damico_eq252_optimal_dv_cost() {
+        use crate::test_helpers::damico_table21_chief;
+
+        let chief = damico_table21_chief(); // aop=0, M=0 → u=0
+        let a = chief.a_km;
+        let n = chief.mean_motion();
+
+        // Target: δex corresponding to 400m physical separation
+        let target_dex = 0.400 / a; // dimensionless
+
+        // D'Amico Eq. 2.52: Δv_I = n·a·|δex|/2 for optimal eccentricity change at u=0
+        let dv_analytical = n * a * target_dex / 2.0;
+
+        // Apply via B-matrix: B * [0, Δv_I, 0]^T
+        let b = compute_b_matrix(&chief).unwrap();
+        let dv = Vector3::new(0.0, dv_analytical, 0.0);
+        let delta_roe = b * dv;
+
+        // δex from B-matrix should match target
+        assert!(
+            (delta_roe[2] - target_dex).abs() < 1e-10,
+            "δex from B-matrix = {}, expected {target_dex}",
+            delta_roe[2]
+        );
+
+        // At u=0: B[2,1] = 2·cos(0)/(n·a) = 2/(n·a), so δex = 2·Δv/(n·a) = target_dex ✓
+        let expected_b21 = 2.0 / (n * a);
+        assert!(
+            (b[(2, 1)] - expected_b21).abs() < 1e-15,
+            "B[2,1] = {}, expected {expected_b21}",
+            b[(2, 1)]
+        );
+
+        // Structural: B[0,0]=0 means pure radial Δv does NOT change δa.
+        // But along-track Δv DOES change δa: B[0,1]=2/(n·a), so δa = 2·Δv/(n·a).
+        let expected_da = 2.0 * dv_analytical / (n * a);
+        assert!(
+            (delta_roe[0] - expected_da).abs() < 1e-10,
+            "δa from along-track Δv = {}, expected {expected_da}",
+            delta_roe[0]
+        );
+
+        // Verify B[0,0]=0: radial Δv does NOT change δa
+        assert!(
+            b[(0, 0)].abs() < 1e-15,
+            "B[0,0] should be 0 (radial Δv doesn't change δa), got {}",
+            b[(0, 0)]
+        );
+
+        // δey at u=0: B[3,1] = 2·sin(0)/(n·a) = 0
+        assert!(
+            delta_roe[3].abs() < 1e-15,
+            "δey should be zero at u=0, got {}",
+            delta_roe[3]
+        );
+
+        // Out-of-plane should be zero (decoupled)
+        assert!(delta_roe[4].abs() < 1e-15, "δix should be zero");
+        assert!(delta_roe[5].abs() < 1e-15, "δiy should be zero");
+    }
+
     /// Zero Δv should not change ROE.
     #[test]
     fn zero_dv_identity() {

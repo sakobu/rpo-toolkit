@@ -116,6 +116,49 @@ mod tests {
         );
     }
 
+    /// D'Amico Table 2.1 Case 1: construct deputy from known ROE, then verify
+    /// `compute_roe()` recovers the published ROE values.
+    /// This is the first test validating `compute_roe()` against published chief/deputy → ROE data.
+    #[test]
+    fn damico_table21_case1_compute_roe() {
+        use crate::test_helpers::{damico_table21_case1_roe, damico_table21_chief, deputy_from_roe};
+
+        let chief = damico_table21_chief();
+        let expected_roe = damico_table21_case1_roe();
+
+        // Construct deputy by inverting the ROE formulas from the known Table 2.1 Case 1 ROE
+        let deputy = deputy_from_roe(&chief, &expected_roe);
+
+        // Compute ROE from the constructed chief/deputy pair
+        let computed_roe = compute_roe(&chief, &deputy).unwrap();
+
+        // Assert each ROE component matches within 1e-10 (dimensionless)
+        assert!(
+            (computed_roe.da - expected_roe.da).abs() < 1e-10,
+            "δa: computed={}, expected={}", computed_roe.da, expected_roe.da
+        );
+        assert!(
+            (computed_roe.dlambda - expected_roe.dlambda).abs() < 1e-10,
+            "δλ: computed={}, expected={}", computed_roe.dlambda, expected_roe.dlambda
+        );
+        assert!(
+            (computed_roe.dex - expected_roe.dex).abs() < 1e-10,
+            "δex: computed={}, expected={}", computed_roe.dex, expected_roe.dex
+        );
+        assert!(
+            (computed_roe.dey - expected_roe.dey).abs() < 1e-10,
+            "δey: computed={}, expected={}", computed_roe.dey, expected_roe.dey
+        );
+        assert!(
+            (computed_roe.dix - expected_roe.dix).abs() < 1e-10,
+            "δix: computed={}, expected={}", computed_roe.dix, expected_roe.dix
+        );
+        assert!(
+            (computed_roe.diy - expected_roe.diy).abs() < 1e-10,
+            "δiy: computed={}, expected={}", computed_roe.diy, expected_roe.diy
+        );
+    }
+
     #[test]
     fn roe_inclination_offset() {
         let chief = KeplerianElements {
