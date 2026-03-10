@@ -8,7 +8,7 @@ use hifitime::Duration;
 use nalgebra::Vector3;
 
 use crate::mission::targeting::{optimize_tof, solve_leg};
-use crate::propagation::propagator::{PropagatedState, PropagationError, RelativePropagator};
+use crate::propagation::propagator::{PropagatedState, PropagationError, PropagationModel};
 use crate::types::{
     DepartureState, ManeuverLeg, MissionConfig, MissionError, SafetyConfig, SafetyMetrics,
     Waypoint, WaypointMission,
@@ -99,7 +99,7 @@ pub fn plan_waypoint_mission(
     initial: &DepartureState,
     waypoints: &[Waypoint],
     config: &MissionConfig,
-    propagator: &dyn RelativePropagator,
+    propagator: &PropagationModel,
 ) -> Result<WaypointMission, MissionError> {
     if waypoints.is_empty() {
         return Err(MissionError::EmptyWaypoints);
@@ -171,7 +171,7 @@ pub fn replan_from_waypoint(
     new_waypoints: &[Waypoint],
     initial: &DepartureState,
     config: &MissionConfig,
-    propagator: &dyn RelativePropagator,
+    propagator: &PropagationModel,
 ) -> Result<WaypointMission, MissionError> {
     // Full replan if starting from the beginning
     if modified_index == 0 {
@@ -244,7 +244,7 @@ pub fn replan_from_waypoint(
 pub fn get_mission_state_at_time(
     mission: &WaypointMission,
     elapsed_s: f64,
-    propagator: &dyn RelativePropagator,
+    propagator: &PropagationModel,
 ) -> Option<PropagatedState> {
     if elapsed_s < 0.0 {
         return None;
@@ -282,7 +282,7 @@ pub fn get_mission_state_at_time(
 pub fn resample_leg_trajectory(
     leg: &ManeuverLeg,
     n_steps: usize,
-    propagator: &dyn RelativePropagator,
+    propagator: &PropagationModel,
 ) -> Result<Vec<PropagatedState>, PropagationError> {
     propagator.propagate_with_steps(
         &leg.post_departure_roe,
@@ -296,7 +296,7 @@ pub fn resample_leg_trajectory(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::propagation::propagator::J2StmPropagator;
+    use crate::propagation::propagator::PropagationModel;
     use crate::test_helpers::{iss_like_elements, test_epoch};
     use crate::types::{MissionConfig, QuasiNonsingularROE};
     use nalgebra::Vector3;
@@ -317,7 +317,7 @@ mod tests {
     #[test]
     fn single_waypoint() {
         let departure = zero_departure();
-        let propagator = J2StmPropagator;
+        let propagator = PropagationModel::J2Stm;
         let config = default_config();
         let period = std::f64::consts::TAU / departure.chief.mean_motion();
 
@@ -340,7 +340,7 @@ mod tests {
     #[test]
     fn three_waypoint_chain() {
         let departure = zero_departure();
-        let propagator = J2StmPropagator;
+        let propagator = PropagationModel::J2Stm;
         let config = default_config();
         let period = std::f64::consts::TAU / departure.chief.mean_motion();
         let tof = period * 0.75;
@@ -381,7 +381,7 @@ mod tests {
     #[test]
     fn state_continuity() {
         let departure = zero_departure();
-        let propagator = J2StmPropagator;
+        let propagator = PropagationModel::J2Stm;
         let config = default_config();
         let period = std::f64::consts::TAU / departure.chief.mean_motion();
         let tof = period * 0.75;
@@ -415,7 +415,7 @@ mod tests {
     #[test]
     fn get_state_at_time() {
         let departure = zero_departure();
-        let propagator = J2StmPropagator;
+        let propagator = PropagationModel::J2Stm;
         let config = default_config();
         let period = std::f64::consts::TAU / departure.chief.mean_motion();
 
@@ -452,7 +452,7 @@ mod tests {
     #[test]
     fn exact_evaluation_at_endpoints() {
         let departure = zero_departure();
-        let propagator = J2StmPropagator;
+        let propagator = PropagationModel::J2Stm;
         let config = default_config();
         let period = std::f64::consts::TAU / departure.chief.mean_motion();
 
@@ -489,7 +489,7 @@ mod tests {
     #[test]
     fn exact_evaluation_midpoint() {
         let departure = zero_departure();
-        let propagator = J2StmPropagator;
+        let propagator = PropagationModel::J2Stm;
         let config = default_config();
         let period = std::f64::consts::TAU / departure.chief.mean_motion();
         let tof = period * 0.75;
@@ -530,7 +530,7 @@ mod tests {
     #[test]
     fn resample_leg_denser() {
         let departure = zero_departure();
-        let propagator = J2StmPropagator;
+        let propagator = PropagationModel::J2Stm;
         let config = default_config();
         let period = std::f64::consts::TAU / departure.chief.mean_motion();
 
@@ -561,7 +561,7 @@ mod tests {
     #[test]
     fn evaluate_out_of_bounds() {
         let departure = zero_departure();
-        let propagator = J2StmPropagator;
+        let propagator = PropagationModel::J2Stm;
         let config = default_config();
         let period = std::f64::consts::TAU / departure.chief.mean_motion();
 
@@ -589,7 +589,7 @@ mod tests {
     #[test]
     fn empty_waypoints_error() {
         let departure = zero_departure();
-        let propagator = J2StmPropagator;
+        let propagator = PropagationModel::J2Stm;
         let config = default_config();
 
         let result =
@@ -604,7 +604,7 @@ mod tests {
     #[test]
     fn serde_roundtrip() {
         let departure = zero_departure();
-        let propagator = J2StmPropagator;
+        let propagator = PropagationModel::J2Stm;
         let config = default_config();
         let period = std::f64::consts::TAU / departure.chief.mean_motion();
 
@@ -650,7 +650,7 @@ mod tests {
     #[test]
     fn replan_index_zero_equals_full_plan() {
         let departure = zero_departure();
-        let propagator = J2StmPropagator;
+        let propagator = PropagationModel::J2Stm;
         let config = default_config();
         let period = std::f64::consts::TAU / departure.chief.mean_motion();
         let waypoints = three_wp_waypoints(period * 0.75);
@@ -673,7 +673,7 @@ mod tests {
     #[test]
     fn replan_preserves_kept_legs() {
         let departure = zero_departure();
-        let propagator = J2StmPropagator;
+        let propagator = PropagationModel::J2Stm;
         let config = default_config();
         let period = std::f64::consts::TAU / departure.chief.mean_motion();
         let tof = period * 0.75;
@@ -710,7 +710,7 @@ mod tests {
     #[test]
     fn replan_state_continuity() {
         let departure = zero_departure();
-        let propagator = J2StmPropagator;
+        let propagator = PropagationModel::J2Stm;
         let config = default_config();
         let period = std::f64::consts::TAU / departure.chief.mean_motion();
         let tof = period * 0.75;
@@ -740,7 +740,7 @@ mod tests {
     #[test]
     fn replan_middle_waypoint() {
         let departure = zero_departure();
-        let propagator = J2StmPropagator;
+        let propagator = PropagationModel::J2Stm;
         let config = default_config();
         let period = std::f64::consts::TAU / departure.chief.mean_motion();
         let tof = period * 0.75;
@@ -775,7 +775,7 @@ mod tests {
     #[test]
     fn replan_invalid_index() {
         let departure = zero_departure();
-        let propagator = J2StmPropagator;
+        let propagator = PropagationModel::J2Stm;
         let config = default_config();
         let period = std::f64::consts::TAU / departure.chief.mean_motion();
         let waypoints = three_wp_waypoints(period * 0.75);
@@ -804,7 +804,7 @@ mod tests {
     #[test]
     fn replan_trailing_deletion() {
         let departure = zero_departure();
-        let propagator = J2StmPropagator;
+        let propagator = PropagationModel::J2Stm;
         let config = default_config();
         let period = std::f64::consts::TAU / departure.chief.mean_motion();
         let tof = period * 0.75;
@@ -835,7 +835,7 @@ mod tests {
     #[test]
     fn metadata_fields_populated() {
         let departure = zero_departure();
-        let propagator = J2StmPropagator;
+        let propagator = PropagationModel::J2Stm;
         let config = default_config();
         let period = std::f64::consts::TAU / departure.chief.mean_motion();
 
@@ -877,7 +877,7 @@ mod tests {
     #[test]
     fn leg_boundary_ownership() {
         let departure = zero_departure();
-        let propagator = J2StmPropagator;
+        let propagator = PropagationModel::J2Stm;
         let config = default_config();
         let period = std::f64::consts::TAU / departure.chief.mean_motion();
         let tof = period * 0.75;
@@ -917,7 +917,7 @@ mod tests {
     #[test]
     fn serde_roundtrip_with_new_fields() {
         let departure = zero_departure();
-        let propagator = J2StmPropagator;
+        let propagator = PropagationModel::J2Stm;
         let config = default_config();
         let period = std::f64::consts::TAU / departure.chief.mean_motion();
 
@@ -954,7 +954,7 @@ mod tests {
     #[test]
     fn safety_provenance_leg_index() {
         let departure = zero_departure();
-        let propagator = J2StmPropagator;
+        let propagator = PropagationModel::J2Stm;
         let period = std::f64::consts::TAU / departure.chief.mean_motion();
         let tof = period * 0.75;
 

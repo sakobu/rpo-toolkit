@@ -7,7 +7,7 @@ use rpo_core::{
     compute_roe, keplerian_to_state, roe_to_ric, state_to_keplerian,
     // Propagation layer
     compute_j2_params, compute_stm, compute_stm_with_params, propagate_roe_j2_drag,
-    propagate_roe_stm, J2DragStmPropagator, J2StmPropagator, RelativePropagator,
+    propagate_roe_stm, PropagationModel,
     // Mission layer
     classify_separation, dimensionless_separation, plan_mission,
     solve_lambert_with_config, LambertConfig, TransferDirection,
@@ -233,7 +233,7 @@ pub(crate) fn run_demo() -> Result<(), Box<dyn Error>> {
         (chief_1orbit.raan_rad - chief.raan_rad).to_degrees());
 
     // --- Full trajectory via J2StmPropagator trait ---
-    let j2_prop = J2StmPropagator;
+    let j2_prop = PropagationModel::J2Stm;
     let trajectory = j2_prop.propagate_with_steps(
         &roe, &chief, epoch, total_time, n_steps,
     )?;
@@ -276,7 +276,7 @@ pub(crate) fn run_demo() -> Result<(), Box<dyn Error>> {
     println!("  δėy_drag  = {:.2e} /s", drag.dey_dot);
 
     // --- J2+drag propagation ---
-    let drag_prop = J2DragStmPropagator { drag };
+    let drag_prop = PropagationModel::J2DragStm { drag };
     let drag_traj = drag_prop.propagate_with_steps(
         &roe, &chief, epoch, total_time, n_steps,
     )?;
@@ -287,7 +287,7 @@ pub(crate) fn run_demo() -> Result<(), Box<dyn Error>> {
     println!("    δa = {:.6e} (vs J2-only: {:.6e})", roe_drag_1orbit.da, roe_1orbit.da);
 
     // --- DragConfig::zero() equivalence ---
-    let zero_drag_prop = J2DragStmPropagator { drag: DragConfig::zero() };
+    let zero_drag_prop = PropagationModel::J2DragStm { drag: DragConfig::zero() };
     let zero_drag_final = zero_drag_prop.propagate(
         &roe, &chief, epoch, total_time,
     );

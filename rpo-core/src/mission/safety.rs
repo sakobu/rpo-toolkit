@@ -341,12 +341,12 @@ mod tests {
     /// Higher sampling density should find a tighter (or equal) 3D minimum.
     #[test]
     fn sampling_density_convergence() {
-        use crate::propagation::propagator::{J2StmPropagator, RelativePropagator};
+        use crate::propagation::propagator::PropagationModel;
         use crate::test_helpers::test_epoch;
 
         let chief = iss_like_elements();
         let epoch = test_epoch();
-        let propagator = J2StmPropagator;
+        let propagator = PropagationModel::J2Stm;
         let period = std::f64::consts::TAU / chief.mean_motion();
 
         // Formation with nonzero δe/δi so 3D distance oscillates
@@ -381,12 +381,12 @@ mod tests {
     /// Trajectory worst-case analysis.
     #[test]
     fn trajectory_worst_case() {
-        use crate::propagation::propagator::{J2StmPropagator, RelativePropagator};
+        use crate::propagation::propagator::PropagationModel;
         use crate::test_helpers::test_epoch;
 
         let chief = iss_like_elements();
         let epoch = test_epoch();
-        let propagator = J2StmPropagator;
+        let propagator = PropagationModel::J2Stm;
         let period = std::f64::consts::TAU / chief.mean_motion();
 
         let roe = QuasiNonsingularROE {
@@ -414,12 +414,12 @@ mod tests {
     /// Provenance fields are populated by `analyze_trajectory_safety`.
     #[test]
     fn trajectory_provenance_populated() {
-        use crate::propagation::propagator::{J2StmPropagator, RelativePropagator};
+        use crate::propagation::propagator::PropagationModel;
         use crate::test_helpers::test_epoch;
 
         let chief = iss_like_elements();
         let epoch = test_epoch();
-        let propagator = J2StmPropagator;
+        let propagator = PropagationModel::J2Stm;
         let period = std::f64::consts::TAU / chief.mean_motion();
 
         let roe = QuasiNonsingularROE {

@@ -1,13 +1,13 @@
 //! Two-burn waypoint targeting via Newton-Raphson shooting in ROE space.
 //!
 //! Solves for departure and arrival Δv that transfer between ROE states
-//! while hitting a target RIC position/velocity, using the existing
-//! [`RelativePropagator`] for the forward model.
+//! while hitting a target RIC position/velocity, using the
+//! [`PropagationModel`] for the forward model.
 
 use nalgebra::{SMatrix, Vector3};
 
 use crate::elements::gve::apply_maneuver;
-use crate::propagation::propagator::{PropagatedState, RelativePropagator};
+use crate::propagation::propagator::{PropagatedState, PropagationModel};
 use crate::types::{
     DepartureState, KeplerianElements, Maneuver, ManeuverLeg, MissionError,
     QuasiNonsingularROE, TargetingConfig, TofOptConfig,
@@ -75,7 +75,7 @@ fn forward_model(
     departure: &DepartureState,
     dv1: &Vector3<f64>,
     tof_s: f64,
-    propagator: &dyn RelativePropagator,
+    propagator: &PropagationModel,
 ) -> (PropagatedState, QuasiNonsingularROE) {
     let post_dv1_roe = apply_maneuver(&departure.roe, dv1, &departure.chief);
     let state = propagator.propagate(&post_dv1_roe, &departure.chief, departure.epoch, tof_s);
@@ -132,7 +132,7 @@ pub fn solve_leg(
     target_velocity: &Vector3<f64>,
     tof_s: f64,
     config: &TargetingConfig,
-    propagator: &dyn RelativePropagator,
+    propagator: &PropagationModel,
 ) -> Result<ManeuverLeg, MissionError> {
     let mut dv1 = cw_initial_guess(
         &departure.chief,
@@ -204,7 +204,7 @@ fn solve_leg_cost_only(
     target_velocity: &Vector3<f64>,
     tof_s: f64,
     config: &TargetingConfig,
-    propagator: &dyn RelativePropagator,
+    propagator: &PropagationModel,
 ) -> Result<f64, MissionError> {
     let mut dv1 = cw_initial_guess(
         &departure.chief,
@@ -258,7 +258,7 @@ fn build_leg(
     solution: &ConvergedSolution,
     tof_s: f64,
     config: &TargetingConfig,
-    propagator: &dyn RelativePropagator,
+    propagator: &PropagationModel,
 ) -> Result<ManeuverLeg, MissionError> {
     let arrival_epoch = departure.epoch + hifitime::Duration::from_seconds(tof_s);
 
@@ -315,7 +315,7 @@ pub fn optimize_tof(
     target_velocity: &Vector3<f64>,
     targeting_config: &TargetingConfig,
     tof_config: &TofOptConfig,
-    propagator: &dyn RelativePropagator,
+    propagator: &PropagationModel,
 ) -> Result<(f64, ManeuverLeg), MissionError> {
     let period = departure.chief.period();
     let tof_min = tof_config.min_periods * period;
@@ -404,7 +404,7 @@ pub fn optimize_tof(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::propagation::propagator::J2StmPropagator;
+    use crate::propagation::propagator::PropagationModel;
     use crate::test_helpers::iss_like_elements;
     use crate::types::QuasiNonsingularROE;
     use hifitime::Epoch;
@@ -423,7 +423,7 @@ mod tests {
         let chief = iss_like_elements();
         let epoch = test_epoch();
         let period = std::f64::consts::TAU / chief.mean_motion();
-        let propagator = J2StmPropagator;
+        let propagator = PropagationModel::J2Stm;
         let config = TargetingConfig::default();
         let departure = DepartureState { roe: zero_roe(), chief, epoch };
 
@@ -445,7 +445,7 @@ mod tests {
         let chief = iss_like_elements();
         let epoch = test_epoch();
         let period = std::f64::consts::TAU / chief.mean_motion();
-        let propagator = J2StmPropagator;
+        let propagator = PropagationModel::J2Stm;
         let config = TargetingConfig::default();
         let departure = DepartureState { roe: zero_roe(), chief, epoch };
 
@@ -466,7 +466,7 @@ mod tests {
         let chief = iss_like_elements();
         let epoch = test_epoch();
         let period = std::f64::consts::TAU / chief.mean_motion();
-        let propagator = J2StmPropagator;
+        let propagator = PropagationModel::J2Stm;
         let config = TargetingConfig::default();
 
         let roe0 = QuasiNonsingularROE {
@@ -495,7 +495,7 @@ mod tests {
         let chief = iss_like_elements();
         let epoch = test_epoch();
         let period = std::f64::consts::TAU / chief.mean_motion();
-        let propagator = J2StmPropagator;
+        let propagator = PropagationModel::J2Stm;
         let config = TargetingConfig::default();
         let departure = DepartureState { roe: zero_roe(), chief, epoch };
 
@@ -548,7 +548,7 @@ mod tests {
         let chief = iss_like_elements();
         let epoch = test_epoch();
         let period = std::f64::consts::TAU / chief.mean_motion();
-        let propagator = J2StmPropagator;
+        let propagator = PropagationModel::J2Stm;
         let config = TargetingConfig::default();
         let departure = DepartureState { roe: zero_roe(), chief, epoch };
 
@@ -575,7 +575,7 @@ mod tests {
     fn tof_opt_lower_than_endpoints() {
         let chief = iss_like_elements();
         let epoch = test_epoch();
-        let propagator = J2StmPropagator;
+        let propagator = PropagationModel::J2Stm;
         let config = TargetingConfig::default();
         let tof_config = TofOptConfig::default();
         let period = std::f64::consts::TAU / chief.mean_motion();
@@ -621,7 +621,7 @@ mod tests {
     fn tof_opt_near_one_period() {
         let chief = iss_like_elements();
         let epoch = test_epoch();
-        let propagator = J2StmPropagator;
+        let propagator = PropagationModel::J2Stm;
         let config = TargetingConfig::default();
         let tof_config = TofOptConfig::default();
         let period = std::f64::consts::TAU / chief.mean_motion();
@@ -647,7 +647,7 @@ mod tests {
         let chief = iss_like_elements();
         let epoch = test_epoch();
         let period = std::f64::consts::TAU / chief.mean_motion();
-        let propagator = J2StmPropagator;
+        let propagator = PropagationModel::J2Stm;
         let departure = DepartureState { roe: zero_roe(), chief, epoch };
 
         let tof_s = period * 0.75;
@@ -701,7 +701,7 @@ mod tests {
         let chief = iss_like_elements();
         let epoch = test_epoch();
         let period = std::f64::consts::TAU / chief.mean_motion();
-        let propagator = J2StmPropagator;
+        let propagator = PropagationModel::J2Stm;
         let config = TargetingConfig {
             max_iterations: 2,
             ..TargetingConfig::default()

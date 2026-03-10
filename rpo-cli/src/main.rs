@@ -8,7 +8,7 @@ use rpo_core::{
     // Elements layer
     compute_roe, state_to_keplerian,
     // Propagation layer
-    propagate_keplerian, J2DragStmPropagator, J2StmPropagator, RelativePropagator,
+    propagate_keplerian, PropagationModel,
     // Mission layer
     plan_mission, plan_waypoint_mission,
     // Types
@@ -82,13 +82,13 @@ struct SolverConfig {
 }
 
 impl PropagatorConfig {
-    fn make_propagator(&self) -> Box<dyn RelativePropagator> {
+    fn make_propagator(&self) -> PropagationModel {
         match (self.propagator, &self.drag) {
-            (PropagatorChoice::J2Drag, Some(d)) => Box::new(J2DragStmPropagator { drag: *d }),
+            (PropagatorChoice::J2Drag, Some(d)) => PropagationModel::J2DragStm { drag: *d },
             (PropagatorChoice::J2Drag, None) => {
-                Box::new(J2DragStmPropagator { drag: DragConfig::zero() })
+                PropagationModel::J2DragStm { drag: DragConfig::zero() }
             }
-            _ => Box::new(J2StmPropagator),
+            _ => PropagationModel::J2Stm,
         }
     }
 }
@@ -175,7 +175,7 @@ fn run_targeting(input_path: &PathBuf, json_output: bool) -> Result<(), Box<dyn 
 
     let prop = input.prop.make_propagator();
     let mission = plan_waypoint_mission(
-        &departure, &waypoints, &mission_config, prop.as_ref(),
+        &departure, &waypoints, &mission_config, &prop,
     )?;
 
     if json_output {
@@ -269,7 +269,7 @@ fn run_end_to_end_mission(input_path: &PathBuf, json_output: bool) -> Result<(),
     };
 
     let wp_mission = plan_waypoint_mission(
-        &departure, &waypoints, &mission_config, prop.as_ref(),
+        &departure, &waypoints, &mission_config, &prop,
     )?;
 
     let waypoint_dv_km_s = wp_mission.total_dv_km_s;

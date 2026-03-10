@@ -7,7 +7,7 @@
 //!
 //! ## Module groups
 //! - `elements` — coordinate conversions, ROE computation, frame mapping
-//! - `propagation` — J2 params, STMs, propagator trait/impls
+//! - `propagation` — J2 params, STMs, propagation model
 //! - `mission` — classification, Lambert transfers, validation
 
 #![warn(missing_docs)]
@@ -34,8 +34,8 @@ pub use mission::{
 };
 pub use propagation::{
     compute_j2_drag_stm, compute_j2_params, compute_stm, compute_stm_with_params,
-    propagate_keplerian, propagate_roe_j2_drag, propagate_roe_stm, J2DragStmPropagator, J2Params,
-    J2StmPropagator, PropagatedState, PropagationError, RelativePropagator,
+    propagate_keplerian, propagate_roe_j2_drag, propagate_roe_stm, J2Params, PropagatedState,
+    PropagationError, PropagationModel,
 };
 pub use types::{
     DepartureState, DragConfig, KeplerianElements, Maneuver, ManeuverLeg, MissionConfig,

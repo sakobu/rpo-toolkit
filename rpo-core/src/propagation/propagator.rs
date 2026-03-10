@@ -1,4 +1,4 @@
-//! Propagator trait and analytical J2 STM implementation.
+//! Propagation model enum and analytical J2 STM implementations.
 
 use hifitime::{Duration, Epoch};
 use serde::{Deserialize, Serialize};
@@ -48,25 +48,51 @@ impl std::fmt::Display for PropagationError {
 
 impl std::error::Error for PropagationError {}
 
-/// Trait for relative orbit propagators.
+/// Analytical relative-orbit propagator, selected at construction time.
 ///
-/// Unifies analytical (STM-based) and numerical propagation engines
-/// under a common interface.
-pub trait RelativePropagator: Send + Sync {
+/// Dispatches to the appropriate closed-form STM at each call.
+/// Use [`PropagationModel::J2Stm`] for J2-only and
+/// [`PropagationModel::J2DragStm`] to include density-model-free
+/// differential drag (Koenig Sec. VIII).
+#[derive(Debug, Clone)]
+pub enum PropagationModel {
+    /// J2-perturbed STM propagator (Koenig formulation, Eq. A6).
+    J2Stm,
+    /// J2 + differential drag STM propagator (Koenig Sec. VIII / Appendix D).
+    J2DragStm {
+        /// DMF differential drag configuration.
+        drag: DragConfig,
+    },
+}
+
+impl PropagationModel {
     /// Propagate ROE forward by `dt_seconds` from `epoch_0`.
-    fn propagate(
+    #[must_use]
+    pub fn propagate(
         &self,
         roe_0: &QuasiNonsingularROE,
         chief_mean_0: &KeplerianElements,
         epoch_0: Epoch,
         dt_seconds: f64,
-    ) -> PropagatedState;
+    ) -> PropagatedState {
+        match self {
+            Self::J2Stm => {
+                let (roe, chief_mean) = propagate_roe_stm(roe_0, chief_mean_0, dt_seconds);
+                make_propagated_state(roe, chief_mean, epoch_0, dt_seconds)
+            }
+            Self::J2DragStm { drag } => {
+                let (roe, chief_mean) =
+                    propagate_roe_j2_drag(roe_0, chief_mean_0, drag, dt_seconds);
+                make_propagated_state(roe, chief_mean, epoch_0, dt_seconds)
+            }
+        }
+    }
 
     /// Propagate with intermediate steps, returning a trajectory.
     ///
     /// # Errors
     /// Returns `PropagationError` if `n_steps` is zero.
-    fn propagate_with_steps(
+    pub fn propagate_with_steps(
         &self,
         roe_0: &QuasiNonsingularROE,
         chief_mean_0: &KeplerianElements,
@@ -117,49 +143,6 @@ fn make_propagated_state(
     }
 }
 
-/// J2-perturbed STM propagator (Koenig formulation).
-///
-/// Uses the analytical state transition matrix from `stm.rs` to propagate
-/// quasi-nonsingular ROEs under J2 secular perturbations.
-#[derive(Debug, Clone, Default)]
-pub struct J2StmPropagator;
-
-impl RelativePropagator for J2StmPropagator {
-    fn propagate(
-        &self,
-        roe_0: &QuasiNonsingularROE,
-        chief_mean_0: &KeplerianElements,
-        epoch_0: Epoch,
-        dt_seconds: f64,
-    ) -> PropagatedState {
-        let (roe, chief_mean) = propagate_roe_stm(roe_0, chief_mean_0, dt_seconds);
-        make_propagated_state(roe, chief_mean, epoch_0, dt_seconds)
-    }
-}
-
-/// J2 + differential drag STM propagator (Koenig Sec. VIII / Appendix D).
-///
-/// Extends `J2StmPropagator` with density-model-free differential drag.
-/// When `drag` is `DragConfig::zero()`, produces identical results to `J2StmPropagator`.
-#[derive(Debug, Clone)]
-pub struct J2DragStmPropagator {
-    /// DMF differential drag configuration.
-    pub drag: DragConfig,
-}
-
-impl RelativePropagator for J2DragStmPropagator {
-    fn propagate(
-        &self,
-        roe_0: &QuasiNonsingularROE,
-        chief_mean_0: &KeplerianElements,
-        epoch_0: Epoch,
-        dt_seconds: f64,
-    ) -> PropagatedState {
-        let (roe, chief_mean) =
-            propagate_roe_j2_drag(roe_0, chief_mean_0, &self.drag, dt_seconds);
-        make_propagated_state(roe, chief_mean, epoch_0, dt_seconds)
-    }
-}
 
 #[cfg(test)]
 mod tests {
@@ -168,7 +151,7 @@ mod tests {
 
     #[test]
     fn propagator_initial_state() {
-        let prop = J2StmPropagator;
+        let prop = PropagationModel::J2Stm;
         let chief = iss_like_elements();
         let epoch = test_epoch();
         let roe = QuasiNonsingularROE {
@@ -188,7 +171,7 @@ mod tests {
 
     #[test]
     fn propagator_multi_step() {
-        let prop = J2StmPropagator;
+        let prop = PropagationModel::J2Stm;
         let chief = iss_like_elements();
         let epoch = test_epoch();
         let roe = QuasiNonsingularROE {
@@ -212,7 +195,7 @@ mod tests {
 
     #[test]
     fn propagator_zero_steps_error() {
-        let prop = J2StmPropagator;
+        let prop = PropagationModel::J2Stm;
         let chief = iss_like_elements();
         let epoch = test_epoch();
         let roe = QuasiNonsingularROE::default();
@@ -224,7 +207,7 @@ mod tests {
     #[test]
     fn along_track_drift_grows() {
         // With nonzero δa, along-track distance should grow over time
-        let prop = J2StmPropagator;
+        let prop = PropagationModel::J2Stm;
         let chief = iss_like_elements();
         let epoch = test_epoch();
         let roe = QuasiNonsingularROE {
@@ -261,8 +244,8 @@ mod tests {
             diy: 0.0003,
         };
 
-        let j2_prop = J2StmPropagator;
-        let drag_prop = J2DragStmPropagator {
+        let j2_prop = PropagationModel::J2Stm;
+        let drag_prop = PropagationModel::J2DragStm {
             drag: DragConfig::zero(),
         };
 
@@ -308,7 +291,7 @@ mod tests {
         let epoch = test_epoch();
         let roe = QuasiNonsingularROE::default();
 
-        let drag_prop = J2DragStmPropagator {
+        let drag_prop = PropagationModel::J2DragStm {
             drag: test_drag_config(),
         };
 

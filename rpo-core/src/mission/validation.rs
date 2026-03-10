@@ -88,7 +88,7 @@ pub fn nyx_propagate_two_body(
 mod tests {
     use crate::elements::conversions::{keplerian_to_state, state_to_keplerian};
     use crate::mission::planning::{classify_separation, plan_mission};
-    use crate::propagation::propagator::{J2DragStmPropagator, J2StmPropagator, RelativePropagator};
+    use crate::propagation::propagator::PropagationModel;
     use crate::elements::roe::compute_roe;
     use crate::test_helpers::{
         iss_like_elements, leo_400km_elements, leo_800km_target_elements, test_drag_config,
@@ -178,7 +178,7 @@ mod tests {
         let period = std::f64::consts::TAU / chief.mean_motion();
 
         // J2-only propagator (zero ROE should stay near zero)
-        let j2_prop = J2StmPropagator;
+        let j2_prop = PropagationModel::J2Stm;
         let j2_5 = j2_prop.propagate(&zero_roe, &chief, epoch, 5.0 * period);
         assert!(
             j2_5.roe.da.abs() < 1e-12,
@@ -187,7 +187,7 @@ mod tests {
         );
 
         // J2+drag propagator
-        let drag_prop = J2DragStmPropagator {
+        let drag_prop = PropagationModel::J2DragStm {
             drag: drag_config,
         };
         let drag_5 = drag_prop.propagate(&zero_roe, &chief, epoch, 5.0 * period);
@@ -231,7 +231,7 @@ mod tests {
         let roe_0 = compute_roe(&chief, &deputy);
         let period = std::f64::consts::TAU / chief.mean_motion();
 
-        let prop = J2StmPropagator;
+        let prop = PropagationModel::J2Stm;
         let state_10 = prop.propagate(&roe_0, &chief, epoch, 10.0 * period);
 
         // da should remain constant under J2 (no secular da drift)
@@ -367,7 +367,7 @@ mod tests {
 
         // Propagate with J2 STM
         let roe_0 = compute_roe(&chief_ke, &deputy_ke);
-        let prop = J2StmPropagator;
+        let prop = PropagationModel::J2Stm;
         let stm_state = prop.propagate(&roe_0, &chief_ke, epoch, duration);
 
         // da should be constant in both (Keplerian preserves SMA)
