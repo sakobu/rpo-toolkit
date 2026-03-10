@@ -9,6 +9,7 @@
     "position": [4846.5, -4088.0, 2599.0],
     "velocity": [4.918, 4.372, 3.274]
   },
+  "proximity": { "roe_threshold": 0.005 },
   "waypoints": [
     {
       "position": [0.5, 5.0, 0.5],

@@ -9,6 +9,7 @@
     "position": [-4415.2, 1703.3, 5159.6],
     "velocity": [-5.002, -5.013, -2.578]
   },
+  "proximity": { "roe_threshold": 0.005 },
   "perch": { "VBar": { "along_track_km": 5.0 } },
   "lambert_tof_s": 3600.0,
   "waypoints": [
@@ -31,7 +32,7 @@
       "tof_s": 4200.0
     }
   ],
-  "proximity": { "roe_threshold": 0.005 },
+
   "safety": {
     "min_ei_separation_km": 0.1,
     "min_distance_3d_km": 0.05
