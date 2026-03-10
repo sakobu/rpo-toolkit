@@ -9,6 +9,10 @@ use nalgebra::Vector3;
 use crate::propagation::propagator::PropagatedState;
 use crate::types::{KeplerianElements, QuasiNonsingularROE, SafetyMetrics};
 
+/// Degenerate e/i vector guard for D'Amico Eq. 2.22 — below this magnitude,
+/// the e/i separation formula is undefined (division by zero).
+const ROE_MAG_EPSILON: f64 = 1e-15;
+
 /// Errors from safety analysis operations.
 #[derive(Debug, Clone)]
 pub enum SafetyError {
@@ -69,10 +73,10 @@ pub fn analyze_safety(
     // e/i vector separation (D'Amico Eq. 2.22):
     // δr_nr^min = sqrt(2) · a · |δe × δi| / sqrt(δe² + δi²)
     // Cross product magnitude |dex*diy - dey*dix| avoids trig on the phase angle.
-    let ei_separation = if ecc_mag > 1e-15 && inc_mag > 1e-15 {
+    let ei_separation = if ecc_mag > ROE_MAG_EPSILON && inc_mag > ROE_MAG_EPSILON {
         let cross = (roe.dex * roe.diy - roe.dey * roe.dix).abs();
         let norm_sq = ecc_mag * ecc_mag + inc_mag * inc_mag;
-        (2.0_f64).sqrt() * sma * cross / norm_sq.sqrt()
+        std::f64::consts::SQRT_2 * sma * cross / norm_sq.sqrt()
     } else {
         0.0
     };

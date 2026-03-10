@@ -16,6 +16,9 @@ use nyx_space::tools::lambert::{self, LambertInput, LambertSolution, TransferKin
 use crate::constants::EARTH_J2000;
 use crate::types::StateVector;
 
+/// Minimum position separation (km) between departure and arrival for a valid Lambert problem.
+const LAMBERT_MIN_SEPARATION_KM: f64 = 1e-6;
+
 /// Transfer direction for Lambert solutions.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum TransferDirection {
@@ -123,7 +126,7 @@ impl std::error::Error for LambertError {}
 
 /// Validate Lambert inputs.
 ///
-/// Checks that TOF > 0 and position separation > 1e-6 km.
+/// Checks that TOF > 0 and position separation > `LAMBERT_MIN_SEPARATION_KM`.
 fn validate_inputs(
     departure: &StateVector,
     arrival: &StateVector,
@@ -134,7 +137,7 @@ fn validate_inputs(
     }
 
     let sep = (arrival.position_eci_km - departure.position_eci_km).norm();
-    if sep < 1e-6 {
+    if sep < LAMBERT_MIN_SEPARATION_KM {
         return Err(LambertError::IdenticalPositions { separation_km: sep });
     }
 
@@ -206,16 +209,8 @@ fn transfer_from_solution(
     tof: f64,
     direction: TransferDirection,
 ) -> LambertTransfer {
-    let v1_vec = Vector3::new(
-        solution.v_init_km_s[0],
-        solution.v_init_km_s[1],
-        solution.v_init_km_s[2],
-    );
-    let v2_vec = Vector3::new(
-        solution.v_final_km_s[0],
-        solution.v_final_km_s[1],
-        solution.v_final_km_s[2],
-    );
+    let v1_vec = solution.v_init_km_s;
+    let v2_vec = solution.v_final_km_s;
 
     build_transfer(
         departure,
@@ -234,7 +229,7 @@ fn transfer_from_solution(
 ///
 /// # Invariants
 /// - `arrival.epoch > departure.epoch` (positive time of flight)
-/// - Departure and arrival positions must be non-degenerate (separation > 1e-6 km)
+/// - Departure and arrival positions must be non-degenerate (separation > `LAMBERT_MIN_SEPARATION_KM`)
 /// - Transfer angle must not be exactly 0 or π (degenerate geometry)
 ///
 /// # Errors
@@ -253,7 +248,7 @@ pub fn solve_lambert(
 ///
 /// # Invariants
 /// - `arrival.epoch > departure.epoch` (positive time of flight)
-/// - Departure and arrival positions must be non-degenerate (separation > 1e-6 km)
+/// - Departure and arrival positions must be non-degenerate (separation > `LAMBERT_MIN_SEPARATION_KM`)
 /// - For multi-rev (`config.revolutions > 0`), TOF must be long enough to
 ///   accommodate the requested number of revolutions
 ///
@@ -274,7 +269,7 @@ pub fn solve_lambert_with_config(
 ///
 /// # Invariants
 /// - `arrival.epoch > departure.epoch` (positive time of flight)
-/// - Departure and arrival positions must be non-degenerate (separation > 1e-6 km)
+/// - Departure and arrival positions must be non-degenerate (separation > `LAMBERT_MIN_SEPARATION_KM`)
 /// - `mu > 0` (uses `EARTH_J2000` gravitational parameter internally)
 ///
 /// # Errors

@@ -1,9 +1,9 @@
 //! Conversions between ECI state vectors and Keplerian orbital elements.
 
 use hifitime::Epoch;
-use nalgebra::Vector3;
+use nalgebra::{Matrix3, Vector3};
 
-use crate::constants::{ECC_TOL, INC_TOL, MU_EARTH, TWO_PI};
+use crate::constants::{ECC_TOL, INC_TOL, MIN_POSITION_NORM_KM, MU_EARTH, TWO_PI};
 use crate::types::{KeplerianElements, StateVector};
 
 /// Errors from ECI ↔ Keplerian conversions.
@@ -85,7 +85,7 @@ pub(crate) fn validate_elements(ke: &KeplerianElements) -> Result<(), Conversion
 /// - Kepler's equation inversion (via `true_anomaly()`) may not converge for `e` near 1
 ///
 /// # Errors
-/// Returns `ConversionError::ZeroPositionVector` if the position vector norm is < 1e-10 km.
+/// Returns `ConversionError::ZeroPositionVector` if the position vector norm is < `MIN_POSITION_NORM_KM`.
 /// Returns `ConversionError::UnboundOrbit` if specific energy >= 0 (escape trajectory).
 #[allow(clippy::many_single_char_names)]
 pub fn state_to_keplerian(sv: &StateVector) -> Result<KeplerianElements, ConversionError> {
@@ -94,7 +94,7 @@ pub fn state_to_keplerian(sv: &StateVector) -> Result<KeplerianElements, Convers
     let r = r_vec.norm();
     let v = v_vec.norm();
 
-    if r < 1e-10 {
+    if r < MIN_POSITION_NORM_KM {
         return Err(ConversionError::ZeroPositionVector);
     }
 
@@ -221,24 +221,20 @@ pub fn keplerian_to_state(ke: &KeplerianElements, epoch: Epoch) -> Result<StateV
     let cos_w = ke.aop_rad.cos();
     let sin_w = ke.aop_rad.sin();
 
-    let r11 = cos_o * cos_w - sin_o * sin_w * cos_i;
-    let r12 = -cos_o * sin_w - sin_o * cos_w * cos_i;
-    let r21 = sin_o * cos_w + cos_o * sin_w * cos_i;
-    let r22 = -sin_o * sin_w + cos_o * cos_w * cos_i;
-    let r31 = sin_w * sin_i;
-    let r32 = cos_w * sin_i;
-
-    let position = Vector3::new(
-        r11 * r_pqw.x + r12 * r_pqw.y,
-        r21 * r_pqw.x + r22 * r_pqw.y,
-        r31 * r_pqw.x + r32 * r_pqw.y,
+    let rot = Matrix3::new(
+        cos_o * cos_w - sin_o * sin_w * cos_i,
+        -cos_o * sin_w - sin_o * cos_w * cos_i,
+        0.0,
+        sin_o * cos_w + cos_o * sin_w * cos_i,
+        -sin_o * sin_w + cos_o * cos_w * cos_i,
+        0.0,
+        sin_w * sin_i,
+        cos_w * sin_i,
+        0.0,
     );
 
-    let velocity = Vector3::new(
-        r11 * v_pqw.x + r12 * v_pqw.y,
-        r21 * v_pqw.x + r22 * v_pqw.y,
-        r31 * v_pqw.x + r32 * v_pqw.y,
-    );
+    let position = rot * r_pqw;
+    let velocity = rot * v_pqw;
 
     Ok(StateVector {
         epoch,

@@ -343,10 +343,9 @@ mod tests {
             let ric_vec = t * roe.to_vector();
             let ric_ref = roe_to_ric(&roe, &chief).unwrap();
 
-            let pos_err = ((ric_vec[0] - ric_ref.position_ric_km.x).powi(2)
-                + (ric_vec[1] - ric_ref.position_ric_km.y).powi(2)
-                + (ric_vec[2] - ric_ref.position_ric_km.z).powi(2))
-            .sqrt();
+            let pos_err = (Vector3::new(ric_vec[0], ric_vec[1], ric_vec[2])
+                - ric_ref.position_ric_km)
+                .norm();
             assert!(
                 pos_err < 1e-10,
                 "Position mismatch at u={u_deg}°: err={pos_err}"

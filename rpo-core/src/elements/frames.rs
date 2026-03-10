@@ -107,8 +107,9 @@ pub fn eci_to_ric_relative(chief: &StateVector, deputy: &StateVector) -> RICStat
     let h = chief.position_eci_km.cross(&chief.velocity_eci_km_s);
     let omega = h.norm() / (r * r);
 
-    // ω × ρ in RIC = [0, 0, ω] × [R, I, C] = [-ω·I, ω·R, 0]
-    let omega_cross_rho = Vector3::new(-omega * rho.y, omega * rho.x, 0.0);
+    // ω × ρ in RIC = [0, 0, ω] × [R, I, C]
+    let omega_vec = Vector3::new(0.0, 0.0, omega);
+    let omega_cross_rho = omega_vec.cross(&rho);
 
     RICState {
         position_ric_km: rho,
@@ -148,9 +149,10 @@ pub fn ric_to_eci_state(chief: &StateVector, ric_state: &RICState) -> StateVecto
     let h = chief.position_eci_km.cross(&chief.velocity_eci_km_s);
     let omega = h.norm() / (r * r);
 
-    // ω × ρ in RIC = [-ω·I, ω·R, 0]
+    // ω × ρ in RIC = [0, 0, ω] × [R, I, C]
     let rho = &ric_state.position_ric_km;
-    let omega_cross_rho = Vector3::new(-omega * rho.y, omega * rho.x, 0.0);
+    let omega_vec = Vector3::new(0.0, 0.0, omega);
+    let omega_cross_rho = omega_vec.cross(rho);
 
     let position = chief.position_eci_km + dcm.transpose() * ric_state.position_ric_km;
     let velocity = chief.velocity_eci_km_s + dcm.transpose() * (ric_state.velocity_ric_km_s + omega_cross_rho);

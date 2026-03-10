@@ -14,6 +14,9 @@ use crate::types::{
     ProximityConfig, QuasiNonsingularROE, StateVector,
 };
 
+/// Minimum perch offset (km) — guards against degenerate zero-offset perch geometry.
+const PERCH_OFFSET_MIN_KM: f64 = 1e-10;
+
 /// Analyze two ECI states and determine the mission phase.
 ///
 /// Converts both states to Keplerian elements, computes the dimensionless
@@ -103,7 +106,7 @@ pub fn perch_to_roe(
 ) -> Result<QuasiNonsingularROE, MissionError> {
     match perch {
         PerchGeometry::VBar { along_track_km } => {
-            if along_track_km.abs() < 1e-10 {
+            if along_track_km.abs() < PERCH_OFFSET_MIN_KM {
                 return Err(MissionError::InvalidVBarOffset {
                     along_track_km: *along_track_km,
                 });
@@ -121,7 +124,7 @@ pub fn perch_to_roe(
             })
         }
         PerchGeometry::RBar { radial_km } => {
-            if radial_km.abs() < 1e-10 {
+            if radial_km.abs() < PERCH_OFFSET_MIN_KM {
                 return Err(MissionError::InvalidRBarOffset {
                     radial_km: *radial_km,
                 });
@@ -226,7 +229,7 @@ fn perch_roe_to_keplerian(
     let aop = ecc_y_dep.atan2(ecc_x_dep).rem_euclid(crate::constants::TWO_PI);
 
     // Recover RAAN from δiy = (Ω_d - Ω_c) * sin(i_c)
-    let raan = if chief.i_rad.sin().abs() > 1e-10 {
+    let raan = if chief.i_rad.sin().abs() > crate::constants::INC_TOL {
         chief.raan_rad + roe.diy / chief.i_rad.sin()
     } else {
         chief.raan_rad

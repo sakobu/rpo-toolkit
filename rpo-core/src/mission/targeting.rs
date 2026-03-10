@@ -13,6 +13,15 @@ use crate::types::{
     QuasiNonsingularROE, TargetingConfig, TofOptConfig,
 };
 
+/// Dimensionless `n*t` threshold below which the CW short-transfer (linear) approximation is used.
+const CW_SHORT_TRANSFER_NT: f64 = 0.1;
+
+/// SVD pseudo-inverse regularization epsilon for near-singular Jacobians.
+const JACOBIAN_PINV_TOL: f64 = 1e-10;
+
+/// Golden-section bracket half-width in orbital periods around the best multi-start TOF.
+const TOF_REFINE_HALF_WINDOW: f64 = 0.5;
+
 /// Clamp each component of a vector to `[-cap, cap]`.
 fn clamp_dv(dv: &Vector3<f64>, cap: f64) -> Vector3<f64> {
     Vector3::new(
@@ -24,7 +33,7 @@ fn clamp_dv(dv: &Vector3<f64>, cap: f64) -> Vector3<f64> {
 
 /// CW (Clohessy-Wiltshire) initial guess for departure Δv.
 ///
-/// For short transfers (`n*t < 0.1`) uses linear approximation;
+/// For short transfers (`n*t < CW_SHORT_TRANSFER_NT`) uses linear approximation;
 /// for longer transfers uses full CW STM inversion.
 fn cw_initial_guess(
     chief: &KeplerianElements,
@@ -36,7 +45,7 @@ fn cw_initial_guess(
     let n = chief.mean_motion();
     let nt = n * tof_s;
 
-    let dv = if nt.abs() < 0.1 {
+    let dv = if nt.abs() < CW_SHORT_TRANSFER_NT {
         // Linear approximation for very short transfers
         Vector3::new(
             target_pos.x / tof_s,
@@ -157,7 +166,7 @@ pub fn solve_leg(
         inv
     } else {
         let svd = jac.svd(true, true);
-        svd.pseudo_inverse(1e-10)
+        svd.pseudo_inverse(JACOBIAN_PINV_TOL)
             .map_err(|_| MissionError::SingularJacobian)?
     };
 
@@ -227,7 +236,7 @@ fn solve_leg_cost_only(
         inv
     } else {
         let svd = jac.svd(true, true);
-        svd.pseudo_inverse(1e-10)
+        svd.pseudo_inverse(JACOBIAN_PINV_TOL)
             .map_err(|_| MissionError::SingularJacobian)?
     };
 
@@ -366,8 +375,8 @@ pub fn optimize_tof(
 
     // Golden section search around best TOF
     let golden = (5.0_f64.sqrt() - 1.0) / 2.0;
-    let mut lo = (center_tof - 0.5 * period).max(tof_min);
-    let mut hi = (center_tof + 0.5 * period).min(tof_max);
+    let mut lo = (center_tof - TOF_REFINE_HALF_WINDOW * period).max(tof_min);
+    let mut hi = (center_tof + TOF_REFINE_HALF_WINDOW * period).min(tof_max);
 
     let eval = |tof: f64| -> f64 {
         solve_leg_cost_only(

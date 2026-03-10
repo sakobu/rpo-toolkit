@@ -18,6 +18,9 @@ pub const ECC_TOL: f64 = 1e-10;
 /// Tolerance for near-equatorial orbit detection
 pub const INC_TOL: f64 = 1e-10;
 
+/// Minimum position vector norm (km) — zero-vector guard (0.1 mm).
+pub const MIN_POSITION_NORM_KM: f64 = 1e-10;
+
 /// Kepler's equation convergence tolerance
 pub const KEPLER_TOL: f64 = 1e-14;
 
