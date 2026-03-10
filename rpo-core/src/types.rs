@@ -178,7 +178,7 @@ impl DragConfig {
 pub struct RICState {
     /// Relative position in RIC frame (km): [radial, in-track, cross-track]
     pub position: Vector3<f64>,
-    /// Relative velocity in RIC frame (km/s): [radial, in-track, cross-track]
+    /// Time derivative of relative position in the rotating RIC frame, ρ̇ (km/s)
     pub velocity: Vector3<f64>,
 }
 
