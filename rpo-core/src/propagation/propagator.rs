@@ -3,6 +3,7 @@
 use hifitime::{Duration, Epoch};
 use serde::{Deserialize, Serialize};
 
+use crate::elements::conversions::ConversionError;
 use crate::propagation::drag_stm::propagate_roe_j2_drag;
 use crate::elements::ric::roe_to_ric;
 use crate::propagation::stm::propagate_roe_stm;
@@ -43,6 +44,8 @@ pub enum PropagationError {
         /// The invalid semi-major axis (km).
         a_km: f64,
     },
+    /// ROE→RIC conversion failed (theoretically unreachable after STM validation).
+    RicConversion(ConversionError),
 }
 
 impl std::fmt::Display for PropagationError {
@@ -58,7 +61,16 @@ impl std::fmt::Display for PropagationError {
             Self::InvalidSemiMajorAxis { a_km } => {
                 write!(f, "PropagationError: semi-major axis = {a_km} km must be positive")
             }
+            Self::RicConversion(e) => {
+                write!(f, "PropagationError: RIC conversion failed — {e}")
+            }
         }
+    }
+}
+
+impl From<ConversionError> for PropagationError {
+    fn from(e: ConversionError) -> Self {
+        Self::RicConversion(e)
     }
 }
 
@@ -101,12 +113,12 @@ impl PropagationModel {
         match self {
             Self::J2Stm => {
                 let (roe, chief_mean) = propagate_roe_stm(roe_0, chief_mean_0, dt_seconds)?;
-                Ok(make_propagated_state(roe, chief_mean, epoch_0, dt_seconds))
+                Ok(make_propagated_state(roe, chief_mean, epoch_0, dt_seconds)?)
             }
             Self::J2DragStm { drag } => {
                 let (roe, chief_mean) =
                     propagate_roe_j2_drag(roe_0, chief_mean_0, drag, dt_seconds)?;
-                Ok(make_propagated_state(roe, chief_mean, epoch_0, dt_seconds))
+                Ok(make_propagated_state(roe, chief_mean, epoch_0, dt_seconds)?)
             }
         }
     }
@@ -161,15 +173,15 @@ fn make_propagated_state(
     chief_mean: KeplerianElements,
     epoch_0: Epoch,
     dt_seconds: f64,
-) -> PropagatedState {
-    let ric = roe_to_ric(&roe, &chief_mean);
-    PropagatedState {
+) -> Result<PropagatedState, PropagationError> {
+    let ric = roe_to_ric(&roe, &chief_mean)?;
+    Ok(PropagatedState {
         epoch: epoch_0 + Duration::from_seconds(dt_seconds),
         roe,
         chief_mean,
         ric,
         elapsed_s: dt_seconds,
-    }
+    })
 }
 
 

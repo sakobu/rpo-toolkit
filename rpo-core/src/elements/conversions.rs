@@ -16,6 +16,16 @@ pub enum ConversionError {
         /// Specific orbital energy (km²/s²).
         energy_km2_s2: f64,
     },
+    /// Semi-major axis must be positive.
+    InvalidSemiMajorAxis {
+        /// The invalid semi-major axis (km).
+        a_km: f64,
+    },
+    /// Eccentricity must be in [0, 1).
+    InvalidEccentricity {
+        /// The invalid eccentricity value.
+        e: f64,
+    },
 }
 
 impl std::fmt::Display for ConversionError {
@@ -30,11 +40,38 @@ impl std::fmt::Display for ConversionError {
                     "ConversionError: unbound orbit — specific energy = {energy_km2_s2:.6e} km²/s² (must be negative)"
                 )
             }
+            Self::InvalidSemiMajorAxis { a_km } => {
+                write!(
+                    f,
+                    "ConversionError: semi-major axis = {a_km} km must be positive"
+                )
+            }
+            Self::InvalidEccentricity { e } => {
+                write!(
+                    f,
+                    "ConversionError: eccentricity = {e} out of range [0, 1)"
+                )
+            }
         }
     }
 }
 
 impl std::error::Error for ConversionError {}
+
+/// Validate that Keplerian elements have positive SMA and bound eccentricity.
+///
+/// # Errors
+/// Returns `ConversionError::InvalidSemiMajorAxis` if `ke.a_km <= 0`.
+/// Returns `ConversionError::InvalidEccentricity` if `ke.e < 0` or `ke.e >= 1`.
+pub(crate) fn validate_elements(ke: &KeplerianElements) -> Result<(), ConversionError> {
+    if ke.a_km <= 0.0 {
+        return Err(ConversionError::InvalidSemiMajorAxis { a_km: ke.a_km });
+    }
+    if ke.e < 0.0 || ke.e >= 1.0 {
+        return Err(ConversionError::InvalidEccentricity { e: ke.e });
+    }
+    Ok(())
+}
 
 /// Convert an ECI state vector to Keplerian orbital elements.
 ///
@@ -156,10 +193,12 @@ pub fn state_to_keplerian(sv: &StateVector) -> Result<KeplerianElements, Convers
 /// - `ke.a_km > 0` (negative SMA produces invalid geometry)
 /// - `0 <= ke.e < 1` (parabolic/hyperbolic elements are not supported)
 /// - Delegates to `true_anomaly()` for Kepler's equation; see its invariants
-#[must_use]
-pub fn keplerian_to_state(ke: &KeplerianElements, epoch: Epoch) -> StateVector {
-    debug_assert!(ke.a_km > 0.0, "semi-major axis must be positive, got {}", ke.a_km);
-    debug_assert!(ke.e >= 0.0 && ke.e < 1.0, "eccentricity must be in [0, 1), got {}", ke.e);
+///
+/// # Errors
+/// Returns `ConversionError::InvalidSemiMajorAxis` if `ke.a_km <= 0`.
+/// Returns `ConversionError::InvalidEccentricity` if `ke.e` is outside [0, 1).
+pub fn keplerian_to_state(ke: &KeplerianElements, epoch: Epoch) -> Result<StateVector, ConversionError> {
+    validate_elements(ke)?;
 
     let nu = ke.true_anomaly();
     let p = ke.a_km * (1.0 - ke.e * ke.e); // semi-latus rectum
@@ -201,11 +240,11 @@ pub fn keplerian_to_state(ke: &KeplerianElements, epoch: Epoch) -> StateVector {
         r31 * v_pqw.x + r32 * v_pqw.y,
     );
 
-    StateVector {
+    Ok(StateVector {
         epoch,
         position_eci_km: position,
         velocity_eci_km_s: velocity,
-    }
+    })
 }
 
 #[cfg(test)]
@@ -217,9 +256,9 @@ mod tests {
     fn roundtrip_eci_keplerian() {
         let epoch = test_epoch();
         let ke = iss_like_elements();
-        let sv = keplerian_to_state(&ke, epoch);
+        let sv = keplerian_to_state(&ke, epoch).unwrap();
         let ke2 = state_to_keplerian(&sv).unwrap();
-        let sv2 = keplerian_to_state(&ke2, sv.epoch);
+        let sv2 = keplerian_to_state(&ke2, sv.epoch).unwrap();
 
         let pos_err = (sv.position_eci_km - sv2.position_eci_km).norm();
         let vel_err = (sv.velocity_eci_km_s - sv2.velocity_eci_km_s).norm();
@@ -238,9 +277,9 @@ mod tests {
     fn roundtrip_eccentric_orbit() {
         let epoch = test_epoch();
         let ke = eccentric_elements();
-        let sv = keplerian_to_state(&ke, epoch);
+        let sv = keplerian_to_state(&ke, epoch).unwrap();
         let ke2 = state_to_keplerian(&sv).unwrap();
-        let sv2 = keplerian_to_state(&ke2, epoch);
+        let sv2 = keplerian_to_state(&ke2, epoch).unwrap();
 
         let pos_err = (sv.position_eci_km - sv2.position_eci_km).norm();
         let vel_err = (sv.velocity_eci_km_s - sv2.velocity_eci_km_s).norm();
@@ -260,9 +299,9 @@ mod tests {
             aop_rad: 0.0,
             mean_anomaly_rad: 90.0_f64.to_radians(),
         };
-        let sv = keplerian_to_state(&ke, epoch);
+        let sv = keplerian_to_state(&ke, epoch).unwrap();
         let ke2 = state_to_keplerian(&sv).unwrap();
-        let sv2 = keplerian_to_state(&ke2, epoch);
+        let sv2 = keplerian_to_state(&ke2, epoch).unwrap();
 
         let pos_err = (sv.position_eci_km - sv2.position_eci_km).norm();
         let vel_err = (sv.velocity_eci_km_s - sv2.velocity_eci_km_s).norm();
@@ -282,7 +321,7 @@ mod tests {
             aop_rad: 90.0_f64.to_radians(),
             mean_anomaly_rad: 45.0_f64.to_radians(),
         };
-        let sv = keplerian_to_state(&ke_orig, epoch);
+        let sv = keplerian_to_state(&ke_orig, epoch).unwrap();
         let ke = state_to_keplerian(&sv).unwrap();
 
         assert!((ke.a_km - ke_orig.a_km).abs() < 1e-8, "SMA mismatch");
@@ -293,6 +332,42 @@ mod tests {
         assert!(
             (ke.mean_anomaly_rad - ke_orig.mean_anomaly_rad).abs() < 1e-10,
             "Mean anomaly mismatch"
+        );
+    }
+
+    #[test]
+    fn keplerian_to_state_negative_sma_returns_error() {
+        let epoch = test_epoch();
+        let ke = KeplerianElements {
+            a_km: -100.0,
+            e: 0.001,
+            i_rad: 0.5,
+            raan_rad: 0.0,
+            aop_rad: 0.0,
+            mean_anomaly_rad: 0.0,
+        };
+        let result = keplerian_to_state(&ke, epoch);
+        assert!(
+            matches!(result, Err(ConversionError::InvalidSemiMajorAxis { .. })),
+            "Negative SMA should return InvalidSemiMajorAxis, got {result:?}"
+        );
+    }
+
+    #[test]
+    fn keplerian_to_state_hyperbolic_returns_error() {
+        let epoch = test_epoch();
+        let ke = KeplerianElements {
+            a_km: 7000.0,
+            e: 1.5,
+            i_rad: 0.5,
+            raan_rad: 0.0,
+            aop_rad: 0.0,
+            mean_anomaly_rad: 0.0,
+        };
+        let result = keplerian_to_state(&ke, epoch);
+        assert!(
+            matches!(result, Err(ConversionError::InvalidEccentricity { .. })),
+            "e >= 1 should return InvalidEccentricity, got {result:?}"
         );
     }
 

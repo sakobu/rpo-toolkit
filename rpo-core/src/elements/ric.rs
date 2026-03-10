@@ -6,6 +6,7 @@
 
 use nalgebra::{SMatrix, Vector3};
 
+use crate::elements::conversions::{validate_elements, ConversionError};
 use crate::types::{KeplerianElements, QuasiNonsingularROE, RICState};
 
 /// Errors from RIC ↔ ROE operations.
@@ -13,6 +14,8 @@ use crate::types::{KeplerianElements, QuasiNonsingularROE, RICState};
 pub enum RicError {
     /// `T_pos` · `T_pos^T` is singular; cannot compute pseudo-inverse.
     SingularPositionMatrix,
+    /// Chief Keplerian elements are invalid (e.g., `a <= 0` or `e >= 1`).
+    InvalidChiefElements(ConversionError),
 }
 
 impl std::fmt::Display for RicError {
@@ -21,11 +24,20 @@ impl std::fmt::Display for RicError {
             Self::SingularPositionMatrix => {
                 write!(f, "T_pos · T_pos^T is singular; cannot compute pseudo-inverse")
             }
+            Self::InvalidChiefElements(e) => {
+                write!(f, "RicError: invalid chief elements — {e}")
+            }
         }
     }
 }
 
 impl std::error::Error for RicError {}
+
+impl From<ConversionError> for RicError {
+    fn from(e: ConversionError) -> Self {
+        Self::InvalidChiefElements(e)
+    }
+}
 
 /// Compute the full 6×6 ROE→RIC transformation matrix (D'Amico Eq. 2.17).
 ///
@@ -37,8 +49,12 @@ impl std::error::Error for RicError {}
 /// # Invariants
 /// - `chief.a_km > 0`
 /// - Near-circular assumption: accurate for `e < ~0.1`
-#[must_use]
-pub fn compute_t_matrix(chief: &KeplerianElements) -> SMatrix<f64, 6, 6> {
+///
+/// # Errors
+/// Returns `ConversionError::InvalidSemiMajorAxis` if `chief.a_km <= 0`.
+/// Returns `ConversionError::InvalidEccentricity` if `chief.e` is outside [0, 1).
+pub fn compute_t_matrix(chief: &KeplerianElements) -> Result<SMatrix<f64, 6, 6>, ConversionError> {
+    validate_elements(chief)?;
     let a = chief.a_km;
     let n = chief.mean_motion();
     let u = chief.mean_arg_of_lat();
@@ -75,27 +91,31 @@ pub fn compute_t_matrix(chief: &KeplerianElements) -> SMatrix<f64, 6, 6> {
     t[(5, 4)] = a * n * cos_u;
     t[(5, 5)] = a * n * sin_u;
 
-    t
+    Ok(t)
 }
 
 /// Compute the 3×6 position submatrix of the T matrix (top 3 rows).
 ///
 /// # Invariants
 /// - `chief.a_km > 0`
-#[must_use]
-pub fn compute_t_position(chief: &KeplerianElements) -> SMatrix<f64, 3, 6> {
-    let t = compute_t_matrix(chief);
-    t.fixed_rows::<3>(0).into()
+///
+/// # Errors
+/// Returns `ConversionError` if `chief` has invalid SMA or eccentricity.
+pub fn compute_t_position(chief: &KeplerianElements) -> Result<SMatrix<f64, 3, 6>, ConversionError> {
+    let t = compute_t_matrix(chief)?;
+    Ok(t.fixed_rows::<3>(0).into())
 }
 
 /// Compute the 3×6 velocity submatrix of the T matrix (bottom 3 rows).
 ///
 /// # Invariants
 /// - `chief.a_km > 0`
-#[must_use]
-pub fn compute_t_velocity(chief: &KeplerianElements) -> SMatrix<f64, 3, 6> {
-    let t = compute_t_matrix(chief);
-    t.fixed_rows::<3>(3).into()
+///
+/// # Errors
+/// Returns `ConversionError` if `chief` has invalid SMA or eccentricity.
+pub fn compute_t_velocity(chief: &KeplerianElements) -> Result<SMatrix<f64, 3, 6>, ConversionError> {
+    let t = compute_t_matrix(chief)?;
+    Ok(t.fixed_rows::<3>(3).into())
 }
 
 /// Recover ROE from a target RIC position using the pseudo-inverse of `T_pos`.
@@ -117,7 +137,7 @@ pub fn ric_position_to_roe(
     ric_pos: &Vector3<f64>,
     chief: &KeplerianElements,
 ) -> Result<QuasiNonsingularROE, RicError> {
-    let t_pos = compute_t_position(chief);
+    let t_pos = compute_t_position(chief)?;
     // Pseudo-inverse: T^† = Tᵀ(T·Tᵀ)⁻¹
     let t_tt = t_pos * t_pos.transpose();
     let t_tt_inv = t_tt.try_inverse().ok_or(RicError::SingularPositionMatrix)?;
@@ -137,21 +157,57 @@ pub fn ric_position_to_roe(
 /// # Invariants
 /// - `chief.a_km > 0`
 /// - ROE must satisfy linearization validity (`dimensionless_norm() < ~0.01`)
-#[must_use]
-pub fn roe_to_ric(roe: &QuasiNonsingularROE, chief: &KeplerianElements) -> RICState {
-    debug_assert!(chief.a_km > 0.0, "chief semi-major axis must be positive");
-    let t = compute_t_matrix(chief);
+///
+/// # Errors
+/// Returns `ConversionError` if `chief` has invalid SMA or eccentricity.
+pub fn roe_to_ric(roe: &QuasiNonsingularROE, chief: &KeplerianElements) -> Result<RICState, ConversionError> {
+    let t = compute_t_matrix(chief)?;
     let ric_vec = t * roe.to_vector();
-    RICState {
+    Ok(RICState {
         position_ric_km: Vector3::new(ric_vec[0], ric_vec[1], ric_vec[2]),
         velocity_ric_km_s: Vector3::new(ric_vec[3], ric_vec[4], ric_vec[5]),
-    }
+    })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::test_helpers::iss_like_elements;
+
+    #[test]
+    fn t_matrix_negative_sma_returns_error() {
+        let chief = KeplerianElements {
+            a_km: -100.0,
+            e: 0.001,
+            i_rad: 0.5,
+            raan_rad: 0.0,
+            aop_rad: 0.0,
+            mean_anomaly_rad: 0.0,
+        };
+        let result = compute_t_matrix(&chief);
+        assert!(
+            matches!(result, Err(crate::elements::conversions::ConversionError::InvalidSemiMajorAxis { .. })),
+            "Negative SMA should return InvalidSemiMajorAxis, got {result:?}"
+        );
+    }
+
+    #[test]
+    fn roe_to_ric_negative_sma_returns_error() {
+        let chief = KeplerianElements {
+            a_km: -100.0,
+            e: 0.001,
+            i_rad: 0.5,
+            raan_rad: 0.0,
+            aop_rad: 0.0,
+            mean_anomaly_rad: 0.0,
+        };
+        let roe = QuasiNonsingularROE::default();
+        let result = roe_to_ric(&roe, &chief);
+        assert!(
+            matches!(result, Err(crate::elements::conversions::ConversionError::InvalidSemiMajorAxis { .. })),
+            "Negative SMA should return InvalidSemiMajorAxis, got {result:?}"
+        );
+    }
 
     // --- Tests from frames.rs ---
 
@@ -166,7 +222,7 @@ mod tests {
             mean_anomaly_rad: 0.0,
         };
         let roe = QuasiNonsingularROE::default();
-        let ric = roe_to_ric(&roe, &chief);
+        let ric = roe_to_ric(&roe, &chief).unwrap();
         assert!(ric.position_ric_km.norm() < 1e-12);
         assert!(ric.velocity_ric_km_s.norm() < 1e-12);
     }
@@ -191,7 +247,7 @@ mod tests {
             dix: 0.0,
             diy: 0.0,
         };
-        let ric = roe_to_ric(&roe, &chief);
+        let ric = roe_to_ric(&roe, &chief).unwrap();
 
         // Radial position should be a * da = 1 km
         assert!(
@@ -222,7 +278,7 @@ mod tests {
             dix,
             diy: 0.0,
         };
-        let ric = roe_to_ric(&roe, &chief);
+        let ric = roe_to_ric(&roe, &chief).unwrap();
 
         // At u=π/2, cross-track = a * dix * sin(u) = a * dix
         let expected_cross = chief.a_km * dix;
@@ -248,11 +304,11 @@ mod tests {
             diy: 0.0003,
         };
 
-        let t = compute_t_matrix(&chief);
+        let t = compute_t_matrix(&chief).unwrap();
         let roe_vec = roe.to_vector();
         let ric_vec = t * roe_vec;
 
-        let ric_ref = roe_to_ric(&roe, &chief);
+        let ric_ref = roe_to_ric(&roe, &chief).unwrap();
 
         assert!((ric_vec[0] - ric_ref.position_ric_km.x).abs() < 1e-10, "R mismatch");
         assert!((ric_vec[1] - ric_ref.position_ric_km.y).abs() < 1e-10, "I mismatch");
@@ -283,9 +339,9 @@ mod tests {
                 diy: 0.0001,
             };
 
-            let t = compute_t_matrix(&chief);
+            let t = compute_t_matrix(&chief).unwrap();
             let ric_vec = t * roe.to_vector();
-            let ric_ref = roe_to_ric(&roe, &chief);
+            let ric_ref = roe_to_ric(&roe, &chief).unwrap();
 
             let pos_err = ((ric_vec[0] - ric_ref.position_ric_km.x).powi(2)
                 + (ric_vec[1] - ric_ref.position_ric_km.y).powi(2)
@@ -303,7 +359,7 @@ mod tests {
     fn zero_roe_gives_zero_ric_via_t() {
         let chief = iss_like_elements();
         let roe = QuasiNonsingularROE::default();
-        let t = compute_t_matrix(&chief);
+        let t = compute_t_matrix(&chief).unwrap();
         let ric_vec = t * roe.to_vector();
         assert!(ric_vec.norm() < 1e-12);
     }
@@ -320,9 +376,9 @@ mod tests {
             dix: 0.0005,
             diy: 0.0003,
         };
-        let t_pos = compute_t_position(&chief);
+        let t_pos = compute_t_position(&chief).unwrap();
         let pos = t_pos * roe.to_vector();
-        let ric_ref = roe_to_ric(&roe, &chief);
+        let ric_ref = roe_to_ric(&roe, &chief).unwrap();
 
         assert!((pos[0] - ric_ref.position_ric_km.x).abs() < 1e-10);
         assert!((pos[1] - ric_ref.position_ric_km.y).abs() < 1e-10);
@@ -336,7 +392,7 @@ mod tests {
         let target_pos = nalgebra::Vector3::new(1.0, 5.0, 0.5);
 
         let roe = ric_position_to_roe(&target_pos, &chief).unwrap();
-        let t_pos = compute_t_position(&chief);
+        let t_pos = compute_t_position(&chief).unwrap();
         let recovered_pos = t_pos * roe.to_vector();
 
         assert!(

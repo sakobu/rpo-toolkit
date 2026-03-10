@@ -70,7 +70,7 @@ impl LambertTransfer {
     /// # Errors
     /// Returns `ConversionError` if the departure state cannot be converted
     /// to Keplerian elements (should not happen for valid Lambert solutions).
-    pub fn densify_arc(&self, n_steps: usize) -> Result<Vec<StateVector>, crate::elements::conversions::ConversionError> {
+    pub fn densify_arc(&self, n_steps: u32) -> Result<Vec<StateVector>, crate::elements::conversions::ConversionError> {
         crate::propagation::keplerian::propagate_keplerian(&self.departure_state, self.tof_s, n_steps)
     }
 }
@@ -321,11 +321,11 @@ mod tests {
     #[test]
     fn izzo_coplanar_transfer() {
         let epoch = test_epoch();
-        let dep = keplerian_to_state(&leo_400km_elements(), epoch);
+        let dep = keplerian_to_state(&leo_400km_elements(), epoch).unwrap();
         let arr = keplerian_to_state(
             &leo_800km_target_elements(),
             epoch + Duration::from_seconds(2400.0),
-        );
+        ).unwrap();
 
         let config = LambertConfig::default();
         let transfer = solve_lambert_izzo(&dep, &arr, &config).expect("Izzo should succeed");
@@ -341,7 +341,7 @@ mod tests {
     fn izzo_non_coplanar_transfer() {
         let epoch = test_epoch();
 
-        let dep = keplerian_to_state(&leo_400km_elements(), epoch);
+        let dep = keplerian_to_state(&leo_400km_elements(), epoch).unwrap();
 
         let arr_ke = KeplerianElements {
             a_km: 6378.137 + 500.0,
@@ -351,7 +351,7 @@ mod tests {
             aop_rad: 0.0,
             mean_anomaly_rad: 2.0,
         };
-        let arr = keplerian_to_state(&arr_ke, epoch + Duration::from_seconds(3600.0));
+        let arr = keplerian_to_state(&arr_ke, epoch + Duration::from_seconds(3600.0)).unwrap();
 
         let config = LambertConfig::default();
         let transfer = solve_lambert_izzo(&dep, &arr, &config).expect("Izzo non-coplanar failed");
@@ -366,7 +366,7 @@ mod tests {
     #[test]
     fn multi_rev_transfer() {
         let epoch = test_epoch();
-        let dep = keplerian_to_state(&leo_400km_elements(), epoch);
+        let dep = keplerian_to_state(&leo_400km_elements(), epoch).unwrap();
 
         let arr_ke = KeplerianElements {
             a_km: 6378.137 + 500.0,
@@ -377,7 +377,7 @@ mod tests {
             mean_anomaly_rad: 90.0_f64.to_radians(),
         };
         // Long TOF to allow 1-rev solution (~2 orbital periods)
-        let arr = keplerian_to_state(&arr_ke, epoch + Duration::from_seconds(12000.0));
+        let arr = keplerian_to_state(&arr_ke, epoch + Duration::from_seconds(12000.0)).unwrap();
 
         let config = LambertConfig {
             direction: TransferDirection::Auto,
@@ -394,7 +394,7 @@ mod tests {
     #[test]
     fn long_way_transfer() {
         let epoch = test_epoch();
-        let dep = keplerian_to_state(&leo_400km_elements(), epoch);
+        let dep = keplerian_to_state(&leo_400km_elements(), epoch).unwrap();
 
         let arr_ke = KeplerianElements {
             a_km: 6378.137 + 600.0,
@@ -404,7 +404,7 @@ mod tests {
             aop_rad: 0.0,
             mean_anomaly_rad: 90.0_f64.to_radians(),
         };
-        let arr = keplerian_to_state(&arr_ke, epoch + Duration::from_seconds(3600.0));
+        let arr = keplerian_to_state(&arr_ke, epoch + Duration::from_seconds(3600.0)).unwrap();
 
         let config = LambertConfig {
             direction: TransferDirection::LongWay,
@@ -420,11 +420,11 @@ mod tests {
     #[test]
     fn densify_arc_endpoints_match() {
         let epoch = test_epoch();
-        let dep = keplerian_to_state(&leo_400km_elements(), epoch);
+        let dep = keplerian_to_state(&leo_400km_elements(), epoch).unwrap();
         let arr = keplerian_to_state(
             &leo_800km_target_elements(),
             epoch + Duration::from_seconds(2400.0),
-        );
+        ).unwrap();
 
         let transfer = solve_lambert(&dep, &arr).expect("Lambert should succeed");
         let arc = transfer.densify_arc(100).unwrap();
@@ -442,11 +442,11 @@ mod tests {
     #[test]
     fn densify_arc_correct_count() {
         let epoch = test_epoch();
-        let dep = keplerian_to_state(&leo_400km_elements(), epoch);
+        let dep = keplerian_to_state(&leo_400km_elements(), epoch).unwrap();
         let arr = keplerian_to_state(
             &leo_800km_target_elements(),
             epoch + Duration::from_seconds(2400.0),
-        );
+        ).unwrap();
 
         let transfer = solve_lambert(&dep, &arr).expect("Lambert should succeed");
         let arc = transfer.densify_arc(100).unwrap();
@@ -457,11 +457,11 @@ mod tests {
     #[test]
     fn densify_arc_monotonic_epochs() {
         let epoch = test_epoch();
-        let dep = keplerian_to_state(&leo_400km_elements(), epoch);
+        let dep = keplerian_to_state(&leo_400km_elements(), epoch).unwrap();
         let arr = keplerian_to_state(
             &leo_800km_target_elements(),
             epoch + Duration::from_seconds(2400.0),
-        );
+        ).unwrap();
 
         let transfer = solve_lambert(&dep, &arr).expect("Lambert should succeed");
         let arc = transfer.densify_arc(50).unwrap();
@@ -481,11 +481,11 @@ mod tests {
         use crate::constants::R_EARTH;
 
         let epoch = test_epoch();
-        let dep = keplerian_to_state(&leo_400km_elements(), epoch);
+        let dep = keplerian_to_state(&leo_400km_elements(), epoch).unwrap();
         let arr = keplerian_to_state(
             &leo_800km_target_elements(),
             epoch + Duration::from_seconds(2400.0),
-        );
+        ).unwrap();
 
         let transfer = solve_lambert(&dep, &arr).expect("Lambert should succeed");
         let arc = transfer.densify_arc(100).unwrap();
@@ -506,11 +506,11 @@ mod tests {
     #[test]
     fn c3_is_populated() {
         let epoch = test_epoch();
-        let dep = keplerian_to_state(&leo_400km_elements(), epoch);
+        let dep = keplerian_to_state(&leo_400km_elements(), epoch).unwrap();
         let arr = keplerian_to_state(
             &leo_800km_target_elements(),
             epoch + Duration::from_seconds(2400.0),
-        );
+        ).unwrap();
 
         let config = LambertConfig::default();
         let izzo = solve_lambert_izzo(&dep, &arr, &config).expect("Izzo failed");

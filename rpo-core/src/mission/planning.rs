@@ -7,7 +7,7 @@
 //! Provides mission planning functions that combine Lambert transfers
 //! (when available) with ROE-based proximity operations.
 
-use crate::elements::conversions::state_to_keplerian;
+use crate::elements::conversions::{state_to_keplerian, ConversionError};
 use crate::elements::roe::compute_roe;
 use crate::types::{
     KeplerianElements, MissionError, MissionPhase, MissionPlan, PerchGeometry,
@@ -36,7 +36,7 @@ pub fn classify_separation(
     let chief_elements = state_to_keplerian(chief)?;
     let deputy_elements = state_to_keplerian(deputy)?;
     let separation_km = eci_separation_km(chief, deputy);
-    let roe = compute_roe(&chief_elements, &deputy_elements);
+    let roe = compute_roe(&chief_elements, &deputy_elements)?;
     let delta_r_over_r = roe.dimensionless_norm();
 
     if delta_r_over_r < config.roe_threshold {
@@ -78,13 +78,15 @@ pub fn eci_separation_km(chief: &StateVector, deputy: &StateVector) -> f64 {
 /// # Invariants
 /// - `chief.a_km > 0` (used as normalizing denominator in ROE computation)
 /// - Both elements must be at the same epoch
-#[must_use]
+///
+/// # Errors
+/// Returns `ConversionError` if `chief` has invalid SMA or eccentricity.
 pub fn dimensionless_separation(
     chief: &KeplerianElements,
     deputy: &KeplerianElements,
-) -> f64 {
-    let roe = compute_roe(chief, deputy);
-    roe.dimensionless_norm()
+) -> Result<f64, ConversionError> {
+    let roe = compute_roe(chief, deputy)?;
+    Ok(roe.dimensionless_norm())
 }
 
 /// Convert a [`PerchGeometry`] to a [`QuasiNonsingularROE`] state relative to the chief.
@@ -188,7 +190,7 @@ pub fn plan_mission(
             let arrival_epoch =
                 deputy.epoch + hifitime::Duration::from_seconds(lambert_tof_s);
             let target_state =
-                crate::elements::conversions::keplerian_to_state(&target_ke, arrival_epoch);
+                crate::elements::conversions::keplerian_to_state(&target_ke, arrival_epoch)?;
 
             // Solve Lambert: deputy → perch
             let transfer = crate::mission::lambert::solve_lambert(deputy, &target_state)?;
@@ -263,8 +265,8 @@ mod tests {
         let mut deputy_ke = chief_ke;
         deputy_ke.a_km += 1.0; // 1 km higher
 
-        let chief = keplerian_to_state(&chief_ke, epoch);
-        let deputy = keplerian_to_state(&deputy_ke, epoch);
+        let chief = keplerian_to_state(&chief_ke, epoch).unwrap();
+        let deputy = keplerian_to_state(&deputy_ke, epoch).unwrap();
         let config = ProximityConfig::default();
 
         let phase = classify_separation(&chief, &deputy, &config).unwrap();
@@ -287,8 +289,8 @@ mod tests {
             mean_anomaly_rad: 180.0_f64.to_radians(),
         };
 
-        let chief = keplerian_to_state(&chief_ke, epoch);
-        let deputy = keplerian_to_state(&deputy_ke, epoch);
+        let chief = keplerian_to_state(&chief_ke, epoch).unwrap();
+        let deputy = keplerian_to_state(&deputy_ke, epoch).unwrap();
         let config = ProximityConfig::default();
 
         let phase = classify_separation(&chief, &deputy, &config).unwrap();
@@ -308,7 +310,7 @@ mod tests {
 
         // These should NOT increase dimensionless separation
         // because δλ and δiy are excluded
-        let sep = dimensionless_separation(&chief, &deputy);
+        let sep = dimensionless_separation(&chief, &deputy).unwrap();
 
         // δa, δex, δey, δix should all be zero (same a, e, i, aop)
         assert!(
@@ -337,9 +339,9 @@ mod tests {
         let mut deputy_above = chief_ke;
         deputy_above.a_km = chief_ke.a_km * (1.0 + threshold * 1.01); // just above
 
-        let chief = keplerian_to_state(&chief_ke, epoch);
-        let dep_below = keplerian_to_state(&deputy_below, epoch);
-        let dep_above = keplerian_to_state(&deputy_above, epoch);
+        let chief = keplerian_to_state(&chief_ke, epoch).unwrap();
+        let dep_below = keplerian_to_state(&deputy_below, epoch).unwrap();
+        let dep_above = keplerian_to_state(&deputy_above, epoch).unwrap();
         let config = ProximityConfig { roe_threshold: threshold };
 
         assert!(matches!(
@@ -359,8 +361,8 @@ mod tests {
         let mut deputy_ke = chief_ke;
         deputy_ke.a_km += 50.0; // 50 km higher → δa/a ≈ 0.0074
 
-        let chief = keplerian_to_state(&chief_ke, epoch);
-        let deputy = keplerian_to_state(&deputy_ke, epoch);
+        let chief = keplerian_to_state(&chief_ke, epoch).unwrap();
+        let deputy = keplerian_to_state(&deputy_ke, epoch).unwrap();
 
         // Default threshold (0.005) should classify as FarField
         let strict = ProximityConfig::default();
@@ -385,8 +387,8 @@ mod tests {
         deputy_ke.a_km += 1.0;
         deputy_ke.mean_anomaly_rad += 0.01;
 
-        let chief = keplerian_to_state(&chief_ke, epoch);
-        let deputy = keplerian_to_state(&deputy_ke, epoch);
+        let chief = keplerian_to_state(&chief_ke, epoch).unwrap();
+        let deputy = keplerian_to_state(&deputy_ke, epoch).unwrap();
         let config = ProximityConfig::default();
 
         let phase = classify_separation(&chief, &deputy, &config).unwrap();
@@ -399,7 +401,7 @@ mod tests {
         } = phase
         {
             // ROE from classify should match direct compute_roe
-            let direct_roe = compute_roe(&chief_elements, &deputy_elements);
+            let direct_roe = compute_roe(&chief_elements, &deputy_elements).unwrap();
             assert!(
                 (roe.da - direct_roe.da).abs() < 1e-14,
                 "da mismatch"
@@ -449,7 +451,7 @@ mod tests {
         assert!(roe.dey.abs() < 1e-15, "dey should be zero");
 
         // Verify the RIC position has along-track component
-        let ric = roe_to_ric(&roe, &chief);
+        let ric = roe_to_ric(&roe, &chief).unwrap();
         // Along-track ≈ a * δλ + oscillatory terms
         assert!(
             ric.position_ric_km.y.abs() > 1.0,
@@ -488,7 +490,7 @@ mod tests {
 
         // Convert ROE → Keplerian → back to ROE
         let deputy_ke = perch_roe_to_keplerian(&original_roe, &chief);
-        let recovered_roe = compute_roe(&chief, &deputy_ke);
+        let recovered_roe = compute_roe(&chief, &deputy_ke).unwrap();
 
         assert!(
             (original_roe.da - recovered_roe.da).abs() < 1e-10,
@@ -541,8 +543,8 @@ mod tests {
             mean_anomaly_rad: 2.0,
         };
 
-        let chief = keplerian_to_state(&chief_ke, epoch);
-        let deputy = keplerian_to_state(&deputy_ke, epoch);
+        let chief = keplerian_to_state(&chief_ke, epoch).unwrap();
+        let deputy = keplerian_to_state(&deputy_ke, epoch).unwrap();
         let config = ProximityConfig::default();
         let perch = PerchGeometry::VBar {
             along_track_km: 5.0,
@@ -567,8 +569,8 @@ mod tests {
         deputy_ke.a_km += 1.0; // 1 km higher → Proximity regime
         deputy_ke.mean_anomaly_rad += 0.01;
 
-        let chief = keplerian_to_state(&chief_ke, epoch);
-        let deputy = keplerian_to_state(&deputy_ke, epoch);
+        let chief = keplerian_to_state(&chief_ke, epoch).unwrap();
+        let deputy = keplerian_to_state(&deputy_ke, epoch).unwrap();
         let config = ProximityConfig::default();
 
         let plan = plan_mission(&chief, &deputy, &perch, &config, 3600.0)
@@ -613,8 +615,8 @@ mod tests {
         let mut deputy_ke = chief_ke;
         deputy_ke.a_km += 1.0;
 
-        let chief = keplerian_to_state(&chief_ke, epoch);
-        let deputy = keplerian_to_state(&deputy_ke, epoch);
+        let chief = keplerian_to_state(&chief_ke, epoch).unwrap();
+        let deputy = keplerian_to_state(&deputy_ke, epoch).unwrap();
         let config = ProximityConfig::default();
         let perch = PerchGeometry::VBar { along_track_km: 5.0 };
 

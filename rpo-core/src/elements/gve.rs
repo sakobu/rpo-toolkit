@@ -5,6 +5,7 @@
 
 use nalgebra::{SMatrix, Vector3};
 
+use crate::elements::conversions::{validate_elements, ConversionError};
 use crate::types::{KeplerianElements, QuasiNonsingularROE};
 
 /// Compute the 6×3 GVE control input matrix (D'Amico Eq. 2.38).
@@ -20,8 +21,12 @@ use crate::types::{KeplerianElements, QuasiNonsingularROE};
 /// # Invariants
 /// - `chief.a_km > 0` (appears as `n * a` in denominator; zero → division by zero)
 /// - Near-circular assumption: derived for `e ≈ 0`; accuracy degrades for `e > 0.1`
-#[must_use]
-pub fn compute_b_matrix(chief: &KeplerianElements) -> SMatrix<f64, 6, 3> {
+///
+/// # Errors
+/// Returns `ConversionError::InvalidSemiMajorAxis` if `chief.a_km <= 0`.
+/// Returns `ConversionError::InvalidEccentricity` if `chief.e` is outside [0, 1).
+pub fn compute_b_matrix(chief: &KeplerianElements) -> Result<SMatrix<f64, 6, 3>, ConversionError> {
+    validate_elements(chief)?;
     let a = chief.a_km;
     let n = chief.mean_motion();
     let u = chief.mean_arg_of_lat();
@@ -56,7 +61,7 @@ pub fn compute_b_matrix(chief: &KeplerianElements) -> SMatrix<f64, 6, 3> {
     // a·δiy = δv_n·sin(u)/n
     b[(5, 2)] = sin_u * inv_na;
 
-    b
+    Ok(b)
 }
 
 /// Apply an impulsive maneuver to a ROE state using the GVE B matrix.
@@ -72,16 +77,18 @@ pub fn compute_b_matrix(chief: &KeplerianElements) -> SMatrix<f64, 6, 3> {
 /// - `chief.a_km > 0` (delegates to `compute_b_matrix`)
 /// - Near-circular assumption: accurate for `chief.e < ~0.1`
 /// - `chief` must be at the maneuver epoch
-#[must_use]
+///
+/// # Errors
+/// Returns `ConversionError` if `chief` has invalid SMA or eccentricity.
 pub fn apply_maneuver(
     roe: &QuasiNonsingularROE,
     dv_ric: &Vector3<f64>,
     chief: &KeplerianElements,
-) -> QuasiNonsingularROE {
-    let b = compute_b_matrix(chief);
+) -> Result<QuasiNonsingularROE, ConversionError> {
+    let b = compute_b_matrix(chief)?;
     let delta_roe = b * dv_ric;
     let new_roe = roe.to_vector() + delta_roe;
-    QuasiNonsingularROE::from_vector(&new_roe)
+    Ok(QuasiNonsingularROE::from_vector(&new_roe))
 }
 
 #[cfg(test)]
@@ -89,11 +96,28 @@ mod tests {
     use super::*;
     use crate::test_helpers::iss_like_elements;
 
+    #[test]
+    fn b_matrix_negative_sma_returns_error() {
+        let chief = KeplerianElements {
+            a_km: -100.0,
+            e: 0.001,
+            i_rad: 0.5,
+            raan_rad: 0.0,
+            aop_rad: 0.0,
+            mean_anomaly_rad: 0.0,
+        };
+        let result = compute_b_matrix(&chief);
+        assert!(
+            matches!(result, Err(crate::elements::conversions::ConversionError::InvalidSemiMajorAxis { .. })),
+            "Negative SMA should return InvalidSemiMajorAxis, got {result:?}"
+        );
+    }
+
     /// Along-track Δv should primarily change δa and δex/δey.
     #[test]
     fn along_track_dv_changes_da() {
         let chief = iss_like_elements();
-        let b = compute_b_matrix(&chief);
+        let b = compute_b_matrix(&chief).unwrap();
 
         // Pure along-track impulse
         let dv = Vector3::new(0.0, 0.001, 0.0); // 1 m/s along-track
@@ -114,7 +138,7 @@ mod tests {
     #[test]
     fn radial_dv_does_not_change_da() {
         let chief = iss_like_elements();
-        let b = compute_b_matrix(&chief);
+        let b = compute_b_matrix(&chief).unwrap();
 
         let dv = Vector3::new(0.001, 0.0, 0.0); // 1 m/s radial
         let delta = b * dv;
@@ -129,7 +153,7 @@ mod tests {
     #[test]
     fn cross_track_dv_changes_only_di() {
         let chief = iss_like_elements();
-        let b = compute_b_matrix(&chief);
+        let b = compute_b_matrix(&chief).unwrap();
 
         let dv = Vector3::new(0.0, 0.0, 0.001); // 1 m/s cross-track
         let delta = b * dv;
@@ -149,7 +173,7 @@ mod tests {
     #[test]
     fn inplane_outofplane_decoupled() {
         let chief = iss_like_elements();
-        let b = compute_b_matrix(&chief);
+        let b = compute_b_matrix(&chief).unwrap();
 
         // B matrix should have zeros enforcing decoupling:
         // Rows 4,5 (δix, δiy) columns 0,1 (radial, along-track) = 0
@@ -178,7 +202,7 @@ mod tests {
             diy: 0.0003,
         };
 
-        let result = apply_maneuver(&roe, &Vector3::zeros(), &chief);
+        let result = apply_maneuver(&roe, &Vector3::zeros(), &chief).unwrap();
         let diff = (result.to_vector() - roe.to_vector()).norm();
         assert!(diff < 1e-15, "Zero Δv should not change ROE, diff={diff}");
     }
@@ -197,8 +221,8 @@ mod tests {
         };
 
         let dv = Vector3::new(0.001, 0.002, 0.0005);
-        let after_fwd = apply_maneuver(&roe, &dv, &chief);
-        let after_rev = apply_maneuver(&after_fwd, &(-dv), &chief);
+        let after_fwd = apply_maneuver(&roe, &dv, &chief).unwrap();
+        let after_rev = apply_maneuver(&after_fwd, &(-dv), &chief).unwrap();
 
         let diff = (after_rev.to_vector() - roe.to_vector()).norm();
         assert!(

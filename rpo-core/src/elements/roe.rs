@@ -1,6 +1,7 @@
 //! Quasi-nonsingular relative orbital element (ROE) computation.
 
 use crate::constants::TWO_PI;
+use crate::elements::conversions::{validate_elements, ConversionError};
 use crate::types::{KeplerianElements, QuasiNonsingularROE};
 
 /// Compute quasi-nonsingular relative orbital elements (Koenig Eq. 2).
@@ -11,12 +12,15 @@ use crate::types::{KeplerianElements, QuasiNonsingularROE};
 /// - `chief.a_km > 0` (used as normalizing denominator)
 /// - Both elements must be at the same epoch
 /// - Near-equatorial orbits (`i ≈ 0`): `diy` degrades as `sin(i) → 0`
-#[must_use]
+///
+/// # Errors
+/// Returns `ConversionError::InvalidSemiMajorAxis` if `chief.a_km <= 0`.
+/// Returns `ConversionError::InvalidEccentricity` if `chief.e` is outside [0, 1).
 pub fn compute_roe(
     chief: &KeplerianElements,
     deputy: &KeplerianElements,
-) -> QuasiNonsingularROE {
-    debug_assert!(chief.a_km > 0.0, "chief semi-major axis must be positive, got {}", chief.a_km);
+) -> Result<QuasiNonsingularROE, ConversionError> {
+    validate_elements(chief)?;
 
     let da = (deputy.a_km - chief.a_km) / chief.a_km;
 
@@ -34,14 +38,14 @@ pub fn compute_roe(
     let dix = deputy.i_rad - chief.i_rad;
     let diy = d_raan * chief.i_rad.sin();
 
-    QuasiNonsingularROE {
+    Ok(QuasiNonsingularROE {
         da,
         dlambda,
         dex,
         dey,
         dix,
         diy,
-    }
+    })
 }
 
 /// Wrap angle to [-π, π]
@@ -61,9 +65,27 @@ mod tests {
     use crate::test_helpers::iss_like_elements;
 
     #[test]
+    fn roe_negative_sma_returns_error() {
+        let chief = KeplerianElements {
+            a_km: -100.0,
+            e: 0.001,
+            i_rad: 0.5,
+            raan_rad: 0.0,
+            aop_rad: 0.0,
+            mean_anomaly_rad: 0.0,
+        };
+        let deputy = iss_like_elements();
+        let result = compute_roe(&chief, &deputy);
+        assert!(
+            matches!(result, Err(crate::elements::conversions::ConversionError::InvalidSemiMajorAxis { .. })),
+            "Negative SMA should return InvalidSemiMajorAxis, got {result:?}"
+        );
+    }
+
+    #[test]
     fn roe_identical_orbits_are_zero() {
         let chief = iss_like_elements();
-        let roe = compute_roe(&chief, &chief);
+        let roe = compute_roe(&chief, &chief).unwrap();
         assert!(roe.da.abs() < 1e-15);
         assert!(roe.dlambda.abs() < 1e-15);
         assert!(roe.dex.abs() < 1e-15);
@@ -85,7 +107,7 @@ mod tests {
         let mut deputy = chief;
         deputy.a_km = 6787.0; // 1 km higher
 
-        let roe = compute_roe(&chief, &deputy);
+        let roe = compute_roe(&chief, &deputy).unwrap();
         let expected_da = 1.0 / 6786.0;
         assert!(
             (roe.da - expected_da).abs() < 1e-12,
@@ -107,7 +129,7 @@ mod tests {
         let mut deputy = chief;
         deputy.i_rad = chief.i_rad + 0.001; // small inclination offset
 
-        let roe = compute_roe(&chief, &deputy);
+        let roe = compute_roe(&chief, &deputy).unwrap();
         assert!(
             (roe.dix - 0.001).abs() < 1e-12,
             "dix mismatch: {}",

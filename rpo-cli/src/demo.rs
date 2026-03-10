@@ -89,7 +89,7 @@ pub(crate) fn run_demo() -> Result<(), Box<dyn Error>> {
 
     // --- ISS-like orbit: Keplerian → ECI ---
     let chief = iss_chief();
-    let chief_sv = keplerian_to_state(&chief, epoch);
+    let chief_sv = keplerian_to_state(&chief, epoch)?;
     println!("ISS-like orbit (near-circular, 51.6° inclination):");
     println!("  Keplerian: a={:.1} km, e={:.4}, i={:.1}°",
         chief.a_km, chief.e, chief.i_rad.to_degrees());
@@ -100,7 +100,7 @@ pub(crate) fn run_demo() -> Result<(), Box<dyn Error>> {
 
     // --- Roundtrip: ECI → Keplerian → ECI ---
     let recovered = state_to_keplerian(&chief_sv)?;
-    let recovered_sv = keplerian_to_state(&recovered, epoch);
+    let recovered_sv = keplerian_to_state(&recovered, epoch)?;
     let pos_err = (chief_sv.position_eci_km - recovered_sv.position_eci_km).norm();
     let vel_err = (chief_sv.velocity_eci_km_s - recovered_sv.velocity_eci_km_s).norm();
     println!("\n  Roundtrip ECI→Kep→ECI errors:");
@@ -118,9 +118,9 @@ pub(crate) fn run_demo() -> Result<(), Box<dyn Error>> {
 
     // --- Eccentric orbit ---
     let ecc = eccentric_orbit();
-    let ecc_sv = keplerian_to_state(&ecc, epoch);
+    let ecc_sv = keplerian_to_state(&ecc, epoch)?;
     let ecc_recovered = state_to_keplerian(&ecc_sv)?;
-    let ecc_sv2 = keplerian_to_state(&ecc_recovered, epoch);
+    let ecc_sv2 = keplerian_to_state(&ecc_recovered, epoch)?;
     let ecc_pos_err = (ecc_sv.position_eci_km - ecc_sv2.position_eci_km).norm();
     println!("\n  Eccentric orbit (e={:.2}, i={:.1}°, a={:.0} km):",
         ecc.e, ecc.i_rad.to_degrees(), ecc.a_km);
@@ -135,7 +135,7 @@ pub(crate) fn run_demo() -> Result<(), Box<dyn Error>> {
     println!("╚══════════════════════════════════════════════════╝\n");
 
     let deputy = close_deputy();
-    let roe = compute_roe(&chief, &deputy);
+    let roe = compute_roe(&chief, &deputy)?;
 
     print_roe("ROE (chief → close deputy)", &roe, chief.a_km);
 
@@ -147,7 +147,7 @@ pub(crate) fn run_demo() -> Result<(), Box<dyn Error>> {
     println!("  from_vector() roundtrip δa error: {:.2e}", (roe_back.da - roe.da).abs());
 
     // --- Dimensionless separation metric ---
-    let dim_sep = dimensionless_separation(&chief, &deputy);
+    let dim_sep = dimensionless_separation(&chief, &deputy)?;
     println!("\n  Dimensionless separation δr/r: {dim_sep:.6e}");
     println!("    (uses max of |δa|, |δex|, |δey|, |δix|; excludes δλ, δiy)");
     println!("    Default proximity threshold: {:.4}", ProximityConfig::default().roe_threshold);
@@ -158,7 +158,7 @@ pub(crate) fn run_demo() -> Result<(), Box<dyn Error>> {
     });
 
     // --- Standalone roe_to_ric ---
-    let ric = roe_to_ric(&roe, &chief);
+    let ric = roe_to_ric(&roe, &chief)?;
     println!("\n  ROE → RIC mapping (D'Amico Eq. 2.17):");
     println!("    RIC frame: R=radial, I=in-track (velocity direction), C=cross-track");
     println!("    Position: R={:.6} km, I={:.6} km, C={:.6} km",
@@ -327,7 +327,7 @@ pub(crate) fn run_demo() -> Result<(), Box<dyn Error>> {
 
     let config = ProximityConfig::default();
     let deputy_kep = close_deputy();
-    let deputy_sv = keplerian_to_state(&deputy_kep, epoch);
+    let deputy_sv = keplerian_to_state(&deputy_kep, epoch)?;
 
     // --- Proximity case ---
     println!("Case A: Close deputy (+1 km SMA, small phase offset)");
@@ -341,13 +341,13 @@ pub(crate) fn run_demo() -> Result<(), Box<dyn Error>> {
         MissionPhase::FarField { .. } => println!("  Classification: FAR-FIELD"),
     }
 
-    let prox_roe = compute_roe(&chief, &deputy_kep);
+    let prox_roe = compute_roe(&chief, &deputy_kep)?;
     println!("\n  Proximity ROE state:");
     print_roe("ROE", &prox_roe, chief.a_km);
 
     // --- Far-field case ---
     let far_dep = far_deputy();
-    let far_sv = keplerian_to_state(&far_dep, epoch);
+    let far_sv = keplerian_to_state(&far_dep, epoch)?;
 
     println!("\nCase B: Distant deputy (+500 km SMA, different plane)");
     let far_phase = classify_separation(&chief_sv, &far_sv, &config)?;
@@ -391,7 +391,7 @@ pub(crate) fn run_demo() -> Result<(), Box<dyn Error>> {
 
     // Build departure and arrival states for standalone Lambert calls
     let lambert_dep_ke = far_deputy();
-    let lambert_dep_sv = keplerian_to_state(&lambert_dep_ke, epoch);
+    let lambert_dep_sv = keplerian_to_state(&lambert_dep_ke, epoch)?;
     // Target: a point near the chief 1 hour later
     let arrival_epoch = epoch + hifitime::Duration::from_seconds(3600.0);
     let lambert_arr_ke = KeplerianElements {
@@ -402,7 +402,7 @@ pub(crate) fn run_demo() -> Result<(), Box<dyn Error>> {
         aop_rad: 0.0,
         mean_anomaly_rad: 90.0_f64.to_radians(), // different position in orbit
     };
-    let lambert_arr_sv = keplerian_to_state(&lambert_arr_ke, arrival_epoch);
+    let lambert_arr_sv = keplerian_to_state(&lambert_arr_ke, arrival_epoch)?;
 
     // --- Short-way transfer ---
     let short_config = LambertConfig {
@@ -452,8 +452,8 @@ pub(crate) fn run_demo() -> Result<(), Box<dyn Error>> {
     }
 
     // Compare V-bar vs R-bar perch
-    let vbar_ric = roe_to_ric(&mission.perch_roe, &chief);
-    let rbar_ric = roe_to_ric(&rbar_mission.perch_roe, &chief);
+    let vbar_ric = roe_to_ric(&mission.perch_roe, &chief)?;
+    let rbar_ric = roe_to_ric(&rbar_mission.perch_roe, &chief)?;
     println!("\n  Perch comparison (RIC at epoch):");
     println!("    {:>8}  {:>12}  {:>12}  {:>12}", "", "R (km)", "I (km)", "C (km)");
     println!("    {:>8}  {:>12.6}  {:>12.6}  {:>12.6}", "V-bar",
@@ -471,7 +471,7 @@ pub(crate) fn run_demo() -> Result<(), Box<dyn Error>> {
         diy: 0.0,
     };
     let custom_perch = PerchGeometry::Custom(custom_roe);
-    let custom_ric = roe_to_ric(&custom_roe, &chief);
+    let custom_ric = roe_to_ric(&custom_roe, &chief)?;
     println!("\n  Custom perch (0.5 km R + 3 km I):");
     println!("    RIC: [{:.4}, {:.4}, {:.4}] km",
         custom_ric.position_ric_km.x, custom_ric.position_ric_km.y, custom_ric.position_ric_km.z);

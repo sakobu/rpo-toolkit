@@ -161,7 +161,7 @@ fn run_targeting(input_path: &PathBuf, json_output: bool) -> Result<(), Box<dyn 
 
     let chief_ke = state_to_keplerian(&input.chief)?;
     let deputy_ke = state_to_keplerian(&input.deputy)?;
-    let roe = compute_roe(&chief_ke, &deputy_ke);
+    let roe = compute_roe(&chief_ke, &deputy_ke)?;
 
     let waypoints = convert_waypoints(&input.waypoints);
 

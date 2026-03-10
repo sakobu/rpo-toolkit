@@ -22,7 +22,7 @@ use crate::types::StateVector;
 pub fn propagate_keplerian(
     initial: &StateVector,
     duration_s: f64,
-    n_steps: usize,
+    n_steps: u32,
 ) -> Result<Vec<StateVector>, ConversionError> {
     if n_steps == 0 {
         return Ok(vec![initial.clone()]);
@@ -31,10 +31,10 @@ pub fn propagate_keplerian(
     let ke = state_to_keplerian(initial)?;
     let n = ke.mean_motion();
 
-    Ok((0..=n_steps)
+    let step = duration_s / f64::from(n_steps);
+    (0..=n_steps)
         .map(|k| {
-            #[allow(clippy::cast_precision_loss)]
-            let dt = duration_s * (k as f64) / (n_steps as f64);
+            let dt = f64::from(k) * step;
             let epoch_k = initial.epoch + Duration::from_seconds(dt);
             let m_k = (ke.mean_anomaly_rad + n * dt).rem_euclid(TWO_PI);
             let ke_k = crate::types::KeplerianElements {
@@ -43,7 +43,7 @@ pub fn propagate_keplerian(
             };
             keplerian_to_state(&ke_k, epoch_k)
         })
-        .collect())
+        .collect()
 }
 
 #[cfg(test)]
@@ -57,7 +57,7 @@ mod tests {
     fn propagate_keplerian_circular_closure() {
         let epoch = test_epoch();
         let ke = iss_like_elements();
-        let initial = keplerian_to_state(&ke, epoch);
+        let initial = keplerian_to_state(&ke, epoch).unwrap();
         let period = ke.period();
 
         let trajectory = propagate_keplerian(&initial, period, 100).unwrap();
@@ -75,7 +75,7 @@ mod tests {
     fn propagate_keplerian_eccentric_closure() {
         let epoch = test_epoch();
         let ke = eccentric_elements();
-        let initial = keplerian_to_state(&ke, epoch);
+        let initial = keplerian_to_state(&ke, epoch).unwrap();
         let period = ke.period();
 
         let trajectory = propagate_keplerian(&initial, period, 100).unwrap();
@@ -91,7 +91,7 @@ mod tests {
     fn propagate_keplerian_zero_steps() {
         let epoch = test_epoch();
         let ke = iss_like_elements();
-        let initial = keplerian_to_state(&ke, epoch);
+        let initial = keplerian_to_state(&ke, epoch).unwrap();
 
         let trajectory = propagate_keplerian(&initial, 3600.0, 0).unwrap();
         assert_eq!(trajectory.len(), 1, "n_steps=0 should return 1 state");
@@ -105,7 +105,7 @@ mod tests {
     fn propagate_keplerian_energy_conservation() {
         let epoch = test_epoch();
         let ke = eccentric_elements();
-        let initial = keplerian_to_state(&ke, epoch);
+        let initial = keplerian_to_state(&ke, epoch).unwrap();
         let period = ke.period();
 
         let trajectory = propagate_keplerian(&initial, period, 200).unwrap();

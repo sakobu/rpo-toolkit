@@ -120,8 +120,8 @@ mod tests {
             mean_anomaly_rad: 2.0,
         };
 
-        let chief = keplerian_to_state(&chief_ke, epoch);
-        let deputy = keplerian_to_state(&deputy_ke, epoch);
+        let chief = keplerian_to_state(&chief_ke, epoch).unwrap();
+        let deputy = keplerian_to_state(&deputy_ke, epoch).unwrap();
         let config = ProximityConfig::default();
 
         // Phase classification
@@ -235,7 +235,7 @@ mod tests {
         let mut deputy = chief;
         deputy.a_km += 1.0;
         deputy.i_rad += 0.001;
-        let roe_0 = compute_roe(&chief, &deputy);
+        let roe_0 = compute_roe(&chief, &deputy).unwrap();
         let period = std::f64::consts::TAU / chief.mean_motion();
 
         let prop = PropagationModel::J2Stm;
@@ -278,11 +278,11 @@ mod tests {
         let epoch = test_epoch();
         let tof = 2400.0;
 
-        let dep = keplerian_to_state(&leo_400km_elements(), epoch);
+        let dep = keplerian_to_state(&leo_400km_elements(), epoch).unwrap();
         let arr = keplerian_to_state(
             &leo_800km_target_elements(),
             epoch + hifitime::Duration::from_seconds(tof),
-        );
+        ).unwrap();
 
         // Solve Lambert
         let transfer =
@@ -312,7 +312,7 @@ mod tests {
         let epoch = test_epoch();
         let tof = 3600.0;
 
-        let dep = keplerian_to_state(&leo_400km_elements(), epoch);
+        let dep = keplerian_to_state(&leo_400km_elements(), epoch).unwrap();
         let arr_ke = KeplerianElements {
             a_km: 6378.137 + 500.0,
             e: 0.001,
@@ -321,7 +321,7 @@ mod tests {
             aop_rad: 0.0,
             mean_anomaly_rad: 2.0,
         };
-        let arr = keplerian_to_state(&arr_ke, epoch + hifitime::Duration::from_seconds(tof));
+        let arr = keplerian_to_state(&arr_ke, epoch + hifitime::Duration::from_seconds(tof)).unwrap();
 
         let transfer =
             crate::mission::lambert::solve_lambert(&dep, &arr).expect("Lambert should converge");
@@ -355,8 +355,8 @@ mod tests {
         deputy_ke.a_km += 1.0;
         deputy_ke.i_rad += 0.001;
 
-        let chief_sv = keplerian_to_state(&chief_ke, epoch);
-        let deputy_sv = keplerian_to_state(&deputy_ke, epoch);
+        let chief_sv = keplerian_to_state(&chief_ke, epoch).unwrap();
+        let deputy_sv = keplerian_to_state(&deputy_ke, epoch).unwrap();
 
         let period = std::f64::consts::TAU / chief_ke.mean_motion();
         let duration = 10.0 * period;
@@ -370,10 +370,10 @@ mod tests {
         // Compute ROEs from nyx final states
         let chief_ke_final = state_to_keplerian(&chief_nyx).unwrap();
         let deputy_ke_final = state_to_keplerian(&deputy_nyx).unwrap();
-        let nyx_roe = compute_roe(&chief_ke_final, &deputy_ke_final);
+        let nyx_roe = compute_roe(&chief_ke_final, &deputy_ke_final).unwrap();
 
         // Propagate with J2 STM
-        let roe_0 = compute_roe(&chief_ke, &deputy_ke);
+        let roe_0 = compute_roe(&chief_ke, &deputy_ke).unwrap();
         let prop = PropagationModel::J2Stm;
         let stm_state = prop.propagate(&roe_0, &chief_ke, epoch, duration).unwrap();
 

@@ -182,7 +182,7 @@ mod tests {
             aop_rad: 0.0,
             mean_anomaly_rad: 0.0, // at periapsis → r along x, v along y
         };
-        let sv = keplerian_to_state(&ke, test_epoch());
+        let sv = keplerian_to_state(&ke, test_epoch()).unwrap();
         let dcm = eci_to_ric_dcm(&sv);
 
         // R_hat should be along +x, I_hat along +y, C_hat along +z
@@ -197,7 +197,7 @@ mod tests {
     /// DCM must be orthogonal: DCM·DCM^T = I, det(DCM) = +1
     #[test]
     fn dcm_orthogonality() {
-        let sv = keplerian_to_state(&iss_like_elements(), test_epoch());
+        let sv = keplerian_to_state(&iss_like_elements(), test_epoch()).unwrap();
         let dcm = eci_to_ric_dcm(&sv);
 
         let product = dcm * dcm.transpose();
@@ -221,7 +221,7 @@ mod tests {
         let dv_ric = Vector3::new(0.001, -0.005, 0.002);
 
         for ke in &[iss_like_elements(), eccentric_elements()] {
-            let sv = keplerian_to_state(ke, test_epoch());
+            let sv = keplerian_to_state(ke, test_epoch()).unwrap();
             let dv_eci = ric_to_eci_dv(&dv_ric, &sv);
             let dv_back = eci_to_ric_dv(&dv_eci, &sv);
 
@@ -248,15 +248,15 @@ mod tests {
         };
 
         let epoch = test_epoch();
-        let chief_sv = keplerian_to_state(&chief_ke, epoch);
-        let deputy_sv = keplerian_to_state(&deputy_ke, epoch);
+        let chief_sv = keplerian_to_state(&chief_ke, epoch).unwrap();
+        let deputy_sv = keplerian_to_state(&deputy_ke, epoch).unwrap();
 
         // Geometric path: direct ECI→RIC
         let ric_geometric = eci_to_ric_relative(&chief_sv, &deputy_sv);
 
         // Analytical path: Keplerian→ROE→RIC
-        let roe = compute_roe(&chief_ke, &deputy_ke);
-        let ric_analytical = roe_to_ric(&roe, &chief_ke);
+        let roe = compute_roe(&chief_ke, &deputy_ke).unwrap();
+        let ric_analytical = roe_to_ric(&roe, &chief_ke).unwrap();
 
         let pos_err = (ric_geometric.position_ric_km - ric_analytical.position_ric_km).norm();
         assert!(
@@ -283,8 +283,8 @@ mod tests {
         };
 
         let epoch = test_epoch();
-        let chief_sv = keplerian_to_state(&chief_ke, epoch);
-        let deputy_sv = keplerian_to_state(&deputy_ke, epoch);
+        let chief_sv = keplerian_to_state(&chief_ke, epoch).unwrap();
+        let deputy_sv = keplerian_to_state(&deputy_ke, epoch).unwrap();
 
         // Forward: ECI → RIC
         let ric = eci_to_ric_relative(&chief_sv, &deputy_sv);
@@ -315,7 +315,7 @@ mod tests {
                 mean_anomaly_rad: u_deg.to_radians(),
                 ..base
             };
-            let sv = keplerian_to_state(&ke, test_epoch());
+            let sv = keplerian_to_state(&ke, test_epoch()).unwrap();
             let dcm = eci_to_ric_dcm(&sv);
 
             // Row 0 (R_hat) should be parallel to position
@@ -355,8 +355,8 @@ mod tests {
             ..chief_ke
         };
         let epoch = test_epoch();
-        let chief_sv = keplerian_to_state(&chief_ke, epoch);
-        let deputy_sv = keplerian_to_state(&deputy_ke, epoch);
+        let chief_sv = keplerian_to_state(&chief_ke, epoch).unwrap();
+        let deputy_sv = keplerian_to_state(&deputy_ke, epoch).unwrap();
 
         // Compute the ω×ρ correction magnitude directly
         let dcm = eci_to_ric_dcm(&chief_sv);

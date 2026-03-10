@@ -77,7 +77,7 @@ fn forward_model(
     tof_s: f64,
     propagator: &PropagationModel,
 ) -> Result<(PropagatedState, QuasiNonsingularROE), MissionError> {
-    let post_dv1_roe = apply_maneuver(&departure.roe, dv1, &departure.chief);
+    let post_dv1_roe = apply_maneuver(&departure.roe, dv1, &departure.chief)?;
     let state = propagator.propagate(&post_dv1_roe, &departure.chief, departure.epoch, tof_s)?;
     Ok((state, post_dv1_roe))
 }
@@ -94,8 +94,8 @@ fn compute_analytical_jacobian(
     let j2p = crate::propagation::j2_params::compute_j2_params(chief_dep)?;
     let phi = crate::propagation::stm::compute_stm_with_params(&j2p, chief_dep, tof_s);
     let chief_arr = crate::propagation::stm::propagate_chief_mean(chief_dep, &j2p, tof_s);
-    let b = crate::elements::gve::compute_b_matrix(chief_dep);
-    let t_pos = crate::elements::ric::compute_t_position(&chief_arr);
+    let b = crate::elements::gve::compute_b_matrix(chief_dep)?;
+    let t_pos = crate::elements::ric::compute_t_position(&chief_arr)?;
     Ok(t_pos * phi * b)
 }
 
@@ -272,7 +272,7 @@ fn build_leg(
 
     // Arrival Δv corrects velocity mismatch
     let dv2 = solution.target_velocity - solution.arrival.ric.velocity_ric_km_s;
-    let post_arr_roe = apply_maneuver(&solution.arrival.roe, &dv2, &solution.arrival.chief_mean);
+    let post_arr_roe = apply_maneuver(&solution.arrival.roe, &dv2, &solution.arrival.chief_mean)?;
 
     let total_dv_km_s = solution.dv1.norm() + dv2.norm();
 
@@ -284,7 +284,7 @@ fn build_leg(
         config.trajectory_steps,
     )?;
 
-    let from_position_ric_km = crate::elements::ric::roe_to_ric(&departure.roe, &departure.chief).position_ric_km;
+    let from_position_ric_km = crate::elements::ric::roe_to_ric(&departure.roe, &departure.chief)?.position_ric_km;
 
     Ok(ManeuverLeg {
         departure_maneuver: Maneuver {
@@ -522,7 +522,7 @@ mod tests {
         .expect("should converge");
 
         // Verify by propagating with the computed Δv
-        let post_dep = apply_maneuver(&departure.roe, &leg.departure_maneuver.dv_ric_km_s, &chief);
+        let post_dep = apply_maneuver(&departure.roe, &leg.departure_maneuver.dv_ric_km_s, &chief).unwrap();
         let state = propagator.propagate(&post_dep, &chief, epoch, period).unwrap();
         let pos_err = (state.ric.position_ric_km - target_pos).norm();
 
