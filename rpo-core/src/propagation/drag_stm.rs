@@ -189,7 +189,7 @@ pub fn propagate_roe_j2_drag(
 mod tests {
     use super::*;
     use crate::propagation::stm::compute_stm;
-    use crate::test_helpers::{eccentric_elements, iss_like_elements, test_drag_config};
+    use crate::test_helpers::{eccentric_elements, iss_like_elements, koenig_table2_case1, test_drag_config};
 
     #[test]
     fn zero_drag_equals_j2_stm() {
@@ -375,5 +375,84 @@ mod tests {
         let json = serde_json::to_string(&config).expect("serialize");
         let roundtrip: DragConfig = serde_json::from_str(&json).expect("deserialize");
         assert_eq!(config, roundtrip);
+    }
+
+    // --- Paper-traced regression tests (Koenig Appendix D) ---
+
+    /// Koenig Appendix D: drag coupling block entries for Table 2 Case 1, tau = 1 period.
+    /// Validates the 6×3 upper-right drag block and the identity/zero structure.
+    #[test]
+    fn koenig_appendix_d_drag_block_case1() {
+        let chief = koenig_table2_case1();
+        let drag = DragConfig::zero();
+        let period = chief.period();
+        let j2p = compute_j2_params(&chief).unwrap();
+        let stm = compute_j2_drag_stm(&chief, &drag, period).unwrap();
+
+        // phi[0,6] = τ (linear δa from δȧ)
+        assert!(
+            (stm[(0, 6)] - period).abs() < 1e-4,
+            "phi[0,6]: got {}, expected {period}", stm[(0, 6)]
+        );
+
+        // phi[1,6] = -(0.75·n + 1.75·κ·E·P)·τ²
+        let tau2 = period * period;
+        let expected_16 = -(0.75 * j2p.n + 1.75 * j2p.kappa * j2p.big_e * j2p.big_p) * tau2;
+        assert!(
+            (stm[(1, 6)] - expected_16).abs() < 1e-2,
+            "phi[1,6]: got {}, expected {expected_16}", stm[(1, 6)]
+        );
+
+        // Lower-right 3×3 identity block
+        assert!((stm[(6, 6)] - 1.0).abs() < 1e-14, "phi[6,6] should be 1.0");
+        assert!((stm[(7, 7)] - 1.0).abs() < 1e-14, "phi[7,7] should be 1.0");
+        assert!((stm[(8, 8)] - 1.0).abs() < 1e-14, "phi[8,8] should be 1.0");
+
+        // Lower-left 3×6 block should be all zeros
+        for r in 6..9 {
+            for c in 0..6 {
+                assert!(
+                    stm[(r, c)].abs() < 1e-14,
+                    "phi[{r},{c}] should be 0, got {}", stm[(r, c)]
+                );
+            }
+        }
+    }
+
+    /// Koenig Appendix D: δȧ → δλ quadratic coupling coefficient.
+    /// Propagates zero ROE with δȧ=-1e-10 and verifies:
+    /// (1) δλ(2T)/δλ(T) ≈ 4.0 (quadratic scaling)
+    /// (2) coefficient matches -(0.75·n + 1.75·κ·E·P)
+    #[test]
+    fn koenig_appendix_d_quadratic_coefficient() {
+        let chief = koenig_table2_case1();
+        let da_dot = -1e-10;
+        let drag = DragConfig {
+            da_dot,
+            dex_dot: 0.0,
+            dey_dot: 0.0,
+        };
+        let roe = QuasiNonsingularROE::default();
+        let period = chief.period();
+
+        let (roe_1t, _) = propagate_roe_j2_drag(&roe, &chief, &drag, period).unwrap();
+        let (roe_2t, _) = propagate_roe_j2_drag(&roe, &chief, &drag, 2.0 * period).unwrap();
+
+        // Quadratic: δλ(2T) / δλ(T) ≈ 4.0
+        let ratio = roe_2t.dlambda / roe_1t.dlambda;
+        assert!(
+            (ratio - 4.0).abs() < 0.1,
+            "Quadratic ratio: got {ratio}, expected ~4.0"
+        );
+
+        // Verify coefficient: δλ ≈ coeff · δȧ · τ²
+        // coeff = -(0.75·n + 1.75·κ·E·P)
+        let j2p = compute_j2_params(&chief).unwrap();
+        let expected_coeff = -(0.75 * j2p.n + 1.75 * j2p.kappa * j2p.big_e * j2p.big_p);
+        let actual_coeff = roe_1t.dlambda / (da_dot * period * period);
+        assert!(
+            (actual_coeff - expected_coeff).abs() / expected_coeff.abs() < 1e-6,
+            "Quadratic coefficient: got {actual_coeff}, expected {expected_coeff}"
+        );
     }
 }

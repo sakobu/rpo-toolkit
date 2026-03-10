@@ -143,7 +143,9 @@ pub fn compute_j2_params(mean: &KeplerianElements) -> Result<J2Params, Propagati
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_helpers::iss_like_elements;
+    use crate::test_helpers::{
+        iss_like_elements, koenig_table2_case1, koenig_table2_case2, koenig_table2_case3,
+    };
 
     #[test]
     fn iss_raan_rate() {
@@ -234,6 +236,211 @@ mod tests {
         assert!(
             (j2p.big_q - expected_q).abs() < 1e-14,
             "Q should be 5cos²i - 1"
+        );
+    }
+
+    // --- Paper-traced regression tests (Koenig Eqs. 13-16) ---
+
+    /// Koenig Eqs. 13-16: J2 parameters for Table 2 Case 1 (i=30°, e=0.005).
+    /// Validates exact trig-based auxiliaries P, Q, S, T and derived quantities.
+    #[test]
+    fn koenig_table2_case1_j2_params() {
+        let chief = koenig_table2_case1();
+        let j2p = compute_j2_params(&chief).unwrap();
+
+        // eta = sqrt(1 - 0.005²) = sqrt(0.999975)
+        let expected_eta = (1.0 - 0.005_f64.powi(2)).sqrt();
+        assert!(
+            (j2p.eta - expected_eta).abs() < 1e-12,
+            "eta: got {}, expected {expected_eta}", j2p.eta
+        );
+
+        // i=30°: cos²(30°) = 3/4 exactly
+        // P = 3cos²i - 1 = 5/4 = 1.25
+        assert!(
+            (j2p.big_p - 1.25).abs() < 1e-12,
+            "P: got {}, expected 1.25", j2p.big_p
+        );
+
+        // Q = 5cos²i - 1 = 11/4 = 2.75
+        assert!(
+            (j2p.big_q - 2.75).abs() < 1e-12,
+            "Q: got {}, expected 2.75", j2p.big_q
+        );
+
+        // S = sin(2·30°) = sin(60°) = √3/2
+        let sqrt3_over_2 = 3.0_f64.sqrt() / 2.0;
+        assert!(
+            (j2p.big_s - sqrt3_over_2).abs() < 1e-12,
+            "S: got {}, expected {sqrt3_over_2}", j2p.big_s
+        );
+
+        // T = sin²(30°) = 1/4 = 0.25
+        assert!(
+            (j2p.big_t - 0.25).abs() < 1e-12,
+            "T: got {}, expected 0.25", j2p.big_t
+        );
+
+        // ex = e·cos(ω) = 0.005·cos(180°) = -0.005
+        assert!(
+            (j2p.ex - (-0.005)).abs() < 1e-12,
+            "ex: got {}, expected -0.005", j2p.ex
+        );
+
+        // ey = e·sin(ω) = 0.005·sin(180°) ≈ 0
+        assert!(
+            j2p.ey.abs() < 1e-15,
+            "ey: got {}, expected ~0", j2p.ey
+        );
+
+        // E = 1 + eta
+        assert!(
+            (j2p.big_e - (1.0 + expected_eta)).abs() < 1e-12,
+            "E: got {}, expected {}", j2p.big_e, 1.0 + expected_eta
+        );
+
+        // F = 4 + 3·eta
+        assert!(
+            (j2p.big_f - (4.0 + 3.0 * expected_eta)).abs() < 1e-12,
+            "F: got {}, expected {}", j2p.big_f, 4.0 + 3.0 * expected_eta
+        );
+
+        // G = 1/(eta²·(1+eta))
+        let expected_g = 1.0 / (expected_eta * expected_eta * (1.0 + expected_eta));
+        assert!(
+            (j2p.big_g - expected_g).abs() < 1e-12,
+            "G: got {}, expected {expected_g}", j2p.big_g
+        );
+
+        // kappa = (3/4)·n·J2·(R_E/p)²
+        let p = chief.a_km * (1.0 - chief.e * chief.e);
+        let n = chief.mean_motion();
+        let r_over_p = R_EARTH / p;
+        let expected_kappa = 0.75 * n * J2 * r_over_p * r_over_p;
+        assert!(
+            (j2p.kappa - expected_kappa).abs() < 1e-15,
+            "kappa: got {}, expected {expected_kappa}", j2p.kappa
+        );
+
+        // Secular rates (Koenig Eq. 13)
+        let expected_raan_dot = -2.0 * expected_kappa * j2p.cos_i;
+        assert!(
+            (j2p.raan_dot - expected_raan_dot).abs() < 1e-15,
+            "raan_dot: got {}, expected {expected_raan_dot}", j2p.raan_dot
+        );
+
+        let expected_aop_dot = expected_kappa * 2.75;
+        assert!(
+            (j2p.aop_dot - expected_aop_dot).abs() < 1e-15,
+            "aop_dot: got {}, expected {expected_aop_dot}", j2p.aop_dot
+        );
+    }
+
+    /// Koenig Eqs. 13-16: J2 parameters for Table 2 Case 2 (i=1°, e=0.2).
+    /// Near-equatorial with nonzero ey = 0.2·sin(120°) ≈ 0.1732.
+    #[test]
+    fn koenig_table2_case2_j2_params() {
+        let chief = koenig_table2_case2();
+        let j2p = compute_j2_params(&chief).unwrap();
+
+        // eta = sqrt(1 - 0.04) = sqrt(0.96)
+        let expected_eta = 0.96_f64.sqrt();
+        assert!(
+            (j2p.eta - expected_eta).abs() < 1e-12,
+            "eta: got {}, expected {expected_eta}", j2p.eta
+        );
+
+        // ex = 0.2·cos(120°) = 0.2·(-0.5) = -0.1
+        assert!(
+            (j2p.ex - (-0.1)).abs() < 1e-12,
+            "ex: got {}, expected -0.1", j2p.ex
+        );
+
+        // ey = 0.2·sin(120°) = 0.2·(√3/2)
+        let expected_ey = 0.2 * 120.0_f64.to_radians().sin();
+        assert!(
+            (j2p.ey - expected_ey).abs() < 1e-12,
+            "ey: got {}, expected {expected_ey}", j2p.ey
+        );
+
+        // ey should be substantial (nonzero aop effect)
+        assert!(
+            j2p.ey.abs() > 0.17,
+            "ey should be ~0.1732, got {}", j2p.ey
+        );
+
+        // Near-equatorial: P ≈ 2.0, Q ≈ 4.0
+        let cos2_1 = 1.0_f64.to_radians().cos().powi(2);
+        let expected_p = 3.0 * cos2_1 - 1.0;
+        let expected_q = 5.0 * cos2_1 - 1.0;
+        assert!(
+            (j2p.big_p - expected_p).abs() < 1e-12,
+            "P: got {}, expected {expected_p}", j2p.big_p
+        );
+        assert!(
+            (j2p.big_q - expected_q).abs() < 1e-12,
+            "Q: got {}, expected {expected_q}", j2p.big_q
+        );
+    }
+
+    /// Koenig Eqs. 13-16: J2 parameters for Table 2 Case 3 (i=45°, e=0.5).
+    /// High eccentricity: exact trig at 45° gives S=1, T=0.5, P=0.5, Q=1.5.
+    #[test]
+    fn koenig_table2_case3_j2_params() {
+        let chief = koenig_table2_case3();
+        let j2p = compute_j2_params(&chief).unwrap();
+
+        // eta = sqrt(1 - 0.25) = sqrt(3)/2
+        let expected_eta = 3.0_f64.sqrt() / 2.0;
+        assert!(
+            (j2p.eta - expected_eta).abs() < 1e-12,
+            "eta: got {}, expected {expected_eta}", j2p.eta
+        );
+
+        // i=45°: cos²(45°) = 1/2
+        // P = 3·(1/2) - 1 = 0.5
+        assert!(
+            (j2p.big_p - 0.5).abs() < 1e-12,
+            "P: got {}, expected 0.5", j2p.big_p
+        );
+
+        // Q = 5·(1/2) - 1 = 1.5
+        assert!(
+            (j2p.big_q - 1.5).abs() < 1e-12,
+            "Q: got {}, expected 1.5", j2p.big_q
+        );
+
+        // S = sin(90°) = 1.0 exactly
+        assert!(
+            (j2p.big_s - 1.0).abs() < 1e-12,
+            "S: got {}, expected 1.0", j2p.big_s
+        );
+
+        // T = sin²(45°) = 1/2 = 0.5
+        assert!(
+            (j2p.big_t - 0.5).abs() < 1e-12,
+            "T: got {}, expected 0.5", j2p.big_t
+        );
+
+        // G = 1/(eta²·(1+eta)) = 1/(3/4 · (1 + √3/2))
+        let eta2 = 0.75;
+        let expected_g = 1.0 / (eta2 * (1.0 + expected_eta));
+        assert!(
+            (j2p.big_g - expected_g).abs() < 1e-12,
+            "G: got {}, expected {expected_g}", j2p.big_g
+        );
+
+        // ex = 0.5·cos(60°) = 0.5·0.5 = 0.25
+        assert!(
+            (j2p.ex - 0.25).abs() < 1e-12,
+            "ex: got {}, expected 0.25", j2p.ex
+        );
+
+        // ey = 0.5·sin(60°) = √3/4
+        let expected_ey = 3.0_f64.sqrt() / 4.0;
+        assert!(
+            (j2p.ey - expected_ey).abs() < 1e-12,
+            "ey: got {}, expected {expected_ey}", j2p.ey
         );
     }
 }

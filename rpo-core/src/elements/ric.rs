@@ -172,7 +172,7 @@ pub fn roe_to_ric(roe: &QuasiNonsingularROE, chief: &KeplerianElements) -> Resul
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_helpers::iss_like_elements;
+    use crate::test_helpers::{damico_table21_case1_roe, damico_table21_chief, iss_like_elements};
 
     #[test]
     fn t_matrix_negative_sma_returns_error() {
@@ -411,6 +411,107 @@ mod tests {
             "C roundtrip: {} vs {}",
             recovered_pos[2],
             target_pos.z
+        );
+    }
+
+    // --- Paper-traced regression tests (D'Amico Eq. 2.17) ---
+
+    /// D'Amico Eq. 2.17: T-matrix entries at u=0 (sin=0, cos=1).
+    /// All entries are exact closed-form values at this argument of latitude.
+    #[test]
+    fn damico_eq217_t_matrix_at_u0() {
+        let chief = damico_table21_chief(); // aop=0, M=0 → u=0
+        let a = chief.a_km;
+        let t = compute_t_matrix(&chief).unwrap();
+
+        // At u=0: sin(u)=0, cos(u)=1
+        // Row 0 (R): a·δa - a·cos(u)·δex - a·sin(u)·δey
+        assert!((t[(0, 0)] - a).abs() < 1e-10, "T[0,0]={}, expected {a}", t[(0, 0)]);
+        assert!((t[(0, 2)] - (-a)).abs() < 1e-10, "T[0,2]={}, expected {}", t[(0, 2)], -a);
+        assert!(t[(0, 3)].abs() < 1e-10, "T[0,3]={}, expected 0", t[(0, 3)]);
+
+        // Row 1 (I): a·δλ + 2a·sin(u)·δex - 2a·cos(u)·δey
+        assert!((t[(1, 1)] - a).abs() < 1e-10, "T[1,1]={}, expected {a}", t[(1, 1)]);
+        assert!(t[(1, 2)].abs() < 1e-10, "T[1,2]={}, expected 0 (2a·sin(0))", t[(1, 2)]);
+        assert!((t[(1, 3)] - (-2.0 * a)).abs() < 1e-10, "T[1,3]={}, expected {}", t[(1, 3)], -2.0 * a);
+
+        // Row 2 (C): a·sin(u)·δix - a·cos(u)·δiy
+        assert!(t[(2, 4)].abs() < 1e-10, "T[2,4]={}, expected 0 (a·sin(0))", t[(2, 4)]);
+        assert!((t[(2, 5)] - (-a)).abs() < 1e-10, "T[2,5]={}, expected {}", t[(2, 5)], -a);
+    }
+
+    /// D'Amico Eq. 2.17: T-matrix entries at u=90° (sin=1, cos=0).
+    /// Complementary entries are nonzero compared to u=0.
+    #[test]
+    fn damico_eq217_t_matrix_at_u90() {
+        let mut chief = damico_table21_chief();
+        chief.mean_anomaly_rad = std::f64::consts::FRAC_PI_2; // u = π/2
+        let a = chief.a_km;
+        let t = compute_t_matrix(&chief).unwrap();
+
+        // At u=π/2: sin(u)=1, cos(u)=0
+        // Row 0: T[0,2]=0 (-a·cos(π/2)), T[0,3]=-a (-a·sin(π/2))
+        assert!(t[(0, 2)].abs() < 1e-10, "T[0,2]={}, expected ~0", t[(0, 2)]);
+        assert!((t[(0, 3)] - (-a)).abs() < 1e-10, "T[0,3]={}, expected {}", t[(0, 3)], -a);
+
+        // Row 1: T[1,2]=2a (2a·sin(π/2)), T[1,3]=0 (-2a·cos(π/2))
+        assert!((t[(1, 2)] - 2.0 * a).abs() < 1e-10, "T[1,2]={}, expected {}", t[(1, 2)], 2.0 * a);
+        assert!(t[(1, 3)].abs() < 1e-10, "T[1,3]={}, expected ~0", t[(1, 3)]);
+
+        // Row 2: T[2,4]=a (a·sin(π/2)), T[2,5]=0 (-a·cos(π/2))
+        assert!((t[(2, 4)] - a).abs() < 1e-10, "T[2,4]={}, expected {a}", t[(2, 4)]);
+        assert!(t[(2, 5)].abs() < 1e-10, "T[2,5]={}, expected ~0", t[(2, 5)]);
+    }
+
+    /// D'Amico Table 2.1 Case 1: ROE → RIC at u=0.
+    /// Expected: R=0, I=-0.8 km, C=-0.2 km (closed-form from T at u=0).
+    /// I = a·(-2·δey·cos(0)) = -2·0.400 = -0.8 km; C = a·(-δiy·cos(0)) = -0.200 = -0.2 km.
+    #[test]
+    fn damico_table21_case1_ric_at_u0() {
+        let chief = damico_table21_chief(); // u=0
+        let roe = damico_table21_case1_roe(); // δey=0.4/a, δiy=0.2/a
+        let ric = roe_to_ric(&roe, &chief).unwrap();
+
+        // R = a·(δa - δex·cos(0) - δey·sin(0)) = 0
+        assert!(
+            ric.position_ric_km.x.abs() < 1e-10,
+            "R={}, expected 0", ric.position_ric_km.x
+        );
+        // I = a·(δλ + 2·δex·sin(0) - 2·δey·cos(0)) = -2·a·δey = -0.8 km
+        assert!(
+            (ric.position_ric_km.y - (-0.8)).abs() < 1e-10,
+            "I={}, expected -0.8", ric.position_ric_km.y
+        );
+        // C = a·(δix·sin(0) - δiy·cos(0)) = -a·δiy = -0.2 km
+        assert!(
+            (ric.position_ric_km.z - (-0.2)).abs() < 1e-10,
+            "C={}, expected -0.2", ric.position_ric_km.z
+        );
+    }
+
+    /// D'Amico Table 2.1 Case 1: ROE → RIC at u=90°.
+    /// Expected: R=-0.4 km, I≈0, C≈0 (closed-form from T at u=π/2).
+    #[test]
+    fn damico_table21_case1_ric_at_u90() {
+        let mut chief = damico_table21_chief();
+        chief.mean_anomaly_rad = std::f64::consts::FRAC_PI_2; // u = π/2
+        let roe = damico_table21_case1_roe();
+        let ric = roe_to_ric(&roe, &chief).unwrap();
+
+        // R = a·(-δey·sin(π/2)) = -a·δey = -0.4 km
+        assert!(
+            (ric.position_ric_km.x - (-0.4)).abs() < 1e-8,
+            "R={}, expected -0.4", ric.position_ric_km.x
+        );
+        // I = a·(-2·δey·cos(π/2)) ≈ 0 (cos(π/2) ≈ 6e-17)
+        assert!(
+            ric.position_ric_km.y.abs() < 1e-8,
+            "I={}, expected ~0", ric.position_ric_km.y
+        );
+        // C = a·(-δiy·cos(π/2)) ≈ 0
+        assert!(
+            ric.position_ric_km.z.abs() < 1e-8,
+            "C={}, expected ~0", ric.position_ric_km.z
         );
     }
 }

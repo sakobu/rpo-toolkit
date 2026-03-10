@@ -179,7 +179,9 @@ pub fn propagate_chief_mean(
 mod tests {
     use super::*;
     use crate::elements::roe::wrap_angle;
-    use crate::test_helpers::iss_like_elements;
+    use crate::test_helpers::{
+        iss_like_elements, koenig_table2_case1, koenig_table2_case1_roe, koenig_table2_case2,
+    };
 
     #[test]
     fn zero_tau_gives_near_identity() {
@@ -308,6 +310,138 @@ mod tests {
             (roe_prop.da - da).abs() < 1e-8,
             "da should be preserved over one orbit: {} vs {da}",
             roe_prop.da
+        );
+    }
+
+    // --- Paper-traced regression tests (Koenig Eq. A6) ---
+
+    /// Koenig Eq. A6: STM structure for Table 2 Case 1 (i=30°, e=0.005), tau = 1 period.
+    /// Validates row 0/row 4 identity structure and key matrix entries against
+    /// hand-computed values from Eq. A6 using precomputed J2Params.
+    #[test]
+    fn koenig_eqa6_stm_elements_case1() {
+        let chief = koenig_table2_case1();
+        let period = chief.period();
+        let j2p = compute_j2_params(&chief).unwrap();
+        let stm = compute_stm(&chief, period).unwrap();
+
+        // Row 0: δa is conserved → phi[0,0]=1, all others = 0
+        assert!((stm[(0, 0)] - 1.0).abs() < 1e-14, "phi[0,0] should be 1.0");
+        for c in 1..6 {
+            assert!(stm[(0, c)].abs() < 1e-14, "phi[0,{c}] should be 0, got {}", stm[(0, c)]);
+        }
+
+        // Row 4: δix is conserved → phi[4,4]=1, all others = 0
+        assert!((stm[(4, 4)] - 1.0).abs() < 1e-14, "phi[4,4] should be 1.0");
+        for c in 0..6 {
+            if c != 4 {
+                assert!(stm[(4, c)].abs() < 1e-14, "phi[4,{c}] should be 0, got {}", stm[(4, c)]);
+            }
+        }
+
+        // phi[1,0] = -(1.5·n + 3.5·κ·E·P)·τ
+        let expected_10 = -(1.5 * j2p.n + 3.5 * j2p.kappa * j2p.big_e * j2p.big_p) * period;
+        assert!(
+            (stm[(1, 0)] - expected_10).abs() < 1e-6,
+            "phi[1,0]: got {}, expected {expected_10}", stm[(1, 0)]
+        );
+
+        // phi[5,0] = 3.5·κ·S·τ
+        let expected_50 = 3.5 * j2p.kappa * j2p.big_s * period;
+        assert!(
+            (stm[(5, 0)] - expected_50).abs() < 1e-6,
+            "phi[5,0]: got {}, expected {expected_50}", stm[(5, 0)]
+        );
+
+        // phi[2,2] ≈ cos(ω̇·τ) at leading order (ey_i ≈ 0 so secular term vanishes)
+        let d_omega = j2p.aop_dot * period;
+        assert!(
+            (stm[(2, 2)] - d_omega.cos()).abs() < 1e-4,
+            "phi[2,2]: got {}, expected ~cos(dω)={}", stm[(2, 2)], d_omega.cos()
+        );
+
+        // phi[1,3] ≈ 0 because ey_i ≈ 0 at aop=180°
+        assert!(
+            stm[(1, 3)].abs() < 1e-12,
+            "phi[1,3] should be ~0 (ey_i≈0), got {}", stm[(1, 3)]
+        );
+    }
+
+    /// Koenig Eq. A6: STM for Table 2 Case 2 (e=0.2, aop=120°).
+    /// Nonzero ey_i = 0.2·sin(120°) ≈ 0.1732 makes phi[1,3] substantial.
+    #[test]
+    fn koenig_eqa6_stm_elements_case2() {
+        let chief = koenig_table2_case2();
+        let period = chief.period();
+        let j2p = compute_j2_params(&chief).unwrap();
+        let stm = compute_stm(&chief, period).unwrap();
+
+        // Verify ey_i is substantial (nonzero aop)
+        assert!(
+            j2p.ey.abs() > 0.17,
+            "ey_i should be ~0.1732, got {}", j2p.ey
+        );
+
+        // phi[1,3] = κ·ey_i·F·G·P·τ should be nonzero
+        let expected_13 = j2p.kappa * j2p.ey * j2p.big_f * j2p.big_g * j2p.big_p * period;
+        assert!(
+            (stm[(1, 3)] - expected_13).abs() < 1e-6,
+            "phi[1,3]: got {}, expected {expected_13}", stm[(1, 3)]
+        );
+
+        // phi[1,2] = κ·ex_i·F·G·P·τ should also be nonzero (ex_i = -0.1)
+        let expected_12 = j2p.kappa * j2p.ex * j2p.big_f * j2p.big_g * j2p.big_p * period;
+        assert!(
+            (stm[(1, 2)] - expected_12).abs() < 1e-6,
+            "phi[1,2]: got {}, expected {expected_12}", stm[(1, 2)]
+        );
+
+        // Both ex and ey columns contribute substantially
+        assert!(
+            stm[(1, 2)].abs() > 1e-3,
+            "phi[1,2] should be substantial, got {}", stm[(1, 2)]
+        );
+        assert!(
+            stm[(1, 3)].abs() > 1e-3,
+            "phi[1,3] should be substantial, got {}", stm[(1, 3)]
+        );
+    }
+
+    /// Koenig Table 4: 10-orbit propagation bounds for Case 1.
+    /// Verifies δa conservation and successful propagation over long intervals.
+    /// Koenig Table 4 reports J2 STM errors of 38.5m (δa), 1808.8m (δλ) over
+    /// 10 orbits vs. 20×20 numerical integrator; our STM is self-consistent
+    /// and these errors represent linearization + truncation limits.
+    #[test]
+    fn koenig_table4_propagation_bounds_case1() {
+        let chief = koenig_table2_case1();
+        let roe = koenig_table2_case1_roe();
+        let period = chief.period();
+        let tau = 10.0 * period;
+
+        let (roe_prop, _) = propagate_roe_stm(&roe, &chief, tau).unwrap();
+
+        // δa is a first-order constant in the J2 STM → should be conserved
+        assert!(
+            (roe_prop.da - roe.da).abs() < 1e-8,
+            "δa should be conserved over 10 orbits: initial={}, final={}",
+            roe.da, roe_prop.da
+        );
+
+        // δix is also conserved (row 4 identity)
+        assert!(
+            (roe_prop.dix - roe.dix).abs() < 1e-8,
+            "δix should be conserved over 10 orbits: initial={}, final={}",
+            roe.dix, roe_prop.dix
+        );
+
+        // Eccentricity vector magnitude should be approximately conserved
+        // (it rotates due to J2 but magnitude changes are second-order)
+        let de_initial = (roe.dex.powi(2) + roe.dey.powi(2)).sqrt();
+        let de_final = (roe_prop.dex.powi(2) + roe_prop.dey.powi(2)).sqrt();
+        assert!(
+            (de_final - de_initial).abs() / de_initial < 0.01,
+            "δe magnitude should be ~conserved: initial={de_initial}, final={de_final}"
         );
     }
 }
