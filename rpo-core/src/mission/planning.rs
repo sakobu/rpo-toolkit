@@ -174,22 +174,35 @@ pub fn plan_mission(
             ref chief_elements,
             ..
         } => {
+            let chief_at_arrival = *chief_elements;
             let perch_roe = perch_to_roe(perch, chief_elements)?;
 
             Ok(MissionPlan {
                 phase,
                 transfer: None,
                 perch_roe,
+                chief_at_arrival,
             })
         }
         MissionPhase::FarField {
             ref chief_elements, ..
         } => {
-            let perch_roe = perch_to_roe(perch, chief_elements)?;
             let chief_ke = *chief_elements;
 
+            // Advance chief mean anomaly to arrival epoch (two-body).
+            // The Lambert target must be at the chief's position at arrival,
+            // not at the departure epoch.
+            let n = chief_ke.mean_motion();
+            let chief_ke_arrival = KeplerianElements {
+                mean_anomaly_rad: (chief_ke.mean_anomaly_rad + n * lambert_tof_s)
+                    .rem_euclid(crate::constants::TWO_PI),
+                ..chief_ke
+            };
+
+            let perch_roe = perch_to_roe(perch, &chief_ke_arrival)?;
+
             // Convert perch ROE to a target Keplerian orbit for Lambert
-            let target_ke = perch_roe_to_keplerian(&perch_roe, &chief_ke);
+            let target_ke = perch_roe_to_keplerian(&perch_roe, &chief_ke_arrival);
             let arrival_epoch =
                 deputy.epoch + hifitime::Duration::from_seconds(lambert_tof_s);
             let target_state =
@@ -202,6 +215,7 @@ pub fn plan_mission(
                 phase,
                 transfer: Some(transfer),
                 perch_roe,
+                chief_at_arrival: chief_ke_arrival,
             })
         }
     }

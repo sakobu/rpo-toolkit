@@ -183,7 +183,62 @@ impl DragConfig {
             dey_dot: 0.0,
         }
     }
+}
 
+/// Physical properties of a spacecraft for force modeling.
+///
+/// Entry point for the entire tool: user defines spacecraft properties,
+/// and everything downstream derives from them:
+/// - nyx full-physics propagation (via `config_to_spacecraft()`)
+/// - Analytical DMF drag rates (via `extract_dmf_rates()` → `DragConfig`)
+/// - Mission validation (via `validate_mission_nyx()`)
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+pub struct SpacecraftConfig {
+    /// Spacecraft dry mass in kg
+    pub dry_mass_kg: f64,
+    /// Drag reference area in m²
+    pub drag_area_m2: f64,
+    /// Coefficient of drag (dimensionless, typically 2.0–2.5)
+    pub coeff_drag: f64,
+    /// SRP reference area in m²
+    pub srp_area_m2: f64,
+    /// Coefficient of reflectivity (dimensionless, typically 1.0–2.0)
+    pub coeff_reflectivity: f64,
+}
+
+impl Default for SpacecraftConfig {
+    fn default() -> Self {
+        Self {
+            dry_mass_kg: 500.0,
+            drag_area_m2: 1.0,
+            coeff_drag: 2.2,
+            srp_area_m2: 1.0,
+            coeff_reflectivity: 1.5,
+        }
+    }
+}
+
+impl SpacecraftConfig {
+    /// Typical 6U cubesat: 12 kg, 0.06 m² cross-section.
+    pub const CUBESAT_6U: Self = Self {
+        dry_mass_kg: 12.0,
+        drag_area_m2: 0.06,
+        coeff_drag: 2.2,
+        srp_area_m2: 0.06,
+        coeff_reflectivity: 1.5,
+    };
+
+    /// Typical 500 kg servicer spacecraft.
+    /// Note: intentionally identical to `Default` — the preset provides a named
+    /// reference point, while `Default` is the ergonomic fallback. If the servicer
+    /// baseline changes, update both or have `Default` delegate to this const.
+    pub const SERVICER_500KG: Self = Self {
+        dry_mass_kg: 500.0,
+        drag_area_m2: 1.0,
+        coeff_drag: 2.2,
+        srp_area_m2: 1.0,
+        coeff_reflectivity: 1.5,
+    };
 }
 
 /// Relative state in the RIC (Radial-In-track-Cross-track) frame
@@ -279,6 +334,11 @@ pub struct MissionPlan {
     pub transfer: Option<crate::mission::lambert::LambertTransfer>,
     /// Perch orbit ROE state (transfer target / proximity start)
     pub perch_roe: QuasiNonsingularROE,
+    /// Chief Keplerian elements at the waypoint mission start epoch.
+    ///
+    /// For far-field missions, mean anomaly is advanced to the Lambert
+    /// arrival epoch (two-body). For proximity missions, same as departure elements.
+    pub chief_at_arrival: KeplerianElements,
 }
 
 /// A target waypoint in RIC space for maneuver targeting.
@@ -379,6 +439,44 @@ pub struct SafetyMetrics {
     pub min_3d_elapsed_s: f64,
     /// RIC position (km) at minimum 3D distance.
     pub min_3d_ric_position_km: Vector3<f64>,
+}
+
+/// Per-timestep comparison between analytical and numerical propagation.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ValidationPoint {
+    /// Time since mission start (seconds)
+    pub elapsed_s: f64,
+    /// Analytical (Phase 4) RIC state
+    pub analytical_ric: RICState,
+    /// Numerical (nyx) RIC state
+    pub numerical_ric: RICState,
+    /// Position difference magnitude (km)
+    pub position_error_km: f64,
+    /// Velocity difference magnitude (km/s)
+    pub velocity_error_km_s: f64,
+}
+
+/// Aggregate validation results for a mission.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ValidationReport {
+    /// Per-leg comparison points
+    pub leg_points: Vec<Vec<ValidationPoint>>,
+    /// Maximum position error across all points (km)
+    pub max_position_error_km: f64,
+    /// Mean position error across all points (km)
+    pub mean_position_error_km: f64,
+    /// RMS position error across all points (km)
+    pub rms_position_error_km: f64,
+    /// Maximum velocity error across all points (km/s)
+    pub max_velocity_error_km_s: f64,
+    /// Safety metrics from analytical trajectory (from `WaypointMission.safety`)
+    pub analytical_safety: Option<SafetyMetrics>,
+    /// Safety metrics recomputed from nyx trajectory
+    pub numerical_safety: SafetyMetrics,
+    /// Chief spacecraft configuration used
+    pub chief_config: SpacecraftConfig,
+    /// Deputy spacecraft configuration used
+    pub deputy_config: SpacecraftConfig,
 }
 
 /// Departure orbital state for targeting: groups ROE, chief elements, and epoch.

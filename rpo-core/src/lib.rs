@@ -27,10 +27,12 @@ pub use elements::{
 };
 pub use mission::{
     analyze_safety, analyze_trajectory_safety, classify_separation,
-    dimensionless_separation, eci_separation_km, get_mission_state_at_time, optimize_tof,
+    dimensionless_separation, eci_separation_km, extract_dmf_rates,
+    get_mission_state_at_time, load_default_almanac, load_full_almanac, optimize_tof,
     plan_mission, plan_waypoint_mission, replan_from_waypoint,
     resample_leg_trajectory, solve_lambert, solve_lambert_izzo, solve_lambert_with_config,
-    solve_leg, LambertConfig, LambertError, LambertTransfer, SafetyError, TransferDirection,
+    solve_leg, validate_mission_nyx, LambertConfig, LambertError, LambertTransfer,
+    SafetyError, TransferDirection, ValidationError,
 };
 pub use propagation::{
     compute_j2_drag_stm, compute_j2_params, compute_stm, compute_stm_with_params,
@@ -40,8 +42,8 @@ pub use propagation::{
 pub use types::{
     DepartureState, DragConfig, KeplerianElements, Maneuver, ManeuverLeg, MissionConfig,
     MissionError, MissionPhase, MissionPlan, PerchGeometry, ProximityConfig,
-    QuasiNonsingularROE, RICState, SafetyConfig, SafetyMetrics, StateVector, TargetingConfig,
-    TofOptConfig, Waypoint, WaypointMission,
+    QuasiNonsingularROE, RICState, SafetyConfig, SafetyMetrics, SpacecraftConfig, StateVector,
+    TargetingConfig, TofOptConfig, ValidationPoint, ValidationReport, Waypoint, WaypointMission,
 };
 
 #[cfg(test)]
