@@ -496,7 +496,7 @@ fn print_safety_analysis(safety: &SafetyMetrics, config: &SafetyConfig) {
         if overall { "PASS" } else { "FAIL" }
     );
     println!(
-        "  Min instantaneous R/C:    {:.4} km",
+        "  Min instantaneous R/C:    {:.4} km  (informational)",
         safety.min_rc_separation_km
     );
     println!(
@@ -855,8 +855,8 @@ fn print_safety_comparison(report: &ValidationReport, config: &MissionConfig) {
             "", "Analytical", "Numerical", "Thresh."
         );
         println!(
-            "    {:>20}  {:>12.4}  {:>12.4}  {:>8.2}",
-            "R/C sep (km)", ana.min_rc_separation_km, num.min_rc_separation_km, sc.min_distance_3d_km
+            "    {:>20}  {:>12.4}  {:>12.4}  {:>8}",
+            "R/C sep (km)", ana.min_rc_separation_km, num.min_rc_separation_km, "N/A"
         );
         println!(
             "    {:>20}  {:>12.4}  {:>12.4}  {:>8.2}",
