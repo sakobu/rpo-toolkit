@@ -608,6 +608,7 @@ mod tests {
 
     use crate::elements::conversions::{keplerian_to_state, state_to_keplerian};
     use crate::elements::roe::compute_roe;
+    use crate::mission::lambert::LambertConfig;
     use crate::mission::planning::{classify_separation, plan_mission};
     use crate::propagation::propagator::PropagationModel;
     use crate::test_helpers::{
@@ -763,7 +764,7 @@ mod tests {
             along_track_km: 5.0,
         };
 
-        let plan = plan_mission(&chief, &deputy, &perch, &config, 3600.0)
+        let plan = plan_mission(&chief, &deputy, &perch, &config, 3600.0, &LambertConfig::default())
             .expect("mission plan should succeed");
 
         // Lambert transfer assertions

@@ -11,7 +11,11 @@
   },
   "proximity": { "roe_threshold": 0.005 },
   "perch": { "VBar": { "along_track_km": 5.0 } },
-  "lambert_tof_s": 3600.0,
+  "lambert_tof_s": 12000.0,
+  "lambert_config": {
+    "direction": "Auto",
+    "revolutions": 1
+  },
   "waypoints": [
     {
       "label": "Approach to 2 km (+R/C corridor)",

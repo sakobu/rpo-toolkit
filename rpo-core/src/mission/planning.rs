@@ -9,6 +9,7 @@
 
 use crate::elements::conversions::{state_to_keplerian, ConversionError};
 use crate::elements::roe::compute_roe;
+use crate::mission::lambert::{solve_lambert_with_config, LambertConfig};
 use crate::types::{
     KeplerianElements, MissionError, MissionPhase, MissionPlan, PerchGeometry,
     ProximityConfig, QuasiNonsingularROE, StateVector,
@@ -153,9 +154,14 @@ pub fn perch_to_roe(
 /// `lambert_tof_s` is the time of flight for the Lambert transfer (seconds).
 /// It is only used when the spacecraft are in the far-field regime.
 ///
+/// `lambert_config` controls transfer direction and multi-revolution
+/// selection. Only used in the far-field regime.
+///
 /// # Invariants
 /// - Both states must represent bound orbits (`e < 1`, `a > 0`)
 /// - `lambert_tof_s > 0` (when used in far-field regime)
+/// - For multi-rev (`lambert_config.revolutions > 0`), `lambert_tof_s` must
+///   be long enough to accommodate the requested number of revolutions
 /// - Position vectors must be non-zero
 ///
 /// # Errors
@@ -166,6 +172,7 @@ pub fn plan_mission(
     perch: &PerchGeometry,
     config: &ProximityConfig,
     lambert_tof_s: f64,
+    lambert_config: &LambertConfig,
 ) -> Result<MissionPlan, MissionError> {
     let phase = classify_separation(chief, deputy, config)?;
 
@@ -209,7 +216,7 @@ pub fn plan_mission(
                 crate::elements::conversions::keplerian_to_state(&target_ke, arrival_epoch)?;
 
             // Solve Lambert: deputy → perch
-            let transfer = crate::mission::lambert::solve_lambert(deputy, &target_state)?;
+            let transfer = solve_lambert_with_config(deputy, &target_state, lambert_config)?;
 
             Ok(MissionPlan {
                 phase,
@@ -589,7 +596,7 @@ mod tests {
             along_track_km: 5.0,
         };
 
-        let plan = plan_mission(&chief, &deputy, &perch, &config, 3600.0)
+        let plan = plan_mission(&chief, &deputy, &perch, &config, 3600.0, &LambertConfig::default())
             .expect("far-field mission should succeed");
 
         assert!(matches!(plan.phase, MissionPhase::FarField { .. }));
@@ -612,7 +619,7 @@ mod tests {
         let deputy = keplerian_to_state(&deputy_ke, epoch).unwrap();
         let config = ProximityConfig::default();
 
-        let plan = plan_mission(&chief, &deputy, &perch, &config, 3600.0)
+        let plan = plan_mission(&chief, &deputy, &perch, &config, 3600.0, &LambertConfig::default())
             .expect("proximity mission should succeed");
         (plan, chief_ke)
     }
@@ -659,7 +666,7 @@ mod tests {
         let config = ProximityConfig::default();
         let perch = PerchGeometry::VBar { along_track_km: 5.0 };
 
-        let plan = plan_mission(&chief, &deputy, &perch, &config, 3600.0)
+        let plan = plan_mission(&chief, &deputy, &perch, &config, 3600.0, &LambertConfig::default())
             .expect("mission should succeed");
 
         let json = serde_json::to_string(&plan).expect("serialize should work");
@@ -670,6 +677,63 @@ mod tests {
         assert!(
             (deserialized.perch_roe.dlambda - expected_dlambda).abs() < 1e-12,
             "perch_roe should survive serde roundtrip"
+        );
+    }
+
+    /// Far-field mission with a 1-revolution Lambert transfer.
+    ///
+    /// Uses a longer TOF (~12000 s, ~2 orbital periods) to accommodate 1 revolution.
+    /// Verifies that the solver succeeds and produces a different Δv than 0-rev.
+    ///
+    /// Tolerance: Δv difference is structural (different solution branch), not numerical.
+    /// Any nonzero difference confirms multi-rev dispatch.
+    #[test]
+    fn farfield_mission_multi_rev_lambert() {
+        use crate::mission::lambert::TransferDirection;
+
+        let epoch = test_epoch();
+        let chief_ke = iss_like_elements();
+        let deputy_ke = KeplerianElements {
+            a_km: chief_ke.a_km + 200.0,
+            e: 0.005,
+            i_rad: chief_ke.i_rad + 0.05,
+            raan_rad: chief_ke.raan_rad,
+            aop_rad: 0.0,
+            mean_anomaly_rad: 2.0,
+        };
+
+        let chief = keplerian_to_state(&chief_ke, epoch).unwrap();
+        let deputy = keplerian_to_state(&deputy_ke, epoch).unwrap();
+        let config = ProximityConfig::default();
+        let perch = PerchGeometry::VBar {
+            along_track_km: 5.0,
+        };
+
+        // Long TOF to accommodate 1 revolution (~2 orbital periods)
+        let tof_s = 12000.0;
+
+        let config_0rev = LambertConfig {
+            direction: TransferDirection::Auto,
+            revolutions: 0,
+        };
+        let config_1rev = LambertConfig {
+            direction: TransferDirection::Auto,
+            revolutions: 1,
+        };
+
+        let plan_0 = plan_mission(&chief, &deputy, &perch, &config, tof_s, &config_0rev)
+            .expect("0-rev far-field mission should succeed");
+        let plan_1 = plan_mission(&chief, &deputy, &perch, &config, tof_s, &config_1rev)
+            .expect("1-rev far-field mission should succeed");
+
+        assert!(matches!(plan_1.phase, MissionPhase::FarField { .. }));
+        assert!(plan_1.transfer.is_some(), "should have Lambert transfer");
+
+        let dv_0 = plan_0.transfer.as_ref().unwrap().total_dv_km_s;
+        let dv_1 = plan_1.transfer.as_ref().unwrap().total_dv_km_s;
+        assert!(
+            (dv_0 - dv_1).abs() > 1e-6,
+            "Multi-rev should produce different Δv: 0-rev={dv_0:.6}, 1-rev={dv_1:.6}"
         );
     }
 }

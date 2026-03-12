@@ -59,14 +59,15 @@ fn eccentric_orbit() -> KeplerianElements {
 }
 
 /// Distant deputy — well outside ROE-valid range, requires Lambert transfer.
+/// Coplanar with chief, +500 km SMA.
 fn far_deputy() -> KeplerianElements {
     KeplerianElements {
-        a_km: 6786.0 + 500.0,  // +500 km SMA
+        a_km: 6786.0 + 500.0,  // +500 km SMA → δa/a ≈ 0.074
         e: 0.01,
-        i_rad: 45.0_f64.to_radians(), // different plane
-        raan_rad: 90.0_f64.to_radians(),
-        aop_rad: 10.0_f64.to_radians(),
-        mean_anomaly_rad: 180.0_f64.to_radians(),
+        i_rad: 51.6_f64.to_radians(),  // same plane as chief
+        raan_rad: 30.0_f64.to_radians(),
+        aop_rad: 0.0,
+        mean_anomaly_rad: 45.0_f64.to_radians(),
     }
 }
 
@@ -349,7 +350,7 @@ pub(crate) fn run_demo() -> Result<(), Box<dyn Error>> {
     let far_dep = far_deputy();
     let far_sv = keplerian_to_state(&far_dep, epoch)?;
 
-    println!("\nCase B: Distant deputy (+500 km SMA, different plane)");
+    println!("\nCase B: Distant deputy (+500 km SMA, coplanar)");
     let far_phase = classify_separation(&chief_sv, &far_sv, &config)?;
     match &far_phase {
         MissionPhase::Proximity { .. } => println!("  Classification: PROXIMITY"),
@@ -364,7 +365,7 @@ pub(crate) fn run_demo() -> Result<(), Box<dyn Error>> {
     let vbar_perch = PerchGeometry::VBar { along_track_km: 5.0 };
 
     let mission = plan_mission(
-        &chief_sv, &far_sv, &vbar_perch, &config, 3600.0,
+        &chief_sv, &far_sv, &vbar_perch, &config, 3600.0, &LambertConfig::default(),
     )?;
 
     if let Some(ref transfer) = mission.transfer {
@@ -434,7 +435,7 @@ pub(crate) fn run_demo() -> Result<(), Box<dyn Error>> {
     let rbar_perch = PerchGeometry::RBar { radial_km: 2.0 };
 
     let rbar_mission = plan_mission(
-        &chief_sv, &far_sv, &rbar_perch, &config, 3600.0,
+        &chief_sv, &far_sv, &rbar_perch, &config, 3600.0, &LambertConfig::default(),
     )?;
 
     println!("  R-bar perch ROE:");
@@ -471,7 +472,7 @@ pub(crate) fn run_demo() -> Result<(), Box<dyn Error>> {
         custom_ric.position_ric_km.x, custom_ric.position_ric_km.y, custom_ric.position_ric_km.z);
 
     let custom_mission = plan_mission(
-        &chief_sv, &far_sv, &custom_perch, &config, 3600.0,
+        &chief_sv, &far_sv, &custom_perch, &config, 3600.0, &LambertConfig::default(),
     )?;
     if let Some(ref transfer) = custom_mission.transfer {
         println!("    Lambert Δv to custom perch: {:.4} km/s", transfer.total_dv_km_s);

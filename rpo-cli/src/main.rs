@@ -13,7 +13,7 @@ use rpo_core::{
     extract_dmf_rates, load_full_almanac, plan_mission, plan_waypoint_mission,
     validate_mission_nyx,
     // Types
-    DepartureState, DragConfig, MissionConfig, MissionPhase, MissionPlan,
+    DepartureState, DragConfig, LambertConfig, MissionConfig, MissionPhase, MissionPlan,
     PerchGeometry, ProximityConfig, QuasiNonsingularROE, SafetyConfig, SafetyMetrics,
     SpacecraftConfig, StateVector, TargetingConfig, TofOptConfig, ValidationPoint,
     ValidationReport, Waypoint, WaypointMission,
@@ -153,6 +153,7 @@ struct EndToEndInput {
     deputy: StateVector,
     perch: Option<PerchGeometry>,
     lambert_tof_s: Option<f64>,
+    lambert_config: Option<LambertConfig>,
     waypoints: Vec<WaypointInput>,
     proximity: Option<ProximityConfig>,
     #[serde(flatten)]
@@ -171,6 +172,7 @@ struct ValidateInput {
     deputy: StateVector,
     perch: Option<PerchGeometry>,
     lambert_tof_s: Option<f64>,
+    lambert_config: Option<LambertConfig>,
     waypoints: Vec<WaypointInput>,
     proximity: Option<ProximityConfig>,
     #[serde(flatten)]
@@ -297,11 +299,12 @@ fn run_end_to_end_mission(input_path: &PathBuf, json_output: bool) -> Result<(),
     let perch = input.perch.unwrap_or(PerchGeometry::VBar { along_track_km: 5.0 });
     let proximity = input.proximity.unwrap_or_default();
     let lambert_tof_s = input.lambert_tof_s.unwrap_or(3600.0);
+    let lambert_cfg = input.lambert_config.unwrap_or_default();
 
     // Phase 1: Classification + Lambert transfer
     let prop = input.prop.make_propagator();
     let mission = plan_mission(
-        &input.chief, &input.deputy, &perch, &proximity, lambert_tof_s,
+        &input.chief, &input.deputy, &perch, &proximity, lambert_tof_s, &lambert_cfg,
     )?;
 
     let lambert_dv_km_s = mission.transfer.as_ref().map_or(0.0, |t| t.total_dv_km_s);
@@ -380,6 +383,9 @@ fn run_end_to_end_mission(input_path: &PathBuf, json_output: bool) -> Result<(),
         println!("    TOF:          {:.1} s ({:.2} min)", transfer.tof_s, transfer.tof_s / 60.0);
         println!("    C3:           {:.4} km²/s²", transfer.c3_km2_s2);
         println!("    Direction:    {:?}", transfer.direction);
+        if lambert_cfg.revolutions > 0 {
+            println!("    Revolutions:  {}", lambert_cfg.revolutions);
+        }
         let v_circ = (rpo_core::constants::MU_EARTH / transfer.departure_state.position_eci_km.norm()).sqrt();
         println!("    Δv/v_circ:    {:.3}", transfer.total_dv_km_s / v_circ);
     }
@@ -591,6 +597,7 @@ fn run_validate(
     let perch = input.perch.unwrap_or(PerchGeometry::VBar { along_track_km: 5.0 });
     let proximity = input.proximity.unwrap_or_default();
     let lambert_tof_s = input.lambert_tof_s.unwrap_or(3600.0);
+    let lambert_cfg = input.lambert_config.unwrap_or_default();
 
     // Load almanac (downloads on first run)
     eprintln!("Loading almanac (may download on first run)...");
@@ -600,7 +607,7 @@ fn run_validate(
     // Phase 1: Classification + Lambert transfer
     eprintln!("Phase 1: Classification + Lambert transfer...");
     let mission = plan_mission(
-        &input.chief, &input.deputy, &perch, &proximity, lambert_tof_s,
+        &input.chief, &input.deputy, &perch, &proximity, lambert_tof_s, &lambert_cfg,
     )?;
 
     let lambert_dv_km_s = mission.transfer.as_ref().map_or(0.0, |t| t.total_dv_km_s);
@@ -737,6 +744,9 @@ fn run_validate(
         println!("    TOF:          {:.1} s ({:.2} min)", transfer.tof_s, transfer.tof_s / 60.0);
         println!("    C3:           {:.4} km²/s²", transfer.c3_km2_s2);
         println!("    Direction:    {:?}", transfer.direction);
+        if lambert_cfg.revolutions > 0 {
+            println!("    Revolutions:  {}", lambert_cfg.revolutions);
+        }
         let v_circ = (rpo_core::constants::MU_EARTH / transfer.departure_state.position_eci_km.norm()).sqrt();
         println!("    Δv/v_circ:    {:.3}", transfer.total_dv_km_s / v_circ);
     }
