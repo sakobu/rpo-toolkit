@@ -82,6 +82,7 @@ fn build_mission(
         total_dv_km_s,
         total_duration_s,
         safety,
+        covariance: None,
     }
 }
 

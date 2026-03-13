@@ -34,3 +34,37 @@ pub const EARTH_J2000: anise::prelude::Frame = anise::prelude::Frame {
     mu_km3_s2: Some(MU_EARTH),
     shape: None,
 };
+
+// --- Covariance propagation constants ---
+
+/// Tolerance for covariance matrix symmetry checks.
+/// Used to verify P = Pᵀ within floating-point precision.
+pub const COVARIANCE_SYMMETRY_TOL: f64 = 1e-12;
+
+/// Default 1-sigma position accuracy per RIC axis (km).
+/// 100 m is typical for GPS-based navigation in LEO proximity ops.
+pub const DEFAULT_NAV_POSITION_SIGMA_KM: f64 = 0.1;
+
+/// Default 1-sigma velocity accuracy per RIC axis (km/s).
+/// 0.1 m/s = 1e-4 km/s, typical for GPS-based navigation.
+pub const DEFAULT_NAV_VELOCITY_SIGMA_KM_S: f64 = 1e-4;
+
+/// Default 1-sigma maneuver magnitude error (proportional). 1% = 0.01.
+pub const DEFAULT_MANEUVER_MAGNITUDE_SIGMA: f64 = 0.01;
+
+/// Default 1-sigma maneuver pointing error (rad). 1° ≈ 0.01745 rad.
+pub const DEFAULT_MANEUVER_POINTING_SIGMA_RAD: f64 = 0.01745;
+
+/// Floor for computed collision probability (avoids exact-zero reporting).
+pub const COLLISION_PROBABILITY_FLOOR: f64 = 1e-15;
+
+/// Default collision probability threshold (km) — minimum 3D distance
+/// below which a sample is counted as a collision.
+pub const MC_DEFAULT_COLLISION_THRESHOLD_KM: f64 = 0.1;
+
+/// Default number of covariance sample points per leg.
+pub const DEFAULT_COVARIANCE_SAMPLES_PER_LEG: usize = 100;
+
+/// Singularity threshold for Δv direction vector normalization.
+/// Below this norm, the Δv is treated as zero (no maneuver execution error).
+pub const DV_NORM_ZERO_THRESHOLD_KM_S: f64 = 1e-15;

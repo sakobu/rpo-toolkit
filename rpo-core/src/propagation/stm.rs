@@ -4,15 +4,10 @@
 //! under J2-perturbed motion, directly from the Koenig et al. (JGCD 2017)
 //! Appendix A formulas.
 
-use nalgebra::SMatrix;
-
 use crate::constants::TWO_PI;
 use crate::propagation::j2_params::{compute_j2_params, J2Params};
 use crate::propagation::propagator::PropagationError;
-use crate::types::{KeplerianElements, QuasiNonsingularROE};
-
-/// 6×6 matrix type alias.
-type Matrix6 = SMatrix<f64, 6, 6>;
+use crate::types::{KeplerianElements, Matrix6, QuasiNonsingularROE};
 
 /// Compute the closed-form J2-perturbed QNS STM (Koenig Eq. A6).
 ///

@@ -12,6 +12,7 @@ hifitime = "4"
 serde = { version = "1", features = ["derive"] }
 nyx-space = "2.3.1"
 anise = "0.9"
+libm = "0.2"
 
 [dev-dependencies]
 serde_json = "1"

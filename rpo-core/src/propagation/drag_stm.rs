@@ -5,15 +5,12 @@
 //! is `[δa, δλ, δex, δey, δix, δiy, δȧ, δėx, δėy]` where the last three
 //! elements are constant drag rates (Koenig Sec. VIII, Eqs. 73-77).
 
-use nalgebra::{SMatrix, SVector};
+use nalgebra::SVector;
 
 use crate::propagation::j2_params::{compute_j2_params, J2Params};
 use crate::propagation::propagator::PropagationError;
 use crate::propagation::stm::{compute_stm_with_params, propagate_chief_mean};
-use crate::types::{DragConfig, KeplerianElements, QuasiNonsingularROE};
-
-/// 9×9 matrix type alias for the augmented J2+drag STM.
-type Matrix9 = SMatrix<f64, 9, 9>;
+use crate::types::{DragConfig, KeplerianElements, Matrix9, QuasiNonsingularROE};
 
 /// Compute the J2+drag 9×9 QNS STM (Koenig Appendix D).
 ///
