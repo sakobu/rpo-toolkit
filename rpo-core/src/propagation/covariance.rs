@@ -21,7 +21,7 @@ use crate::propagation::j2_params::{compute_j2_params, J2Params};
 use crate::propagation::propagator::{PropagationError, PropagationModel};
 use crate::propagation::stm::{compute_stm, compute_stm_with_params, propagate_chief_mean};
 use crate::types::{
-    CovarianceState, DragConfig, KeplerianElements, LegCovarianceReport, ManeuverUncertainty,
+    CovarianceState, KeplerianElements, LegCovarianceReport, ManeuverUncertainty,
     Matrix6, Matrix9, MissionCovarianceReport, NavigationAccuracy, QuasiNonsingularROE,
     WaypointMission,
 };
@@ -184,12 +184,11 @@ pub fn propagate_covariance_with_params(
 /// - `chief_mean` must be **mean** Keplerian elements, not osculating
 /// - `covariance_roe` should be symmetric PSD
 /// - `tau` must be finite
-/// - Drag rates in `drag` are treated as deterministic (no uncertainty on drag state)
+/// - Drag rates are treated as deterministic (no uncertainty on drag state)
 ///
 /// # Arguments
 /// * `covariance_roe` - Initial 6×6 ROE covariance
 /// * `chief_mean` - Chief mean Keplerian elements
-/// * `drag` - Drag configuration (for STM computation)
 /// * `tau` - Propagation time (seconds)
 ///
 /// # Errors
@@ -197,10 +196,9 @@ pub fn propagate_covariance_with_params(
 pub fn propagate_covariance_with_drag(
     covariance_roe: &Matrix6,
     chief_mean: &KeplerianElements,
-    drag: &DragConfig,
     tau: f64,
 ) -> Result<Matrix6, CovarianceError> {
-    let phi9 = compute_j2_drag_stm(chief_mean, drag, tau)?;
+    let phi9 = compute_j2_drag_stm(chief_mean, tau)?;
 
     // Embed 6×6 covariance into upper-left block of 9×9
     let mut p9 = Matrix9::zeros();

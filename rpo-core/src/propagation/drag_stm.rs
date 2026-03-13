@@ -18,7 +18,6 @@ use crate::types::{DragConfig, KeplerianElements, Matrix9, QuasiNonsingularROE};
 ///
 /// # Arguments
 /// * `chief_mean` - Chief mean Keplerian elements at epoch
-/// * `drag` - DMF differential drag configuration
 /// * `tau` - Propagation time (seconds)
 ///
 /// # Invariants
@@ -26,14 +25,11 @@ use crate::types::{DragConfig, KeplerianElements, Matrix9, QuasiNonsingularROE};
 /// - `0 <= chief_mean.e < 1`
 /// - `chief_mean` must be **mean** Keplerian elements, not osculating
 /// - `tau` must be finite
-/// - `_drag` parameter is currently unused (placeholder); drag rates are
-///   encoded in the augmented state vector at propagation time
 ///
 /// # Errors
 /// Returns `PropagationError` if eccentricity or SMA are out of range.
 pub fn compute_j2_drag_stm(
     chief_mean: &KeplerianElements,
-    _drag: &DragConfig,
     tau: f64,
 ) -> Result<Matrix9, PropagationError> {
     let j2p = compute_j2_params(chief_mean)?;
@@ -192,10 +188,9 @@ mod tests {
     fn zero_drag_equals_j2_stm() {
         let chief = iss_like_elements();
         let tau = 3600.0;
-        let drag = DragConfig::zero();
 
         let stm_j2 = compute_stm(&chief, tau).unwrap();
-        let stm_drag = compute_j2_drag_stm(&chief, &drag, tau).unwrap();
+        let stm_drag = compute_j2_drag_stm(&chief, tau).unwrap();
 
         // Upper-left 6x6 must match
         for r in 0..6 {
@@ -214,9 +209,8 @@ mod tests {
     #[test]
     fn zero_tau_gives_identity_9x9() {
         let chief = iss_like_elements();
-        let drag = test_drag_config();
 
-        let stm = compute_j2_drag_stm(&chief, &drag, 0.0).unwrap();
+        let stm = compute_j2_drag_stm(&chief, 0.0).unwrap();
         let identity = Matrix9::identity();
 
         let diff = (stm - identity).norm();
@@ -348,10 +342,9 @@ mod tests {
     fn eccentric_orbit_zero_drag() {
         let chief = eccentric_elements();
         let tau = 3600.0;
-        let drag = DragConfig::zero();
 
         let stm_j2 = compute_stm(&chief, tau).unwrap();
-        let stm_drag = compute_j2_drag_stm(&chief, &drag, tau).unwrap();
+        let stm_drag = compute_j2_drag_stm(&chief, tau).unwrap();
 
         for r in 0..6 {
             for c in 0..6 {
@@ -381,10 +374,9 @@ mod tests {
     #[test]
     fn koenig_appendix_d_drag_block_case1() {
         let chief = koenig_table2_case1();
-        let drag = DragConfig::zero();
         let period = chief.period();
         let j2p = compute_j2_params(&chief).unwrap();
-        let stm = compute_j2_drag_stm(&chief, &drag, period).unwrap();
+        let stm = compute_j2_drag_stm(&chief, period).unwrap();
 
         // phi[0,6] = τ (linear δa from δȧ)
         assert!(
@@ -571,8 +563,7 @@ mod tests {
         let period = chief.period();
 
         // Build the STM directly for tau = 1 orbital period
-        let drag = DragConfig::zero();
-        let stm = compute_j2_drag_stm(&chief, &drag, period).unwrap();
+        let stm = compute_j2_drag_stm(&chief, period).unwrap();
 
         // phi[0,6] = τ  (Koenig Appendix D, Eq. D2, row 0)
         // The δȧ coupling to δa is purely linear, with no J2 corrections.
