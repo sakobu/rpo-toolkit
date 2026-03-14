@@ -1,6 +1,7 @@
 //! Mission-level orchestration: classification, Lambert transfers, targeting, safety, and validation.
 
 pub mod lambert;
+pub mod monte_carlo;
 pub mod planning;
 pub mod safety;
 pub mod targeting;
@@ -20,6 +21,7 @@ pub use validation::{
     extract_dmf_rates, load_default_almanac, load_full_almanac, validate_mission_nyx,
     ValidationError,
 };
+pub use monte_carlo::{run_monte_carlo, MonteCarloError};
 pub use waypoints::{
     get_mission_state_at_time, plan_waypoint_mission, replan_from_waypoint,
     resample_leg_trajectory,

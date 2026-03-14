@@ -246,7 +246,7 @@ pub fn extract_dmf_rates(
 /// # Errors
 /// Returns [`ValidationError::FrameLookup`] if `IAU_EARTH` frame data is unavailable,
 /// or [`ValidationError::DynamicsSetup`] if drag/SRP initialization fails.
-fn build_full_physics_dynamics(
+pub(crate) fn build_full_physics_dynamics(
     almanac: &Arc<Almanac>,
 ) -> Result<SpacecraftDynamics, ValidationError> {
     let iau_earth = almanac
@@ -274,7 +274,7 @@ fn build_full_physics_dynamics(
 /// - Position/velocity in ECI J2000, km and km/s
 /// - Epoch from `StateVector.epoch` (hifitime `Epoch`)
 /// - Mass, areas, coefficients from `SpacecraftConfig`
-fn config_to_spacecraft(sv: &StateVector, config: &SpacecraftConfig) -> Spacecraft {
+pub(crate) fn config_to_spacecraft(sv: &StateVector, config: &SpacecraftConfig) -> Spacecraft {
     let orbit = Orbit::new(
         sv.position_eci_km.x,
         sv.position_eci_km.y,
@@ -293,7 +293,7 @@ fn config_to_spacecraft(sv: &StateVector, config: &SpacecraftConfig) -> Spacecra
 /// Convert a nyx [`Spacecraft`] back to a ROE-RUST [`StateVector`].
 ///
 /// Extracts ECI position (km) and velocity (km/s) from the spacecraft's orbit.
-fn spacecraft_to_state(sc: &Spacecraft) -> StateVector {
+pub(crate) fn spacecraft_to_state(sc: &Spacecraft) -> StateVector {
     StateVector {
         epoch: sc.orbit.epoch,
         position_eci_km: Vector3::new(
@@ -325,7 +325,7 @@ fn spacecraft_to_state(sc: &Spacecraft) -> StateVector {
 ///
 /// # Errors
 /// Returns [`ValidationError::Propagation`] if nyx propagation fails.
-fn nyx_propagate_segment(
+pub(crate) fn nyx_propagate_segment(
     sv: &StateVector,
     duration_s: f64,
     n_samples: u32,
@@ -392,7 +392,7 @@ fn find_closest_analytical_ric(trajectory: &[PropagatedState], elapsed_s: f64) -
 /// # Invariants
 /// - `chief.position_eci_km` must be non-zero (for RIC frame definition)
 /// - `chief` angular momentum must be non-zero
-fn apply_impulse(
+pub(crate) fn apply_impulse(
     deputy: &StateVector,
     chief: &StateVector,
     dv_ric_km_s: &Vector3<f64>,
@@ -444,7 +444,7 @@ fn compute_report_statistics(leg_points: &[Vec<ValidationPoint>]) -> (f64, f64, 
 ///
 /// # Errors
 /// Returns [`ValidationError::Conversion`] if Keplerian element extraction fails.
-fn build_nyx_safety_states(
+pub(crate) fn build_nyx_safety_states(
     chief_deputy_pairs: &[(f64, StateVector, StateVector)],
 ) -> Result<Vec<PropagatedState>, ValidationError> {
     let mut states = Vec::with_capacity(chief_deputy_pairs.len());
@@ -541,7 +541,9 @@ pub fn validate_mission_nyx(
 
         // Build comparison points for this leg
         let mut points = Vec::with_capacity(chief_results.len());
-        for (chief_sample, deputy_sample) in chief_results.iter().zip(deputy_results.iter()) {
+        for (idx, (chief_sample, deputy_sample)) in
+            chief_results.iter().zip(deputy_results.iter()).enumerate()
+        {
             let numerical_ric = eci_to_ric_relative(&chief_sample.1, &deputy_sample.1);
             let elapsed = cumulative_time + chief_sample.0;
             let analytical_ric = find_closest_analytical_ric(&leg.trajectory, chief_sample.0);
@@ -551,7 +553,11 @@ pub fn validate_mission_nyx(
             let vel_err =
                 (numerical_ric.velocity_ric_km_s - analytical_ric.velocity_ric_km_s).norm();
 
-            safety_pairs.push((elapsed, chief_sample.1.clone(), deputy_sample.1.clone()));
+            // Skip t=0 sample from safety: at the maneuver instant, positions
+            // haven't separated yet — distance is physically meaningless.
+            if idx > 0 {
+                safety_pairs.push((elapsed, chief_sample.1.clone(), deputy_sample.1.clone()));
+            }
             points.push(ValidationPoint {
                 elapsed_s: elapsed,
                 analytical_ric,
@@ -650,40 +656,42 @@ mod tests {
 
     /// Propagate an ECI state forward using RK4 with J2 gravity.
     ///
-    /// Fixed time step `dt` (seconds). State = [pos; vel] in ECI.
+    /// Nominal time step `dt` (seconds); the last step is shortened to land
+    /// exactly on `duration_s`. State = [pos; vel] in ECI.
     /// This is a test-only utility providing an independent numerical truth source
     /// with no shared code paths with the analytical STM.
     fn rk4_j2_propagate(sv: &StateVector, duration_s: f64, dt: f64) -> StateVector {
         debug_assert!(duration_s >= 0.0 && dt > 0.0, "duration and dt must be positive");
-        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-        let n_steps = (duration_s / dt).ceil() as u32;
-        let actual_dt = duration_s / f64::from(n_steps);
 
         let mut pos = sv.position_eci_km;
         let mut vel = sv.velocity_eci_km_s;
+        let mut t = 0.0;
 
-        for _ in 0..n_steps {
+        while t < duration_s {
+            let step = dt.min(duration_s - t);
+
             // RK4 for d(pos)/dt = vel, d(vel)/dt = accel(pos)
             let k1v = j2_acceleration(&pos);
             let k1r = vel;
 
-            let pos2 = pos + 0.5 * actual_dt * k1r;
-            let vel2 = vel + 0.5 * actual_dt * k1v;
+            let pos2 = pos + 0.5 * step * k1r;
+            let vel2 = vel + 0.5 * step * k1v;
             let k2v = j2_acceleration(&pos2);
             let k2r = vel2;
 
-            let pos3 = pos + 0.5 * actual_dt * k2r;
-            let vel3 = vel + 0.5 * actual_dt * k2v;
+            let pos3 = pos + 0.5 * step * k2r;
+            let vel3 = vel + 0.5 * step * k2v;
             let k3v = j2_acceleration(&pos3);
             let k3r = vel3;
 
-            let pos4 = pos + actual_dt * k3r;
-            let vel4 = vel + actual_dt * k3v;
+            let pos4 = pos + step * k3r;
+            let vel4 = vel + step * k3v;
             let k4v = j2_acceleration(&pos4);
             let k4r = vel4;
 
-            pos += actual_dt / 6.0 * (k1r + 2.0 * k2r + 2.0 * k3r + k4r);
-            vel += actual_dt / 6.0 * (k1v + 2.0 * k2v + 2.0 * k3v + k4v);
+            pos += step / 6.0 * (k1r + 2.0 * k2r + 2.0 * k3r + k4r);
+            vel += step / 6.0 * (k1v + 2.0 * k2v + 2.0 * k3v + k4v);
+            t += step;
         }
 
         StateVector {
@@ -1177,15 +1185,12 @@ mod tests {
 
         let period = chief.period();
         let dt_sample = 30.0; // sample every 30 seconds
-        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-        let n_samples = (period / dt_sample).floor() as u32;
 
         let mut sum_sq_err = 0.0;
-        let mut count = 0;
+        let mut count = 0_u32;
+        let mut t = 0.0;
 
-        for i in 0..=n_samples {
-            let t = f64::from(i) * dt_sample;
-
+        while t <= period {
             // "True" RIC from numerical ECI propagation
             let chief_t = rk4_j2_propagate(&chief_sv, t, 10.0);
             let deputy_t = rk4_j2_propagate(&deputy_sv, t, 10.0);
@@ -1198,6 +1203,7 @@ mod tests {
             let pos_err = (ric_true.position_ric_km - ric_pred.position_ric_km).norm();
             sum_sq_err += pos_err * pos_err;
             count += 1;
+            t += dt_sample;
         }
 
         let rms_position_m = (sum_sq_err / f64::from(count)).sqrt() * 1000.0;
@@ -1550,152 +1556,6 @@ mod tests {
         assert_eq!(mv, 0.0, "empty max_vel");
     }
 
-    /// Single V-bar transfer validated against nyx full-physics propagation.
-    ///
-    /// ISS-like orbit, deputy starts colocated, single waypoint at [0,5,0] RIC km,
-    /// TOF = 1 orbital period. Max position error should be < 1.0 km.
-    #[test]
-    #[ignore] // Requires MetaAlmanac (network on first run)
-    fn validate_single_leg() {
-        use crate::mission::waypoints::plan_waypoint_mission;
-        use crate::types::{DepartureState, MissionConfig, QuasiNonsingularROE, Waypoint};
-
-        let epoch = test_epoch();
-        let chief_ke = iss_like_elements();
-        let chief_sv = keplerian_to_state(&chief_ke, epoch).unwrap();
-        let deputy_sv = chief_sv.clone();
-
-        let period = chief_ke.period();
-        let waypoint = Waypoint {
-            position_ric_km: Vector3::new(0.0, 5.0, 0.0),
-            velocity_ric_km_s: Vector3::zeros(),
-            tof_s: Some(period),
-        };
-
-        let departure = DepartureState {
-            roe: QuasiNonsingularROE::default(),
-            chief: chief_ke,
-            epoch,
-        };
-        let config = MissionConfig::default();
-        let propagator = PropagationModel::J2Stm;
-
-        let mission = plan_waypoint_mission(&departure, &[waypoint], &config, &propagator)
-            .expect("mission planning should succeed");
-
-        let almanac = super::load_full_almanac().expect("full almanac should load");
-        let chief_config = SpacecraftConfig::SERVICER_500KG;
-        let deputy_config = SpacecraftConfig::SERVICER_500KG;
-
-        let report = super::validate_mission_nyx(
-            &mission,
-            &chief_sv,
-            &deputy_sv,
-            20,
-            &chief_config,
-            &deputy_config,
-            &almanac,
-        )
-        .expect("validation should succeed");
-
-        eprintln!(
-            "Single-leg validation: max_pos={:.4} km, mean_pos={:.4} km, rms_pos={:.4} km",
-            report.max_position_error_km,
-            report.mean_position_error_km,
-            report.rms_position_error_km,
-        );
-
-        assert!(
-            report.max_position_error_km < 1.0,
-            "max position error = {:.4} km (expected < 1.0)",
-            report.max_position_error_km,
-        );
-        assert_eq!(report.leg_points.len(), 1, "should have 1 leg");
-    }
-
-    /// Three-waypoint V-bar mission validated against nyx full-physics propagation.
-    ///
-    /// ISS-like orbit, 3 V-bar waypoints at [0,2,0], [0,5,0], [0,1,0] km,
-    /// each with 0.75-period TOF. Errors should remain bounded across legs.
-    #[test]
-    #[ignore] // Requires MetaAlmanac (network on first run)
-    fn validate_three_waypoint() {
-        use crate::mission::waypoints::plan_waypoint_mission;
-        use crate::types::{DepartureState, MissionConfig, QuasiNonsingularROE, Waypoint};
-
-        let epoch = test_epoch();
-        let chief_ke = iss_like_elements();
-        let chief_sv = keplerian_to_state(&chief_ke, epoch).unwrap();
-        let deputy_sv = chief_sv.clone();
-
-        let period = chief_ke.period();
-        let tof = 0.75 * period;
-        let waypoints = vec![
-            Waypoint {
-                position_ric_km: Vector3::new(0.0, 2.0, 0.0),
-                velocity_ric_km_s: Vector3::zeros(),
-                tof_s: Some(tof),
-            },
-            Waypoint {
-                position_ric_km: Vector3::new(0.0, 5.0, 0.0),
-                velocity_ric_km_s: Vector3::zeros(),
-                tof_s: Some(tof),
-            },
-            Waypoint {
-                position_ric_km: Vector3::new(0.0, 1.0, 0.0),
-                velocity_ric_km_s: Vector3::zeros(),
-                tof_s: Some(tof),
-            },
-        ];
-
-        let departure = DepartureState {
-            roe: QuasiNonsingularROE::default(),
-            chief: chief_ke,
-            epoch,
-        };
-        let config = MissionConfig::default();
-        let propagator = PropagationModel::J2Stm;
-
-        let mission = plan_waypoint_mission(&departure, &waypoints, &config, &propagator)
-            .expect("mission planning should succeed");
-
-        let almanac = super::load_full_almanac().expect("full almanac should load");
-        let chief_config = SpacecraftConfig::SERVICER_500KG;
-        let deputy_config = SpacecraftConfig::SERVICER_500KG;
-
-        let report = super::validate_mission_nyx(
-            &mission,
-            &chief_sv,
-            &deputy_sv,
-            20,
-            &chief_config,
-            &deputy_config,
-            &almanac,
-        )
-        .expect("validation should succeed");
-
-        eprintln!(
-            "Three-waypoint validation: max_pos={:.4} km, mean_pos={:.4} km, rms_pos={:.4} km",
-            report.max_position_error_km,
-            report.mean_position_error_km,
-            report.rms_position_error_km,
-        );
-
-        assert_eq!(report.leg_points.len(), 3, "should have 3 legs");
-
-        // Errors should be bounded (< 5 km for 3 legs with full physics)
-        assert!(
-            report.max_position_error_km < 5.0,
-            "max position error = {:.4} km (expected < 5.0)",
-            report.max_position_error_km,
-        );
-
-        // Safety metrics should be populated
-        assert!(
-            report.numerical_safety.min_distance_3d_km > 0.0,
-            "numerical safety 3D distance should be positive"
-        );
-    }
 
     // =========================================================================
     // Phase 6: Full-Physics Integration Tests

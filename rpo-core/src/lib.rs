@@ -30,9 +30,9 @@ pub use mission::{
     dimensionless_separation, eci_separation_km, extract_dmf_rates,
     get_mission_state_at_time, load_default_almanac, load_full_almanac, optimize_tof,
     plan_mission, plan_waypoint_mission, replan_from_waypoint,
-    resample_leg_trajectory, solve_lambert, solve_lambert_izzo, solve_lambert_with_config,
-    solve_leg, validate_mission_nyx, LambertConfig, LambertError, LambertTransfer,
-    SafetyError, TransferDirection, ValidationError,
+    resample_leg_trajectory, run_monte_carlo, solve_lambert, solve_lambert_izzo,
+    solve_lambert_with_config, solve_leg, validate_mission_nyx, LambertConfig, LambertError,
+    LambertTransfer, MonteCarloError, SafetyError, TransferDirection, ValidationError,
 };
 pub use propagation::{
     compute_j2_drag_stm, compute_j2_params, compute_stm, compute_stm_with_params,
@@ -41,10 +41,14 @@ pub use propagation::{
 };
 pub use propagation::covariance::CovarianceError;
 pub use types::{
-    CovarianceState, DepartureState, DragConfig, KeplerianElements, LegCovarianceReport, Maneuver,
-    ManeuverLeg, ManeuverUncertainty, Matrix6, Matrix9, MissionConfig, MissionCovarianceReport,
-    MissionError, MissionPhase, MissionPlan, NavigationAccuracy, PerchGeometry, ProximityConfig,
-    QuasiNonsingularROE, RICState, SafetyConfig, SafetyMetrics, SpacecraftConfig, StateVector,
+    CovarianceState, CovarianceValidation, DepartureState, DispersionConfig, DispersionEnvelope,
+    Distribution, DragConfig, EnsembleStatistics, KeplerianElements, LegCovarianceReport,
+    Maneuver, ManeuverDispersion, ManeuverLeg, ManeuverUncertainty, Matrix6, Matrix9,
+    MissionConfig, MissionCovarianceReport, MissionError, MissionPhase, MissionPlan,
+    MonteCarloConfig, MonteCarloInput, MonteCarloMode, MonteCarloReport, NavigationAccuracy,
+    PercentileStats, PerchGeometry, ProximityConfig, QuasiNonsingularROE, RICState, SafetyConfig,
+    SafetyMetrics,
+    SampleResult, SpacecraftConfig, SpacecraftDispersion, StateDispersion, StateVector,
     TargetingConfig, TofOptConfig, ValidationPoint, ValidationReport, Waypoint, WaypointMission,
 };
 

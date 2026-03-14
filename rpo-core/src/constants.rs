@@ -68,3 +68,18 @@ pub const DEFAULT_COVARIANCE_SAMPLES_PER_LEG: usize = 100;
 /// Singularity threshold for Δv direction vector normalization.
 /// Below this norm, the Δv is treated as zero (no maneuver execution error).
 pub const DV_NORM_ZERO_THRESHOLD_KM_S: f64 = 1e-15;
+
+// --- Monte Carlo constants ---
+
+/// Singularity threshold for random rotation axis normalization in Rodrigues' formula.
+/// If the sampled 3D Gaussian axis has norm below this, a default axis is used.
+/// Set to 1e-30 (well below f64 precision) to catch only near-zero vectors.
+pub const RODRIGUES_AXIS_NORM_THRESHOLD: f64 = 1e-30;
+
+/// Division-by-zero guard for covariance sigma in MC vs covariance comparison.
+/// If predicted 1-sigma is below this, sigma ratio defaults to 1.0.
+pub const COVARIANCE_SIGMA_FLOOR: f64 = 1e-15;
+
+/// Minimum spacecraft dry mass (kg) after dispersion.
+/// Prevents non-physical zero or negative mass in dispersed samples.
+pub const MIN_SPACECRAFT_MASS_KG: f64 = 0.1;
