@@ -174,10 +174,6 @@ pub fn load_full_almanac() -> Result<Arc<Almanac>, ValidationError> {
 /// will be near-zero. Returns `DragConfig::zero()` when extracted rates
 /// are below `DMF_NOISE_THRESHOLD` (1e-15).
 ///
-/// # Panics
-/// Panics if `nyx_propagate_segment` returns an empty result vector, which
-/// cannot happen when `n_samples = 0` (always returns exactly one element).
-///
 /// # Errors
 /// Returns [`ValidationError`] if almanac frame lookup, dynamics setup,
 /// propagation, or Keplerian conversion fails.
@@ -203,13 +199,13 @@ pub fn extract_dmf_rates(
     let chief_results = nyx_propagate_segment(
         chief_initial, duration, 0, chief_config, chief_dynamics, almanac,
     )?;
-    let chief_final = &chief_results.last().unwrap().1;
+    let chief_final = &chief_results.last().ok_or(ValidationError::EmptyTrajectory)?.1;
 
     let deputy_dynamics = build_full_physics_dynamics(almanac)?;
     let deputy_results = nyx_propagate_segment(
         deputy_initial, duration, 0, deputy_config, deputy_dynamics, almanac,
     )?;
-    let deputy_final = &deputy_results.last().unwrap().1;
+    let deputy_final = &deputy_results.last().ok_or(ValidationError::EmptyTrajectory)?.1;
 
     // Compute final ROE
     let chief_ke_f = state_to_keplerian(chief_final)?;
