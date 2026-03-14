@@ -1,13 +1,33 @@
-//! Passive safety analysis via e/i vector separation (D'Amico Sec. 2.2).
+//! Safety analysis for rendezvous and proximity operations.
 //!
-//! Evaluates formation safety using the minimum radial/cross-track
-//! separation derived from the relative eccentricity and inclination vectors,
-//! and minimum 3D distance from RIC position.
+//! Provides two categories of safety metrics:
+//!
+//! ## Operational safety (active missions)
+//!
+//! Instantaneous geometric distance measures — meaningful for all mission
+//! types including actively guided approaches:
+//! - **Minimum 3D distance**: `‖RIC position‖`
+//! - **Minimum R/C distance**: `sqrt(R² + C²)` (radial/cross-track plane)
+//!
+//! ## Passive / abort safety (free drift)
+//!
+//! Orbit-averaged formation geometry bounds from D'Amico Sec. 2.2 —
+//! meaningful for uncontrolled drift, abort/contingency analysis, or
+//! long-coast formation flying:
+//! - **E/I vector separation** (D'Amico Eq. 2.22): orbit-averaged minimum
+//!   R/C bound from relative eccentricity and inclination vector geometry.
+//!
+//! The passive safety metric is **not enforced during active waypoint
+//! targeting** — the planner does not optimize for e/i separation. High
+//! violation rates in guided approach missions are expected and do not
+//! indicate operational hazard.
 
 use nalgebra::Vector3;
 
 use crate::propagation::propagator::PropagatedState;
-use crate::types::{KeplerianElements, QuasiNonsingularROE, SafetyMetrics};
+use crate::types::{
+    KeplerianElements, OperationalSafety, PassiveSafety, QuasiNonsingularROE, SafetyMetrics,
+};
 
 /// Degenerate e/i vector guard for D'Amico Eq. 2.22 — below this magnitude,
 /// the e/i separation formula is undefined (division by zero).
@@ -88,18 +108,22 @@ pub fn analyze_safety(
     let dist_3d = ric_position.norm();
 
     SafetyMetrics {
-        min_rc_separation_km: rc_instantaneous,
-        min_distance_3d_km: dist_3d,
-        min_ei_separation_km: ei_separation,
-        de_magnitude: ecc_mag,
-        di_magnitude: inc_mag,
-        ei_phase_angle_rad: ei_phase,
-        min_rc_leg_index: 0,
-        min_rc_elapsed_s: 0.0,
-        min_rc_ric_position_km: *ric_position,
-        min_3d_leg_index: 0,
-        min_3d_elapsed_s: 0.0,
-        min_3d_ric_position_km: *ric_position,
+        operational: OperationalSafety {
+            min_rc_separation_km: rc_instantaneous,
+            min_distance_3d_km: dist_3d,
+            min_rc_leg_index: 0,
+            min_rc_elapsed_s: 0.0,
+            min_rc_ric_position_km: *ric_position,
+            min_3d_leg_index: 0,
+            min_3d_elapsed_s: 0.0,
+            min_3d_ric_position_km: *ric_position,
+        },
+        passive: PassiveSafety {
+            min_ei_separation_km: ei_separation,
+            de_magnitude: ecc_mag,
+            di_magnitude: inc_mag,
+            ei_phase_angle_rad: ei_phase,
+        },
     }
 }
 
@@ -137,39 +161,39 @@ pub fn analyze_trajectory_safety(
 
     let first = &trajectory[0];
     let mut worst = analyze_safety(&first.roe, &first.chief_mean, &first.ric.position_ric_km);
-    worst.min_rc_elapsed_s = first.elapsed_s;
-    worst.min_3d_elapsed_s = first.elapsed_s;
-    let mut min_rc = worst.min_rc_separation_km;
-    let mut min_ei = worst.min_ei_separation_km;
-    let mut min_3d = worst.min_distance_3d_km;
+    worst.operational.min_rc_elapsed_s = first.elapsed_s;
+    worst.operational.min_3d_elapsed_s = first.elapsed_s;
+    let mut min_rc = worst.operational.min_rc_separation_km;
+    let mut min_ei = worst.passive.min_ei_separation_km;
+    let mut min_3d = worst.operational.min_distance_3d_km;
     let mut min_3d_elapsed_s = first.elapsed_s;
     let mut min_3d_ric_position_km = first.ric.position_ric_km;
 
     for state in &trajectory[1..] {
         let metrics = analyze_safety(&state.roe, &state.chief_mean, &state.ric.position_ric_km);
-        if metrics.min_rc_separation_km < min_rc {
-            min_rc = metrics.min_rc_separation_km;
-            // Keep the ROE-related fields from the worst R/C point
+        if metrics.operational.min_rc_separation_km < min_rc {
+            min_rc = metrics.operational.min_rc_separation_km;
+            // Keep the passive fields from the worst R/C point
             worst = metrics;
-            worst.min_rc_elapsed_s = state.elapsed_s;
-            worst.min_rc_ric_position_km = state.ric.position_ric_km;
+            worst.operational.min_rc_elapsed_s = state.elapsed_s;
+            worst.operational.min_rc_ric_position_km = state.ric.position_ric_km;
         }
-        if metrics.min_ei_separation_km < min_ei {
-            min_ei = metrics.min_ei_separation_km;
+        if metrics.passive.min_ei_separation_km < min_ei {
+            min_ei = metrics.passive.min_ei_separation_km;
         }
-        if metrics.min_distance_3d_km < min_3d {
-            min_3d = metrics.min_distance_3d_km;
+        if metrics.operational.min_distance_3d_km < min_3d {
+            min_3d = metrics.operational.min_distance_3d_km;
             min_3d_elapsed_s = state.elapsed_s;
             min_3d_ric_position_km = state.ric.position_ric_km;
         }
     }
 
     // Composite: all minimums
-    worst.min_rc_separation_km = min_rc;
-    worst.min_ei_separation_km = min_ei;
-    worst.min_distance_3d_km = min_3d;
-    worst.min_3d_elapsed_s = min_3d_elapsed_s;
-    worst.min_3d_ric_position_km = min_3d_ric_position_km;
+    worst.operational.min_rc_separation_km = min_rc;
+    worst.passive.min_ei_separation_km = min_ei;
+    worst.operational.min_distance_3d_km = min_3d;
+    worst.operational.min_3d_elapsed_s = min_3d_elapsed_s;
+    worst.operational.min_3d_ric_position_km = min_3d_ric_position_km;
     // leg_index stays 0 — set by compute_worst_safety
 
     Ok(worst)
@@ -200,11 +224,11 @@ mod tests {
         let metrics = analyze_safety(&roe, &chief, &ric_pos);
 
         assert!(
-            metrics.min_rc_separation_km < 1e-10,
+            metrics.operational.min_rc_separation_km < 1e-10,
             "Min R/C separation should be ~0"
         );
         assert!(
-            metrics.min_distance_3d_km < 1e-10,
+            metrics.operational.min_distance_3d_km < 1e-10,
             "Min 3D distance should be ~0"
         );
     }
@@ -226,13 +250,13 @@ mod tests {
         let metrics = analyze_safety(&roe, &chief, &ric_pos);
 
         assert!(
-            metrics.min_ei_separation_km < 1e-10,
+            metrics.passive.min_ei_separation_km < 1e-10,
             "Pure δe with no δi should have zero e/i separation"
         );
         assert!(
-            (metrics.min_rc_separation_km - 1.0).abs() < 1e-10,
+            (metrics.operational.min_rc_separation_km - 1.0).abs() < 1e-10,
             "Instantaneous R/C should be 1.0 km for RIC [1,0,0]: {}",
-            metrics.min_rc_separation_km,
+            metrics.operational.min_rc_separation_km,
         );
     }
 
@@ -253,12 +277,12 @@ mod tests {
         let metrics = analyze_safety(&roe, &chief, &ric_pos);
 
         assert!(
-            metrics.min_rc_separation_km > 0.1,
+            metrics.operational.min_rc_separation_km > 0.1,
             "Perpendicular e/i vectors should give good separation: {} km",
-            metrics.min_rc_separation_km
+            metrics.operational.min_rc_separation_km
         );
         assert!(
-            metrics.min_distance_3d_km > 0.1,
+            metrics.operational.min_distance_3d_km > 0.1,
             "3D distance should exceed threshold"
         );
     }
@@ -282,12 +306,12 @@ mod tests {
         let metrics = analyze_safety(&roe, &chief, &ric_pos);
 
         assert!(
-            metrics.min_ei_separation_km < 1e-10,
+            metrics.passive.min_ei_separation_km < 1e-10,
             "Parallel e/i vectors should give zero e/i separation: {} km",
-            metrics.min_ei_separation_km
+            metrics.passive.min_ei_separation_km
         );
         assert!(
-            metrics.min_ei_separation_km < config.min_ei_separation_km,
+            metrics.passive.min_ei_separation_km < config.min_ei_separation_km,
             "Parallel e/i should fail threshold"
         );
     }
@@ -314,16 +338,16 @@ mod tests {
         let metrics = analyze_safety(&roe, &chief, &ric_pos);
 
         assert!(
-            metrics.min_ei_separation_km > 0.1,
+            metrics.passive.min_ei_separation_km > 0.1,
             "e/i separation should be fine: {}",
-            metrics.min_ei_separation_km
+            metrics.passive.min_ei_separation_km
         );
         assert!(
-            metrics.min_distance_3d_km < 0.1,
+            metrics.operational.min_distance_3d_km < 0.1,
             "3D distance should be below threshold"
         );
         assert!(
-            metrics.min_distance_3d_km < config.min_distance_3d_km,
+            metrics.operational.min_distance_3d_km < config.min_distance_3d_km,
             "Should fail 3D distance threshold"
         );
     }
@@ -342,20 +366,20 @@ mod tests {
         let metrics = analyze_safety(&roe, &chief, &ric_pos);
 
         assert!(
-            metrics.min_rc_separation_km < 1e-10,
+            metrics.operational.min_rc_separation_km < 1e-10,
             "R/C separation should be ~0 for zero ROE"
         );
         assert!(
-            (metrics.min_distance_3d_km - 5.0).abs() < 1e-10,
+            (metrics.operational.min_distance_3d_km - 5.0).abs() < 1e-10,
             "3D distance should be 5.0 km"
         );
         // e/i fails (zero ROE) but 3D passes
         assert!(
-            metrics.min_ei_separation_km < config.min_ei_separation_km,
+            metrics.passive.min_ei_separation_km < config.min_ei_separation_km,
             "Should fail e/i threshold due to zero ROE"
         );
         assert!(
-            metrics.min_distance_3d_km >= config.min_distance_3d_km,
+            metrics.operational.min_distance_3d_km >= config.min_distance_3d_km,
             "3D distance should pass threshold"
         );
     }
@@ -393,10 +417,10 @@ mod tests {
 
         // Finer sampling can only find a tighter or equal minimum
         assert!(
-            fine_metrics.min_distance_3d_km <= coarse_metrics.min_distance_3d_km + 1e-12,
+            fine_metrics.operational.min_distance_3d_km <= coarse_metrics.operational.min_distance_3d_km + 1e-12,
             "200-step minimum ({:.6} km) should be ≤ 20-step minimum ({:.6} km)",
-            fine_metrics.min_distance_3d_km,
-            coarse_metrics.min_distance_3d_km,
+            fine_metrics.operational.min_distance_3d_km,
+            coarse_metrics.operational.min_distance_3d_km,
         );
     }
 
@@ -427,10 +451,10 @@ mod tests {
         let worst = analyze_trajectory_safety(&trajectory).unwrap();
 
         // Should have valid metrics
-        assert!(worst.de_magnitude > 0.0);
-        assert!(worst.di_magnitude > 0.0);
-        assert!(worst.min_distance_3d_km > 0.0, "3D distance should be positive");
-        assert!(worst.min_ei_separation_km > 0.0, "e/i separation should be positive");
+        assert!(worst.passive.de_magnitude > 0.0);
+        assert!(worst.passive.di_magnitude > 0.0);
+        assert!(worst.operational.min_distance_3d_km > 0.0, "3D distance should be positive");
+        assert!(worst.passive.min_ei_separation_km > 0.0, "e/i separation should be positive");
     }
 
     /// Provenance fields are populated by `analyze_trajectory_safety`.
@@ -460,33 +484,33 @@ mod tests {
         let worst = analyze_trajectory_safety(&trajectory).unwrap();
 
         // Elapsed times should be non-negative and within the trajectory span
-        assert!(worst.min_rc_elapsed_s >= 0.0, "R/C elapsed_s should be non-negative");
-        assert!(worst.min_3d_elapsed_s >= 0.0, "3D elapsed_s should be non-negative");
+        assert!(worst.operational.min_rc_elapsed_s >= 0.0, "R/C elapsed_s should be non-negative");
+        assert!(worst.operational.min_3d_elapsed_s >= 0.0, "3D elapsed_s should be non-negative");
         assert!(
-            worst.min_rc_elapsed_s <= period + 1e-6,
+            worst.operational.min_rc_elapsed_s <= period + 1e-6,
             "R/C elapsed_s should be within trajectory span"
         );
         assert!(
-            worst.min_3d_elapsed_s <= period + 1e-6,
+            worst.operational.min_3d_elapsed_s <= period + 1e-6,
             "3D elapsed_s should be within trajectory span"
         );
 
         // RIC positions should match the trajectory points at those times
         let rc_match = trajectory.iter().find(|s| {
-            (s.elapsed_s - worst.min_rc_elapsed_s).abs() < 1e-12
+            (s.elapsed_s - worst.operational.min_rc_elapsed_s).abs() < 1e-12
         });
         assert!(rc_match.is_some(), "Should find trajectory point matching R/C elapsed_s");
         assert!(
-            (rc_match.unwrap().ric.position_ric_km - worst.min_rc_ric_position_km).norm() < 1e-12,
+            (rc_match.unwrap().ric.position_ric_km - worst.operational.min_rc_ric_position_km).norm() < 1e-12,
             "R/C RIC position should match trajectory point"
         );
 
         let d3_match = trajectory.iter().find(|s| {
-            (s.elapsed_s - worst.min_3d_elapsed_s).abs() < 1e-12
+            (s.elapsed_s - worst.operational.min_3d_elapsed_s).abs() < 1e-12
         });
         assert!(d3_match.is_some(), "Should find trajectory point matching 3D elapsed_s");
         assert!(
-            (d3_match.unwrap().ric.position_ric_km - worst.min_3d_ric_position_km).norm() < 1e-12,
+            (d3_match.unwrap().ric.position_ric_km - worst.operational.min_3d_ric_position_km).norm() < 1e-12,
             "3D RIC position should match trajectory point"
         );
     }
@@ -512,8 +536,8 @@ mod tests {
         let metrics = analyze_safety(&roe, &chief, &ric_pos);
 
         assert!(
-            (metrics.min_ei_separation_km - 0.200).abs() < 1e-9,
-            "e/i separation: got {}, expected 0.200 km", metrics.min_ei_separation_km
+            (metrics.passive.min_ei_separation_km - 0.200).abs() < 1e-9,
+            "e/i separation: got {}, expected 0.200 km", metrics.passive.min_ei_separation_km
         );
     }
 
@@ -547,8 +571,8 @@ mod tests {
         let expected = std::f64::consts::SQRT_2 * 0.300 * 0.500
             / (0.300_f64.powi(2) + 0.500_f64.powi(2)).sqrt();
         assert!(
-            (metrics.min_ei_separation_km - expected).abs() < 1e-6,
-            "e/i separation: got {}, expected {expected}", metrics.min_ei_separation_km
+            (metrics.passive.min_ei_separation_km - expected).abs() < 1e-6,
+            "e/i separation: got {}, expected {expected}", metrics.passive.min_ei_separation_km
         );
     }
 
@@ -565,8 +589,8 @@ mod tests {
         let metrics = analyze_safety(&roe, &chief, &ric_pos);
 
         assert!(
-            metrics.min_ei_separation_km.abs() < 1e-10,
-            "Parallel e/i should give 0 separation, got {}", metrics.min_ei_separation_km
+            metrics.passive.min_ei_separation_km.abs() < 1e-10,
+            "Parallel e/i should give 0 separation, got {}", metrics.passive.min_ei_separation_km
         );
     }
 }

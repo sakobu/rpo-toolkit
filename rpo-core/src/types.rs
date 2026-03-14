@@ -428,21 +428,17 @@ pub struct WaypointMission {
     pub covariance: Option<MissionCovarianceReport>,
 }
 
-/// Passive safety metrics based on instantaneous R/C distance, e/i vector separation, and 3D distance.
+/// Operational safety metrics — instantaneous geometric distance measures.
+///
+/// Meaningful for all mission types including actively guided approaches.
+/// These metrics reflect the actual physical separation between vehicles
+/// at each trajectory point.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
-pub struct SafetyMetrics {
-    /// Minimum instantaneous R/C distance (km): min sqrt(R^2 + C^2) along trajectory.
+pub struct OperationalSafety {
+    /// Minimum instantaneous R/C distance (km): min sqrt(R² + C²) along trajectory.
     pub min_rc_separation_km: f64,
-    /// Minimum 3D distance between vehicles (km): min |RIC position|
+    /// Minimum 3D distance between vehicles (km): min ‖RIC position‖ along trajectory.
     pub min_distance_3d_km: f64,
-    /// Minimum e/i vector separation (km) from D'Amico Eq. 2.22 (analytic orbit-averaged bound).
-    pub min_ei_separation_km: f64,
-    /// Magnitude of relative eccentricity vector
-    pub de_magnitude: f64,
-    /// Magnitude of relative inclination vector
-    pub di_magnitude: f64,
-    /// Phase angle between e/i vectors (rad). Parallel = 0, anti-parallel = π.
-    pub ei_phase_angle_rad: f64,
 
     /// Leg index (0-based) where minimum R/C separation occurs.
     pub min_rc_leg_index: usize,
@@ -457,6 +453,60 @@ pub struct SafetyMetrics {
     pub min_3d_elapsed_s: f64,
     /// RIC position (km) at minimum 3D distance.
     pub min_3d_ric_position_km: Vector3<f64>,
+}
+
+/// Passive / abort safety metrics — orbit-averaged formation geometry bounds
+/// derived from D'Amico Eq. 2.22.
+///
+/// Represents the minimum R/C distance a deputy would achieve in free drift
+/// (no maneuvers) based on the relative eccentricity and inclination vectors.
+/// Meaningful for:
+/// - Abort/contingency analysis ("if guidance fails mid-leg")
+/// - Long-coast formation flying
+/// - Drift-safe orbit design
+///
+/// **Not enforced during active waypoint targeting.** High violation rates
+/// in guided approach missions are expected and do not indicate operational
+/// hazard — they reflect that intermediate ROE geometries during short
+/// maneuver legs are not optimized for passive safety.
+///
+/// # Validity
+///
+/// - Assumes linearized ROE dynamics with near-circular chief orbit.
+/// - Orbit-averaged: designed for mean elements. When computed from
+///   osculating elements (e.g. nyx full-physics), short-period oscillations
+///   add noise to the metric.
+/// - Singular when both δe and δi magnitudes are below `ROE_MAG_EPSILON`
+///   (returns 0.0).
+///
+/// See [`crate::mission::safety::analyze_safety`] for the full computation.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
+pub struct PassiveSafety {
+    /// Minimum e/i vector separation (km) from D'Amico Eq. 2.22 (analytic orbit-averaged bound).
+    pub min_ei_separation_km: f64,
+    /// Magnitude of relative eccentricity vector (dimensionless).
+    pub de_magnitude: f64,
+    /// Magnitude of relative inclination vector (dimensionless).
+    pub di_magnitude: f64,
+    /// Phase angle between e/i vectors (rad). Perpendicular (±π/2) = maximum passive safety.
+    pub ei_phase_angle_rad: f64,
+}
+
+/// Complete safety analysis combining operational and passive/abort metrics.
+///
+/// # Safety categories
+///
+/// - **Operational** ([`OperationalSafety`]): instantaneous 3D distance and R/C
+///   separation — meaningful for all mission types.
+/// - **Passive / abort** ([`PassiveSafety`]): orbit-averaged e/i vector separation
+///   (D'Amico Eq. 2.22) — meaningful for free-drift contingency analysis.
+///   Not a planning constraint in the current targeting solver.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
+pub struct SafetyMetrics {
+    /// Operational safety: instantaneous geometric distance measures.
+    pub operational: OperationalSafety,
+    /// Passive / abort safety: orbit-averaged formation geometry bounds.
+    pub passive: PassiveSafety,
 }
 
 /// Per-timestep comparison between analytical and numerical propagation.
@@ -560,12 +610,19 @@ impl Default for TofOptConfig {
     }
 }
 
-/// Configuration for passive safety analysis.
+/// Configuration for safety analysis thresholds.
+///
+/// Contains thresholds for both operational and passive safety checks:
+/// - `min_distance_3d_km`: operational keep-out sphere (3D distance)
+/// - `min_ei_separation_km`: passive/abort e/i separation (D'Amico Eq. 2.22)
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
 pub struct SafetyConfig {
-    /// e/i vector separation threshold (km) — minimum D'Amico Eq. 2.22 passive safety bound
+    /// e/i vector separation threshold (km) — passive/abort safety bound (D'Amico Eq. 2.22).
+    /// Violations indicate the formation geometry would be unsafe in free drift,
+    /// not necessarily during active guidance.
     pub min_ei_separation_km: f64,
-    /// 3D keep-out sphere threshold (km) — minimum allowed distance between vehicles
+    /// 3D keep-out sphere threshold (km) — operational safety bound.
+    /// Violations indicate actual physical proximity below the threshold.
     pub min_distance_3d_km: f64,
 }
 
@@ -1043,6 +1100,7 @@ pub struct PercentileStats {
     pub std_dev: f64,
 }
 
+
 /// Trajectory dispersion envelope at a single time point.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DispersionEnvelope {
@@ -1062,17 +1120,27 @@ pub struct EnsembleStatistics {
     /// Total Δv distribution across samples (km/s).
     pub total_dv_km_s: PercentileStats,
     /// Minimum radial/cross-track separation distribution (km).
-    pub min_rc_distance_km: PercentileStats,
+    /// `None` when no samples produced safety data.
+    pub min_rc_distance_km: Option<PercentileStats>,
     /// Minimum 3D distance distribution (km).
-    pub min_3d_distance_km: PercentileStats,
+    /// `None` when no samples produced safety data.
+    pub min_3d_distance_km: Option<PercentileStats>,
     /// Minimum e/i vector separation distribution (km).
-    pub min_ei_separation_km: PercentileStats,
+    /// `None` when no samples produced safety data.
+    pub min_ei_separation_km: Option<PercentileStats>,
     /// Per-waypoint miss distance distributions (km), one entry per waypoint.
-    pub waypoint_miss_km: Vec<PercentileStats>,
+    /// Individual entries are `None` when no finite miss data was available.
+    pub waypoint_miss_km: Vec<Option<PercentileStats>>,
     /// Empirical collision probability (fraction of samples violating keep-out).
     pub collision_probability: f64,
     /// Fraction of samples where targeting converged.
     pub convergence_rate: f64,
+    /// Fraction of samples where min e/i separation violated the configured threshold.
+    /// 0.0 if no `SafetyConfig` was provided.
+    pub ei_violation_rate: f64,
+    /// Fraction of samples where min 3D distance violated the configured keep-out threshold.
+    /// 0.0 if no `SafetyConfig` was provided.
+    pub keepout_violation_rate: f64,
     /// Trajectory dispersion envelope at sampled time points.
     pub dispersion_envelope: Vec<DispersionEnvelope>,
 }

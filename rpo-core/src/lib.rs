@@ -36,7 +36,8 @@ pub use mission::{
 };
 pub use propagation::{
     compute_j2_drag_stm, compute_j2_params, compute_stm, compute_stm_with_params,
-    propagate_keplerian, propagate_mission_covariance, propagate_roe_j2_drag, propagate_roe_stm,
+    propagate_keplerian, propagate_mission_covariance, ric_accuracy_to_roe_covariance,
+    propagate_roe_j2_drag, propagate_roe_stm,
     J2Params, PropagatedState, PropagationError, PropagationModel,
 };
 pub use propagation::covariance::CovarianceError;
@@ -46,8 +47,8 @@ pub use types::{
     Maneuver, ManeuverDispersion, ManeuverLeg, ManeuverUncertainty, Matrix6, Matrix9,
     MissionConfig, MissionCovarianceReport, MissionError, MissionPhase, MissionPlan,
     MonteCarloConfig, MonteCarloInput, MonteCarloMode, MonteCarloReport, NavigationAccuracy,
-    PercentileStats, PerchGeometry, ProximityConfig, QuasiNonsingularROE, RICState, SafetyConfig,
-    SafetyMetrics,
+    OperationalSafety, PassiveSafety, PercentileStats, PerchGeometry, ProximityConfig,
+    QuasiNonsingularROE, RICState, SafetyConfig, SafetyMetrics,
     SampleResult, SpacecraftConfig, SpacecraftDispersion, StateDispersion, StateVector,
     TargetingConfig, TofOptConfig, ValidationPoint, ValidationReport, Waypoint, WaypointMission,
 };

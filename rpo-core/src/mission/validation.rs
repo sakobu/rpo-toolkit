@@ -2022,36 +2022,36 @@ mod tests {
         eprintln!("Safety comparison (analytical vs numerical):");
         eprintln!(
             "  R/C separation:  {:.4} km vs {:.4} km",
-            analytical.min_rc_separation_km, numerical.min_rc_separation_km,
+            analytical.operational.min_rc_separation_km, numerical.operational.min_rc_separation_km,
         );
         eprintln!(
             "  3D distance:     {:.4} km vs {:.4} km",
-            analytical.min_distance_3d_km, numerical.min_distance_3d_km,
+            analytical.operational.min_distance_3d_km, numerical.operational.min_distance_3d_km,
         );
         eprintln!(
             "  e/i separation:  {:.4} km vs {:.4} km",
-            analytical.min_ei_separation_km, numerical.min_ei_separation_km,
+            analytical.passive.min_ei_separation_km, numerical.passive.min_ei_separation_km,
         );
         eprintln!(
             "  |δe|:            {:.6} vs {:.6}",
-            analytical.de_magnitude, numerical.de_magnitude,
+            analytical.passive.de_magnitude, numerical.passive.de_magnitude,
         );
         eprintln!(
             "  |δi|:            {:.6} vs {:.6}",
-            analytical.di_magnitude, numerical.di_magnitude,
+            analytical.passive.di_magnitude, numerical.passive.di_magnitude,
         );
         eprintln!(
             "  e/i phase angle: {:.4} rad vs {:.4} rad",
-            analytical.ei_phase_angle_rad, numerical.ei_phase_angle_rad,
+            analytical.passive.ei_phase_angle_rad, numerical.passive.ei_phase_angle_rad,
         );
 
         // R/C separation: relative agreement within 50%
         // When both values are near zero (V-bar configuration), relative comparison
         // is meaningless — skip it.
-        let rc_ref = analytical.min_rc_separation_km.max(numerical.min_rc_separation_km);
+        let rc_ref = analytical.operational.min_rc_separation_km.max(numerical.operational.min_rc_separation_km);
         if rc_ref > SAFETY_RC_NEAR_ZERO_KM {
             let rc_rel_err =
-                (analytical.min_rc_separation_km - numerical.min_rc_separation_km).abs() / rc_ref;
+                (analytical.operational.min_rc_separation_km - numerical.operational.min_rc_separation_km).abs() / rc_ref;
             eprintln!("  R/C relative error: {rc_rel_err:.2}");
             assert!(
                 rc_rel_err < SAFETY_RC_RELATIVE_TOL,
@@ -2066,7 +2066,7 @@ mod tests {
 
         // 3D distance: absolute agreement within 0.5 km
         let dist_3d_err =
-            (analytical.min_distance_3d_km - numerical.min_distance_3d_km).abs();
+            (analytical.operational.min_distance_3d_km - numerical.operational.min_distance_3d_km).abs();
         eprintln!("  3D distance absolute error: {dist_3d_err:.4} km");
         assert!(
             dist_3d_err < SAFETY_3D_ABSOLUTE_TOL_KM,
@@ -2074,10 +2074,10 @@ mod tests {
         );
 
         // e/i separation: relative agreement within 50%
-        let ei_ref = analytical.min_ei_separation_km.max(numerical.min_ei_separation_km);
+        let ei_ref = analytical.passive.min_ei_separation_km.max(numerical.passive.min_ei_separation_km);
         if ei_ref > 1e-6 {
             let ei_rel_err =
-                (analytical.min_ei_separation_km - numerical.min_ei_separation_km).abs() / ei_ref;
+                (analytical.passive.min_ei_separation_km - numerical.passive.min_ei_separation_km).abs() / ei_ref;
             eprintln!("  e/i relative error: {ei_rel_err:.2}");
             assert!(
                 ei_rel_err < SAFETY_EI_RELATIVE_TOL,

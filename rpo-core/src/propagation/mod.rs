@@ -7,7 +7,7 @@ pub mod keplerian;
 pub mod propagator;
 pub mod stm;
 
-pub use covariance::propagate_mission_covariance;
+pub use covariance::{propagate_mission_covariance, ric_accuracy_to_roe_covariance};
 pub use drag_stm::{compute_j2_drag_stm, propagate_roe_j2_drag};
 pub use j2_params::{compute_j2_params, J2Params};
 pub use keplerian::propagate_keplerian;

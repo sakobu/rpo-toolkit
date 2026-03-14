@@ -41,29 +41,29 @@ fn compute_worst_safety(
                 cumulative_time += leg.tof_s;
                 continue;
             };
-            if m.min_rc_separation_km < overall_min_rc {
-                overall_min_rc = m.min_rc_separation_km;
-                rc_provenance = (i, cumulative_time + m.min_rc_elapsed_s, m.min_rc_ric_position_km);
+            if m.operational.min_rc_separation_km < overall_min_rc {
+                overall_min_rc = m.operational.min_rc_separation_km;
+                rc_provenance = (i, cumulative_time + m.operational.min_rc_elapsed_s, m.operational.min_rc_ric_position_km);
                 worst = Some(m);
             }
-            overall_min_ei = overall_min_ei.min(m.min_ei_separation_km);
-            if m.min_distance_3d_km < overall_min_3d {
-                overall_min_3d = m.min_distance_3d_km;
-                d3_provenance = (i, cumulative_time + m.min_3d_elapsed_s, m.min_3d_ric_position_km);
+            overall_min_ei = overall_min_ei.min(m.passive.min_ei_separation_km);
+            if m.operational.min_distance_3d_km < overall_min_3d {
+                overall_min_3d = m.operational.min_distance_3d_km;
+                d3_provenance = (i, cumulative_time + m.operational.min_3d_elapsed_s, m.operational.min_3d_ric_position_km);
             }
             cumulative_time += leg.tof_s;
         }
 
         worst.map(|mut w| {
-            w.min_rc_separation_km = overall_min_rc;
-            w.min_ei_separation_km = overall_min_ei;
-            w.min_distance_3d_km = overall_min_3d;
-            w.min_rc_leg_index = rc_provenance.0;
-            w.min_rc_elapsed_s = rc_provenance.1;
-            w.min_rc_ric_position_km = rc_provenance.2;
-            w.min_3d_leg_index = d3_provenance.0;
-            w.min_3d_elapsed_s = d3_provenance.1;
-            w.min_3d_ric_position_km = d3_provenance.2;
+            w.operational.min_rc_separation_km = overall_min_rc;
+            w.passive.min_ei_separation_km = overall_min_ei;
+            w.operational.min_distance_3d_km = overall_min_3d;
+            w.operational.min_rc_leg_index = rc_provenance.0;
+            w.operational.min_rc_elapsed_s = rc_provenance.1;
+            w.operational.min_rc_ric_position_km = rc_provenance.2;
+            w.operational.min_3d_leg_index = d3_provenance.0;
+            w.operational.min_3d_elapsed_s = d3_provenance.1;
+            w.operational.min_3d_ric_position_km = d3_provenance.2;
             w
         })
     })
@@ -1037,43 +1037,43 @@ mod tests {
 
         // Leg indices should be in range
         assert!(
-            safety.min_rc_leg_index < mission.legs.len(),
+            safety.operational.min_rc_leg_index < mission.legs.len(),
             "R/C leg index {} should be < {}",
-            safety.min_rc_leg_index,
+            safety.operational.min_rc_leg_index,
             mission.legs.len(),
         );
         assert!(
-            safety.min_3d_leg_index < mission.legs.len(),
+            safety.operational.min_3d_leg_index < mission.legs.len(),
             "3D leg index {} should be < {}",
-            safety.min_3d_leg_index,
+            safety.operational.min_3d_leg_index,
             mission.legs.len(),
         );
 
         // Elapsed times should be non-negative and within mission duration
         assert!(
-            safety.min_rc_elapsed_s >= 0.0,
+            safety.operational.min_rc_elapsed_s >= 0.0,
             "R/C elapsed_s should be non-negative"
         );
         assert!(
-            safety.min_3d_elapsed_s >= 0.0,
+            safety.operational.min_3d_elapsed_s >= 0.0,
             "3D elapsed_s should be non-negative"
         );
         assert!(
-            safety.min_rc_elapsed_s <= mission.total_duration_s + 1e-6,
+            safety.operational.min_rc_elapsed_s <= mission.total_duration_s + 1e-6,
             "R/C elapsed_s ({}) should be within mission duration ({})",
-            safety.min_rc_elapsed_s,
+            safety.operational.min_rc_elapsed_s,
             mission.total_duration_s,
         );
         assert!(
-            safety.min_3d_elapsed_s <= mission.total_duration_s + 1e-6,
+            safety.operational.min_3d_elapsed_s <= mission.total_duration_s + 1e-6,
             "3D elapsed_s ({}) should be within mission duration ({})",
-            safety.min_3d_elapsed_s,
+            safety.operational.min_3d_elapsed_s,
             mission.total_duration_s,
         );
 
         // RIC positions should be nonzero (we have nonzero waypoints)
         assert!(
-            safety.min_3d_ric_position_km.norm() > 0.0,
+            safety.operational.min_3d_ric_position_km.norm() > 0.0,
             "3D RIC position should be nonzero"
         );
     }

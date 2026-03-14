@@ -27,8 +27,8 @@ use crate::propagation::propagator::{PropagatedState, PropagationError, Propagat
 use crate::types::{
     CovarianceValidation, DepartureState, DispersionEnvelope, Distribution, EnsembleStatistics,
     ManeuverDispersion, MissionConfig, MissionCovarianceReport, MissionError, MonteCarloConfig,
-    MonteCarloInput, MonteCarloMode, MonteCarloReport, PercentileStats, SampleResult,
-    SpacecraftConfig, StateVector, Waypoint, WaypointMission,
+    MonteCarloInput, MonteCarloMode, MonteCarloReport, PercentileStats, SafetyConfig,
+    SampleResult, SpacecraftConfig, StateVector, Waypoint, WaypointMission,
 };
 
 use super::validation::{
@@ -287,18 +287,30 @@ fn disperse_maneuver<R: Rng>(
 /// - For n = 1, all percentiles equal the single value and `std_dev = 0`.
 ///
 /// # Errors
-/// Returns [`MonteCarloError::EmptyEnsemble`] if `values` is empty.
+/// Returns [`MonteCarloError::EmptyEnsemble`] if no finite values remain
+/// after filtering NaN/Inf.
 fn compute_percentile_stats(values: &[f64]) -> Result<PercentileStats, MonteCarloError> {
-    if values.is_empty() {
+    // Filter non-finite values (NaN, Inf) that can arise from degenerate
+    // nyx propagation states or frame conversions.
+    let mut sorted: Vec<f64> = values.iter().copied().filter(|x| x.is_finite()).collect();
+    if sorted.is_empty() {
         return Err(MonteCarloError::EmptyEnsemble);
     }
     // Convert length to u32 for lossless f64 conversion.
     // MC sample counts are always bounded by MonteCarloConfig.num_samples (u32),
     // so this conversion is infallible in practice.
-    let n = u32::try_from(values.len()).unwrap_or(u32::MAX);
+    let n = u32::try_from(sorted.len()).unwrap_or(u32::MAX);
     let n_f = f64::from(n);
 
-    let mut sorted = values.to_vec();
+    // Compute mean/variance before sorting (order doesn't matter for summation).
+    let sum: f64 = sorted.iter().sum();
+    let mean = sum / n_f;
+    let variance = if n > 1 {
+        sorted.iter().map(|x| (x - mean).powi(2)).sum::<f64>() / f64::from(n - 1)
+    } else {
+        0.0
+    };
+
     sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
 
     // Nearest-rank percentile using integer arithmetic only.
@@ -311,14 +323,6 @@ fn compute_percentile_stats(values: &[f64]) -> Result<PercentileStats, MonteCarl
         // u32 → usize: always widening on 32-bit and 64-bit platforms.
         let idx = rank.saturating_sub(1).min(n - 1) as usize;
         sorted[idx]
-    };
-
-    let sum: f64 = values.iter().sum();
-    let mean = sum / n_f;
-    let variance = if n > 1 {
-        values.iter().map(|x| (x - mean).powi(2)).sum::<f64>() / f64::from(n - 1)
-    } else {
-        0.0
     };
 
     Ok(PercentileStats {
@@ -612,7 +616,12 @@ fn run_single_sample(
         elapsed_total += leg.tof_s;
     }
 
-    // Build safety states and compute safety metrics
+    // Build safety states and compute safety metrics.
+    // Note: nyx provides osculating ECI states, so ROE (and e/i separation)
+    // are computed from osculating elements. The passive safety metric
+    // (D'Amico Eq. 2.22) is orbit-averaged and designed for mean elements;
+    // osculating input adds short-period noise but does not affect operational
+    // safety metrics (3D distance, R/C distance).
     let safety_states = build_nyx_safety_states(&all_safety_pairs)?;
     let safety = analyze_trajectory_safety(&safety_states).ok();
 
@@ -745,8 +754,14 @@ pub fn run_monte_carlo(input: &MonteCarloInput<'_>) -> Result<MonteCarloReport, 
         });
     }
 
-    // Compute ensemble statistics
-    let statistics = collect_ensemble_statistics(&samples, &trajectories, config)?;
+    // Compute ensemble statistics (denominator = total samples attempted, not just successes)
+    let statistics = collect_ensemble_statistics(
+        &samples,
+        &trajectories,
+        config,
+        config.num_samples,
+        input.mission_config.safety.as_ref(),
+    )?;
 
     // Covariance validation (if provided)
     let covariance_validation = input
@@ -774,6 +789,7 @@ pub fn run_monte_carlo(input: &MonteCarloInput<'_>) -> Result<MonteCarloReport, 
 /// # Invariants
 /// - `samples` must be non-empty (caller ensures this after filtering).
 /// - `trajectories.len() == samples.len()`.
+/// - `total_num_samples` is the total number of MC samples attempted (including failures).
 ///
 /// # Errors
 /// Returns [`MonteCarloError::EmptyEnsemble`] if `compute_percentile_stats`
@@ -782,6 +798,8 @@ fn collect_ensemble_statistics(
     samples: &[SampleResult],
     trajectories: &[Vec<PropagatedState>],
     config: &MonteCarloConfig,
+    total_num_samples: u32,
+    safety_config: Option<&SafetyConfig>,
 ) -> Result<EnsembleStatistics, MonteCarloError> {
     let total_dvs: Vec<f64> = samples.iter().map(|s| s.total_dv_km_s).collect();
 
@@ -792,29 +810,28 @@ fn collect_ensemble_statistics(
 
     for s in samples {
         if let Some(ref safety) = s.safety {
-            min_rc_values.push(safety.min_rc_separation_km);
-            min_3d_values.push(safety.min_distance_3d_km);
-            min_ei_values.push(safety.min_ei_separation_km);
+            min_rc_values.push(safety.operational.min_rc_separation_km);
+            min_3d_values.push(safety.operational.min_distance_3d_km);
+            min_ei_values.push(safety.passive.min_ei_separation_km);
         }
     }
 
     let total_dv_stats = compute_percentile_stats(&total_dvs)?;
 
-    // Use zero stats if no safety data available
     let min_rc_stats = if min_rc_values.is_empty() {
-        PercentileStats::default()
+        None
     } else {
-        compute_percentile_stats(&min_rc_values)?
+        Some(compute_percentile_stats(&min_rc_values)?)
     };
     let min_3d_stats = if min_3d_values.is_empty() {
-        PercentileStats::default()
+        None
     } else {
-        compute_percentile_stats(&min_3d_values)?
+        Some(compute_percentile_stats(&min_3d_values)?)
     };
     let min_ei_stats = if min_ei_values.is_empty() {
-        PercentileStats::default()
+        None
     } else {
-        compute_percentile_stats(&min_ei_values)?
+        Some(compute_percentile_stats(&min_ei_values)?)
     };
 
     // Per-waypoint miss distance statistics
@@ -828,30 +845,52 @@ fn collect_ensemble_statistics(
             .filter_map(|s| s.waypoint_miss_km.get(wp_idx).copied())
             .collect();
         if misses.is_empty() {
-            waypoint_miss_stats.push(PercentileStats::default());
+            waypoint_miss_stats.push(None);
         } else {
-            waypoint_miss_stats.push(compute_percentile_stats(&misses)?);
+            // compute_percentile_stats filters NaN internally; if all values
+            // are non-finite, fall back to None
+            match compute_percentile_stats(&misses) {
+                Ok(stats) => waypoint_miss_stats.push(Some(stats)),
+                Err(MonteCarloError::EmptyEnsemble) => {
+                    waypoint_miss_stats.push(None);
+                }
+                Err(e) => return Err(e),
+            }
         }
     }
 
-    // Empirical collision probability: fraction of samples violating keep-out
-    let n_samples = u32::try_from(samples.len()).unwrap_or(u32::MAX);
-    let n_samples_f = f64::from(n_samples);
+    // Collision probability and convergence rate use total_num_samples as
+    // denominator (not just successful samples) to avoid misleading rates.
+    let n_total_f = f64::from(total_num_samples);
 
     let mut collision_count = 0_u32;
     let mut converged_count = 0_u32;
+    let mut ei_violation_count = 0_u32;
+    let mut keepout_violation_count = 0_u32;
     for s in samples {
         if s.safety.as_ref().is_some_and(|safety| {
-            safety.min_distance_3d_km < MC_DEFAULT_COLLISION_THRESHOLD_KM
+            safety.operational.min_distance_3d_km < MC_DEFAULT_COLLISION_THRESHOLD_KM
         }) {
             collision_count += 1;
+        }
+        if let Some(sc) = safety_config
+            && let Some(ref safety) = s.safety
+        {
+            if safety.passive.min_ei_separation_km < sc.min_ei_separation_km {
+                ei_violation_count += 1;
+            }
+            if safety.operational.min_distance_3d_km < sc.min_distance_3d_km {
+                keepout_violation_count += 1;
+            }
         }
         if s.converged {
             converged_count += 1;
         }
     }
-    let collision_probability = f64::from(collision_count) / n_samples_f;
-    let convergence_rate = f64::from(converged_count) / n_samples_f;
+    let collision_probability = f64::from(collision_count) / n_total_f;
+    let convergence_rate = f64::from(converged_count) / n_total_f;
+    let ei_violation_rate = f64::from(ei_violation_count) / n_total_f;
+    let keepout_violation_rate = f64::from(keepout_violation_count) / n_total_f;
 
     // Dispersion envelope
     let dispersion_envelope = compute_dispersion_envelope(trajectories, config.trajectory_steps);
@@ -864,6 +903,8 @@ fn collect_ensemble_statistics(
         waypoint_miss_km: waypoint_miss_stats,
         collision_probability,
         convergence_rate,
+        ei_violation_rate,
+        keepout_violation_rate,
         dispersion_envelope,
     })
 }
@@ -903,13 +944,17 @@ fn compute_covariance_validation(
 
     // 3-sigma containment approximation via percentile comparison
     let cov_3sigma = cov_report.max_sigma3_position_km;
-    let fraction_within_3sigma = if statistics.min_3d_distance_km.std_dev > 0.0 {
-        if statistics.min_3d_distance_km.p99 < cov_3sigma {
-            0.99
-        } else if statistics.min_3d_distance_km.p95 < cov_3sigma {
-            0.95
+    let fraction_within_3sigma = if let Some(ref d3_stats) = statistics.min_3d_distance_km {
+        if d3_stats.std_dev > 0.0 {
+            if d3_stats.p99 < cov_3sigma {
+                0.99
+            } else if d3_stats.p95 < cov_3sigma {
+                0.95
+            } else {
+                0.90
+            }
         } else {
-            0.90
+            1.0
         }
     } else {
         1.0
@@ -1165,6 +1210,31 @@ mod tests {
         assert_eq!(stats.p50, 42.0);
         assert_eq!(stats.mean, 42.0);
         assert_eq!(stats.std_dev, 0.0);
+    }
+
+    /// NaN values in input are filtered before computing statistics.
+    /// The finite values should produce correct percentiles.
+    #[test]
+    fn percentile_filters_nan() {
+        // Mix of finite values and NaN — stats should reflect only finite values.
+        let values = vec![1.0, 2.0, f64::NAN, 3.0, f64::NAN, 4.0, 5.0];
+        let stats = compute_percentile_stats(&values).unwrap();
+        // 5 finite values: [1, 2, 3, 4, 5]
+        assert_eq!(stats.min, 1.0);
+        assert_eq!(stats.max, 5.0);
+        assert_eq!(stats.p50, 3.0);
+        assert!((stats.mean - 3.0).abs() < 1e-10, "mean should be 3.0, got {}", stats.mean);
+    }
+
+    /// All-NaN input produces EmptyEnsemble error (no finite data to summarize).
+    #[test]
+    fn percentile_all_nan_is_error() {
+        let values = vec![f64::NAN, f64::NAN, f64::NAN];
+        let result = compute_percentile_stats(&values);
+        assert!(
+            matches!(result, Err(MonteCarloError::EmptyEnsemble)),
+            "all-NaN input should return EmptyEnsemble, got {result:?}"
+        );
     }
 
     // -----------------------------------------------------------------------
