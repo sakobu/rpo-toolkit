@@ -7,7 +7,7 @@
 use hifitime::Duration;
 
 use crate::constants::TWO_PI;
-use crate::elements::conversions::{keplerian_to_state, state_to_keplerian, ConversionError};
+use crate::elements::keplerian_conversions::{keplerian_to_state, state_to_keplerian, ConversionError};
 use crate::types::StateVector;
 
 /// Propagate a state vector under two-body Keplerian dynamics, producing
@@ -54,7 +54,7 @@ pub fn propagate_keplerian(
 mod tests {
     use super::*;
     use crate::constants::MU_EARTH;
-    use crate::elements::conversions::keplerian_to_state;
+    use crate::elements::keplerian_conversions::keplerian_to_state;
     use crate::test_helpers::{eccentric_elements, iss_like_elements, test_epoch};
 
     #[test]

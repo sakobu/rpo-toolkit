@@ -7,13 +7,14 @@
 //! Provides mission planning functions that combine Lambert transfers
 //! (when available) with ROE-based proximity operations.
 
-use crate::elements::conversions::{state_to_keplerian, ConversionError};
+use crate::elements::keplerian_conversions::{state_to_keplerian, ConversionError};
 use crate::elements::roe::compute_roe;
-use crate::mission::lambert::{solve_lambert_with_config, LambertConfig};
-use crate::types::{
-    KeplerianElements, MissionError, MissionPhase, MissionPlan, PerchGeometry,
-    ProximityConfig, QuasiNonsingularROE, StateVector,
-};
+use crate::propagation::lambert::{solve_lambert_with_config, LambertConfig};
+use crate::types::{KeplerianElements, QuasiNonsingularROE, StateVector};
+
+use super::config::ProximityConfig;
+use super::errors::MissionError;
+use super::types::{MissionPhase, MissionPlan, PerchGeometry};
 
 /// Minimum perch offset (km) — guards against degenerate zero-offset perch geometry.
 const PERCH_OFFSET_MIN_KM: f64 = 1e-10;
@@ -213,7 +214,7 @@ pub fn plan_mission(
             let arrival_epoch =
                 deputy.epoch + hifitime::Duration::from_seconds(lambert_tof_s);
             let target_state =
-                crate::elements::conversions::keplerian_to_state(&target_ke, arrival_epoch)?;
+                crate::elements::keplerian_conversions::keplerian_to_state(&target_ke, arrival_epoch)?;
 
             // Solve Lambert: deputy → perch
             let transfer = solve_lambert_with_config(deputy, &target_state, lambert_config)?;
@@ -276,8 +277,8 @@ fn perch_roe_to_keplerian(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::elements::conversions::keplerian_to_state;
-    use crate::elements::ric::roe_to_ric;
+    use crate::elements::keplerian_conversions::keplerian_to_state;
+    use crate::elements::roe_to_ric::roe_to_ric;
     use crate::elements::roe::compute_roe;
     use crate::test_helpers::{iss_like_elements, test_epoch};
     use crate::types::KeplerianElements;
@@ -689,7 +690,7 @@ mod tests {
     /// Any nonzero difference confirms multi-rev dispatch.
     #[test]
     fn farfield_mission_multi_rev_lambert() {
-        use crate::mission::lambert::TransferDirection;
+        use crate::propagation::lambert::TransferDirection;
 
         let epoch = test_epoch();
         let chief_ke = iss_like_elements();

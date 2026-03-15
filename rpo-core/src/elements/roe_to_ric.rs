@@ -6,7 +6,7 @@
 
 use nalgebra::{SMatrix, Vector3};
 
-use crate::elements::conversions::{validate_elements, ConversionError};
+use crate::elements::keplerian_conversions::{validate_elements, ConversionError};
 use crate::types::{KeplerianElements, QuasiNonsingularROE, RICState};
 
 /// Errors from RIC ↔ ROE operations.
@@ -186,7 +186,7 @@ mod tests {
         };
         let result = compute_t_matrix(&chief);
         assert!(
-            matches!(result, Err(crate::elements::conversions::ConversionError::InvalidSemiMajorAxis { .. })),
+            matches!(result, Err(crate::elements::keplerian_conversions::ConversionError::InvalidSemiMajorAxis { .. })),
             "Negative SMA should return InvalidSemiMajorAxis, got {result:?}"
         );
     }
@@ -204,7 +204,7 @@ mod tests {
         let roe = QuasiNonsingularROE::default();
         let result = roe_to_ric(&roe, &chief);
         assert!(
-            matches!(result, Err(crate::elements::conversions::ConversionError::InvalidSemiMajorAxis { .. })),
+            matches!(result, Err(crate::elements::keplerian_conversions::ConversionError::InvalidSemiMajorAxis { .. })),
             "Negative SMA should return InvalidSemiMajorAxis, got {result:?}"
         );
     }

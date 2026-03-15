@@ -25,9 +25,9 @@
 use nalgebra::Vector3;
 
 use crate::propagation::propagator::PropagatedState;
-use crate::types::{
-    KeplerianElements, OperationalSafety, PassiveSafety, QuasiNonsingularROE, SafetyMetrics,
-};
+use crate::types::{KeplerianElements, QuasiNonsingularROE};
+
+use super::types::{OperationalSafety, PassiveSafety, SafetyMetrics};
 
 /// Degenerate e/i vector guard for D'Amico Eq. 2.22 — below this magnitude,
 /// the e/i separation formula is undefined (division by zero).
@@ -203,7 +203,7 @@ pub fn analyze_trajectory_safety(
 mod tests {
     use super::*;
     use crate::test_helpers::{damico_table21_case1_roe, damico_table21_chief, iss_like_elements};
-    use crate::types::SafetyConfig;
+    use crate::mission::config::SafetyConfig;
 
     /// Empty trajectory returns `SafetyError::EmptyTrajectory`.
     #[test]

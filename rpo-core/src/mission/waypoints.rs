@@ -9,10 +9,11 @@ use nalgebra::Vector3;
 
 use crate::mission::targeting::{optimize_tof, solve_leg};
 use crate::propagation::propagator::{PropagatedState, PropagationError, PropagationModel};
-use crate::types::{
-    DepartureState, ManeuverLeg, MissionConfig, MissionError, SafetyConfig, SafetyMetrics,
-    Waypoint, WaypointMission,
-};
+use crate::types::DepartureState;
+
+use super::config::{MissionConfig, SafetyConfig};
+use super::errors::MissionError;
+use super::types::{ManeuverLeg, SafetyMetrics, Waypoint, WaypointMission};
 
 /// Compute worst-case safety metrics across all leg trajectories.
 ///
@@ -320,7 +321,8 @@ mod tests {
     use super::*;
     use crate::propagation::propagator::PropagationModel;
     use crate::test_helpers::{iss_like_elements, test_epoch};
-    use crate::types::{MissionConfig, QuasiNonsingularROE};
+    use crate::mission::config::MissionConfig;
+    use crate::types::QuasiNonsingularROE;
     use nalgebra::Vector3;
 
     fn default_config() -> MissionConfig {
@@ -1006,9 +1008,9 @@ mod tests {
         let tof = period * 0.75;
 
         let config = MissionConfig {
-            targeting: crate::types::TargetingConfig::default(),
-            tof: crate::types::TofOptConfig::default(),
-            safety: Some(crate::types::SafetyConfig::default()),
+            targeting: crate::mission::config::TargetingConfig::default(),
+            tof: crate::mission::config::TofOptConfig::default(),
+            safety: Some(crate::mission::config::SafetyConfig::default()),
         };
 
         let waypoints = vec![

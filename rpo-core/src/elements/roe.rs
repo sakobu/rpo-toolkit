@@ -1,7 +1,7 @@
 //! Quasi-nonsingular relative orbital element (ROE) computation.
 
 use crate::constants::TWO_PI;
-use crate::elements::conversions::{validate_elements, ConversionError};
+use crate::elements::keplerian_conversions::{validate_elements, ConversionError};
 use crate::types::{KeplerianElements, QuasiNonsingularROE};
 
 /// Compute quasi-nonsingular relative orbital elements (Koenig Eq. 2).
@@ -81,7 +81,7 @@ mod tests {
         let deputy = iss_like_elements();
         let result = compute_roe(&chief, &deputy);
         assert!(
-            matches!(result, Err(crate::elements::conversions::ConversionError::InvalidSemiMajorAxis { .. })),
+            matches!(result, Err(crate::elements::keplerian_conversions::ConversionError::InvalidSemiMajorAxis { .. })),
             "Negative SMA should return InvalidSemiMajorAxis, got {result:?}"
         );
     }

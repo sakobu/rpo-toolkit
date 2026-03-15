@@ -8,10 +8,11 @@ use nalgebra::{SMatrix, Vector3};
 
 use crate::elements::gve::apply_maneuver;
 use crate::propagation::propagator::{PropagatedState, PropagationModel};
-use crate::types::{
-    DepartureState, KeplerianElements, Maneuver, ManeuverLeg, MissionError,
-    QuasiNonsingularROE, TargetingConfig, TofOptConfig,
-};
+use crate::types::{DepartureState, KeplerianElements, QuasiNonsingularROE};
+
+use super::config::{TargetingConfig, TofOptConfig};
+use super::errors::MissionError;
+use super::types::{Maneuver, ManeuverLeg};
 
 /// Dimensionless `n*t` threshold below which the CW short-transfer (linear) approximation is used.
 const CW_SHORT_TRANSFER_NT: f64 = 0.1;
@@ -104,7 +105,7 @@ fn compute_analytical_jacobian(
     let phi = crate::propagation::stm::compute_stm_with_params(&j2p, chief_dep, tof_s);
     let chief_arr = crate::propagation::stm::propagate_chief_mean(chief_dep, &j2p, tof_s);
     let b = crate::elements::gve::compute_b_matrix(chief_dep)?;
-    let t_pos = crate::elements::ric::compute_t_position(&chief_arr)?;
+    let t_pos = crate::elements::roe_to_ric::compute_t_position(&chief_arr)?;
     Ok(t_pos * phi * b)
 }
 
@@ -293,7 +294,7 @@ fn build_leg(
         config.trajectory_steps,
     )?;
 
-    let from_position_ric_km = crate::elements::ric::roe_to_ric(&departure.roe, &departure.chief)?.position_ric_km;
+    let from_position_ric_km = crate::elements::roe_to_ric::roe_to_ric(&departure.roe, &departure.chief)?.position_ric_km;
 
     Ok(ManeuverLeg {
         departure_maneuver: Maneuver {

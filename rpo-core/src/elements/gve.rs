@@ -5,7 +5,7 @@
 
 use nalgebra::{SMatrix, Vector3};
 
-use crate::elements::conversions::{validate_elements, ConversionError};
+use crate::elements::keplerian_conversions::{validate_elements, ConversionError};
 use crate::types::{KeplerianElements, QuasiNonsingularROE};
 
 /// Compute the 6×3 GVE control input matrix (D'Amico Eq. 2.38).
@@ -108,7 +108,7 @@ mod tests {
         };
         let result = compute_b_matrix(&chief);
         assert!(
-            matches!(result, Err(crate::elements::conversions::ConversionError::InvalidSemiMajorAxis { .. })),
+            matches!(result, Err(crate::elements::keplerian_conversions::ConversionError::InvalidSemiMajorAxis { .. })),
             "Negative SMA should return InvalidSemiMajorAxis, got {result:?}"
         );
     }

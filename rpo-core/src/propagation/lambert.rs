@@ -73,7 +73,7 @@ impl LambertTransfer {
     /// # Errors
     /// Returns `ConversionError` if the departure state cannot be converted
     /// to Keplerian elements (should not happen for valid Lambert solutions).
-    pub fn densify_arc(&self, n_steps: u32) -> Result<Vec<StateVector>, crate::elements::conversions::ConversionError> {
+    pub fn densify_arc(&self, n_steps: u32) -> Result<Vec<StateVector>, crate::elements::keplerian_conversions::ConversionError> {
         crate::propagation::keplerian::propagate_keplerian(&self.departure_state, self.tof_s, n_steps)
     }
 }
@@ -316,7 +316,7 @@ pub fn solve_lambert_izzo(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::elements::conversions::keplerian_to_state;
+    use crate::elements::keplerian_conversions::keplerian_to_state;
     use crate::test_helpers::{leo_400km_elements, leo_800km_target_elements, test_epoch};
     use crate::types::KeplerianElements;
     use hifitime::Duration;

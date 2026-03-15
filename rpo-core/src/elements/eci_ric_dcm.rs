@@ -167,8 +167,8 @@ pub fn ric_to_eci_state(chief: &StateVector, ric_state: &RICState) -> StateVecto
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::elements::conversions::keplerian_to_state;
-    use crate::elements::ric::roe_to_ric;
+    use crate::elements::keplerian_conversions::keplerian_to_state;
+    use crate::elements::roe_to_ric::roe_to_ric;
     use crate::elements::roe::compute_roe;
     use crate::test_helpers::{eccentric_elements, iss_like_elements, test_epoch};
     use crate::types::KeplerianElements;

@@ -10,7 +10,8 @@ use nalgebra::SVector;
 use crate::propagation::j2_params::{compute_j2_params, J2Params};
 use crate::propagation::propagator::PropagationError;
 use crate::propagation::stm::{compute_stm_with_params, propagate_chief_mean};
-use crate::types::{DragConfig, KeplerianElements, Matrix9, QuasiNonsingularROE};
+use super::propagator::DragConfig;
+use crate::types::{KeplerianElements, Matrix9, QuasiNonsingularROE};
 
 /// Compute the J2+drag 9×9 QNS STM (Koenig Appendix D).
 ///

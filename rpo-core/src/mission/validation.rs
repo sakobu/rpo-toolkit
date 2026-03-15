@@ -1,62 +1,30 @@
 //! Validation helpers and integration tests for nyx numerical propagation comparisons.
 //!
-//! Provides utility functions for converting between ROE-RUST types and nyx-space types,
-//! loading the ANISE almanac, and running nyx two-body numerical propagation.
+//! Uses the nyx bridge (`propagation::nyx_bridge`) for almanac loading, dynamics
+//! construction, and segment propagation.  This module owns the high-level
+//! `validate_mission_nyx` orchestrator and its associated error type.
 
 use std::sync::Arc;
 
-use anise::almanac::planetary::PlanetaryDataError;
-use anise::constants::celestial_objects::{MOON, SUN};
-use anise::constants::frames::IAU_EARTH_FRAME;
-use anise::errors::AlmanacError;
-use anise::prelude::{Almanac, MetaAlmanac, Orbit};
-use hifitime::Duration;
+use anise::prelude::Almanac;
 use nalgebra::Vector3;
-use nyx_space::cosmic::Spacecraft;
-use nyx_space::dynamics::{DynamicsError, Drag, Harmonics, PointMasses, SolarPressure};
-use nyx_space::io::gravity::HarmonicsMem;
-use nyx_space::md::prelude::{OrbitalDynamics, Propagator, SpacecraftDynamics};
-use nyx_space::propagators::PropagationError as NyxPropagationError;
 
-use crate::constants::EARTH_J2000;
-use crate::elements::conversions::{state_to_keplerian, ConversionError};
-use crate::elements::frames::{eci_to_ric_relative, ric_to_eci_dv};
-use crate::elements::roe::compute_roe;
+use crate::elements::eci_ric_dcm::eci_to_ric_relative;
 use crate::mission::safety::{analyze_trajectory_safety, SafetyError};
-use crate::propagation::propagator::PropagatedState;
-use crate::types::{
-    DragConfig, RICState, SpacecraftConfig, StateVector, ValidationPoint,
-    ValidationReport, WaypointMission,
+use crate::propagation::nyx_bridge::{
+    apply_impulse, build_full_physics_dynamics, build_nyx_safety_states, nyx_propagate_segment,
+    NyxBridgeError,
 };
+use crate::propagation::propagator::PropagatedState;
+use crate::types::{RICState, SpacecraftConfig, StateVector};
+
+use super::types::{ValidationPoint, ValidationReport, WaypointMission};
 
 /// Errors from nyx high-fidelity validation.
 #[derive(Debug)]
 pub enum ValidationError {
-    /// `MetaAlmanac` / ANISE kernel loading failure.
-    AlmanacLoad {
-        /// The underlying almanac error.
-        source: Box<AlmanacError>,
-    },
-    /// Frame information retrieval failure (`IAU_EARTH`, etc.)
-    FrameLookup {
-        /// The underlying planetary data error.
-        source: PlanetaryDataError,
-    },
-    /// Force model initialization failure (drag, SRP).
-    DynamicsSetup {
-        /// The underlying dynamics error.
-        source: DynamicsError,
-    },
-    /// Nyx propagation failure.
-    Propagation {
-        /// The underlying nyx propagation error.
-        source: NyxPropagationError,
-    },
-    /// ECI → Keplerian or ROE conversion failure.
-    Conversion {
-        /// The underlying conversion error.
-        source: ConversionError,
-    },
+    /// Nyx bridge failure (almanac, dynamics, propagation, conversion).
+    NyxBridge(Box<NyxBridgeError>),
     /// Safety analysis failure.
     Safety {
         /// The underlying safety error.
@@ -69,21 +37,7 @@ pub enum ValidationError {
 impl std::fmt::Display for ValidationError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::AlmanacLoad { source } => {
-                write!(f, "almanac loading failed: {source}")
-            }
-            Self::FrameLookup { source } => {
-                write!(f, "frame lookup failed: {source}")
-            }
-            Self::DynamicsSetup { source } => {
-                write!(f, "dynamics setup failed: {source}")
-            }
-            Self::Propagation { source } => {
-                write!(f, "nyx propagation failed: {source}")
-            }
-            Self::Conversion { source } => {
-                write!(f, "conversion failed: {source}")
-            }
+            Self::NyxBridge(e) => write!(f, "nyx bridge: {e}"),
             Self::Safety { source } => {
                 write!(f, "safety analysis failed: {source}")
             }
@@ -96,268 +50,15 @@ impl std::fmt::Display for ValidationError {
 
 impl std::error::Error for ValidationError {}
 
-impl From<ConversionError> for ValidationError {
-    fn from(e: ConversionError) -> Self {
-        Self::Conversion { source: e }
+impl From<NyxBridgeError> for ValidationError {
+    fn from(e: NyxBridgeError) -> Self {
+        Self::NyxBridge(Box::new(e))
     }
 }
 
 impl From<SafetyError> for ValidationError {
     fn from(e: SafetyError) -> Self {
         Self::Safety { source: e }
-    }
-}
-
-impl From<NyxPropagationError> for ValidationError {
-    fn from(e: NyxPropagationError) -> Self {
-        Self::Propagation { source: e }
-    }
-}
-
-impl From<DynamicsError> for ValidationError {
-    fn from(e: DynamicsError) -> Self {
-        Self::DynamicsSetup { source: e }
-    }
-}
-
-impl From<PlanetaryDataError> for ValidationError {
-    fn from(e: PlanetaryDataError) -> Self {
-        Self::FrameLookup { source: e }
-    }
-}
-
-/// Threshold below which extracted DMF rates are treated as numerical noise
-/// and replaced with zero. For ISS-like orbits with identical ballistic
-/// coefficients, residual rates from numerical integration are O(1e-16).
-const DMF_NOISE_THRESHOLD: f64 = 1.0e-15;
-
-/// Create a default ANISE almanac for two-body propagation.
-///
-/// Two-body dynamics only need the frame's `mu` value (baked into `EARTH_J2000`),
-/// so an empty `Almanac::default()` suffices — no network download required.
-#[must_use]
-pub fn load_default_almanac() -> Arc<Almanac> {
-    Arc::new(Almanac::default())
-}
-
-/// Load a full-physics almanac with all ANISE kernel data.
-///
-/// Downloads and caches to `~/.local/share/nyx-space/anise/`:
-/// - `de440s.bsp` (planetary ephemerides, ~32 MB)
-/// - `pck11.pca` (planetary constants)
-/// - `earth_latest_high_prec.bpc` (Earth orientation from JPL)
-/// - `moon_pa_de440_200625.bpc` (Moon orientation)
-///
-/// # Errors
-/// Returns [`ValidationError::AlmanacLoad`] if kernel download or parsing fails.
-pub fn load_full_almanac() -> Result<Arc<Almanac>, ValidationError> {
-    let almanac = MetaAlmanac::latest()
-        .map_err(|e| ValidationError::AlmanacLoad { source: Box::new(e) })?;
-    Ok(Arc::new(almanac))
-}
-
-/// Extract density-model-free (DMF) drag rates by running a short nyx simulation.
-///
-/// Algorithm:
-/// 1. Build full-physics dynamics for both chief and deputy
-/// 2. Propagate both for 2 orbital periods under full physics
-/// 3. Convert initial and final states to Keplerian elements
-/// 4. Compute QNS ROE at t=0 and t=T
-/// 5. Fit secular drift: rate = ΔROE / T
-/// 6. Return `DragConfig { da_dot, dex_dot, dey_dot }`
-///
-/// Takes separate configs because differential drag arises from different
-/// ballistic coefficients between chief and deputy.
-///
-/// # Near-zero guard
-/// If chief and deputy have identical ballistic coefficients, all rates
-/// will be near-zero. Returns `DragConfig::zero()` when extracted rates
-/// are below `DMF_NOISE_THRESHOLD` (1e-15).
-///
-/// # Errors
-/// Returns [`ValidationError`] if almanac frame lookup, dynamics setup,
-/// propagation, or Keplerian conversion fails.
-#[allow(clippy::similar_names)] // rate_ex / rate_ey are standard eccentricity vector components
-pub fn extract_dmf_rates(
-    chief_initial: &StateVector,
-    deputy_initial: &StateVector,
-    chief_config: &SpacecraftConfig,
-    deputy_config: &SpacecraftConfig,
-    almanac: &Arc<Almanac>,
-) -> Result<DragConfig, ValidationError> {
-    // Compute initial ROE
-    let chief_ke_0 = state_to_keplerian(chief_initial)?;
-    let deputy_ke_0 = state_to_keplerian(deputy_initial)?;
-    let roe_0 = compute_roe(&chief_ke_0, &deputy_ke_0)?;
-
-    // Propagation duration: 2 orbital periods
-    let period = chief_ke_0.period();
-    let duration = 2.0 * period;
-
-    // Build dynamics and propagate both spacecraft
-    let chief_dynamics = build_full_physics_dynamics(almanac)?;
-    let chief_results = nyx_propagate_segment(
-        chief_initial, duration, 0, chief_config, chief_dynamics, almanac,
-    )?;
-    let chief_final = &chief_results.last().ok_or(ValidationError::EmptyTrajectory)?.1;
-
-    let deputy_dynamics = build_full_physics_dynamics(almanac)?;
-    let deputy_results = nyx_propagate_segment(
-        deputy_initial, duration, 0, deputy_config, deputy_dynamics, almanac,
-    )?;
-    let deputy_final = &deputy_results.last().ok_or(ValidationError::EmptyTrajectory)?.1;
-
-    // Compute final ROE
-    let chief_ke_f = state_to_keplerian(chief_final)?;
-    let deputy_ke_f = state_to_keplerian(deputy_final)?;
-    let roe_f = compute_roe(&chief_ke_f, &deputy_ke_f)?;
-
-    // Fit secular drift rates
-    let rate_da = (roe_f.da - roe_0.da) / duration;
-    let rate_ex = (roe_f.dex - roe_0.dex) / duration;
-    let rate_ey = (roe_f.dey - roe_0.dey) / duration;
-
-    // Near-zero guard: treat sub-threshold rates as noise
-    if rate_da.abs() < DMF_NOISE_THRESHOLD
-        && rate_ex.abs() < DMF_NOISE_THRESHOLD
-        && rate_ey.abs() < DMF_NOISE_THRESHOLD
-    {
-        return Ok(DragConfig::zero());
-    }
-
-    Ok(DragConfig {
-        da_dot: rate_da,
-        dex_dot: rate_ex,
-        dey_dot: rate_ey,
-    })
-}
-
-/// Build full-physics spacecraft dynamics for nyx propagation.
-///
-/// Force model stack:
-/// 1. J2 gravity (Harmonics with JGM3 J2 coefficient, body-fixed frame)
-/// 2. US Standard Atmosphere 1976 drag model
-/// 3. Solar radiation pressure with eclipse detection
-/// 4. Sun + Moon third-body gravitational perturbations
-///
-/// Spacecraft-specific properties (Cd, drag area, Cr, SRP area) are set on
-/// the `Spacecraft` object via [`config_to_spacecraft`], not here.
-///
-/// # Errors
-/// Returns [`ValidationError::FrameLookup`] if `IAU_EARTH` frame data is unavailable,
-/// or [`ValidationError::DynamicsSetup`] if drag/SRP initialization fails.
-pub(crate) fn build_full_physics_dynamics(
-    almanac: &Arc<Almanac>,
-) -> Result<SpacecraftDynamics, ValidationError> {
-    let iau_earth = almanac
-        .frame_info(IAU_EARTH_FRAME)
-        .map_err(|e| ValidationError::FrameLookup { source: e })?;
-
-    // J2 harmonics (body-fixed frame)
-    let j2_harmonics = Harmonics::from_stor(iau_earth, HarmonicsMem::j2_jgm3());
-    // Third-body perturbations
-    let third_body = PointMasses::new(vec![MOON, SUN]);
-    let orbital_dyn = OrbitalDynamics::new(vec![j2_harmonics, third_body]);
-
-    // Spacecraft force models
-    let drag = Drag::std_atm1976(almanac.clone())
-        .map_err(|e| ValidationError::DynamicsSetup { source: e })?;
-    let srp = SolarPressure::default(iau_earth, almanac.clone())
-        .map_err(|e| ValidationError::DynamicsSetup { source: e })?;
-
-    Ok(SpacecraftDynamics::from_models(orbital_dyn, vec![drag, srp]))
-}
-
-/// Build a nyx [`Spacecraft`] from our [`StateVector`] and [`SpacecraftConfig`].
-///
-/// # Boundary assumptions
-/// - Position/velocity in ECI J2000, km and km/s
-/// - Epoch from `StateVector.epoch` (hifitime `Epoch`)
-/// - Mass, areas, coefficients from `SpacecraftConfig`
-pub(crate) fn config_to_spacecraft(sv: &StateVector, config: &SpacecraftConfig) -> Spacecraft {
-    let orbit = Orbit::new(
-        sv.position_eci_km.x,
-        sv.position_eci_km.y,
-        sv.position_eci_km.z,
-        sv.velocity_eci_km_s.x,
-        sv.velocity_eci_km_s.y,
-        sv.velocity_eci_km_s.z,
-        sv.epoch,
-        EARTH_J2000,
-    );
-    Spacecraft::from_srp_defaults(orbit, config.dry_mass_kg, config.srp_area_m2)
-        .with_drag(config.drag_area_m2, config.coeff_drag)
-        .with_cr(config.coeff_reflectivity)
-}
-
-/// Convert a nyx [`Spacecraft`] back to a ROE-RUST [`StateVector`].
-///
-/// Extracts ECI position (km) and velocity (km/s) from the spacecraft's orbit.
-pub(crate) fn spacecraft_to_state(sc: &Spacecraft) -> StateVector {
-    StateVector {
-        epoch: sc.orbit.epoch,
-        position_eci_km: Vector3::new(
-            sc.orbit.radius_km.x,
-            sc.orbit.radius_km.y,
-            sc.orbit.radius_km.z,
-        ),
-        velocity_eci_km_s: Vector3::new(
-            sc.orbit.velocity_km_s.x,
-            sc.orbit.velocity_km_s.y,
-            sc.orbit.velocity_km_s.z,
-        ),
-    }
-}
-
-/// Propagate a spacecraft through nyx for a given duration, returning
-/// the final state. Optionally returns intermediate states at evenly-spaced
-/// sample times.
-///
-/// When `n_samples` is 0, returns only the final state.
-/// When `n_samples` > 0, returns `n_samples + 1` points (initial + samples).
-///
-/// Returns `Vec<(elapsed_s, state)>` — each tuple contains the elapsed
-/// time in seconds since propagation start and the ECI state at that time.
-///
-/// # Invariants
-/// - `sv` must represent a bound orbit (`e < 1`, `a > 0`)
-/// - `duration_s` must be finite and positive
-///
-/// # Errors
-/// Returns [`ValidationError::Propagation`] if nyx propagation fails.
-pub(crate) fn nyx_propagate_segment(
-    sv: &StateVector,
-    duration_s: f64,
-    n_samples: u32,
-    config: &SpacecraftConfig,
-    dynamics: SpacecraftDynamics,
-    almanac: &Arc<Almanac>,
-) -> Result<Vec<(f64, StateVector)>, ValidationError> {
-    if n_samples == 0 {
-        let sc = config_to_spacecraft(sv, config);
-        let propagator = Propagator::default(dynamics);
-        let final_sc = propagator
-            .with(sc, almanac.clone())
-            .for_duration(Duration::from_seconds(duration_s))?;
-        Ok(vec![(duration_s, spacecraft_to_state(&final_sc))])
-    } else {
-        let dt = duration_s / f64::from(n_samples);
-        let mut results = Vec::with_capacity(n_samples as usize + 1);
-        results.push((0.0, sv.clone()));
-        let mut current_sv = sv.clone();
-
-        for i in 1..=n_samples {
-            let sc = config_to_spacecraft(&current_sv, config);
-            let propagator = Propagator::default(dynamics.clone());
-            let final_sc = propagator
-                .with(sc, almanac.clone())
-                .for_duration(Duration::from_seconds(dt))?;
-            current_sv = spacecraft_to_state(&final_sc);
-            let elapsed = f64::from(i) * dt;
-            results.push((elapsed, current_sv.clone()));
-        }
-
-        Ok(results)
     }
 }
 
@@ -382,27 +83,6 @@ fn find_closest_analytical_ric(trajectory: &[PropagatedState], elapsed_s: f64) -
             },
             |s| s.ric.clone(),
         )
-}
-
-/// Apply an impulsive Δv (in RIC frame) to the deputy spacecraft.
-///
-/// Converts the Δv from the chief-centered RIC frame to ECI via [`ric_to_eci_dv`]
-/// and adds it to the deputy's velocity. Position and epoch are unchanged.
-///
-/// # Invariants
-/// - `chief.position_eci_km` must be non-zero (for RIC frame definition)
-/// - `chief` angular momentum must be non-zero
-pub(crate) fn apply_impulse(
-    deputy: &StateVector,
-    chief: &StateVector,
-    dv_ric_km_s: &Vector3<f64>,
-) -> StateVector {
-    let dv_eci = ric_to_eci_dv(dv_ric_km_s, chief);
-    StateVector {
-        epoch: deputy.epoch,
-        position_eci_km: deputy.position_eci_km,
-        velocity_eci_km_s: deputy.velocity_eci_km_s + dv_eci,
-    }
 }
 
 /// Compute aggregate report statistics from per-leg validation points.
@@ -433,35 +113,6 @@ fn compute_report_statistics(leg_points: &[Vec<ValidationPoint>]) -> (f64, f64, 
     let mean_pos = sum_pos / f64::from(count);
     let rms_pos = (sum_pos_sq / f64::from(count)).sqrt();
     (max_pos, mean_pos, rms_pos, max_vel)
-}
-
-/// Build [`PropagatedState`] entries from chief/deputy ECI pairs for safety analysis.
-///
-/// For each pair, converts ECI states to Keplerian elements, computes QNS ROE,
-/// and computes the RIC relative state. The `chief_mean` field contains osculating
-/// elements (acceptable for validation — safety uses ROE/RIC, not the Keplerian
-/// field except for `a_km` scaling, where osculating ≈ mean for near-circular orbits).
-///
-/// # Errors
-/// Returns [`ValidationError::Conversion`] if Keplerian element extraction fails.
-pub(crate) fn build_nyx_safety_states(
-    chief_deputy_pairs: &[(f64, StateVector, StateVector)],
-) -> Result<Vec<PropagatedState>, ValidationError> {
-    let mut states = Vec::with_capacity(chief_deputy_pairs.len());
-    for (elapsed_s, chief, deputy) in chief_deputy_pairs {
-        let chief_ke = state_to_keplerian(chief)?;
-        let deputy_ke = state_to_keplerian(deputy)?;
-        let roe = compute_roe(&chief_ke, &deputy_ke)?;
-        let ric = eci_to_ric_relative(chief, deputy);
-        states.push(PropagatedState {
-            epoch: chief.epoch,
-            roe,
-            chief_mean: chief_ke,
-            ric,
-            elapsed_s: *elapsed_s,
-        });
-    }
-    Ok(states)
 }
 
 /// Validate a waypoint mission against nyx full-physics propagation.
@@ -608,19 +259,19 @@ pub fn validate_mission_nyx(
 mod tests {
     use nyx_space::md::prelude::{OrbitalDynamics, SpacecraftDynamics};
 
-    use crate::elements::conversions::{keplerian_to_state, state_to_keplerian};
+    use crate::elements::keplerian_conversions::{keplerian_to_state, state_to_keplerian};
     use crate::elements::roe::compute_roe;
-    use crate::mission::lambert::LambertConfig;
+    use crate::propagation::lambert::LambertConfig;
+    use crate::propagation::nyx_bridge;
     use crate::mission::planning::{classify_separation, plan_mission};
     use crate::propagation::propagator::PropagationModel;
     use crate::test_helpers::{
         iss_like_elements, leo_400km_elements, leo_800km_target_elements, test_drag_config,
         test_epoch,
     };
-    use crate::types::{
-        KeplerianElements, MissionPhase, PerchGeometry, ProximityConfig, RICState,
-        SpacecraftConfig, ValidationPoint,
-    };
+    use crate::mission::config::ProximityConfig;
+    use crate::mission::types::{MissionPhase, PerchGeometry, ValidationPoint};
+    use crate::types::{KeplerianElements, RICState, SpacecraftConfig};
 
     // =========================================================================
     // RK4 J2 Numerical Integrator (test-only, independent truth source)
@@ -918,12 +569,12 @@ mod tests {
 
         // Solve Lambert
         let transfer =
-            crate::mission::lambert::solve_lambert(&dep, &arr).expect("Lambert should converge");
+            crate::propagation::lambert::solve_lambert(&dep, &arr).expect("Lambert should converge");
 
         // Propagate departure state (with Lambert velocity) using nyx two-body
-        let almanac = super::load_default_almanac();
+        let almanac = nyx_bridge::load_default_almanac();
         let dynamics = SpacecraftDynamics::new(OrbitalDynamics::two_body());
-        let results = super::nyx_propagate_segment(
+        let results = nyx_bridge::nyx_propagate_segment(
             &transfer.departure_state, tof, 0,
             &SpacecraftConfig::default(), dynamics, &almanac,
         ).expect("nyx propagation should succeed");
@@ -961,11 +612,11 @@ mod tests {
         let arr = keplerian_to_state(&arr_ke, epoch + hifitime::Duration::from_seconds(tof)).unwrap();
 
         let transfer =
-            crate::mission::lambert::solve_lambert(&dep, &arr).expect("Lambert should converge");
+            crate::propagation::lambert::solve_lambert(&dep, &arr).expect("Lambert should converge");
 
-        let almanac = super::load_default_almanac();
+        let almanac = nyx_bridge::load_default_almanac();
         let dynamics = SpacecraftDynamics::new(OrbitalDynamics::two_body());
-        let results = super::nyx_propagate_segment(
+        let results = nyx_bridge::nyx_propagate_segment(
             &transfer.departure_state, tof, 0,
             &SpacecraftConfig::default(), dynamics, &almanac,
         ).expect("nyx propagation should succeed");
@@ -1170,8 +821,8 @@ mod tests {
     /// (from STM-propagated ROE via `roe_to_ric`). RMS position error should be < 50m.
     #[test]
     fn damico_roe_to_ric_trajectory_accuracy() {
-        use crate::elements::frames::eci_to_ric_relative;
-        use crate::elements::ric::roe_to_ric;
+        use crate::elements::eci_ric_dcm::eci_to_ric_relative;
+        use crate::elements::roe_to_ric::roe_to_ric;
         use crate::propagation::stm::propagate_roe_stm;
         use crate::test_helpers::{damico_table21_case1_roe, damico_table21_chief, deputy_from_roe};
 
@@ -1241,16 +892,16 @@ mod tests {
         let duration = 10.0 * period;
 
         // Propagate both with nyx two-body
-        let almanac = super::load_default_almanac();
+        let almanac = nyx_bridge::load_default_almanac();
         let chief_dynamics = SpacecraftDynamics::new(OrbitalDynamics::two_body());
-        let chief_results = super::nyx_propagate_segment(
+        let chief_results = nyx_bridge::nyx_propagate_segment(
             &chief_sv, duration, 0,
             &SpacecraftConfig::default(), chief_dynamics, &almanac,
         ).expect("chief nyx propagation failed");
         let chief_nyx = chief_results.last().unwrap().1.clone();
 
         let deputy_dynamics = SpacecraftDynamics::new(OrbitalDynamics::two_body());
-        let deputy_results = super::nyx_propagate_segment(
+        let deputy_results = nyx_bridge::nyx_propagate_segment(
             &deputy_sv, duration, 0,
             &SpacecraftConfig::default(), deputy_dynamics, &almanac,
         ).expect("deputy nyx propagation failed");
@@ -1305,7 +956,7 @@ mod tests {
     #[ignore] // Requires MetaAlmanac (network on first run)
     fn full_almanac_loads() {
         let almanac =
-            super::load_full_almanac().expect("MetaAlmanac::latest() should succeed");
+            nyx_bridge::load_full_almanac().expect("MetaAlmanac::latest() should succeed");
         // Verify Earth frame data is available
         let earth = almanac
             .frame_info(anise::constants::frames::IAU_EARTH_FRAME)
@@ -1320,15 +971,15 @@ mod tests {
     #[ignore] // Requires MetaAlmanac (network on first run)
     fn full_physics_propagate_one_orbit() {
         let almanac =
-            super::load_full_almanac().expect("full almanac should load");
+            nyx_bridge::load_full_almanac().expect("full almanac should load");
         let epoch = test_epoch();
         let chief_ke = iss_like_elements();
         let sv = keplerian_to_state(&chief_ke, epoch).unwrap();
         let period = chief_ke.period();
 
-        let dynamics = super::build_full_physics_dynamics(&almanac)
+        let dynamics = nyx_bridge::build_full_physics_dynamics(&almanac)
             .expect("full physics dynamics should build");
-        let results = super::nyx_propagate_segment(
+        let results = nyx_bridge::nyx_propagate_segment(
             &sv,
             period,
             0,
@@ -1375,7 +1026,7 @@ mod tests {
     #[test]
     #[ignore] // Requires MetaAlmanac (network on first run)
     fn extract_dmf_rates_nonzero() {
-        let almanac = super::load_full_almanac().expect("full almanac should load");
+        let almanac = nyx_bridge::load_full_almanac().expect("full almanac should load");
         let epoch = test_epoch();
         let chief_ke = iss_like_elements();
         let sv = keplerian_to_state(&chief_ke, epoch).unwrap();
@@ -1388,7 +1039,7 @@ mod tests {
             ..SpacecraftConfig::default()
         };
 
-        let drag = super::extract_dmf_rates(
+        let drag = nyx_bridge::extract_dmf_rates(
             &sv, &sv, &chief_config, &deputy_config, &almanac,
         )
         .expect("DMF extraction should succeed");
@@ -1425,13 +1076,13 @@ mod tests {
     #[test]
     #[ignore] // Requires MetaAlmanac (network on first run)
     fn extract_dmf_rates_identical() {
-        let almanac = super::load_full_almanac().expect("full almanac should load");
+        let almanac = nyx_bridge::load_full_almanac().expect("full almanac should load");
         let epoch = test_epoch();
         let chief_ke = iss_like_elements();
         let sv = keplerian_to_state(&chief_ke, epoch).unwrap();
 
         let config = SpacecraftConfig::default();
-        let drag = super::extract_dmf_rates(
+        let drag = nyx_bridge::extract_dmf_rates(
             &sv, &sv, &config, &config, &almanac,
         )
         .expect("DMF extraction should succeed");
@@ -1457,49 +1108,6 @@ mod tests {
     // =========================================================================
     // Phase 5: Mission Validation Pipeline Tests
     // =========================================================================
-
-    /// Verify that `apply_impulse` correctly transforms RIC Δv to ECI and applies it.
-    ///
-    /// Checks: position unchanged, epoch unchanged, velocity changed by
-    /// ECI-transformed Δv, Δv magnitude preserved (DCM orthogonality),
-    /// zero Δv returns identical state.
-    #[test]
-    fn validate_impulse_application() {
-        let epoch = test_epoch();
-        let chief_ke = iss_like_elements();
-        let chief_sv = keplerian_to_state(&chief_ke, epoch).unwrap();
-        let deputy_sv = chief_sv.clone();
-
-        // Apply known RIC Δv
-        let dv_ric = Vector3::new(0.001, -0.002, 0.0005);
-        let result = super::apply_impulse(&deputy_sv, &chief_sv, &dv_ric);
-
-        // Position unchanged
-        let pos_err = (result.position_eci_km - deputy_sv.position_eci_km).norm();
-        assert!(pos_err < 1e-15, "position should be unchanged, error = {pos_err}");
-
-        // Epoch unchanged
-        assert_eq!(result.epoch, deputy_sv.epoch, "epoch should be unchanged");
-
-        // Velocity changed by ECI-transformed Δv
-        let dv_eci = crate::elements::frames::ric_to_eci_dv(&dv_ric, &chief_sv);
-        let expected_vel = deputy_sv.velocity_eci_km_s + dv_eci;
-        let vel_err = (result.velocity_eci_km_s - expected_vel).norm();
-        assert!(vel_err < 1e-15, "velocity error = {vel_err}");
-
-        // Δv magnitude preserved (DCM is orthogonal)
-        let applied_dv_mag = (result.velocity_eci_km_s - deputy_sv.velocity_eci_km_s).norm();
-        assert!(
-            (applied_dv_mag - dv_ric.norm()).abs() < 1e-14,
-            "Δv magnitude not preserved: {applied_dv_mag} vs {}",
-            dv_ric.norm()
-        );
-
-        // Zero Δv returns identical state
-        let zero_result = super::apply_impulse(&deputy_sv, &chief_sv, &Vector3::zeros());
-        let zero_vel_err = (zero_result.velocity_eci_km_s - deputy_sv.velocity_eci_km_s).norm();
-        assert!(zero_vel_err < 1e-15, "zero Δv should not change velocity");
-    }
 
     /// Verify `compute_report_statistics` with known error values.
     ///
@@ -1602,7 +1210,9 @@ mod tests {
     fn validate_full_physics_single_leg() {
         use crate::mission::waypoints::plan_waypoint_mission;
         use crate::test_helpers::deputy_from_roe;
-        use crate::types::{DepartureState, MissionConfig, QuasiNonsingularROE, Waypoint};
+        use crate::mission::config::MissionConfig;
+        use crate::mission::types::Waypoint;
+        use crate::types::{DepartureState, QuasiNonsingularROE};
 
         let epoch = test_epoch();
         let chief_ke = iss_like_elements();
@@ -1640,7 +1250,7 @@ mod tests {
         let mission = plan_waypoint_mission(&departure, &[waypoint], &config, &propagator)
             .expect("mission planning should succeed");
 
-        let almanac = super::load_full_almanac().expect("full almanac should load");
+        let almanac = nyx_bridge::load_full_almanac().expect("full almanac should load");
         let chief_config = SpacecraftConfig::SERVICER_500KG;
         let deputy_config = SpacecraftConfig::SERVICER_500KG;
 
@@ -1699,7 +1309,9 @@ mod tests {
     fn validate_full_physics_multi_waypoint() {
         use crate::mission::waypoints::plan_waypoint_mission;
         use crate::test_helpers::deputy_from_roe;
-        use crate::types::{DepartureState, MissionConfig, QuasiNonsingularROE, Waypoint};
+        use crate::mission::config::MissionConfig;
+        use crate::mission::types::Waypoint;
+        use crate::types::{DepartureState, QuasiNonsingularROE};
 
         let epoch = test_epoch();
         let chief_ke = iss_like_elements();
@@ -1749,7 +1361,7 @@ mod tests {
         let mission = plan_waypoint_mission(&departure, &waypoints, &config, &propagator)
             .expect("mission planning should succeed");
 
-        let almanac = super::load_full_almanac().expect("full almanac should load");
+        let almanac = nyx_bridge::load_full_almanac().expect("full almanac should load");
         let chief_config = SpacecraftConfig::SERVICER_500KG;
         let deputy_config = SpacecraftConfig::SERVICER_500KG;
 
@@ -1803,7 +1415,9 @@ mod tests {
     #[ignore] // Requires MetaAlmanac (network on first run)
     fn validate_drag_stm_vs_nyx_drag() {
         use crate::mission::waypoints::plan_waypoint_mission;
-        use crate::types::{DepartureState, MissionConfig, QuasiNonsingularROE, Waypoint};
+        use crate::mission::config::MissionConfig;
+        use crate::mission::types::Waypoint;
+        use crate::types::{DepartureState, QuasiNonsingularROE};
 
         let epoch = test_epoch();
         let chief_ke = iss_like_elements();
@@ -1818,8 +1432,8 @@ mod tests {
         };
 
         // Step 1: Extract DMF rates
-        let almanac = super::load_full_almanac().expect("full almanac should load");
-        let drag = super::extract_dmf_rates(
+        let almanac = nyx_bridge::load_full_almanac().expect("full almanac should load");
+        let drag = nyx_bridge::extract_dmf_rates(
             &chief_sv, &deputy_sv, &chief_config, &deputy_config, &almanac,
         )
         .expect("DMF extraction should succeed");
@@ -1942,9 +1556,9 @@ mod tests {
     fn validate_safety_full_physics() {
         use crate::mission::waypoints::plan_waypoint_mission;
         use crate::test_helpers::deputy_from_roe;
-        use crate::types::{
-            DepartureState, MissionConfig, QuasiNonsingularROE, SafetyConfig, Waypoint,
-        };
+        use crate::mission::config::{MissionConfig, SafetyConfig};
+        use crate::mission::types::Waypoint;
+        use crate::types::{DepartureState, QuasiNonsingularROE};
 
         let epoch = test_epoch();
         let chief_ke = iss_like_elements();
@@ -1998,7 +1612,7 @@ mod tests {
         let mission = plan_waypoint_mission(&departure, &waypoints, &config, &propagator)
             .expect("mission planning should succeed");
 
-        let almanac = super::load_full_almanac().expect("full almanac should load");
+        let almanac = nyx_bridge::load_full_almanac().expect("full almanac should load");
         let chief_config = SpacecraftConfig::SERVICER_500KG;
         let deputy_config = SpacecraftConfig::SERVICER_500KG;
 

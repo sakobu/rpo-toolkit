@@ -2,7 +2,8 @@
 
 use hifitime::Epoch;
 
-use crate::types::{DragConfig, KeplerianElements, QuasiNonsingularROE};
+use crate::propagation::propagator::DragConfig;
+use crate::types::{KeplerianElements, QuasiNonsingularROE};
 
 /// Standard test epoch: 2024-01-01 00:00:00 UTC.
 pub fn test_epoch() -> Epoch {
