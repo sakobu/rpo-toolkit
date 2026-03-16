@@ -1,9 +1,11 @@
 //! Shared test fixtures for unit tests.
 
 use hifitime::Epoch;
+use nalgebra::Vector3;
 
+use crate::constants::{J2, MU_EARTH, R_EARTH};
 use crate::propagation::propagator::DragConfig;
-use crate::types::{KeplerianElements, QuasiNonsingularROE};
+use crate::types::{KeplerianElements, QuasiNonsingularROE, StateVector};
 
 /// Standard test epoch: 2024-01-01 00:00:00 UTC.
 pub fn test_epoch() -> Epoch {
@@ -213,5 +215,80 @@ pub fn deputy_from_roe(chief: &KeplerianElements, roe: &QuasiNonsingularROE) -> 
         raan_rad: raan_d,
         aop_rad: aop_d.rem_euclid(crate::constants::TWO_PI),
         mean_anomaly_rad: m_d.rem_euclid(crate::constants::TWO_PI),
+    }
+}
+
+// =========================================================================
+// RK4 J2 Numerical Integrator (independent truth source for regression tests)
+// =========================================================================
+
+/// ECI acceleration: two-body + J2 zonal harmonic.
+#[allow(clippy::doc_markdown)]
+fn j2_acceleration(pos: &Vector3<f64>) -> Vector3<f64> {
+    let r2 = pos.dot(pos);
+    let r = r2.sqrt();
+    let r3 = r * r2;
+    let r5 = r3 * r2;
+    let z2 = pos.z * pos.z;
+    let z2_over_r2 = z2 / r2;
+
+    // Two-body
+    let a_2body = -MU_EARTH / r3 * pos;
+
+    // J2 perturbation
+    let j2_coeff = -1.5 * J2 * MU_EARTH * R_EARTH * R_EARTH / r5;
+    let a_j2 = Vector3::new(
+        j2_coeff * pos.x * (1.0 - 5.0 * z2_over_r2),
+        j2_coeff * pos.y * (1.0 - 5.0 * z2_over_r2),
+        j2_coeff * pos.z * (3.0 - 5.0 * z2_over_r2),
+    );
+
+    a_2body + a_j2
+}
+
+/// Propagate an ECI state forward using RK4 with J2 gravity.
+///
+/// Nominal time step `dt` (seconds); the last step is shortened to land
+/// exactly on `duration_s`. State = [pos; vel] in ECI.
+/// This is a test-only utility providing an independent numerical truth source
+/// with no shared code paths with the analytical STM.
+pub fn rk4_j2_propagate(sv: &StateVector, duration_s: f64, dt: f64) -> StateVector {
+    assert!(duration_s >= 0.0 && dt > 0.0, "duration and dt must be positive");
+
+    let mut pos = sv.position_eci_km;
+    let mut vel = sv.velocity_eci_km_s;
+    let mut t = 0.0;
+
+    while t < duration_s {
+        let step = dt.min(duration_s - t);
+
+        // RK4 for d(pos)/dt = vel, d(vel)/dt = accel(pos)
+        let k1v = j2_acceleration(&pos);
+        let k1r = vel;
+
+        let pos2 = pos + 0.5 * step * k1r;
+        let vel2 = vel + 0.5 * step * k1v;
+        let k2v = j2_acceleration(&pos2);
+        let k2r = vel2;
+
+        let pos3 = pos + 0.5 * step * k2r;
+        let vel3 = vel + 0.5 * step * k2v;
+        let k3v = j2_acceleration(&pos3);
+        let k3r = vel3;
+
+        let pos4 = pos + step * k3r;
+        let vel4 = vel + step * k3v;
+        let k4v = j2_acceleration(&pos4);
+        let k4r = vel4;
+
+        pos += step / 6.0 * (k1r + 2.0 * k2r + 2.0 * k3r + k4r);
+        vel += step / 6.0 * (k1v + 2.0 * k2v + 2.0 * k3v + k4v);
+        t += step;
+    }
+
+    StateVector {
+        epoch: sv.epoch + hifitime::Duration::from_seconds(duration_s),
+        position_eci_km: pos,
+        velocity_eci_km_s: vel,
     }
 }

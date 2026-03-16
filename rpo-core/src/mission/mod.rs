@@ -11,6 +11,9 @@ pub mod types;
 pub mod validation;
 pub mod waypoints;
 
+#[cfg(test)]
+mod regression_tests;
+
 pub use config::{MissionConfig, ProximityConfig, SafetyConfig, TargetingConfig, TofOptConfig};
 pub use errors::MissionError;
 pub use crate::propagation::lambert::{
