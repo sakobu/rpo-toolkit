@@ -16,7 +16,8 @@ use rpo_core::{
     // Types
     DepartureState, DragConfig, KeplerianElements, LambertConfig, ManeuverUncertainty,
     MissionConfig, MissionCovarianceReport, MissionPhase, MissionPlan, MonteCarloConfig,
-    MonteCarloInput, MonteCarloReport, NavigationAccuracy, PercentileStats, PerchGeometry,
+    MonteCarloInput, MonteCarloMode, MonteCarloReport, NavigationAccuracy, PercentileStats,
+    PerchGeometry,
     ProximityConfig, QuasiNonsingularROE, SafetyConfig, SafetyMetrics, SpacecraftConfig,
     StateVector, TargetingConfig, TofOptConfig, ValidationPoint, ValidationReport, Waypoint,
     WaypointMission,
@@ -1222,15 +1223,20 @@ fn print_mc_report(report: &MonteCarloReport, lambert_dv_km_s: f64) {
     if let Some(ref cv) = report.covariance_validation {
         println!("\nCovariance Validation:");
         println!(
-            "  3\u{03c3} containment: {:.1}% (expect ~99.7%)",
-            cv.fraction_within_3sigma * 100.0,
+            "  Terminal 3\u{03c3} box containment: {:.1}% of samples",
+            cv.terminal_3sigma_containment * 100.0,
         );
         println!(
             "  Sigma ratio (R/I/C): {:.2} / {:.2} / {:.2}",
             cv.sigma_ratio_ric.x, cv.sigma_ratio_ric.y, cv.sigma_ratio_ric.z,
         );
+        if matches!(report.config.mode, MonteCarloMode::ClosedLoop) {
+            println!(
+                "    (ClosedLoop: ratios compare retargeted MC against open-loop covariance; values << 1 expected)"
+            );
+        }
         println!(
-            "  Pc: covariance={:.2e}, MC={:.2e}",
+            "  Pc: covariance={:.2e} (analytical), MC={:.2e} (empirical, HBR=100m)",
             cv.covariance_collision_prob, cv.mc_collision_prob,
         );
     }

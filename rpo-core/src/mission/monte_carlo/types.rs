@@ -293,14 +293,35 @@ pub struct EnsembleStatistics {
     pub dispersion_envelope: Vec<DispersionEnvelope>,
 }
 
-/// Comparison between covariance prediction and MC ensemble.
+/// Comparison between linear covariance prediction and MC ensemble.
+///
+/// The covariance model propagates uncertainty along the **nominal mission plan**
+/// (open-loop: P = Phi P0 Phi^T). It does not model closed-loop re-targeting feedback.
+///
+/// - **`OpenLoop`**: Sigma ratios near 1.0 indicate a well-calibrated covariance.
+///   Terminal containment should be near 99.7% for Gaussian-distributed errors.
+/// - **`ClosedLoop`**: Sigma ratios << 1.0 because re-targeting from dispersed
+///   states concentrates samples far within the open-loop uncertainty bounds.
+///   Terminal containment often near 100%. These are expected, not a calibration failure.
+///
+/// **Note on collision probability**: The covariance and MC collision probabilities
+/// use different methodologies and should not be compared directly:
+/// - `covariance_collision_prob`: Analytical `erfc(d/sqrt(2))` where d is Mahalanobis
+///   distance. Conservative, no hard body radius, 1D tail probability.
+/// - `mc_collision_prob`: Empirical fraction of samples where min 3D distance drops
+///   below the collision threshold (100m hard body radius).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CovarianceValidation {
-    /// Fraction of MC samples within covariance 3σ bounds (expect ~99.7%).
-    pub fraction_within_3sigma: f64,
-    /// Covariance-predicted collision probability (from Phase 6C).
+    /// Fraction of MC samples whose terminal RIC position falls within
+    /// the covariance-predicted axis-aligned 3-sigma box at mission end.
+    ///
+    /// For a well-calibrated Gaussian covariance in `OpenLoop` mode,
+    /// expect approximately 0.997 (99.7%). In `ClosedLoop` mode, often near 1.0
+    /// since retargeting tends to concentrate samples within the bounds.
+    pub terminal_3sigma_containment: f64,
+    /// Covariance-predicted collision probability (analytical, no HBR).
     pub covariance_collision_prob: f64,
-    /// MC empirical collision probability.
+    /// MC empirical collision probability (threshold-based, 100m HBR).
     pub mc_collision_prob: f64,
     /// Ratio of MC sigma to covariance sigma per RIC axis (expect ~1.0).
     pub sigma_ratio_ric: Vector3<f64>,

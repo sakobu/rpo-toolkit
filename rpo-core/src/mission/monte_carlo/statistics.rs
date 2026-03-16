@@ -147,61 +147,82 @@ pub(crate) fn compute_dispersion_envelope(
 
 /// Compare MC ensemble statistics against covariance predictions.
 ///
-/// Computes sigma ratios (MC σ / covariance σ per RIC axis) and approximate
-/// 3-sigma containment fraction. A well-calibrated covariance model should
-/// produce sigma ratios near 1.0 and containment near 99.7%.
+/// Computes per-axis sigma ratios (MC sigma / covariance sigma) and a
+/// sample-based terminal 3-sigma box containment fraction. The containment
+/// check uses the **nominal predicted terminal position** as center (not
+/// the MC mean), so terminal bias is visible rather than hidden.
+///
+/// A well-calibrated covariance model in `OpenLoop` mode should produce
+/// sigma ratios near 1.0 and containment near 99.7%.
 ///
 /// # Invariants
 /// - If `statistics.dispersion_envelope` is empty, sigma ratios default to 1.0.
 /// - If predicted covariance sigma is below [`COVARIANCE_SIGMA_FLOOR`],
-///   sigma ratios default to 1.0 (avoids division by zero).
+///   the corresponding sigma ratio defaults to 1.0 (avoids division by zero).
+/// - If `trajectories` is empty, containment defaults to 0.0.
+/// - Returns `MonteCarloError::TooManySamples` if trajectory count exceeds u32
+///   (should not happen — bounded by `MonteCarloConfig::num_samples: u32`).
 pub(crate) fn compute_covariance_validation(
     cov_report: &MissionCovarianceReport,
     statistics: &EnsembleStatistics,
-) -> CovarianceValidation {
-    // Compute sigma ratios: MC std_dev vs covariance 1-sigma per axis
-    let mut sigma_ratio_r = 1.0;
-    let mut sigma_ratio_i = 1.0;
-    let mut sigma_ratio_c = 1.0;
+    trajectories: &[Vec<PropagatedState>],
+) -> Result<CovarianceValidation, MonteCarloError> {
+    // Extract end-of-mission dispersion envelope.
+    let last_env = statistics.dispersion_envelope.last();
 
-    if let Some(last_env) = statistics.dispersion_envelope.last() {
-        let mc_sigma_r = last_env.radial_km.std_dev;
-        let mc_sigma_i = last_env.in_track_km.std_dev;
-        let mc_sigma_c = last_env.cross_track_km.std_dev;
+    // Terminal covariance predictions (explicit fields, no fragile chain).
+    let cov_sigma3 = cov_report.terminal_sigma3_position_ric_km;
+    let nominal_center = cov_report.terminal_position_ric_km;
 
-        // Covariance max 3-sigma → 1-sigma
-        let cov_sigma = cov_report.max_sigma3_position_km / 3.0;
-        if cov_sigma > COVARIANCE_SIGMA_FLOOR {
-            sigma_ratio_r = mc_sigma_r / cov_sigma;
-            sigma_ratio_i = mc_sigma_i / cov_sigma;
-            sigma_ratio_c = mc_sigma_c / cov_sigma;
-        }
-    }
+    // Compute sigma ratios when both MC dispersion and covariance data are available.
+    let sigma_ratio_ric = if let Some(env) = last_env {
+        let mc_sigma = Vector3::new(
+            env.radial_km.std_dev,
+            env.in_track_km.std_dev,
+            env.cross_track_km.std_dev,
+        );
 
-    // 3-sigma containment approximation via percentile comparison
-    let cov_3sigma = cov_report.max_sigma3_position_km;
-    let fraction_within_3sigma = if let Some(ref d3_stats) = statistics.min_3d_distance_km {
-        if d3_stats.std_dev > 0.0 {
-            if d3_stats.p99 < cov_3sigma {
-                0.99
-            } else if d3_stats.p95 < cov_3sigma {
-                0.95
-            } else {
-                0.90
-            }
-        } else {
-            1.0
-        }
+        // Per-axis sigma ratio: MC 1-sigma / covariance 1-sigma (expect ~1.0)
+        let cov_1sigma = cov_sigma3 / 3.0;
+        Vector3::new(
+            if cov_1sigma.x > COVARIANCE_SIGMA_FLOOR { mc_sigma.x / cov_1sigma.x } else { 1.0 },
+            if cov_1sigma.y > COVARIANCE_SIGMA_FLOOR { mc_sigma.y / cov_1sigma.y } else { 1.0 },
+            if cov_1sigma.z > COVARIANCE_SIGMA_FLOOR { mc_sigma.z / cov_1sigma.z } else { 1.0 },
+        )
     } else {
-        1.0
+        // No dispersion data — neutral default
+        Vector3::new(1.0, 1.0, 1.0)
     };
 
-    CovarianceValidation {
-        fraction_within_3sigma,
+    // Terminal 3-sigma box containment: count samples whose terminal RIC position
+    // falls within +/-3sigma of the nominal predicted position on all 3 axes.
+    let n_total = trajectories.len();
+    let terminal_3sigma_containment = if n_total > 0 {
+        let n_within = trajectories
+            .iter()
+            .filter_map(|traj| traj.last())
+            .filter(|s| {
+                let d = s.ric.position_ric_km - nominal_center;
+                d.x.abs() <= cov_sigma3.x
+                    && d.y.abs() <= cov_sigma3.y
+                    && d.z.abs() <= cov_sigma3.z
+            })
+            .count();
+        let n_total_u32 = u32::try_from(n_total)
+            .map_err(|_| MonteCarloError::TooManySamples { count: n_total })?;
+        let n_within_u32 = u32::try_from(n_within)
+            .map_err(|_| MonteCarloError::TooManySamples { count: n_within })?;
+        f64::from(n_within_u32) / f64::from(n_total_u32)
+    } else {
+        0.0
+    };
+
+    Ok(CovarianceValidation {
+        terminal_3sigma_containment,
         covariance_collision_prob: cov_report.max_collision_probability,
         mc_collision_prob: statistics.collision_probability,
-        sigma_ratio_ric: Vector3::new(sigma_ratio_r, sigma_ratio_i, sigma_ratio_c),
-    }
+        sigma_ratio_ric,
+    })
 }
 
 #[cfg(test)]
@@ -209,12 +230,86 @@ mod tests {
     use super::*;
     use crate::mission::monte_carlo::sampling::sample_distribution;
     use crate::mission::monte_carlo::types::Distribution;
+    use crate::propagation::covariance::types::{
+        CovarianceState, LegCovarianceReport, NavigationAccuracy,
+    };
+    use crate::types::Matrix6;
+    use hifitime::Epoch;
+    use nalgebra::SMatrix;
     use rand::SeedableRng;
     use rand_chacha::ChaCha20Rng;
+
+    /// Build a minimal `MissionCovarianceReport` with given terminal position
+    /// and per-axis 3-sigma values.
+    fn mock_cov_report(sigma3_ric: Vector3<f64>) -> MissionCovarianceReport {
+        mock_cov_report_with_center(sigma3_ric, Vector3::new(0.0, 5.0, 0.0))
+    }
+
+    /// Build a minimal `MissionCovarianceReport` with explicit terminal position center.
+    fn mock_cov_report_with_center(
+        sigma3_ric: Vector3<f64>,
+        terminal_pos: Vector3<f64>,
+    ) -> MissionCovarianceReport {
+        let state = CovarianceState {
+            epoch: Epoch::from_gregorian_utc_hms(2026, 1, 1, 0, 0, 0),
+            elapsed_s: 100.0,
+            covariance_roe: Matrix6::zeros(),
+            covariance_ric_position_km2: SMatrix::<f64, 3, 3>::zeros(),
+            sigma3_position_ric_km: sigma3_ric,
+            mahalanobis_distance: 5.0,
+            collision_probability: 1e-10,
+        };
+        let scalar_max = sigma3_ric.x.max(sigma3_ric.y).max(sigma3_ric.z);
+        MissionCovarianceReport {
+            legs: vec![LegCovarianceReport {
+                states: vec![state],
+                max_sigma3_position_km: scalar_max,
+                max_collision_probability: 1e-10,
+            }],
+            navigation_accuracy: NavigationAccuracy::default(),
+            maneuver_uncertainty: None,
+            max_sigma3_position_km: scalar_max,
+            max_collision_probability: 1e-10,
+            terminal_position_ric_km: terminal_pos,
+            terminal_sigma3_position_ric_km: sigma3_ric,
+        }
+    }
+
+    /// Build a minimal `EnsembleStatistics` with one dispersion envelope entry
+    /// having the given per-axis standard deviations.
+    fn mock_statistics(std_devs: Vector3<f64>) -> EnsembleStatistics {
+        let make_stats = |std_dev: f64| PercentileStats {
+            std_dev,
+            ..Default::default()
+        };
+        EnsembleStatistics {
+            total_dv_km_s: make_stats(0.0),
+            min_rc_distance_km: None,
+            min_3d_distance_km: None,
+            min_ei_separation_km: None,
+            waypoint_miss_km: vec![],
+            collision_probability: 0.0,
+            convergence_rate: 1.0,
+            ei_violation_rate: 0.0,
+            keepout_violation_rate: 0.0,
+            dispersion_envelope: vec![DispersionEnvelope {
+                elapsed_s: 100.0,
+                radial_km: make_stats(std_devs.x),
+                in_track_km: make_stats(std_devs.y),
+                cross_track_km: make_stats(std_devs.z),
+            }],
+        }
+    }
 
     /// Tolerance for nearest-rank percentile accuracy with 1000 integer
     /// values: off-by-one in rank gives ±1, so ±2 is conservative.
     const PERCENTILE_ACCURACY_TOL: f64 = 2.0;
+
+    /// Tolerance for covariance validation tests comparing exact rational
+    /// fractions (e.g., 3/4 = 0.75) or known-value sigma ratios.
+    /// f64 arithmetic is exact for these small integers, so only floating-point
+    /// rounding from the division needs coverage.
+    const COVARIANCE_VALIDATION_TOL: f64 = 1e-12;
 
     #[test]
     fn percentile_ordering() {
@@ -282,6 +377,111 @@ mod tests {
         assert!(
             matches!(result, Err(MonteCarloError::EmptyEnsemble)),
             "all-NaN input should return EmptyEnsemble, got {result:?}"
+        );
+    }
+
+    /// Sigma ratios are computed per-axis: MC std_dev / (covariance 3-sigma / 3).
+    #[test]
+    fn sigma_ratio_per_axis() {
+        // Covariance 3-sigma: R=3.0, I=30.0, C=0.9
+        let cov = mock_cov_report(Vector3::new(3.0, 30.0, 0.9));
+        // MC std_dev: R=1.0, I=10.0, C=0.3 (should give ratios of 1.0 per axis)
+        let stats = mock_statistics(Vector3::new(1.0, 10.0, 0.3));
+
+        let cv = compute_covariance_validation(&cov, &stats, &[]).unwrap();
+        let tol = COVARIANCE_VALIDATION_TOL;
+        assert!(
+            (cv.sigma_ratio_ric.x - 1.0).abs() < tol,
+            "radial sigma ratio should be 1.0, got {}",
+            cv.sigma_ratio_ric.x
+        );
+        assert!(
+            (cv.sigma_ratio_ric.y - 1.0).abs() < tol,
+            "in-track sigma ratio should be 1.0, got {}",
+            cv.sigma_ratio_ric.y
+        );
+        assert!(
+            (cv.sigma_ratio_ric.z - 1.0).abs() < tol,
+            "cross-track sigma ratio should be 1.0, got {}",
+            cv.sigma_ratio_ric.z
+        );
+    }
+
+    /// Terminal containment from sample-based counting. Constructs mock
+    /// trajectories with known terminal positions inside/outside the 3-sigma box.
+    #[test]
+    fn terminal_containment_sample_fraction() {
+        use crate::propagation::propagator::PropagatedState;
+        use crate::test_helpers::iss_like_elements;
+        use crate::types::{QuasiNonsingularROE, RICState};
+
+        // Center at (0, 5, 0), 3-sigma box: R=3, I=30, C=0.9
+        let center = Vector3::new(0.0, 5.0, 0.0);
+        let sigma3 = Vector3::new(3.0, 30.0, 0.9);
+        let cov = mock_cov_report_with_center(sigma3, center);
+        let stats = mock_statistics(Vector3::new(1.0, 10.0, 0.3));
+
+        let epoch = Epoch::from_gregorian_utc_hms(2026, 1, 1, 0, 0, 0);
+        let chief = iss_like_elements();
+        let make_traj = |pos: Vector3<f64>| -> Vec<PropagatedState> {
+            vec![PropagatedState {
+                elapsed_s: 100.0,
+                epoch,
+                roe: QuasiNonsingularROE::default(),
+                chief_mean: chief,
+                ric: RICState {
+                    position_ric_km: pos,
+                    velocity_ric_km_s: Vector3::zeros(),
+                },
+            }]
+        };
+
+        // 3 samples inside the box, 1 outside (cross-track exceeds 0.9)
+        let trajectories = vec![
+            make_traj(center),                                      // inside (delta = 0)
+            make_traj(center + Vector3::new(1.0, 10.0, 0.5)),      // inside
+            make_traj(center + Vector3::new(-2.0, -20.0, -0.8)),   // inside
+            make_traj(center + Vector3::new(0.0, 0.0, 1.0)),       // outside (C: 1.0 > 0.9)
+        ];
+
+        let cv = compute_covariance_validation(&cov, &stats, &trajectories).unwrap();
+        // 3/4 = 0.75
+        assert!(
+            (cv.terminal_3sigma_containment - 0.75).abs() < COVARIANCE_VALIDATION_TOL,
+            "expected 0.75, got {}",
+            cv.terminal_3sigma_containment
+        );
+    }
+
+    /// Empty trajectories produce containment of 0.0.
+    #[test]
+    fn terminal_containment_empty_trajectories() {
+        let cov = mock_cov_report(Vector3::new(3.0, 30.0, 0.9));
+        let stats = mock_statistics(Vector3::new(0.5, 5.0, 0.1));
+
+        let cv = compute_covariance_validation(&cov, &stats, &[]).unwrap();
+        assert!(
+            cv.terminal_3sigma_containment.abs() < COVARIANCE_VALIDATION_TOL,
+            "empty trajectories should give 0.0, got {}",
+            cv.terminal_3sigma_containment
+        );
+    }
+
+    /// Empty dispersion envelope defaults sigma ratios to 1.0.
+    #[test]
+    fn sigma_ratio_empty_dispersion() {
+        let cov = mock_cov_report(Vector3::new(3.0, 30.0, 0.9));
+        let mut stats = mock_statistics(Vector3::new(0.5, 5.0, 0.1));
+        stats.dispersion_envelope.clear();
+
+        let cv = compute_covariance_validation(&cov, &stats, &[]).unwrap();
+        let tol = COVARIANCE_VALIDATION_TOL;
+        assert!(
+            (cv.sigma_ratio_ric.x - 1.0).abs() < tol
+                && (cv.sigma_ratio_ric.y - 1.0).abs() < tol
+                && (cv.sigma_ratio_ric.z - 1.0).abs() < tol,
+            "empty dispersion should default sigma ratios to 1.0, got {:?}",
+            cv.sigma_ratio_ric
         );
     }
 }

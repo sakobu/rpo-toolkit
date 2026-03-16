@@ -118,4 +118,10 @@ pub struct MissionCovarianceReport {
     pub max_sigma3_position_km: f64,
     /// Overall maximum collision probability
     pub max_collision_probability: f64,
+    /// Predicted nominal RIC position at mission end (km).
+    /// Used as the center for terminal 3-sigma box containment checks.
+    pub terminal_position_ric_km: Vector3<f64>,
+    /// Terminal 3-sigma position uncertainty per RIC axis (km) at mission end.
+    /// Used for epoch-matched comparison against MC terminal dispersion.
+    pub terminal_sigma3_position_ric_km: Vector3<f64>,
 }

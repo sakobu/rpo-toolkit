@@ -65,6 +65,8 @@ pub fn propagate_mission_covariance(
     let mut leg_reports = Vec::with_capacity(mission.legs.len());
     let mut overall_max_sigma3 = 0.0_f64;
     let mut overall_max_pc = 0.0_f64;
+    let mut terminal_ric_position = Vector3::zeros();
+    let mut terminal_sigma3 = Vector3::zeros();
 
     for leg in &mission.legs {
         // 1. Departure maneuver update
@@ -128,6 +130,11 @@ pub fn propagate_mission_covariance(
             leg_max_sigma3 = leg_max_sigma3.max(max_sigma3_component);
             leg_max_pc = leg_max_pc.max(pc);
 
+            // Overwrite each iteration; after the last leg's last sample,
+            // these hold the mission terminal values.
+            terminal_ric_position = ric_position;
+            terminal_sigma3 = sigma3;
+
             p_last = p_j;
 
             states.push(CovarianceState {
@@ -173,6 +180,8 @@ pub fn propagate_mission_covariance(
         maneuver_uncertainty: maneuver_uncertainty.copied(),
         max_sigma3_position_km: overall_max_sigma3,
         max_collision_probability: overall_max_pc,
+        terminal_position_ric_km: terminal_ric_position,
+        terminal_sigma3_position_ric_km: terminal_sigma3,
     })
 }
 
@@ -198,6 +207,22 @@ mod tests {
     /// machine precision. 1e-6 accounts for accumulated floating-point
     /// error across a full orbital period of propagation.
     const LEG_BOUNDARY_CONTINUITY_TOL: f64 = 1e-6;
+
+    /// PSD eigenvalue floor: covariance eigenvalues should be non-negative,
+    /// but numerical error from STM propagation and matrix operations can
+    /// produce small negative values. -1e-10 km² is well below any
+    /// physically meaningful variance.
+    const PSD_EIGENVALUE_FLOOR: f64 = -1e-10;
+
+    /// Tolerance for terminal sigma3 matching the last state's sigma3.
+    /// Both values come from the same computation path (no independent
+    /// STM evaluation), so agreement should be exact up to f64 rounding.
+    const TERMINAL_SIGMA3_MATCH_TOL: f64 = 1e-15;
+
+    /// Minimum expected terminal position norm (km) for a waypoint mission.
+    /// The test targets a 5 km in-track waypoint; 0.1 km is a loose lower
+    /// bound that catches only a zero/degenerate result.
+    const TERMINAL_POSITION_MIN_NORM_KM: f64 = 0.1;
 
     fn default_nav() -> NavigationAccuracy {
         NavigationAccuracy::default()
@@ -396,9 +421,35 @@ mod tests {
 
         let eig = drag_end.symmetric_eigenvalues();
         assert!(
-            eig.min() > -1e-10,
+            eig.min() > PSD_EIGENVALUE_FLOOR,
             "Drag path covariance should be PSD: min_eig={}",
             eig.min()
+        );
+    }
+
+    /// The new `terminal_sigma3_position_ric_km` field must exactly match
+    /// the 3-sigma values from the last state of the last leg.
+    #[test]
+    fn terminal_sigma3_matches_last_state() {
+        let (mission, propagator) = single_wp_mission();
+        let p0 = mission_initial_covariance();
+        let nav = default_nav();
+
+        let report =
+            propagate_mission_covariance(&mission, &p0, &nav, None, &propagator, 20).unwrap();
+
+        let last_state = report.legs.last().unwrap().states.last().unwrap();
+        let diff = (report.terminal_sigma3_position_ric_km - last_state.sigma3_position_ric_km).norm();
+        assert!(
+            diff < TERMINAL_SIGMA3_MATCH_TOL,
+            "terminal_sigma3 should match last state sigma3: diff={diff}"
+        );
+
+        // Terminal position should be non-zero (waypoint at 5 km in-track)
+        assert!(
+            report.terminal_position_ric_km.norm() > TERMINAL_POSITION_MIN_NORM_KM,
+            "terminal position should be near the waypoint, got {:?}",
+            report.terminal_position_ric_km
         );
     }
 }

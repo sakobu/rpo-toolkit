@@ -72,6 +72,11 @@ pub enum MonteCarloError {
     NyxBridge(Box<NyxBridgeError>),
     /// Empty ensemble (no samples to compute statistics from).
     EmptyEnsemble,
+    /// Trajectory count exceeds u32 range (should not happen — bounded by `num_samples`: u32).
+    TooManySamples {
+        /// The count that overflowed u32.
+        count: usize,
+    },
 }
 
 impl fmt::Display for MonteCarloError {
@@ -103,6 +108,9 @@ impl fmt::Display for MonteCarloError {
             Self::Propagation(e) => write!(f, "propagation failure: {e}"),
             Self::NyxBridge(e) => write!(f, "nyx bridge failure: {e}"),
             Self::EmptyEnsemble => write!(f, "empty ensemble: no samples to compute statistics"),
+            Self::TooManySamples { count } => {
+                write!(f, "trajectory count {count} exceeds u32 range")
+            }
         }
     }
 }
@@ -215,7 +223,8 @@ pub fn run_monte_carlo(input: &MonteCarloInput<'_>) -> Result<MonteCarloReport, 
     // Covariance validation (if provided)
     let covariance_validation = input
         .covariance_report
-        .map(|cov_report| compute_covariance_validation(cov_report, &statistics));
+        .map(|cov_report| compute_covariance_validation(cov_report, &statistics, &trajectories))
+        .transpose()?;
 
     Ok(MonteCarloReport {
         config: config.clone(),
@@ -684,9 +693,9 @@ mod tests {
         assert!(cv.sigma_ratio_ric.y.is_finite(), "in-track sigma ratio not finite");
         assert!(cv.sigma_ratio_ric.z.is_finite(), "cross-track sigma ratio not finite");
         assert!(
-            cv.fraction_within_3sigma >= 0.0 && cv.fraction_within_3sigma <= 1.0,
-            "3-sigma containment should be in [0, 1], got {}",
-            cv.fraction_within_3sigma
+            cv.terminal_3sigma_containment >= 0.0 && cv.terminal_3sigma_containment <= 1.0,
+            "terminal containment should be in [0, 1], got {}",
+            cv.terminal_3sigma_containment
         );
         assert!(cv.mc_collision_prob <= 1.0);
     }

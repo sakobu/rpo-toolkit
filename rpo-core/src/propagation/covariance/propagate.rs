@@ -602,5 +602,19 @@ mod tests {
             report.navigation_accuracy, deserialized.navigation_accuracy,
             "NavigationAccuracy should survive roundtrip"
         );
+
+        // Terminal fields should survive serde roundtrip
+        let diff_pos = (report.terminal_position_ric_km - deserialized.terminal_position_ric_km).norm();
+        assert!(
+            diff_pos < SERDE_ROUNDTRIP_TOL,
+            "terminal_position_ric_km should survive roundtrip: diff={diff_pos}"
+        );
+        let diff_sig = (report.terminal_sigma3_position_ric_km
+            - deserialized.terminal_sigma3_position_ric_km)
+            .norm();
+        assert!(
+            diff_sig < SERDE_ROUNDTRIP_TOL,
+            "terminal_sigma3_position_ric_km should survive roundtrip: diff={diff_sig}"
+        );
     }
 }
