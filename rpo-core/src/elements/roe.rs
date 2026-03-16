@@ -14,8 +14,7 @@ use crate::types::{KeplerianElements, QuasiNonsingularROE};
 /// - Near-equatorial orbits (`i ≈ 0`): `diy` degrades as `sin(i) → 0`
 ///
 /// # Errors
-/// Returns `ConversionError::InvalidSemiMajorAxis` if `chief.a_km <= 0`.
-/// Returns `ConversionError::InvalidEccentricity` if `chief.e` is outside [0, 1).
+/// Returns `ConversionError::KeplerFailure` if `chief.a_km <= 0` or `chief.e` is outside [0, 1).
 pub fn compute_roe(
     chief: &KeplerianElements,
     deputy: &KeplerianElements,
@@ -81,8 +80,10 @@ mod tests {
         let deputy = iss_like_elements();
         let result = compute_roe(&chief, &deputy);
         assert!(
-            matches!(result, Err(crate::elements::keplerian_conversions::ConversionError::InvalidSemiMajorAxis { .. })),
-            "Negative SMA should return InvalidSemiMajorAxis, got {result:?}"
+            matches!(result, Err(crate::elements::keplerian_conversions::ConversionError::KeplerFailure(
+                crate::types::KeplerError::InvalidSemiMajorAxis { .. }
+            ))),
+            "Negative SMA should return KeplerFailure(InvalidSemiMajorAxis), got {result:?}"
         );
     }
 

@@ -9,7 +9,7 @@ use std::sync::Arc;
 use anise::prelude::Almanac;
 use nalgebra::Vector3;
 
-use crate::elements::eci_ric_dcm::eci_to_ric_relative;
+use crate::elements::eci_ric_dcm::{eci_to_ric_relative, DcmError};
 use crate::mission::safety::{analyze_trajectory_safety, SafetyError};
 use crate::propagation::nyx_bridge::{
     apply_impulse, build_full_physics_dynamics, build_nyx_safety_states, nyx_propagate_segment,
@@ -32,6 +32,8 @@ pub enum ValidationError {
     },
     /// No trajectory points to analyze.
     EmptyTrajectory,
+    /// ECI↔RIC frame conversion failed.
+    DcmFailure(DcmError),
 }
 
 impl std::fmt::Display for ValidationError {
@@ -44,15 +46,31 @@ impl std::fmt::Display for ValidationError {
             Self::EmptyTrajectory => {
                 write!(f, "no trajectory points to analyze")
             }
+            Self::DcmFailure(e) => write!(f, "frame conversion failed: {e}"),
         }
     }
 }
 
-impl std::error::Error for ValidationError {}
+impl std::error::Error for ValidationError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::NyxBridge(e) => Some(e.as_ref()),
+            Self::Safety { source } => Some(source),
+            Self::DcmFailure(e) => Some(e),
+            Self::EmptyTrajectory => None,
+        }
+    }
+}
 
 impl From<NyxBridgeError> for ValidationError {
     fn from(e: NyxBridgeError) -> Self {
         Self::NyxBridge(Box::new(e))
+    }
+}
+
+impl From<DcmError> for ValidationError {
+    fn from(e: DcmError) -> Self {
+        Self::DcmFailure(e)
     }
 }
 
@@ -177,7 +195,7 @@ pub fn validate_mission_nyx(
 
         // Apply departure Δv to deputy
         let deputy_post_burn =
-            apply_impulse(&deputy_state, &chief_state, &leg.departure_maneuver.dv_ric_km_s);
+            apply_impulse(&deputy_state, &chief_state, &leg.departure_maneuver.dv_ric_km_s)?;
 
         // Propagate deputy for this leg
         let deputy_dynamics = build_full_physics_dynamics(almanac)?;
@@ -195,7 +213,7 @@ pub fn validate_mission_nyx(
         for (idx, (chief_sample, deputy_sample)) in
             chief_results.iter().zip(deputy_results.iter()).enumerate()
         {
-            let numerical_ric = eci_to_ric_relative(&chief_sample.1, &deputy_sample.1);
+            let numerical_ric = eci_to_ric_relative(&chief_sample.1, &deputy_sample.1)?;
             let elapsed = cumulative_time + chief_sample.0;
             let analytical_ric = find_closest_analytical_ric(&leg.trajectory, chief_sample.0);
 
@@ -231,7 +249,7 @@ pub fn validate_mission_nyx(
             .1
             .clone();
         deputy_state =
-            apply_impulse(&deputy_coast_end, &chief_state, &leg.arrival_maneuver.dv_ric_km_s);
+            apply_impulse(&deputy_coast_end, &chief_state, &leg.arrival_maneuver.dv_ric_km_s)?;
         cumulative_time += tof;
     }
 
@@ -312,7 +330,7 @@ mod tests {
     /// This is a test-only utility providing an independent numerical truth source
     /// with no shared code paths with the analytical STM.
     fn rk4_j2_propagate(sv: &StateVector, duration_s: f64, dt: f64) -> StateVector {
-        debug_assert!(duration_s >= 0.0 && dt > 0.0, "duration and dt must be positive");
+        assert!(duration_s >= 0.0 && dt > 0.0, "duration and dt must be positive");
 
         let mut pos = sv.position_eci_km;
         let mut vel = sv.velocity_eci_km_s;
@@ -361,7 +379,7 @@ mod tests {
         let chief_ke = iss_like_elements();
         let sv = keplerian_to_state(&chief_ke, epoch).unwrap();
 
-        let period = chief_ke.period();
+        let period = chief_ke.period().unwrap();
         let sv_1orbit = rk4_j2_propagate(&sv, period, 10.0);
 
         // Specific energy: E = v²/2 - μ/r
@@ -465,7 +483,7 @@ mod tests {
         let epoch = test_epoch();
         let zero_roe = crate::types::QuasiNonsingularROE::default();
         let drag_config = test_drag_config();
-        let period = std::f64::consts::TAU / chief.mean_motion();
+        let period = std::f64::consts::TAU / chief.mean_motion().unwrap();
 
         // J2-only propagator (zero ROE should stay near zero)
         let j2_prop = PropagationModel::J2Stm;
@@ -519,7 +537,7 @@ mod tests {
         deputy.a_km += 1.0;
         deputy.i_rad += 0.001;
         let roe_0 = compute_roe(&chief, &deputy).unwrap();
-        let period = std::f64::consts::TAU / chief.mean_motion();
+        let period = std::f64::consts::TAU / chief.mean_motion().unwrap();
 
         let prop = PropagationModel::J2Stm;
         let state_10 = prop.propagate(&roe_0, &chief, epoch, 10.0 * period).unwrap();
@@ -652,7 +670,7 @@ mod tests {
 
         let epoch = test_epoch();
         let deputy = deputy_from_roe(chief, roe);
-        let period = chief.period();
+        let period = chief.period().unwrap();
         let duration = n_orbits * period;
 
         // Convert to ECI
@@ -731,7 +749,7 @@ mod tests {
         ] {
             let epoch = test_epoch();
             let sv = keplerian_to_state(chief, epoch).unwrap();
-            let duration = 10.0 * chief.period();
+            let duration = 10.0 * chief.period().unwrap();
 
             let sv_final = rk4_j2_propagate(&sv, duration, 10.0);
 
@@ -784,7 +802,7 @@ mod tests {
         ];
 
         for (label, chief, roe) in &cases {
-            let duration = 10.0 * chief.period();
+            let duration = 10.0 * chief.period().unwrap();
             let (roe_prop, _) = propagate_roe_stm(roe, chief, duration).unwrap();
 
             // δa must be exactly conserved
@@ -834,7 +852,7 @@ mod tests {
         let chief_sv = keplerian_to_state(&chief, epoch).unwrap();
         let deputy_sv = keplerian_to_state(&deputy, epoch).unwrap();
 
-        let period = chief.period();
+        let period = chief.period().unwrap();
         let dt_sample = 30.0; // sample every 30 seconds
 
         let mut sum_sq_err = 0.0;
@@ -845,7 +863,7 @@ mod tests {
             // "True" RIC from numerical ECI propagation
             let chief_t = rk4_j2_propagate(&chief_sv, t, 10.0);
             let deputy_t = rk4_j2_propagate(&deputy_sv, t, 10.0);
-            let ric_true = eci_to_ric_relative(&chief_t, &deputy_t);
+            let ric_true = eci_to_ric_relative(&chief_t, &deputy_t).unwrap();
 
             // Predicted RIC from STM-propagated ROE
             let (roe_t, chief_mean_t) = propagate_roe_stm(&roe, &chief, t).unwrap();
@@ -888,7 +906,7 @@ mod tests {
         let chief_sv = keplerian_to_state(&chief_ke, epoch).unwrap();
         let deputy_sv = keplerian_to_state(&deputy_ke, epoch).unwrap();
 
-        let period = std::f64::consts::TAU / chief_ke.mean_motion();
+        let period = std::f64::consts::TAU / chief_ke.mean_motion().unwrap();
         let duration = 10.0 * period;
 
         // Propagate both with nyx two-body
@@ -975,7 +993,7 @@ mod tests {
         let epoch = test_epoch();
         let chief_ke = iss_like_elements();
         let sv = keplerian_to_state(&chief_ke, epoch).unwrap();
-        let period = chief_ke.period();
+        let period = chief_ke.period().unwrap();
 
         let dynamics = nyx_bridge::build_full_physics_dynamics(&almanac)
             .expect("full physics dynamics should build");
@@ -1232,7 +1250,7 @@ mod tests {
         let chief_sv = keplerian_to_state(&chief_ke, epoch).unwrap();
         let deputy_sv = keplerian_to_state(&deputy_ke, epoch).unwrap();
 
-        let period = chief_ke.period();
+        let period = chief_ke.period().unwrap();
         let waypoint = Waypoint {
             position_ric_km: Vector3::new(0.5, 3.0, 1.0),
             velocity_ric_km_s: Vector3::zeros(),
@@ -1330,7 +1348,7 @@ mod tests {
         let chief_sv = keplerian_to_state(&chief_ke, epoch).unwrap();
         let deputy_sv = keplerian_to_state(&deputy_ke, epoch).unwrap();
 
-        let period = chief_ke.period();
+        let period = chief_ke.period().unwrap();
         let tof = 0.75 * period;
         let waypoints = vec![
             Waypoint {
@@ -1461,7 +1479,7 @@ mod tests {
         );
 
         // Step 2: Plan missions with both propagators
-        let period = chief_ke.period();
+        let period = chief_ke.period().unwrap();
         let waypoint = Waypoint {
             position_ric_km: Vector3::new(0.0, 5.0, 0.0),
             velocity_ric_km_s: Vector3::zeros(),
@@ -1578,7 +1596,7 @@ mod tests {
         let chief_sv = keplerian_to_state(&chief_ke, epoch).unwrap();
         let deputy_sv = keplerian_to_state(&deputy_ke, epoch).unwrap();
 
-        let period = chief_ke.period();
+        let period = chief_ke.period().unwrap();
         let tof = 0.75 * period;
         let waypoints = vec![
             Waypoint {

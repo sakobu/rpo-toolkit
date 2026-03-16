@@ -259,7 +259,7 @@ mod tests {
             diy: 0.0,
         };
 
-        let n = chief.mean_motion();
+        let n = chief.mean_motion().unwrap();
         let tau = 1000.0; // short enough to stay in linear regime
 
         let (roe_prop, _) = propagate_roe_stm(&roe, &chief, tau).unwrap();
@@ -298,7 +298,7 @@ mod tests {
             diy: 0.0,
         };
 
-        let period = TWO_PI / chief.mean_motion();
+        let period = TWO_PI / chief.mean_motion().unwrap();
         let (roe_prop, _) = propagate_roe_stm(&roe, &chief, period).unwrap();
 
         assert!(
@@ -316,7 +316,7 @@ mod tests {
     #[test]
     fn koenig_eqa6_stm_elements_case1() {
         let chief = koenig_table2_case1();
-        let period = chief.period();
+        let period = chief.period().unwrap();
         let j2p = compute_j2_params(&chief).unwrap();
         let stm = compute_stm(&chief, period).unwrap();
 
@@ -419,7 +419,7 @@ mod tests {
     #[test]
     fn koenig_eqa6_stm_elements_case2() {
         let chief = koenig_table2_case2();
-        let period = chief.period();
+        let period = chief.period().unwrap();
         let j2p = compute_j2_params(&chief).unwrap();
         let stm = compute_stm(&chief, period).unwrap();
 
@@ -463,7 +463,7 @@ mod tests {
     fn koenig_table4_propagation_bounds_case1() {
         let chief = koenig_table2_case1();
         let roe = koenig_table2_case1_roe();
-        let period = chief.period();
+        let period = chief.period().unwrap();
         let tau = 10.0 * period;
 
         let (roe_prop, _) = propagate_roe_stm(&roe, &chief, tau).unwrap();

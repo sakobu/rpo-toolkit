@@ -33,7 +33,7 @@ pub fn propagate_keplerian(
     }
 
     let ke = state_to_keplerian(initial)?;
-    let n = ke.mean_motion();
+    let n = ke.mean_motion()?;
 
     let step = duration_s / f64::from(n_steps);
     (0..=n_steps)
@@ -62,7 +62,7 @@ mod tests {
         let epoch = test_epoch();
         let ke = iss_like_elements();
         let initial = keplerian_to_state(&ke, epoch).unwrap();
-        let period = ke.period();
+        let period = ke.period().unwrap();
 
         let trajectory = propagate_keplerian(&initial, period, 100).unwrap();
 
@@ -80,7 +80,7 @@ mod tests {
         let epoch = test_epoch();
         let ke = eccentric_elements();
         let initial = keplerian_to_state(&ke, epoch).unwrap();
-        let period = ke.period();
+        let period = ke.period().unwrap();
 
         let trajectory = propagate_keplerian(&initial, period, 100).unwrap();
 
@@ -110,7 +110,7 @@ mod tests {
         let epoch = test_epoch();
         let ke = eccentric_elements();
         let initial = keplerian_to_state(&ke, epoch).unwrap();
-        let period = ke.period();
+        let period = ke.period().unwrap();
 
         let trajectory = propagate_keplerian(&initial, period, 200).unwrap();
 
@@ -140,7 +140,7 @@ mod tests {
         let epoch = test_epoch();
         let ke = eccentric_elements();
         let initial = keplerian_to_state(&ke, epoch).unwrap();
-        let period = ke.period();
+        let period = ke.period().unwrap();
 
         let trajectory = propagate_keplerian(&initial, period, 200).unwrap();
 

@@ -566,7 +566,7 @@ mod tests {
         let chief = iss_like_elements();
         let propagator = PropagationModel::J2Stm;
         let config = MissionConfig::default();
-        let tof = chief.period() * 0.75;
+        let tof = chief.period().unwrap() * 0.75;
 
         let departure = DepartureState {
             roe: QuasiNonsingularROE::default(),

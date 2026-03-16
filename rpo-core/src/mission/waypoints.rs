@@ -343,7 +343,7 @@ mod tests {
         let departure = zero_departure();
         let propagator = PropagationModel::J2Stm;
         let config = default_config();
-        let period = std::f64::consts::TAU / departure.chief.mean_motion();
+        let period = std::f64::consts::TAU / departure.chief.mean_motion().unwrap();
 
         let waypoints = vec![Waypoint {
             position_ric_km: Vector3::new(0.0, 5.0, 0.0),
@@ -366,7 +366,7 @@ mod tests {
         let departure = zero_departure();
         let propagator = PropagationModel::J2Stm;
         let config = default_config();
-        let period = std::f64::consts::TAU / departure.chief.mean_motion();
+        let period = std::f64::consts::TAU / departure.chief.mean_motion().unwrap();
         let tof = period * 0.75;
 
         let waypoints = vec![
@@ -407,7 +407,7 @@ mod tests {
         let departure = zero_departure();
         let propagator = PropagationModel::J2Stm;
         let config = default_config();
-        let period = std::f64::consts::TAU / departure.chief.mean_motion();
+        let period = std::f64::consts::TAU / departure.chief.mean_motion().unwrap();
         let tof = period * 0.75;
 
         let waypoints = vec![
@@ -441,7 +441,7 @@ mod tests {
         let departure = zero_departure();
         let propagator = PropagationModel::J2Stm;
         let config = default_config();
-        let period = std::f64::consts::TAU / departure.chief.mean_motion();
+        let period = std::f64::consts::TAU / departure.chief.mean_motion().unwrap();
 
         let waypoints = vec![Waypoint {
             position_ric_km: Vector3::new(0.0, 5.0, 0.0),
@@ -478,7 +478,7 @@ mod tests {
         let departure = zero_departure();
         let propagator = PropagationModel::J2Stm;
         let config = default_config();
-        let period = std::f64::consts::TAU / departure.chief.mean_motion();
+        let period = std::f64::consts::TAU / departure.chief.mean_motion().unwrap();
 
         let waypoints = vec![Waypoint {
             position_ric_km: Vector3::new(0.0, 5.0, 0.0),
@@ -515,7 +515,7 @@ mod tests {
         let departure = zero_departure();
         let propagator = PropagationModel::J2Stm;
         let config = default_config();
-        let period = std::f64::consts::TAU / departure.chief.mean_motion();
+        let period = std::f64::consts::TAU / departure.chief.mean_motion().unwrap();
         let tof = period * 0.75;
 
         let waypoints = vec![
@@ -556,7 +556,7 @@ mod tests {
         let departure = zero_departure();
         let propagator = PropagationModel::J2Stm;
         let config = default_config();
-        let period = std::f64::consts::TAU / departure.chief.mean_motion();
+        let period = std::f64::consts::TAU / departure.chief.mean_motion().unwrap();
 
         let waypoints = vec![Waypoint {
             position_ric_km: Vector3::new(0.0, 5.0, 0.0),
@@ -587,7 +587,7 @@ mod tests {
         let departure = zero_departure();
         let propagator = PropagationModel::J2Stm;
         let config = default_config();
-        let period = std::f64::consts::TAU / departure.chief.mean_motion();
+        let period = std::f64::consts::TAU / departure.chief.mean_motion().unwrap();
 
         let waypoints = vec![Waypoint {
             position_ric_km: Vector3::new(0.0, 5.0, 0.0),
@@ -630,7 +630,7 @@ mod tests {
         let departure = zero_departure();
         let propagator = PropagationModel::J2Stm;
         let config = default_config();
-        let period = std::f64::consts::TAU / departure.chief.mean_motion();
+        let period = std::f64::consts::TAU / departure.chief.mean_motion().unwrap();
 
         let waypoints = vec![Waypoint {
             position_ric_km: Vector3::new(0.0, 5.0, 0.0),
@@ -676,7 +676,7 @@ mod tests {
         let departure = zero_departure();
         let propagator = PropagationModel::J2Stm;
         let config = default_config();
-        let period = std::f64::consts::TAU / departure.chief.mean_motion();
+        let period = std::f64::consts::TAU / departure.chief.mean_motion().unwrap();
         let waypoints = three_wp_waypoints(period * 0.75);
 
         let full = plan_waypoint_mission(&departure, &waypoints, &config, &propagator)
@@ -699,7 +699,7 @@ mod tests {
         let departure = zero_departure();
         let propagator = PropagationModel::J2Stm;
         let config = default_config();
-        let period = std::f64::consts::TAU / departure.chief.mean_motion();
+        let period = std::f64::consts::TAU / departure.chief.mean_motion().unwrap();
         let tof = period * 0.75;
         let waypoints = three_wp_waypoints(tof);
 
@@ -736,7 +736,7 @@ mod tests {
         let departure = zero_departure();
         let propagator = PropagationModel::J2Stm;
         let config = default_config();
-        let period = std::f64::consts::TAU / departure.chief.mean_motion();
+        let period = std::f64::consts::TAU / departure.chief.mean_motion().unwrap();
         let tof = period * 0.75;
         let waypoints = three_wp_waypoints(tof);
 
@@ -766,7 +766,7 @@ mod tests {
         let departure = zero_departure();
         let propagator = PropagationModel::J2Stm;
         let config = default_config();
-        let period = std::f64::consts::TAU / departure.chief.mean_motion();
+        let period = std::f64::consts::TAU / departure.chief.mean_motion().unwrap();
         let tof = period * 0.75;
         let waypoints = three_wp_waypoints(tof);
 
@@ -801,7 +801,7 @@ mod tests {
         let departure = zero_departure();
         let propagator = PropagationModel::J2Stm;
         let config = default_config();
-        let period = std::f64::consts::TAU / departure.chief.mean_motion();
+        let period = std::f64::consts::TAU / departure.chief.mean_motion().unwrap();
         let waypoints = three_wp_waypoints(period * 0.75);
 
         // Plan a 1-waypoint mission (1 leg)
@@ -826,7 +826,7 @@ mod tests {
         let departure = zero_departure();
         let propagator = PropagationModel::J2Stm;
         let config = default_config();
-        let period = std::f64::consts::TAU / departure.chief.mean_motion();
+        let period = std::f64::consts::TAU / departure.chief.mean_motion().unwrap();
         let waypoints = three_wp_waypoints(period * 0.75);
 
         let original =
@@ -855,7 +855,7 @@ mod tests {
         let departure = zero_departure();
         let propagator = PropagationModel::J2Stm;
         let config = default_config();
-        let period = std::f64::consts::TAU / departure.chief.mean_motion();
+        let period = std::f64::consts::TAU / departure.chief.mean_motion().unwrap();
         let tof = period * 0.75;
         let waypoints = three_wp_waypoints(tof);
 
@@ -886,7 +886,7 @@ mod tests {
         let departure = zero_departure();
         let propagator = PropagationModel::J2Stm;
         let config = default_config();
-        let period = std::f64::consts::TAU / departure.chief.mean_motion();
+        let period = std::f64::consts::TAU / departure.chief.mean_motion().unwrap();
 
         let target_pos = Vector3::new(0.0, 5.0, 0.0);
         let waypoints = vec![Waypoint {
@@ -928,7 +928,7 @@ mod tests {
         let departure = zero_departure();
         let propagator = PropagationModel::J2Stm;
         let config = default_config();
-        let period = std::f64::consts::TAU / departure.chief.mean_motion();
+        let period = std::f64::consts::TAU / departure.chief.mean_motion().unwrap();
         let tof = period * 0.75;
 
         let waypoints = vec![
@@ -968,7 +968,7 @@ mod tests {
         let departure = zero_departure();
         let propagator = PropagationModel::J2Stm;
         let config = default_config();
-        let period = std::f64::consts::TAU / departure.chief.mean_motion();
+        let period = std::f64::consts::TAU / departure.chief.mean_motion().unwrap();
 
         let waypoints = vec![Waypoint {
             position_ric_km: Vector3::new(0.0, 5.0, 0.0),
@@ -1004,7 +1004,7 @@ mod tests {
     fn safety_provenance_leg_index() {
         let departure = zero_departure();
         let propagator = PropagationModel::J2Stm;
-        let period = std::f64::consts::TAU / departure.chief.mean_motion();
+        let period = std::f64::consts::TAU / departure.chief.mean_motion().unwrap();
         let tof = period * 0.75;
 
         let config = MissionConfig {

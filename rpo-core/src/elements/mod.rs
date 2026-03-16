@@ -9,7 +9,7 @@ pub mod roe;
 pub use keplerian_conversions::{keplerian_to_state, state_to_keplerian, ConversionError};
 pub use eci_ric_dcm::{
     eci_to_ric_dcm, eci_to_ric_dv, eci_to_ric_relative, ric_to_eci_dv, ric_to_eci_position,
-    ric_to_eci_state,
+    ric_to_eci_state, DcmError,
 };
 pub use gve::{apply_maneuver, compute_b_matrix};
 pub use roe_to_ric::{

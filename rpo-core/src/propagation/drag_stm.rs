@@ -375,7 +375,7 @@ mod tests {
     #[test]
     fn koenig_appendix_d_drag_block_case1() {
         let chief = koenig_table2_case1();
-        let period = chief.period();
+        let period = chief.period().unwrap();
         let j2p = compute_j2_params(&chief).unwrap();
         let stm = compute_j2_drag_stm(&chief, period).unwrap();
 
@@ -423,7 +423,7 @@ mod tests {
             dey_dot: 0.0,
         };
         let roe = QuasiNonsingularROE::default();
-        let period = chief.period();
+        let period = chief.period().unwrap();
 
         let (roe_1t, _) = propagate_roe_j2_drag(&roe, &chief, &drag, period).unwrap();
         let (roe_2t, _) = propagate_roe_j2_drag(&roe, &chief, &drag, 2.0 * period).unwrap();
@@ -470,7 +470,7 @@ mod tests {
             dey_dot: 0.0,
         };
         let roe0 = QuasiNonsingularROE::default();
-        let period = chief.period();
+        let period = chief.period().unwrap();
 
         // Propagate to 1, 5, and 10 orbital periods
         let tau_1t = period;
@@ -561,7 +561,7 @@ mod tests {
 
         let chief = koenig_table2_case1();
         let j2p = compute_j2_params(&chief).unwrap();
-        let period = chief.period();
+        let period = chief.period().unwrap();
 
         // Build the STM directly for tau = 1 orbital period
         let stm = compute_j2_drag_stm(&chief, period).unwrap();

@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::constants::{J2, R_EARTH};
 use crate::propagation::propagator::PropagationError;
-use crate::types::KeplerianElements;
+use crate::types::{KeplerError, KeplerianElements};
 
 /// Precomputed J2 perturbation parameters for a mean orbit.
 ///
@@ -66,22 +66,21 @@ pub struct J2Params {
 /// - `mean` must be **mean** Keplerian elements, not osculating
 ///
 /// # Errors
-/// Returns `PropagationError::InvalidEccentricity` if `e < 0` or `e >= 1`.
-/// Returns `PropagationError::InvalidSemiMajorAxis` if `a_km <= 0`.
+/// Returns `PropagationError::KeplerFailure` if `e` is outside [0, 1) or `a_km <= 0`.
 #[allow(clippy::many_single_char_names, clippy::similar_names)]
 pub fn compute_j2_params(mean: &KeplerianElements) -> Result<J2Params, PropagationError> {
     if mean.e < 0.0 || mean.e >= 1.0 {
-        return Err(PropagationError::InvalidEccentricity { e: mean.e });
+        return Err(KeplerError::InvalidEccentricity { e: mean.e }.into());
     }
     if mean.a_km <= 0.0 {
-        return Err(PropagationError::InvalidSemiMajorAxis { a_km: mean.a_km });
+        return Err(KeplerError::InvalidSemiMajorAxis { a_km: mean.a_km }.into());
     }
 
     let a = mean.a_km;
     let e = mean.e;
     let i = mean.i_rad;
 
-    let n = mean.mean_motion();
+    let n = mean.mean_motion()?;
     let eta = (1.0 - e * e).sqrt();
     let p = a * (1.0 - e * e);
 
@@ -201,8 +200,8 @@ mod tests {
         };
         let result = compute_j2_params(&mean);
         assert!(
-            matches!(result, Err(PropagationError::InvalidSemiMajorAxis { .. })),
-            "a_km <= 0 should return InvalidSemiMajorAxis, got {result:?}"
+            matches!(result, Err(PropagationError::KeplerFailure(KeplerError::InvalidSemiMajorAxis { .. }))),
+            "a_km <= 0 should return KeplerFailure(InvalidSemiMajorAxis), got {result:?}"
         );
     }
 
@@ -218,8 +217,8 @@ mod tests {
         };
         let result = compute_j2_params(&mean);
         assert!(
-            matches!(result, Err(PropagationError::InvalidSemiMajorAxis { .. })),
-            "a_km = 0 should return InvalidSemiMajorAxis, got {result:?}"
+            matches!(result, Err(PropagationError::KeplerFailure(KeplerError::InvalidSemiMajorAxis { .. }))),
+            "a_km = 0 should return KeplerFailure(InvalidSemiMajorAxis), got {result:?}"
         );
     }
 
@@ -299,8 +298,8 @@ mod tests {
         };
         let result = compute_j2_params(&mean);
         assert!(
-            matches!(result, Err(PropagationError::InvalidEccentricity { .. })),
-            "e=1 should return InvalidEccentricity, got {result:?}"
+            matches!(result, Err(PropagationError::KeplerFailure(KeplerError::InvalidEccentricity { .. }))),
+            "e=1 should return KeplerFailure(InvalidEccentricity), got {result:?}"
         );
     }
 
@@ -412,7 +411,7 @@ mod tests {
 
         // kappa = (3/4)·n·J2·(R_E/p)²
         let p = chief.a_km * (1.0 - chief.e * chief.e);
-        let n = chief.mean_motion();
+        let n = chief.mean_motion().unwrap();
         let r_over_p = R_EARTH / p;
         let expected_kappa = 0.75 * n * J2 * r_over_p * r_over_p;
         assert!(

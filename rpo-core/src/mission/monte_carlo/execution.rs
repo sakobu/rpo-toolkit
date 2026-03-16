@@ -83,7 +83,7 @@ pub(crate) fn run_single_sample(
         );
 
         // RIC → ECI via DCM transpose
-        let dcm = eci_to_ric_dcm(initial_chief);
+        let dcm = eci_to_ric_dcm(initial_chief)?;
         let dcm_transpose = dcm.transpose();
         let pos_eci_delta = dcm_transpose * pos_ric_delta;
         let vel_eci_delta = dcm_transpose * vel_ric_delta;
@@ -176,7 +176,7 @@ pub(crate) fn run_single_sample(
         } else {
             leg.departure_maneuver.dv_ric_km_s
         };
-        deputy_state = apply_impulse(&deputy_state, &chief_state, &dep_dv);
+        deputy_state = apply_impulse(&deputy_state, &chief_state, &dep_dv)?;
         total_dv += dep_dv.norm();
 
         // Propagate chief + deputy through this leg
@@ -223,11 +223,11 @@ pub(crate) fn run_single_sample(
         } else {
             leg.arrival_maneuver.dv_ric_km_s
         };
-        deputy_state = apply_impulse(&deputy_state, &chief_state, &arr_dv);
+        deputy_state = apply_impulse(&deputy_state, &chief_state, &arr_dv)?;
         total_dv += arr_dv.norm();
 
         // Compute miss distance at waypoint arrival
-        let ric_rel = eci_to_ric_relative(&chief_state, &deputy_state);
+        let ric_rel = eci_to_ric_relative(&chief_state, &deputy_state)?;
         let miss = (ric_rel.position_ric_km - leg.to_position_ric_km).norm();
         waypoint_miss_km.push(miss);
 

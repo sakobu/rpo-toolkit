@@ -8,7 +8,7 @@ use hifitime::Epoch;
 use nalgebra::{Matrix3, Vector3};
 
 use crate::constants::{ECC_TOL, INC_TOL, MIN_POSITION_NORM_KM, MU_EARTH, TWO_PI};
-use crate::types::{KeplerianElements, StateVector};
+use crate::types::{KeplerError, KeplerianElements, StateVector};
 
 /// Errors from ECI ↔ Keplerian conversions.
 #[derive(Debug, Clone)]
@@ -20,16 +20,8 @@ pub enum ConversionError {
         /// Specific orbital energy (km²/s²).
         energy_km2_s2: f64,
     },
-    /// Semi-major axis must be positive.
-    InvalidSemiMajorAxis {
-        /// The invalid semi-major axis (km).
-        a_km: f64,
-    },
-    /// Eccentricity must be in [0, 1).
-    InvalidEccentricity {
-        /// The invalid eccentricity value.
-        e: f64,
-    },
+    /// Kepler's equation solution or element validation failure.
+    KeplerFailure(KeplerError),
 }
 
 impl std::fmt::Display for ConversionError {
@@ -44,35 +36,39 @@ impl std::fmt::Display for ConversionError {
                     "ConversionError: unbound orbit — specific energy = {energy_km2_s2:.6e} km²/s² (must be negative)"
                 )
             }
-            Self::InvalidSemiMajorAxis { a_km } => {
-                write!(
-                    f,
-                    "ConversionError: semi-major axis = {a_km} km must be positive"
-                )
-            }
-            Self::InvalidEccentricity { e } => {
-                write!(
-                    f,
-                    "ConversionError: eccentricity = {e} out of range [0, 1)"
-                )
+            Self::KeplerFailure(e) => {
+                write!(f, "ConversionError: {e}")
             }
         }
     }
 }
 
-impl std::error::Error for ConversionError {}
+impl std::error::Error for ConversionError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::KeplerFailure(e) => Some(e),
+            _ => None,
+        }
+    }
+}
+
+impl From<KeplerError> for ConversionError {
+    fn from(e: KeplerError) -> Self {
+        Self::KeplerFailure(e)
+    }
+}
 
 /// Validate that Keplerian elements have positive SMA and bound eccentricity.
 ///
 /// # Errors
-/// Returns `ConversionError::InvalidSemiMajorAxis` if `ke.a_km <= 0`.
-/// Returns `ConversionError::InvalidEccentricity` if `ke.e < 0` or `ke.e >= 1`.
+/// Returns `ConversionError::KeplerFailure(KeplerError::InvalidSemiMajorAxis)` if `ke.a_km <= 0`.
+/// Returns `ConversionError::KeplerFailure(KeplerError::InvalidEccentricity)` if `ke.e < 0` or `ke.e >= 1`.
 pub(crate) fn validate_elements(ke: &KeplerianElements) -> Result<(), ConversionError> {
     if ke.a_km <= 0.0 {
-        return Err(ConversionError::InvalidSemiMajorAxis { a_km: ke.a_km });
+        return Err(KeplerError::InvalidSemiMajorAxis { a_km: ke.a_km }.into());
     }
     if ke.e < 0.0 || ke.e >= 1.0 {
-        return Err(ConversionError::InvalidEccentricity { e: ke.e });
+        return Err(KeplerError::InvalidEccentricity { e: ke.e }.into());
     }
     Ok(())
 }
@@ -199,12 +195,11 @@ pub fn state_to_keplerian(sv: &StateVector) -> Result<KeplerianElements, Convers
 /// - Delegates to `true_anomaly()` for Kepler's equation; see its invariants
 ///
 /// # Errors
-/// Returns `ConversionError::InvalidSemiMajorAxis` if `ke.a_km <= 0`.
-/// Returns `ConversionError::InvalidEccentricity` if `ke.e` is outside [0, 1).
+/// Returns `ConversionError::KeplerFailure` if `ke.a_km <= 0` or `ke.e` is outside [0, 1).
 pub fn keplerian_to_state(ke: &KeplerianElements, epoch: Epoch) -> Result<StateVector, ConversionError> {
     validate_elements(ke)?;
 
-    let nu = ke.true_anomaly();
+    let nu = ke.true_anomaly()?;
     let p = ke.a_km * (1.0 - ke.e * ke.e); // semi-latus rectum
     let r = p / (1.0 + ke.e * nu.cos());
 
@@ -348,8 +343,8 @@ mod tests {
         };
         let result = keplerian_to_state(&ke, epoch);
         assert!(
-            matches!(result, Err(ConversionError::InvalidSemiMajorAxis { .. })),
-            "Negative SMA should return InvalidSemiMajorAxis, got {result:?}"
+            matches!(result, Err(ConversionError::KeplerFailure(KeplerError::InvalidSemiMajorAxis { .. }))),
+            "Negative SMA should return KeplerFailure(InvalidSemiMajorAxis), got {result:?}"
         );
     }
 
@@ -366,8 +361,8 @@ mod tests {
         };
         let result = keplerian_to_state(&ke, epoch);
         assert!(
-            matches!(result, Err(ConversionError::InvalidEccentricity { .. })),
-            "e >= 1 should return InvalidEccentricity, got {result:?}"
+            matches!(result, Err(ConversionError::KeplerFailure(KeplerError::InvalidEccentricity { .. }))),
+            "e >= 1 should return KeplerFailure(InvalidEccentricity), got {result:?}"
         );
     }
 

@@ -6,10 +6,36 @@
 
 use nalgebra::{SMatrix, Vector3};
 
+use crate::constants::{MIN_ANGULAR_MOMENTUM_NORM_KM2_S, MIN_POSITION_NORM_KM};
 use crate::types::{RICState, StateVector};
 
 /// 3×3 matrix type alias (Direction Cosine Matrix).
 type Matrix3 = SMatrix<f64, 3, 3>;
+
+/// Errors from ECI ↔ RIC frame transformations.
+#[derive(Debug, Clone)]
+pub enum DcmError {
+    /// Chief position vector is zero; cannot define radial direction.
+    ZeroPositionVector,
+    /// Chief angular momentum (r × v) is zero; cannot define orbital plane.
+    /// This occurs for rectilinear orbits or collinear position/velocity.
+    ZeroAngularMomentum,
+}
+
+impl std::fmt::Display for DcmError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::ZeroPositionVector => {
+                write!(f, "DcmError: chief position vector is zero")
+            }
+            Self::ZeroAngularMomentum => {
+                write!(f, "DcmError: chief angular momentum (r × v) is zero")
+            }
+        }
+    }
+}
+
+impl std::error::Error for DcmError {}
 
 /// Compute the ECI→RIC Direction Cosine Matrix from the chief state vector.
 ///
@@ -20,56 +46,55 @@ type Matrix3 = SMatrix<f64, 3, 3>;
 ///
 /// Multiply: `v_ric = DCM * v_eci`. Inverse: `v_eci = DCM^T * v_ric`.
 ///
-/// # Invariants
-/// - `chief.position_eci_km` must be non-zero (degenerate at origin)
-/// - `chief` angular momentum `r × v` must be non-zero (rectilinear orbits unsupported)
-#[must_use]
-pub fn eci_to_ric_dcm(chief: &StateVector) -> Matrix3 {
+/// # Errors
+/// Returns `DcmError::ZeroPositionVector` if `chief.position_eci_km` is zero.
+/// Returns `DcmError::ZeroAngularMomentum` if `r × v` is zero (rectilinear orbit).
+pub fn eci_to_ric_dcm(chief: &StateVector) -> Result<Matrix3, DcmError> {
     let r = chief.position_eci_km;
     let v = chief.velocity_eci_km_s;
     let r_norm = r.norm();
     let h = r.cross(&v);
     let h_norm = h.norm();
 
-    debug_assert!(r_norm > 0.0, "chief position must be non-zero");
-    debug_assert!(h_norm > 0.0, "chief angular momentum must be non-zero");
+    if r_norm < MIN_POSITION_NORM_KM {
+        return Err(DcmError::ZeroPositionVector);
+    }
+    if h_norm < MIN_ANGULAR_MOMENTUM_NORM_KM2_S {
+        return Err(DcmError::ZeroAngularMomentum);
+    }
 
     let r_hat = r / r_norm;
     let c_hat = h / h_norm;
     let i_hat = c_hat.cross(&r_hat);
 
     // DCM rows: R_hat, I_hat, C_hat
-    Matrix3::new(
+    Ok(Matrix3::new(
         r_hat.x, r_hat.y, r_hat.z,
         i_hat.x, i_hat.y, i_hat.z,
         c_hat.x, c_hat.y, c_hat.z,
-    )
+    ))
 }
 
 /// Transform a Δv from RIC frame to ECI frame.
 ///
 /// `dv_eci = DCM^T * dv_ric`
 ///
-/// # Invariants
-/// - `chief.position_eci_km` must be non-zero
-/// - `chief` angular momentum must be non-zero
-#[must_use]
-pub fn ric_to_eci_dv(dv_ric: &Vector3<f64>, chief: &StateVector) -> Vector3<f64> {
-    let dcm = eci_to_ric_dcm(chief);
-    dcm.transpose() * dv_ric
+/// # Errors
+/// Returns `DcmError` if the chief state cannot define a valid RIC frame.
+pub fn ric_to_eci_dv(dv_ric: &Vector3<f64>, chief: &StateVector) -> Result<Vector3<f64>, DcmError> {
+    let dcm = eci_to_ric_dcm(chief)?;
+    Ok(dcm.transpose() * dv_ric)
 }
 
 /// Transform a Δv from ECI frame to RIC frame.
 ///
 /// `dv_ric = DCM * dv_eci`
 ///
-/// # Invariants
-/// - `chief.position_eci_km` must be non-zero
-/// - `chief` angular momentum must be non-zero
-#[must_use]
-pub fn eci_to_ric_dv(dv_eci: &Vector3<f64>, chief: &StateVector) -> Vector3<f64> {
-    let dcm = eci_to_ric_dcm(chief);
-    dcm * dv_eci
+/// # Errors
+/// Returns `DcmError` if the chief state cannot define a valid RIC frame.
+pub fn eci_to_ric_dv(dv_eci: &Vector3<f64>, chief: &StateVector) -> Result<Vector3<f64>, DcmError> {
+    let dcm = eci_to_ric_dcm(chief)?;
+    Ok(dcm * dv_eci)
 }
 
 /// Convert chief and deputy ECI states to a relative RIC state.
@@ -88,13 +113,10 @@ pub fn eci_to_ric_dv(dv_eci: &Vector3<f64>, chief: &StateVector) -> Vector3<f64>
 /// This is the exact instantaneous kinematic relation for the RIC frame
 /// defined by the chief position and velocity.
 ///
-/// # Invariants
-/// - `chief.position_eci_km` must be non-zero
-/// - `chief` angular momentum must be non-zero
-/// - Both states must be at the same epoch
-#[must_use]
-pub fn eci_to_ric_relative(chief: &StateVector, deputy: &StateVector) -> RICState {
-    let dcm = eci_to_ric_dcm(chief);
+/// # Errors
+/// Returns `DcmError` if the chief state cannot define a valid RIC frame.
+pub fn eci_to_ric_relative(chief: &StateVector, deputy: &StateVector) -> Result<RICState, DcmError> {
+    let dcm = eci_to_ric_dcm(chief)?;
 
     let delta_r = deputy.position_eci_km - chief.position_eci_km;
     let delta_v = deputy.velocity_eci_km_s - chief.velocity_eci_km_s;
@@ -111,23 +133,21 @@ pub fn eci_to_ric_relative(chief: &StateVector, deputy: &StateVector) -> RICStat
     let omega_vec = Vector3::new(0.0, 0.0, omega);
     let omega_cross_rho = omega_vec.cross(&rho);
 
-    RICState {
+    Ok(RICState {
         position_ric_km: rho,
         velocity_ric_km_s: dv_ric_inertial - omega_cross_rho,
-    }
+    })
 }
 
 /// Convert a RIC position offset to an ECI position.
 ///
 /// `r_deputy_eci = r_chief_eci + DCM^T * ric_offset`
 ///
-/// # Invariants
-/// - `chief.position_eci_km` must be non-zero
-/// - `chief` angular momentum must be non-zero
-#[must_use]
-pub fn ric_to_eci_position(chief: &StateVector, ric_offset: &Vector3<f64>) -> Vector3<f64> {
-    let dcm = eci_to_ric_dcm(chief);
-    chief.position_eci_km + dcm.transpose() * ric_offset
+/// # Errors
+/// Returns `DcmError` if the chief state cannot define a valid RIC frame.
+pub fn ric_to_eci_position(chief: &StateVector, ric_offset: &Vector3<f64>) -> Result<Vector3<f64>, DcmError> {
+    let dcm = eci_to_ric_dcm(chief)?;
+    Ok(chief.position_eci_km + dcm.transpose() * ric_offset)
 }
 
 /// Convert a chief ECI state and a relative RIC state to the deputy ECI state.
@@ -138,12 +158,10 @@ pub fn ric_to_eci_position(chief: &StateVector, ric_offset: &Vector3<f64>) -> Ve
 /// Position: `r_chief + C^T · ρ`
 /// Velocity: `v_chief + C^T · (ρ̇ + ω × ρ)`
 ///
-/// # Invariants
-/// - `chief.position_eci_km` must be non-zero
-/// - `chief` angular momentum must be non-zero
-#[must_use]
-pub fn ric_to_eci_state(chief: &StateVector, ric_state: &RICState) -> StateVector {
-    let dcm = eci_to_ric_dcm(chief);
+/// # Errors
+/// Returns `DcmError` if the chief state cannot define a valid RIC frame.
+pub fn ric_to_eci_state(chief: &StateVector, ric_state: &RICState) -> Result<StateVector, DcmError> {
+    let dcm = eci_to_ric_dcm(chief)?;
 
     let r = chief.position_eci_km.norm();
     let h = chief.position_eci_km.cross(&chief.velocity_eci_km_s);
@@ -157,11 +175,11 @@ pub fn ric_to_eci_state(chief: &StateVector, ric_state: &RICState) -> StateVecto
     let position = chief.position_eci_km + dcm.transpose() * ric_state.position_ric_km;
     let velocity = chief.velocity_eci_km_s + dcm.transpose() * (ric_state.velocity_ric_km_s + omega_cross_rho);
 
-    StateVector {
+    Ok(StateVector {
         epoch: chief.epoch,
         position_eci_km: position,
         velocity_eci_km_s: velocity,
-    }
+    })
 }
 
 #[cfg(test)]
@@ -185,7 +203,7 @@ mod tests {
             mean_anomaly_rad: 0.0, // at periapsis → r along x, v along y
         };
         let sv = keplerian_to_state(&ke, test_epoch()).unwrap();
-        let dcm = eci_to_ric_dcm(&sv);
+        let dcm = eci_to_ric_dcm(&sv).unwrap();
 
         // R_hat should be along +x, I_hat along +y, C_hat along +z
         let identity = Matrix3::identity();
@@ -200,7 +218,7 @@ mod tests {
     #[test]
     fn dcm_orthogonality() {
         let sv = keplerian_to_state(&iss_like_elements(), test_epoch()).unwrap();
-        let dcm = eci_to_ric_dcm(&sv);
+        let dcm = eci_to_ric_dcm(&sv).unwrap();
 
         let product = dcm * dcm.transpose();
         let identity = Matrix3::identity();
@@ -224,8 +242,8 @@ mod tests {
 
         for ke in &[iss_like_elements(), eccentric_elements()] {
             let sv = keplerian_to_state(ke, test_epoch()).unwrap();
-            let dv_eci = ric_to_eci_dv(&dv_ric, &sv);
-            let dv_back = eci_to_ric_dv(&dv_eci, &sv);
+            let dv_eci = ric_to_eci_dv(&dv_ric, &sv).unwrap();
+            let dv_back = eci_to_ric_dv(&dv_eci, &sv).unwrap();
 
             let err = (dv_back - dv_ric).norm();
             assert!(
@@ -254,7 +272,7 @@ mod tests {
         let deputy_sv = keplerian_to_state(&deputy_ke, epoch).unwrap();
 
         // Geometric path: direct ECI→RIC
-        let ric_geometric = eci_to_ric_relative(&chief_sv, &deputy_sv);
+        let ric_geometric = eci_to_ric_relative(&chief_sv, &deputy_sv).unwrap();
 
         // Analytical path: Keplerian→ROE→RIC
         let roe = compute_roe(&chief_ke, &deputy_ke).unwrap();
@@ -289,10 +307,10 @@ mod tests {
         let deputy_sv = keplerian_to_state(&deputy_ke, epoch).unwrap();
 
         // Forward: ECI → RIC
-        let ric = eci_to_ric_relative(&chief_sv, &deputy_sv);
+        let ric = eci_to_ric_relative(&chief_sv, &deputy_sv).unwrap();
 
         // Inverse: RIC → ECI
-        let deputy_reconstructed = ric_to_eci_state(&chief_sv, &ric);
+        let deputy_reconstructed = ric_to_eci_state(&chief_sv, &ric).unwrap();
 
         let pos_err = (deputy_reconstructed.position_eci_km - deputy_sv.position_eci_km).norm();
         let vel_err = (deputy_reconstructed.velocity_eci_km_s - deputy_sv.velocity_eci_km_s).norm();
@@ -318,7 +336,7 @@ mod tests {
                 ..base
             };
             let sv = keplerian_to_state(&ke, test_epoch()).unwrap();
-            let dcm = eci_to_ric_dcm(&sv);
+            let dcm = eci_to_ric_dcm(&sv).unwrap();
 
             // Row 0 (R_hat) should be parallel to position
             let r_hat_from_dcm = Vector3::new(dcm[(0, 0)], dcm[(0, 1)], dcm[(0, 2)]);
@@ -361,7 +379,7 @@ mod tests {
         let deputy_sv = keplerian_to_state(&deputy_ke, epoch).unwrap();
 
         // Compute the ω×ρ correction magnitude directly
-        let dcm = eci_to_ric_dcm(&chief_sv);
+        let dcm = eci_to_ric_dcm(&chief_sv).unwrap();
         let rho = dcm * (deputy_sv.position_eci_km - chief_sv.position_eci_km);
         let r = chief_sv.position_eci_km.norm();
         let h = chief_sv.position_eci_km.cross(&chief_sv.velocity_eci_km_s).norm();
@@ -378,6 +396,40 @@ mod tests {
         assert!(
             correction_mag > 0.0001,
             "ω×ρ correction {correction_mag} km/s is suspiciously small for ~1 km separation"
+        );
+    }
+
+    // ---------------------------------------------------------------------------
+    // Error-path tests
+    // ---------------------------------------------------------------------------
+
+    /// Zero position vector returns `ZeroPositionVector`.
+    #[test]
+    fn dcm_rejects_zero_position() {
+        let sv = StateVector {
+            epoch: test_epoch(),
+            position_eci_km: Vector3::zeros(),
+            velocity_eci_km_s: Vector3::new(0.0, 7.5, 0.0),
+        };
+        let result = eci_to_ric_dcm(&sv);
+        assert!(
+            matches!(result, Err(DcmError::ZeroPositionVector)),
+            "zero position should return ZeroPositionVector, got {result:?}"
+        );
+    }
+
+    /// Collinear position and velocity (zero angular momentum) returns `ZeroAngularMomentum`.
+    #[test]
+    fn dcm_rejects_zero_angular_momentum() {
+        let sv = StateVector {
+            epoch: test_epoch(),
+            position_eci_km: Vector3::new(7000.0, 0.0, 0.0),
+            velocity_eci_km_s: Vector3::new(7.5, 0.0, 0.0), // parallel to position
+        };
+        let result = eci_to_ric_dcm(&sv);
+        assert!(
+            matches!(result, Err(DcmError::ZeroAngularMomentum)),
+            "collinear r and v should return ZeroAngularMomentum, got {result:?}"
         );
     }
 }

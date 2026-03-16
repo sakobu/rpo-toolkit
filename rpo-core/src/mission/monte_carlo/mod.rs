@@ -14,6 +14,7 @@ use std::time::Instant;
 
 use rayon::prelude::*;
 
+use crate::elements::eci_ric_dcm::DcmError;
 use crate::mission::errors::MissionError;
 use crate::propagation::nyx_bridge::NyxBridgeError;
 use crate::propagation::propagator::PropagationError;
@@ -77,6 +78,8 @@ pub enum MonteCarloError {
         /// The count that overflowed u32.
         count: usize,
     },
+    /// ECI↔RIC frame conversion failed.
+    DcmFailure(DcmError),
 }
 
 impl fmt::Display for MonteCarloError {
@@ -111,6 +114,7 @@ impl fmt::Display for MonteCarloError {
             Self::TooManySamples { count } => {
                 write!(f, "trajectory count {count} exceeds u32 range")
             }
+            Self::DcmFailure(e) => write!(f, "frame conversion failed: {e}"),
         }
     }
 }
@@ -121,8 +125,15 @@ impl std::error::Error for MonteCarloError {
             Self::Mission(e) => Some(e),
             Self::Propagation(e) => Some(e),
             Self::NyxBridge(e) => Some(e.as_ref()),
+            Self::DcmFailure(e) => Some(e),
             _ => None,
         }
+    }
+}
+
+impl From<DcmError> for MonteCarloError {
+    fn from(e: DcmError) -> Self {
+        Self::DcmFailure(e)
     }
 }
 
@@ -284,7 +295,7 @@ mod tests {
         let chief_sv = keplerian_to_state(&chief_ke, epoch).unwrap();
         let deputy_sv = chief_sv.clone();
 
-        let period = chief_ke.period();
+        let period = chief_ke.period().unwrap();
         let waypoint = Waypoint {
             position_ric_km: Vector3::new(0.0, 5.0, 0.0),
             velocity_ric_km_s: Vector3::zeros(),
@@ -572,7 +583,7 @@ mod tests {
         let chief_sv = keplerian_to_state(&chief_ke, epoch).unwrap();
         let deputy_sv = chief_sv.clone();
 
-        let period = chief_ke.period();
+        let period = chief_ke.period().unwrap();
         let waypoint = Waypoint {
             position_ric_km: Vector3::new(0.0, UNSAFE_WAYPOINT_DISTANCE_KM, 0.0),
             velocity_ric_km_s: Vector3::zeros(),

@@ -200,7 +200,7 @@ pub fn plan_mission(
             // Advance chief mean anomaly to arrival epoch (two-body).
             // The Lambert target must be at the chief's position at arrival,
             // not at the departure epoch.
-            let n = chief_ke.mean_motion();
+            let n = chief_ke.mean_motion()?;
             let chief_ke_arrival = KeplerianElements {
                 mean_anomaly_rad: (chief_ke.mean_anomaly_rad + n * lambert_tof_s)
                     .rem_euclid(crate::constants::TWO_PI),

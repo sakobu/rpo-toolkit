@@ -3,6 +3,7 @@
 use crate::elements::keplerian_conversions::ConversionError;
 use crate::propagation::lambert::LambertError;
 use crate::propagation::propagator::PropagationError;
+use crate::types::KeplerError;
 
 /// Errors from mission planning.
 #[derive(Debug, Clone)]
@@ -57,6 +58,8 @@ pub enum MissionError {
         /// Total number of waypoints
         num_waypoints: usize,
     },
+    /// Kepler equation or derived-quantity failure.
+    Kepler(KeplerError),
 }
 
 impl std::fmt::Display for MissionError {
@@ -91,11 +94,28 @@ impl std::fmt::Display for MissionError {
                 f,
                 "MissionError: replan index {index} out of bounds for {num_waypoints} waypoints"
             ),
+            Self::Kepler(e) => write!(f, "MissionError: {e}"),
         }
     }
 }
 
-impl std::error::Error for MissionError {}
+impl std::error::Error for MissionError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Propagation(e) => Some(e),
+            Self::Lambert(e) => Some(e),
+            Self::Conversion(e) => Some(e),
+            Self::Kepler(e) => Some(e),
+            _ => None,
+        }
+    }
+}
+
+impl From<KeplerError> for MissionError {
+    fn from(e: KeplerError) -> Self {
+        Self::Kepler(e)
+    }
+}
 
 impl From<PropagationError> for MissionError {
     fn from(e: PropagationError) -> Self {

@@ -42,8 +42,8 @@ fn cw_initial_guess(
     target_vel: &Vector3<f64>,
     tof_s: f64,
     cap: f64,
-) -> Vector3<f64> {
-    let n = chief.mean_motion();
+) -> Result<Vector3<f64>, MissionError> {
+    let n = chief.mean_motion()?;
     let nt = n * tof_s;
 
     let dv = if nt.abs() < CW_SHORT_TRANSFER_NT {
@@ -75,7 +75,7 @@ fn cw_initial_guess(
         }
     };
 
-    clamp_dv(&dv, cap)
+    Ok(clamp_dv(&dv, cap))
 }
 
 /// Forward model: apply departure Δv, propagate, compute arrival state.
@@ -158,7 +158,7 @@ pub fn solve_leg(
         target_velocity,
         tof_s,
         config.dv_cap_km_s,
-    );
+    )?;
 
     // Analytical Jacobian: constant w.r.t. Δv (affine forward model).
     // Computed once; pre-invert for direct Newton steps.
@@ -230,7 +230,7 @@ fn solve_leg_cost_only(
         target_velocity,
         tof_s,
         config.dv_cap_km_s,
-    );
+    )?;
 
     let jac = compute_analytical_jacobian(&departure.chief, tof_s)?;
     let jac_inv = if let Some(inv) = jac.try_inverse() {
@@ -341,7 +341,7 @@ pub fn optimize_tof(
     tof_config: &TofOptConfig,
     propagator: &PropagationModel,
 ) -> Result<(f64, ManeuverLeg), MissionError> {
-    let period = departure.chief.period();
+    let period = departure.chief.period()?;
     let tof_min = tof_config.min_periods * period;
     let tof_max = tof_config.max_periods * period;
     let num_starts = f64::from(tof_config.num_starts);
@@ -446,7 +446,7 @@ mod tests {
     fn vbar_to_vbar_transfer() {
         let chief = iss_like_elements();
         let epoch = test_epoch();
-        let period = std::f64::consts::TAU / chief.mean_motion();
+        let period = std::f64::consts::TAU / chief.mean_motion().unwrap();
         let propagator = PropagationModel::J2Stm;
         let config = TargetingConfig::default();
         let departure = DepartureState { roe: zero_roe(), chief, epoch };
@@ -468,7 +468,7 @@ mod tests {
     fn vbar_to_rbar_transfer() {
         let chief = iss_like_elements();
         let epoch = test_epoch();
-        let period = std::f64::consts::TAU / chief.mean_motion();
+        let period = std::f64::consts::TAU / chief.mean_motion().unwrap();
         let propagator = PropagationModel::J2Stm;
         let config = TargetingConfig::default();
         let departure = DepartureState { roe: zero_roe(), chief, epoch };
@@ -489,7 +489,7 @@ mod tests {
     fn three_d_target() {
         let chief = iss_like_elements();
         let epoch = test_epoch();
-        let period = std::f64::consts::TAU / chief.mean_motion();
+        let period = std::f64::consts::TAU / chief.mean_motion().unwrap();
         let propagator = PropagationModel::J2Stm;
         let config = TargetingConfig::default();
 
@@ -518,7 +518,7 @@ mod tests {
     fn convergence_check() {
         let chief = iss_like_elements();
         let epoch = test_epoch();
-        let period = std::f64::consts::TAU / chief.mean_motion();
+        let period = std::f64::consts::TAU / chief.mean_motion().unwrap();
         let propagator = PropagationModel::J2Stm;
         let config = TargetingConfig::default();
         let departure = DepartureState { roe: zero_roe(), chief, epoch };
@@ -548,9 +548,9 @@ mod tests {
         let chief = iss_like_elements();
         let target = Vector3::new(0.0, 1.0, 0.0);
         let vel = Vector3::zeros();
-        let tof = 0.01 / chief.mean_motion();
+        let tof = 0.01 / chief.mean_motion().unwrap();
 
-        let guess = cw_initial_guess(&chief, &target, &vel, tof, 1.0);
+        let guess = cw_initial_guess(&chief, &target, &vel, tof, 1.0).unwrap();
         assert!(guess.norm() > 0.0, "Short transfer should produce nonzero guess");
     }
 
@@ -560,9 +560,9 @@ mod tests {
         let chief = iss_like_elements();
         let target = Vector3::new(0.0, 5.0, 0.0);
         let vel = Vector3::zeros();
-        let period = std::f64::consts::TAU / chief.mean_motion();
+        let period = std::f64::consts::TAU / chief.mean_motion().unwrap();
 
-        let guess = cw_initial_guess(&chief, &target, &vel, period, 1.0);
+        let guess = cw_initial_guess(&chief, &target, &vel, period, 1.0).unwrap();
         assert!(guess.norm() > 0.0, "Long transfer should produce nonzero guess");
     }
 
@@ -571,7 +571,7 @@ mod tests {
     fn deterministic() {
         let chief = iss_like_elements();
         let epoch = test_epoch();
-        let period = std::f64::consts::TAU / chief.mean_motion();
+        let period = std::f64::consts::TAU / chief.mean_motion().unwrap();
         let propagator = PropagationModel::J2Stm;
         let config = TargetingConfig::default();
         let departure = DepartureState { roe: zero_roe(), chief, epoch };
@@ -602,7 +602,7 @@ mod tests {
         let propagator = PropagationModel::J2Stm;
         let config = TargetingConfig::default();
         let tof_config = TofOptConfig::default();
-        let period = std::f64::consts::TAU / chief.mean_motion();
+        let period = std::f64::consts::TAU / chief.mean_motion().unwrap();
         let departure = DepartureState { roe: zero_roe(), chief, epoch };
 
         let target_pos = Vector3::new(0.0, 5.0, 0.0);
@@ -648,7 +648,7 @@ mod tests {
         let propagator = PropagationModel::J2Stm;
         let config = TargetingConfig::default();
         let tof_config = TofOptConfig::default();
-        let period = std::f64::consts::TAU / chief.mean_motion();
+        let period = std::f64::consts::TAU / chief.mean_motion().unwrap();
         let departure = DepartureState { roe: zero_roe(), chief, epoch };
 
         let target_pos = Vector3::new(0.0, 5.0, 0.0);
@@ -670,7 +670,7 @@ mod tests {
     fn analytical_jacobian_matches_fd() {
         let chief = iss_like_elements();
         let epoch = test_epoch();
-        let period = std::f64::consts::TAU / chief.mean_motion();
+        let period = std::f64::consts::TAU / chief.mean_motion().unwrap();
         let propagator = PropagationModel::J2Stm;
         let departure = DepartureState { roe: zero_roe(), chief, epoch };
 
@@ -721,7 +721,7 @@ mod tests {
     fn targeting_convergence_failure() {
         let chief = iss_like_elements();
         let epoch = test_epoch();
-        let period = std::f64::consts::TAU / chief.mean_motion();
+        let period = std::f64::consts::TAU / chief.mean_motion().unwrap();
         let propagator = PropagationModel::J2Stm;
         let config = TargetingConfig {
             max_iterations: 1,
@@ -751,7 +751,7 @@ mod tests {
     fn j2_converges_in_one_iteration() {
         let chief = iss_like_elements();
         let epoch = test_epoch();
-        let period = std::f64::consts::TAU / chief.mean_motion();
+        let period = std::f64::consts::TAU / chief.mean_motion().unwrap();
         let propagator = PropagationModel::J2Stm;
         let config = TargetingConfig {
             max_iterations: 2,

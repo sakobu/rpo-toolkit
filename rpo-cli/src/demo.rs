@@ -109,8 +109,8 @@ pub(crate) fn run_demo() -> Result<(), Box<dyn Error>> {
     println!("    Velocity: {vel_err:.2e} km/s");
 
     // --- Derived quantities ---
-    let nu = chief.true_anomaly();
-    let n = chief.mean_motion();
+    let nu = chief.true_anomaly()?;
+    let n = chief.mean_motion()?;
     let period_s = std::f64::consts::TAU / n;
     println!("\n  Derived quantities:");
     println!("    True anomaly:  {:.4}° (from Kepler's equation)", nu.to_degrees());
@@ -125,7 +125,7 @@ pub(crate) fn run_demo() -> Result<(), Box<dyn Error>> {
     let ecc_pos_err = (ecc_sv.position_eci_km - ecc_sv2.position_eci_km).norm();
     println!("\n  Eccentric orbit (e={:.2}, i={:.1}°, a={:.0} km):",
         ecc.e, ecc.i_rad.to_degrees(), ecc.a_km);
-    println!("    True anomaly:  {:.4}°", ecc.true_anomaly().to_degrees());
+    println!("    True anomaly:  {:.4}°", ecc.true_anomaly()?.to_degrees());
     println!("    Roundtrip pos error: {ecc_pos_err:.2e} km");
 
     // ===================================================================

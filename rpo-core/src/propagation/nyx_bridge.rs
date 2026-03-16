@@ -21,10 +21,10 @@ use nyx_space::propagators::PropagationError as NyxPropagationError;
 
 use crate::constants::EARTH_J2000;
 use crate::elements::keplerian_conversions::{state_to_keplerian, ConversionError};
-use crate::elements::eci_ric_dcm::{eci_to_ric_relative, ric_to_eci_dv};
+use crate::elements::eci_ric_dcm::{eci_to_ric_relative, ric_to_eci_dv, DcmError};
 use crate::elements::roe::compute_roe;
 use crate::propagation::propagator::{DragConfig, PropagatedState};
-use crate::types::{SpacecraftConfig, StateVector};
+use crate::types::{KeplerError, SpacecraftConfig, StateVector};
 
 /// Errors from the nyx-space integration bridge.
 #[derive(Debug)]
@@ -56,6 +56,8 @@ pub enum NyxBridgeError {
     },
     /// Nyx propagation returned no data points.
     EmptyResult,
+    /// ECI↔RIC frame conversion failed.
+    DcmFailure(DcmError),
 }
 
 impl std::fmt::Display for NyxBridgeError {
@@ -79,11 +81,38 @@ impl std::fmt::Display for NyxBridgeError {
             Self::EmptyResult => {
                 write!(f, "nyx propagation returned no data points")
             }
+            Self::DcmFailure(e) => {
+                write!(f, "frame conversion failed: {e}")
+            }
         }
     }
 }
 
-impl std::error::Error for NyxBridgeError {}
+impl std::error::Error for NyxBridgeError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::AlmanacLoad { source } => Some(source.as_ref()),
+            Self::FrameLookup { source } => Some(source),
+            Self::DynamicsSetup { source } => Some(source),
+            Self::Propagation { source } => Some(source),
+            Self::Conversion { source } => Some(source),
+            Self::DcmFailure(e) => Some(e),
+            Self::EmptyResult => None,
+        }
+    }
+}
+
+impl From<DcmError> for NyxBridgeError {
+    fn from(e: DcmError) -> Self {
+        Self::DcmFailure(e)
+    }
+}
+
+impl From<KeplerError> for NyxBridgeError {
+    fn from(e: KeplerError) -> Self {
+        Self::Conversion { source: ConversionError::from(e) }
+    }
+}
 
 impl From<ConversionError> for NyxBridgeError {
     fn from(e: ConversionError) -> Self {
@@ -174,7 +203,7 @@ pub fn extract_dmf_rates(
     let roe_0 = compute_roe(&chief_ke_0, &deputy_ke_0)?;
 
     // Propagation duration: 2 orbital periods
-    let period = chief_ke_0.period();
+    let period = chief_ke_0.period()?;
     let duration = 2.0 * period;
 
     // Build dynamics and propagate both spacecraft
@@ -356,13 +385,13 @@ pub(crate) fn apply_impulse(
     deputy: &StateVector,
     chief: &StateVector,
     dv_ric_km_s: &Vector3<f64>,
-) -> StateVector {
-    let dv_eci = ric_to_eci_dv(dv_ric_km_s, chief);
-    StateVector {
+) -> Result<StateVector, DcmError> {
+    let dv_eci = ric_to_eci_dv(dv_ric_km_s, chief)?;
+    Ok(StateVector {
         epoch: deputy.epoch,
         position_eci_km: deputy.position_eci_km,
         velocity_eci_km_s: deputy.velocity_eci_km_s + dv_eci,
-    }
+    })
 }
 
 /// Build [`PropagatedState`] entries from chief/deputy ECI pairs for safety analysis.
@@ -382,7 +411,7 @@ pub(crate) fn build_nyx_safety_states(
         let chief_ke = state_to_keplerian(chief)?;
         let deputy_ke = state_to_keplerian(deputy)?;
         let roe = compute_roe(&chief_ke, &deputy_ke)?;
-        let ric = eci_to_ric_relative(chief, deputy);
+        let ric = eci_to_ric_relative(chief, deputy)?;
         states.push(PropagatedState {
             epoch: chief.epoch,
             roe,
@@ -415,7 +444,7 @@ mod tests {
 
         // Apply known RIC Δv
         let dv_ric = Vector3::new(0.001, -0.002, 0.0005);
-        let result = apply_impulse(&deputy_sv, &chief_sv, &dv_ric);
+        let result = apply_impulse(&deputy_sv, &chief_sv, &dv_ric).unwrap();
 
         // Position unchanged
         let pos_err = (result.position_eci_km - deputy_sv.position_eci_km).norm();
@@ -425,7 +454,7 @@ mod tests {
         assert_eq!(result.epoch, deputy_sv.epoch, "epoch should be unchanged");
 
         // Velocity changed by ECI-transformed Δv
-        let dv_eci = ric_to_eci_dv(&dv_ric, &chief_sv);
+        let dv_eci = ric_to_eci_dv(&dv_ric, &chief_sv).unwrap();
         let expected_vel = deputy_sv.velocity_eci_km_s + dv_eci;
         let vel_err = (result.velocity_eci_km_s - expected_vel).norm();
         assert!(vel_err < 1e-15, "velocity error = {vel_err}");
@@ -447,7 +476,7 @@ mod tests {
         let chief_sv = keplerian_to_state(&chief_ke, epoch).unwrap();
         let deputy_sv = chief_sv.clone();
 
-        let result = apply_impulse(&deputy_sv, &chief_sv, &Vector3::zeros());
+        let result = apply_impulse(&deputy_sv, &chief_sv, &Vector3::zeros()).unwrap();
         let vel_err = (result.velocity_eci_km_s - deputy_sv.velocity_eci_km_s).norm();
         assert!(vel_err < 1e-15, "zero Δv should not change velocity");
     }

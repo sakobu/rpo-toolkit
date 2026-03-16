@@ -4,6 +4,52 @@ use serde::{Deserialize, Serialize};
 
 use crate::constants::{KEPLER_MAX_ITER, KEPLER_TOL, TWO_PI};
 
+/// Errors from Kepler's equation solution and orbital element derived quantities.
+#[derive(Debug, Clone)]
+pub enum KeplerError {
+    /// Eccentricity out of valid range [0, 1) for Kepler's equation.
+    InvalidEccentricity {
+        /// The invalid eccentricity value.
+        e: f64,
+    },
+    /// Semi-major axis must be positive for mean motion / period computation.
+    InvalidSemiMajorAxis {
+        /// The invalid semi-major axis (km).
+        a_km: f64,
+    },
+    /// Newton-Raphson iteration for Kepler's equation did not converge
+    /// within the maximum number of iterations.
+    KeplerNoConvergence {
+        /// Number of iterations completed.
+        iterations: usize,
+        /// Final Kepler equation residual |E - e*sin(E) - M| (rad).
+        residual: f64,
+        /// Eccentricity of the orbit.
+        e: f64,
+    },
+}
+
+impl std::fmt::Display for KeplerError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::InvalidEccentricity { e } => {
+                write!(f, "KeplerError: eccentricity = {e} out of range [0, 1)")
+            }
+            Self::InvalidSemiMajorAxis { a_km } => {
+                write!(f, "KeplerError: semi-major axis = {a_km} km must be positive")
+            }
+            Self::KeplerNoConvergence { iterations, residual, e } => {
+                write!(
+                    f,
+                    "KeplerError: Kepler's equation did not converge — {iterations} iterations, residual = {residual:.6e}, e = {e}"
+                )
+            }
+        }
+    }
+}
+
+impl std::error::Error for KeplerError {}
+
 /// Classical Keplerian orbital elements
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
 pub struct KeplerianElements {
@@ -24,32 +70,36 @@ pub struct KeplerianElements {
 impl KeplerianElements {
     /// Mean motion n = sqrt(μ/a³) (rad/s).
     ///
-    /// # Invariants
-    /// - `self.a_km > 0` (negative or zero SMA produces NaN)
-    #[must_use]
-    pub fn mean_motion(&self) -> f64 {
-        (crate::constants::MU_EARTH / (self.a_km * self.a_km * self.a_km)).sqrt()
+    /// # Errors
+    /// Returns `KeplerError::InvalidSemiMajorAxis` if `self.a_km <= 0`.
+    pub fn mean_motion(&self) -> Result<f64, KeplerError> {
+        if self.a_km <= 0.0 {
+            return Err(KeplerError::InvalidSemiMajorAxis { a_km: self.a_km });
+        }
+        Ok((crate::constants::MU_EARTH / (self.a_km * self.a_km * self.a_km)).sqrt())
     }
 
     /// Orbital period T = 2π/n (seconds).
     ///
-    /// # Invariants
-    /// - `self.a_km > 0` (delegates to `mean_motion()`)
-    #[must_use]
-    pub fn period(&self) -> f64 {
-        std::f64::consts::TAU / self.mean_motion()
+    /// # Errors
+    /// Returns `KeplerError::InvalidSemiMajorAxis` if `self.a_km <= 0` (propagated
+    /// from `mean_motion()`).
+    pub fn period(&self) -> Result<f64, KeplerError> {
+        let n = self.mean_motion()?;
+        Ok(std::f64::consts::TAU / n)
     }
 
     /// Solve Kepler's equation M = E - e*sin(E) for eccentric anomaly E,
     /// then compute true anomaly ν.
     ///
-    /// # Invariants
-    /// - `0 <= self.e < 1` (parabolic/hyperbolic orbits produce incorrect results)
-    /// - Newton-Raphson iteration is capped at `KEPLER_MAX_ITER`; non-convergence
-    ///   for high-eccentricity orbits is silent (returns last iterate)
-    #[must_use]
-    pub fn true_anomaly(&self) -> f64 {
-        debug_assert!(self.e >= 0.0 && self.e < 1.0, "eccentricity must be in [0, 1), got {}", self.e);
+    /// # Errors
+    /// Returns `KeplerError::InvalidEccentricity` if `self.e` is outside [0, 1).
+    /// Returns `KeplerError::KeplerNoConvergence` if Newton-Raphson iteration
+    /// does not converge within `KEPLER_MAX_ITER` iterations.
+    pub fn true_anomaly(&self) -> Result<f64, KeplerError> {
+        if self.e < 0.0 || self.e >= 1.0 {
+            return Err(KeplerError::InvalidEccentricity { e: self.e });
+        }
 
         let m = self.mean_anomaly_rad.rem_euclid(TWO_PI);
         let e = self.e;
@@ -63,14 +113,20 @@ impl KeplerianElements {
             let delta = f / fp;
             ea -= delta;
             if delta.abs() < KEPLER_TOL {
-                break;
+                // Eccentric anomaly → true anomaly
+                let nu = 2.0
+                    * ((1.0 + e).sqrt() * (ea / 2.0).sin())
+                        .atan2((1.0 - e).sqrt() * (ea / 2.0).cos());
+                return Ok(nu.rem_euclid(TWO_PI));
             }
         }
 
-        // Eccentric anomaly → true anomaly
-        let nu = 2.0
-            * ((1.0 + e).sqrt() * (ea / 2.0).sin()).atan2((1.0 - e).sqrt() * (ea / 2.0).cos());
-        nu.rem_euclid(TWO_PI)
+        let final_residual = (ea - e * ea.sin() - m).abs();
+        Err(KeplerError::KeplerNoConvergence {
+            iterations: KEPLER_MAX_ITER,
+            residual: final_residual,
+            e,
+        })
     }
 
     /// Mean argument of latitude u = ω + M
@@ -119,7 +175,7 @@ mod tests {
         // floating-point representation.
         let eps = 1e-15;
         let el = make_elements(6_778.0, 0.0, PI / 2.0);
-        let nu = el.true_anomaly();
+        let nu = el.true_anomaly().unwrap();
         assert!(
             (nu - PI / 2.0).abs() < eps,
             "circular orbit: expected ν = M = π/2, got {nu}"
@@ -131,7 +187,7 @@ mod tests {
     fn true_anomaly_circular_m_zero() {
         let eps = 1e-15;
         let el = make_elements(6_778.0, 0.0, 0.0);
-        let nu = el.true_anomaly();
+        let nu = el.true_anomaly().unwrap();
         assert!(
             nu < eps,
             "circular orbit M=0: expected ν = 0, got {nu}"
@@ -148,7 +204,7 @@ mod tests {
         // is floating-point rounding in the half-angle atan2 call.
         let eps = 1e-12;
         let el = make_elements(7_000.0, 0.3, PI);
-        let nu = el.true_anomaly();
+        let nu = el.true_anomaly().unwrap();
         assert!(
             (nu - PI).abs() < eps,
             "moderate eccentricity apoapsis: expected ν = π, got {nu}"
@@ -163,7 +219,7 @@ mod tests {
         // Tolerance: 1e-12 — well above KEPLER_TOL; the analytic answer is exact.
         let eps = 1e-12;
         let el = make_elements(10_000.0, 0.8, PI);
-        let nu = el.true_anomaly();
+        let nu = el.true_anomaly().unwrap();
         assert!(
             (nu - PI).abs() < eps,
             "high-eccentricity apoapsis: expected ν = π, got {nu}"
@@ -181,7 +237,7 @@ mod tests {
         let e = 0.8_f64;
         let m = 1.0_f64;
         let el = make_elements(10_000.0, e, m);
-        let nu = el.true_anomaly();
+        let nu = el.true_anomaly().unwrap();
 
         // Back-compute eccentric anomaly from true anomaly to verify round-trip.
         let half_nu = nu / 2.0;
@@ -201,7 +257,7 @@ mod tests {
     fn true_anomaly_m_zero_is_periapsis() {
         let eps = 1e-15;
         let el = make_elements(7_500.0, 0.5, 0.0);
-        let nu = el.true_anomaly();
+        let nu = el.true_anomaly().unwrap();
         assert!(
             nu < eps || (nu - TWO_PI).abs() < eps,
             "M=0: expected ν=0 (or 2π alias), got {nu}"
@@ -212,7 +268,7 @@ mod tests {
     #[test]
     fn true_anomaly_near_two_pi_wraps() {
         let el = make_elements(7_000.0, 0.3, TWO_PI - 1e-10);
-        let nu = el.true_anomaly();
+        let nu = el.true_anomaly().unwrap();
         assert!(
             nu >= 0.0 && nu < TWO_PI,
             "near-2π wrap: expected ν in [0, 2π), got {nu}"
@@ -232,7 +288,7 @@ mod tests {
         let eps = 1e-9;
         let a_km = 6_778.0_f64;
         let el = make_elements(a_km, 0.001, 0.0);
-        let n = el.mean_motion();
+        let n = el.mean_motion().unwrap();
         let n_expected = (MU_EARTH / (a_km * a_km * a_km)).sqrt();
         assert!(
             (n - n_expected).abs() < eps,
@@ -252,7 +308,7 @@ mod tests {
         // exact SMA used; 6778 km gives ~5562 s; 5550 is a round-number bound.
         let a_km = 6_778.0_f64;
         let el = make_elements(a_km, 0.001, 0.0);
-        let t = el.period();
+        let t = el.period().unwrap();
         let t_expected = TWO_PI / (MU_EARTH / (a_km * a_km * a_km)).sqrt();
         // Identity check (period = 2π / mean_motion)
         assert!(
@@ -305,5 +361,64 @@ mod tests {
         let el = make_elements(7_000.0, 0.01, 0.0);
         let u = el.mean_arg_of_lat();
         assert!(u < eps, "mean_arg_of_lat zero: expected 0, got {u}");
+    }
+
+    // ---------------------------------------------------------------------------
+    // Error-path tests
+    // ---------------------------------------------------------------------------
+
+    /// Hyperbolic eccentricity (e >= 1) returns `InvalidEccentricity`.
+    #[test]
+    fn true_anomaly_rejects_hyperbolic_eccentricity() {
+        let el = make_elements(7_000.0, 1.5, 0.0);
+        let result = el.true_anomaly();
+        assert!(
+            matches!(result, Err(KeplerError::InvalidEccentricity { e }) if (e - 1.5).abs() < 1e-15),
+            "e >= 1 should return InvalidEccentricity, got {result:?}"
+        );
+    }
+
+    /// Negative eccentricity returns `InvalidEccentricity`.
+    #[test]
+    fn true_anomaly_rejects_negative_eccentricity() {
+        let el = make_elements(7_000.0, -0.1, 0.0);
+        let result = el.true_anomaly();
+        assert!(
+            matches!(result, Err(KeplerError::InvalidEccentricity { .. })),
+            "e < 0 should return InvalidEccentricity, got {result:?}"
+        );
+    }
+
+    /// Zero SMA returns `InvalidSemiMajorAxis`.
+    #[test]
+    fn mean_motion_rejects_zero_sma() {
+        let el = make_elements(0.0, 0.01, 0.0);
+        let result = el.mean_motion();
+        assert!(
+            matches!(result, Err(KeplerError::InvalidSemiMajorAxis { .. })),
+            "a_km = 0 should return InvalidSemiMajorAxis, got {result:?}"
+        );
+    }
+
+    /// Negative SMA returns `InvalidSemiMajorAxis`.
+    #[test]
+    fn mean_motion_rejects_negative_sma() {
+        let el = make_elements(-100.0, 0.01, 0.0);
+        let result = el.mean_motion();
+        assert!(
+            matches!(result, Err(KeplerError::InvalidSemiMajorAxis { .. })),
+            "a_km < 0 should return InvalidSemiMajorAxis, got {result:?}"
+        );
+    }
+
+    /// `period()` propagates SMA error from `mean_motion()`.
+    #[test]
+    fn period_propagates_sma_error() {
+        let el = make_elements(-100.0, 0.01, 0.0);
+        let result = el.period();
+        assert!(
+            matches!(result, Err(KeplerError::InvalidSemiMajorAxis { .. })),
+            "period() should propagate SMA error, got {result:?}"
+        );
     }
 }

@@ -7,7 +7,7 @@ use crate::elements::keplerian_conversions::ConversionError;
 use crate::propagation::drag_stm::propagate_roe_j2_drag;
 use crate::elements::roe_to_ric::roe_to_ric;
 use crate::propagation::stm::propagate_roe_stm;
-use crate::types::{KeplerianElements, QuasiNonsingularROE, RICState};
+use crate::types::{KeplerError, KeplerianElements, QuasiNonsingularROE, RICState};
 
 /// Density-model-free (DMF) differential drag configuration (Koenig Sec. VIII).
 ///
@@ -61,18 +61,10 @@ pub enum PropagationError {
         /// The requested number of steps.
         n_steps: usize,
     },
-    /// Eccentricity out of range for J2 perturbation model.
-    InvalidEccentricity {
-        /// The invalid eccentricity value.
-        e: f64,
-    },
-    /// Semi-major axis must be positive.
-    InvalidSemiMajorAxis {
-        /// The invalid semi-major axis (km).
-        a_km: f64,
-    },
     /// ROE→RIC conversion failed (theoretically unreachable after STM validation).
     RicConversion(ConversionError),
+    /// Kepler equation or derived-quantity failure.
+    KeplerFailure(KeplerError),
 }
 
 impl std::fmt::Display for PropagationError {
@@ -82,14 +74,11 @@ impl std::fmt::Display for PropagationError {
             Self::StepCountOverflow { n_steps } => {
                 write!(f, "PropagationError: n_steps = {n_steps} exceeds u32::MAX")
             }
-            Self::InvalidEccentricity { e } => {
-                write!(f, "PropagationError: eccentricity = {e} out of range [0, 1)")
-            }
-            Self::InvalidSemiMajorAxis { a_km } => {
-                write!(f, "PropagationError: semi-major axis = {a_km} km must be positive")
-            }
             Self::RicConversion(e) => {
                 write!(f, "PropagationError: RIC conversion failed — {e}")
+            }
+            Self::KeplerFailure(e) => {
+                write!(f, "PropagationError: {e}")
             }
         }
     }
@@ -101,7 +90,21 @@ impl From<ConversionError> for PropagationError {
     }
 }
 
-impl std::error::Error for PropagationError {}
+impl From<KeplerError> for PropagationError {
+    fn from(e: KeplerError) -> Self {
+        Self::KeplerFailure(e)
+    }
+}
+
+impl std::error::Error for PropagationError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::RicConversion(e) => Some(e),
+            Self::KeplerFailure(e) => Some(e),
+            _ => None,
+        }
+    }
+}
 
 /// Analytical relative-orbit propagator, selected at construction time.
 ///
@@ -251,7 +254,7 @@ mod tests {
             diy: 0.0003,
         };
 
-        let period = std::f64::consts::TAU / chief.mean_motion();
+        let period = std::f64::consts::TAU / chief.mean_motion().unwrap();
         let states = prop
             .propagate_with_steps(&roe, &chief, epoch, period, 10)
             .expect("propagation should succeed");
@@ -303,8 +306,8 @@ mod tests {
 
         let result = prop.propagate(&roe, &chief, epoch, 3600.0);
         assert!(
-            matches!(result, Err(PropagationError::InvalidEccentricity { .. })),
-            "e=1.0 should return InvalidEccentricity, got {result:?}"
+            matches!(result, Err(PropagationError::KeplerFailure(KeplerError::InvalidEccentricity { .. }))),
+            "e=1.0 should return KeplerFailure(InvalidEccentricity), got {result:?}"
         );
     }
 
@@ -399,7 +402,7 @@ mod tests {
             drag: test_drag_config(),
         };
 
-        let period = std::f64::consts::TAU / chief.mean_motion();
+        let period = std::f64::consts::TAU / chief.mean_motion().unwrap();
         let states = drag_prop
             .propagate_with_steps(&roe, &chief, epoch, 3.0 * period, 30)
             .expect("propagation should succeed");

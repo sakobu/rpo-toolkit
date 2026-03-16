@@ -51,12 +51,11 @@ impl From<ConversionError> for RicError {
 /// - Near-circular assumption: accurate for `e < ~0.1`
 ///
 /// # Errors
-/// Returns `ConversionError::InvalidSemiMajorAxis` if `chief.a_km <= 0`.
-/// Returns `ConversionError::InvalidEccentricity` if `chief.e` is outside [0, 1).
+/// Returns `ConversionError::KeplerFailure` if `chief.a_km <= 0` or `chief.e` is outside [0, 1).
 pub fn compute_t_matrix(chief: &KeplerianElements) -> Result<SMatrix<f64, 6, 6>, ConversionError> {
     validate_elements(chief)?;
     let a = chief.a_km;
-    let n = chief.mean_motion();
+    let n = chief.mean_motion()?;
     let u = chief.mean_arg_of_lat();
     let (sin_u, cos_u) = u.sin_cos();
 
@@ -186,7 +185,9 @@ mod tests {
         };
         let result = compute_t_matrix(&chief);
         assert!(
-            matches!(result, Err(crate::elements::keplerian_conversions::ConversionError::InvalidSemiMajorAxis { .. })),
+            matches!(result, Err(crate::elements::keplerian_conversions::ConversionError::KeplerFailure(
+                crate::types::KeplerError::InvalidSemiMajorAxis { .. }
+            ))),
             "Negative SMA should return InvalidSemiMajorAxis, got {result:?}"
         );
     }
@@ -204,7 +205,9 @@ mod tests {
         let roe = QuasiNonsingularROE::default();
         let result = roe_to_ric(&roe, &chief);
         assert!(
-            matches!(result, Err(crate::elements::keplerian_conversions::ConversionError::InvalidSemiMajorAxis { .. })),
+            matches!(result, Err(crate::elements::keplerian_conversions::ConversionError::KeplerFailure(
+                crate::types::KeplerError::InvalidSemiMajorAxis { .. }
+            ))),
             "Negative SMA should return InvalidSemiMajorAxis, got {result:?}"
         );
     }

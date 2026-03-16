@@ -21,6 +21,10 @@ pub const INC_TOL: f64 = 1e-10;
 /// Minimum position vector norm (km) — zero-vector guard (0.1 mm).
 pub const MIN_POSITION_NORM_KM: f64 = 1e-10;
 
+/// Minimum angular momentum norm below which the orbital plane is undefined (km²/s).
+/// Used by DCM construction to reject rectilinear orbits or collinear position/velocity.
+pub const MIN_ANGULAR_MOMENTUM_NORM_KM2_S: f64 = 1e-10;
+
 /// Kepler's equation convergence tolerance
 pub const KEPLER_TOL: f64 = 1e-14;
 

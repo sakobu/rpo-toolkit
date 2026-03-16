@@ -393,7 +393,7 @@ mod tests {
         let chief = iss_like_elements();
         let epoch = test_epoch();
         let propagator = PropagationModel::J2Stm;
-        let period = std::f64::consts::TAU / chief.mean_motion();
+        let period = std::f64::consts::TAU / chief.mean_motion().unwrap();
 
         // Formation with nonzero δe/δi so 3D distance oscillates
         let roe = QuasiNonsingularROE {
@@ -433,7 +433,7 @@ mod tests {
         let chief = iss_like_elements();
         let epoch = test_epoch();
         let propagator = PropagationModel::J2Stm;
-        let period = std::f64::consts::TAU / chief.mean_motion();
+        let period = std::f64::consts::TAU / chief.mean_motion().unwrap();
 
         let roe = QuasiNonsingularROE {
             da: 0.0,
@@ -466,7 +466,7 @@ mod tests {
         let chief = iss_like_elements();
         let epoch = test_epoch();
         let propagator = PropagationModel::J2Stm;
-        let period = std::f64::consts::TAU / chief.mean_motion();
+        let period = std::f64::consts::TAU / chief.mean_motion().unwrap();
 
         let roe = QuasiNonsingularROE {
             da: 0.0,

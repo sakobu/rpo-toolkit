@@ -240,7 +240,7 @@ mod tests {
         let departure = mission_departure();
         let propagator = PropagationModel::J2Stm;
         let config = MissionConfig::default();
-        let tof = departure.chief.period() * 0.75;
+        let tof = departure.chief.period().unwrap() * 0.75;
 
         let waypoints = vec![Waypoint {
             position_ric_km: Vector3::new(0.0, 5.0, 0.0),
@@ -257,7 +257,7 @@ mod tests {
         let departure = mission_departure();
         let propagator = PropagationModel::J2Stm;
         let config = MissionConfig::default();
-        let tof = departure.chief.period() * 0.75;
+        let tof = departure.chief.period().unwrap() * 0.75;
 
         let waypoints = vec![
             Waypoint {
