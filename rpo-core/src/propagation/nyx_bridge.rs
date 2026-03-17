@@ -434,6 +434,24 @@ mod tests {
     use crate::elements::keplerian_conversions::keplerian_to_state;
     use crate::test_helpers::{iss_like_elements, test_epoch};
 
+
+    /// Position must be unchanged after impulse (exact identity operation).
+    /// 1e-15 is at machine epsilon level for km-scale positions.
+    const IMPULSE_POSITION_TOL: f64 = 1e-15;
+
+    /// Velocity error from RIC→ECI DCM transformation and addition.
+    /// Machine-precision for km/s-scale velocities.
+    const IMPULSE_VELOCITY_TOL: f64 = 1e-15;
+
+    /// DCM orthogonality preserves Δv magnitude. 1e-14 accounts for
+    /// two matrix-vector multiplications at machine precision.
+    const DV_MAGNITUDE_PRESERVATION_TOL: f64 = 1e-14;
+
+    /// Spacecraft↔StateVector roundtrip tolerance. Nyx stores position
+    /// and velocity as separate vectors; conversion introduces no error
+    /// beyond floating-point representation.
+    const SPACECRAFT_ROUNDTRIP_TOL: f64 = 1e-12;
+
     /// Verify that `apply_impulse` correctly transforms RIC Δv to ECI and applies it.
     ///
     /// Checks: position unchanged, epoch unchanged, velocity changed by
@@ -452,7 +470,7 @@ mod tests {
 
         // Position unchanged
         let pos_err = (result.position_eci_km - deputy_sv.position_eci_km).norm();
-        assert!(pos_err < 1e-15, "position should be unchanged, error = {pos_err}");
+        assert!(pos_err < IMPULSE_POSITION_TOL, "position should be unchanged, error = {pos_err}");
 
         // Epoch unchanged
         assert_eq!(result.epoch, deputy_sv.epoch, "epoch should be unchanged");
@@ -461,12 +479,12 @@ mod tests {
         let dv_eci = ric_to_eci_dv(&dv_ric, &chief_sv).unwrap();
         let expected_vel = deputy_sv.velocity_eci_km_s + dv_eci;
         let vel_err = (result.velocity_eci_km_s - expected_vel).norm();
-        assert!(vel_err < 1e-15, "velocity error = {vel_err}");
+        assert!(vel_err < IMPULSE_VELOCITY_TOL, "velocity error = {vel_err}");
 
         // Δv magnitude preserved (DCM is orthogonal)
         let applied_dv_mag = (result.velocity_eci_km_s - deputy_sv.velocity_eci_km_s).norm();
         assert!(
-            (applied_dv_mag - dv_ric.norm()).abs() < 1e-14,
+            (applied_dv_mag - dv_ric.norm()).abs() < DV_MAGNITUDE_PRESERVATION_TOL,
             "Δv magnitude not preserved: {applied_dv_mag} vs {}",
             dv_ric.norm()
         );
@@ -482,7 +500,7 @@ mod tests {
 
         let result = apply_impulse(&deputy_sv, &chief_sv, &Vector3::zeros()).unwrap();
         let vel_err = (result.velocity_eci_km_s - deputy_sv.velocity_eci_km_s).norm();
-        assert!(vel_err < 1e-15, "zero Δv should not change velocity");
+        assert!(vel_err < IMPULSE_VELOCITY_TOL, "zero Δv should not change velocity");
     }
 
     /// `config_to_spacecraft` → `spacecraft_to_state` roundtrip preserves
@@ -501,11 +519,11 @@ mod tests {
         let vel_err = (recovered.velocity_eci_km_s - sv.velocity_eci_km_s).norm();
 
         assert!(
-            pos_err < 1e-12,
+            pos_err < SPACECRAFT_ROUNDTRIP_TOL,
             "position roundtrip error = {pos_err} km"
         );
         assert!(
-            vel_err < 1e-12,
+            vel_err < SPACECRAFT_ROUNDTRIP_TOL,
             "velocity roundtrip error = {vel_err} km/s"
         );
         assert_eq!(recovered.epoch, sv.epoch, "epoch should be preserved");

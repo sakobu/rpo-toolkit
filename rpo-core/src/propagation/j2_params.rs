@@ -14,7 +14,13 @@ use crate::types::{KeplerError, KeplerianElements};
 pub struct J2Params {
     /// Mean motion n = sqrt(μ/a³) (rad/s)
     pub n_rad_s: f64,
-    /// J2 perturbation frequency parameter κ = `(3/4)·n·J2·(R_E/p)²`
+    /// J2 perturbation frequency parameter κ = `(3/4)·n·J2·(R_E/p)²` (rad/s).
+    ///
+    /// Units are rad/s but the `_rad_s` suffix is intentionally omitted:
+    /// κ is a paper-traced intermediate coefficient (Koenig Eq. 13) that
+    /// appears as a multiplicative factor in every STM entry alongside other
+    /// dimensionless auxiliaries (E, F, G, P, Q, R, S, T). Renaming to
+    /// `kappa_rad_s` would reduce readability of the Eq. A6 implementation.
     pub kappa: f64,
     /// η = sqrt(1 - e²)
     pub eta: f64,
@@ -142,9 +148,25 @@ pub fn compute_j2_params(mean: &KeplerianElements) -> Result<J2Params, Propagati
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::constants::SECONDS_PER_DAY;
     use crate::test_helpers::{
         iss_like_elements, koenig_table2_case1, koenig_table2_case2, koenig_table2_case3,
     };
+
+    /// Tolerance for exact-formula recomputation and exact-zero checks.
+    /// Only f64 arithmetic ordering separates computed from expected;
+    /// 1e-15 is ~4.4 ULP at unit scale.
+    const EXACT_RECOMPUTATION_TOL: f64 = 1e-15;
+
+    /// Tolerance for auxiliary consistency checks (recomputing F = 4+3η, etc.
+    /// from already-computed quantities). Slightly looser than exact
+    /// recomputation to account for intermediate rounding.
+    const AUXILIARY_CONSISTENCY_TOL: f64 = 1e-14;
+
+    /// Tolerance for trig-derived value comparisons (P, Q, S, T, η, ex, ey).
+    /// Accounts for f64 trig implementation differences and accumulated
+    /// rounding across multi-step computations from paper reference values.
+    const TRIG_VALUE_TOL: f64 = 1e-12;
 
     #[test]
     fn iss_raan_rate() {
@@ -152,7 +174,7 @@ mod tests {
         let j2p = compute_j2_params(&mean).unwrap();
 
         // ISS RAAN regression rate ≈ -5.1°/day
-        let raan_deg_per_day = j2p.raan_dot_rad_s.to_degrees() * 86400.0;
+        let raan_deg_per_day = j2p.raan_dot_rad_s.to_degrees() * SECONDS_PER_DAY;
         assert!(
             (raan_deg_per_day - (-5.1)).abs() < 0.5,
             "ISS RAAN rate should be ~-5.1 deg/day, got {raan_deg_per_day}"
@@ -170,7 +192,7 @@ mod tests {
             mean_anomaly_rad: 0.0,
         };
         let j2p = compute_j2_params(&mean).unwrap();
-        let raan_deg_per_day = j2p.raan_dot_rad_s.to_degrees() * 86400.0;
+        let raan_deg_per_day = j2p.raan_dot_rad_s.to_degrees() * SECONDS_PER_DAY;
 
         assert!(
             (raan_deg_per_day - 0.9856).abs() < 0.05,
@@ -238,17 +260,17 @@ mod tests {
 
         // η = sqrt(1 - 0) = 1.0 exactly
         assert!(
-            (j2p.eta - 1.0).abs() < 1e-15,
+            (j2p.eta - 1.0).abs() < EXACT_RECOMPUTATION_TOL,
             "eta should be 1.0 for circular orbit, got {}", j2p.eta
         );
         // G = 1/(1·2) = 0.5
         assert!(
-            (j2p.big_g - 0.5).abs() < 1e-15,
+            (j2p.big_g - 0.5).abs() < EXACT_RECOMPUTATION_TOL,
             "G should be 0.5 for circular orbit, got {}", j2p.big_g
         );
         // ex = ey = 0
-        assert!(j2p.ex.abs() < 1e-15, "ex should be 0 for e=0");
-        assert!(j2p.ey.abs() < 1e-15, "ey should be 0 for e=0");
+        assert!(j2p.ex.abs() < EXACT_RECOMPUTATION_TOL, "ex should be 0 for e=0");
+        assert!(j2p.ey.abs() < EXACT_RECOMPUTATION_TOL, "ey should be 0 for e=0");
     }
 
     /// Edge case: near-polar orbit (i≈90°).
@@ -267,16 +289,16 @@ mod tests {
 
         // At i=90°: P = 3·0 - 1 = -1, Q = 5·0 - 1 = -1
         assert!(
-            (j2p.big_p - (-1.0)).abs() < 1e-12,
+            (j2p.big_p - (-1.0)).abs() < TRIG_VALUE_TOL,
             "P should be -1.0 at i=90°, got {}", j2p.big_p
         );
         assert!(
-            (j2p.big_q - (-1.0)).abs() < 1e-12,
+            (j2p.big_q - (-1.0)).abs() < TRIG_VALUE_TOL,
             "Q should be -1.0 at i=90°, got {}", j2p.big_q
         );
         // RAAN rate should be ~0 (R=cos(90°)≈0)
         assert!(
-            j2p.raan_dot_rad_s.abs() < 1e-14,
+            j2p.raan_dot_rad_s.abs() < AUXILIARY_CONSISTENCY_TOL,
             "RAAN rate should be ~0 at i=90°, got {}", j2p.raan_dot_rad_s
         );
         // AoP rate should be negative (Q = -1, κQ < 0)
@@ -310,28 +332,28 @@ mod tests {
 
         // F = 4 + 3η, η ≈ 1 for near-circular → F ≈ 7
         assert!(
-            (j2p.big_f - (4.0 + 3.0 * j2p.eta)).abs() < 1e-14,
+            (j2p.big_f - (4.0 + 3.0 * j2p.eta)).abs() < AUXILIARY_CONSISTENCY_TOL,
             "F should be 4+3η"
         );
 
         // G = 1/(η²(1+η))
         let expected_g = 1.0 / (j2p.eta * j2p.eta * (1.0 + j2p.eta));
         assert!(
-            (j2p.big_g - expected_g).abs() < 1e-14,
+            (j2p.big_g - expected_g).abs() < AUXILIARY_CONSISTENCY_TOL,
             "G should be 1/(η²(1+η))"
         );
 
         // P = 3cos²i - 1
         let expected_p = 3.0 * j2p.cos2_i - 1.0;
         assert!(
-            (j2p.big_p - expected_p).abs() < 1e-14,
+            (j2p.big_p - expected_p).abs() < AUXILIARY_CONSISTENCY_TOL,
             "P should be 3cos²i - 1"
         );
 
         // Q = 5cos²i - 1
         let expected_q = 5.0 * j2p.cos2_i - 1.0;
         assert!(
-            (j2p.big_q - expected_q).abs() < 1e-14,
+            (j2p.big_q - expected_q).abs() < AUXILIARY_CONSISTENCY_TOL,
             "Q should be 5cos²i - 1"
         );
     }
@@ -348,64 +370,64 @@ mod tests {
         // eta = sqrt(1 - 0.005²) = sqrt(0.999975)
         let expected_eta = (1.0 - 0.005_f64.powi(2)).sqrt();
         assert!(
-            (j2p.eta - expected_eta).abs() < 1e-12,
+            (j2p.eta - expected_eta).abs() < TRIG_VALUE_TOL,
             "eta: got {}, expected {expected_eta}", j2p.eta
         );
 
         // i=30°: cos²(30°) = 3/4 exactly
         // P = 3cos²i - 1 = 5/4 = 1.25
         assert!(
-            (j2p.big_p - 1.25).abs() < 1e-12,
+            (j2p.big_p - 1.25).abs() < TRIG_VALUE_TOL,
             "P: got {}, expected 1.25", j2p.big_p
         );
 
         // Q = 5cos²i - 1 = 11/4 = 2.75
         assert!(
-            (j2p.big_q - 2.75).abs() < 1e-12,
+            (j2p.big_q - 2.75).abs() < TRIG_VALUE_TOL,
             "Q: got {}, expected 2.75", j2p.big_q
         );
 
         // S = sin(2·30°) = sin(60°) = √3/2
         let sqrt3_over_2 = 3.0_f64.sqrt() / 2.0;
         assert!(
-            (j2p.big_s - sqrt3_over_2).abs() < 1e-12,
+            (j2p.big_s - sqrt3_over_2).abs() < TRIG_VALUE_TOL,
             "S: got {}, expected {sqrt3_over_2}", j2p.big_s
         );
 
         // T = sin²(30°) = 1/4 = 0.25
         assert!(
-            (j2p.big_t - 0.25).abs() < 1e-12,
+            (j2p.big_t - 0.25).abs() < TRIG_VALUE_TOL,
             "T: got {}, expected 0.25", j2p.big_t
         );
 
         // ex = e·cos(ω) = 0.005·cos(180°) = -0.005
         assert!(
-            (j2p.ex - (-0.005)).abs() < 1e-12,
+            (j2p.ex - (-0.005)).abs() < TRIG_VALUE_TOL,
             "ex: got {}, expected -0.005", j2p.ex
         );
 
         // ey = e·sin(ω) = 0.005·sin(180°) ≈ 0
         assert!(
-            j2p.ey.abs() < 1e-15,
+            j2p.ey.abs() < EXACT_RECOMPUTATION_TOL,
             "ey: got {}, expected ~0", j2p.ey
         );
 
         // E = 1 + eta
         assert!(
-            (j2p.big_e - (1.0 + expected_eta)).abs() < 1e-12,
+            (j2p.big_e - (1.0 + expected_eta)).abs() < TRIG_VALUE_TOL,
             "E: got {}, expected {}", j2p.big_e, 1.0 + expected_eta
         );
 
         // F = 4 + 3·eta
         assert!(
-            (j2p.big_f - (4.0 + 3.0 * expected_eta)).abs() < 1e-12,
+            (j2p.big_f - (4.0 + 3.0 * expected_eta)).abs() < TRIG_VALUE_TOL,
             "F: got {}, expected {}", j2p.big_f, 4.0 + 3.0 * expected_eta
         );
 
         // G = 1/(eta²·(1+eta))
         let expected_g = 1.0 / (expected_eta * expected_eta * (1.0 + expected_eta));
         assert!(
-            (j2p.big_g - expected_g).abs() < 1e-12,
+            (j2p.big_g - expected_g).abs() < TRIG_VALUE_TOL,
             "G: got {}, expected {expected_g}", j2p.big_g
         );
 
@@ -415,20 +437,20 @@ mod tests {
         let r_over_p = R_EARTH / p;
         let expected_kappa = 0.75 * n * J2 * r_over_p * r_over_p;
         assert!(
-            (j2p.kappa - expected_kappa).abs() < 1e-15,
+            (j2p.kappa - expected_kappa).abs() < EXACT_RECOMPUTATION_TOL,
             "kappa: got {}, expected {expected_kappa}", j2p.kappa
         );
 
         // Secular rates (Koenig Eq. 13)
         let expected_raan_dot = -2.0 * expected_kappa * j2p.cos_i;
         assert!(
-            (j2p.raan_dot_rad_s - expected_raan_dot).abs() < 1e-15,
+            (j2p.raan_dot_rad_s - expected_raan_dot).abs() < EXACT_RECOMPUTATION_TOL,
             "raan_dot_rad_s: got {}, expected {expected_raan_dot}", j2p.raan_dot_rad_s
         );
 
         let expected_aop_dot = expected_kappa * 2.75;
         assert!(
-            (j2p.aop_dot_rad_s - expected_aop_dot).abs() < 1e-15,
+            (j2p.aop_dot_rad_s - expected_aop_dot).abs() < EXACT_RECOMPUTATION_TOL,
             "aop_dot_rad_s: got {}, expected {expected_aop_dot}", j2p.aop_dot_rad_s
         );
     }
@@ -443,20 +465,20 @@ mod tests {
         // eta = sqrt(1 - 0.04) = sqrt(0.96)
         let expected_eta = 0.96_f64.sqrt();
         assert!(
-            (j2p.eta - expected_eta).abs() < 1e-12,
+            (j2p.eta - expected_eta).abs() < TRIG_VALUE_TOL,
             "eta: got {}, expected {expected_eta}", j2p.eta
         );
 
         // ex = 0.2·cos(120°) = 0.2·(-0.5) = -0.1
         assert!(
-            (j2p.ex - (-0.1)).abs() < 1e-12,
+            (j2p.ex - (-0.1)).abs() < TRIG_VALUE_TOL,
             "ex: got {}, expected -0.1", j2p.ex
         );
 
         // ey = 0.2·sin(120°) = 0.2·(√3/2)
         let expected_ey = 0.2 * 120.0_f64.to_radians().sin();
         assert!(
-            (j2p.ey - expected_ey).abs() < 1e-12,
+            (j2p.ey - expected_ey).abs() < TRIG_VALUE_TOL,
             "ey: got {}, expected {expected_ey}", j2p.ey
         );
 
@@ -471,11 +493,11 @@ mod tests {
         let expected_p = 3.0 * cos2_1 - 1.0;
         let expected_q = 5.0 * cos2_1 - 1.0;
         assert!(
-            (j2p.big_p - expected_p).abs() < 1e-12,
+            (j2p.big_p - expected_p).abs() < TRIG_VALUE_TOL,
             "P: got {}, expected {expected_p}", j2p.big_p
         );
         assert!(
-            (j2p.big_q - expected_q).abs() < 1e-12,
+            (j2p.big_q - expected_q).abs() < TRIG_VALUE_TOL,
             "Q: got {}, expected {expected_q}", j2p.big_q
         );
     }
@@ -490,32 +512,32 @@ mod tests {
         // eta = sqrt(1 - 0.25) = sqrt(3)/2
         let expected_eta = 3.0_f64.sqrt() / 2.0;
         assert!(
-            (j2p.eta - expected_eta).abs() < 1e-12,
+            (j2p.eta - expected_eta).abs() < TRIG_VALUE_TOL,
             "eta: got {}, expected {expected_eta}", j2p.eta
         );
 
         // i=45°: cos²(45°) = 1/2
         // P = 3·(1/2) - 1 = 0.5
         assert!(
-            (j2p.big_p - 0.5).abs() < 1e-12,
+            (j2p.big_p - 0.5).abs() < TRIG_VALUE_TOL,
             "P: got {}, expected 0.5", j2p.big_p
         );
 
         // Q = 5·(1/2) - 1 = 1.5
         assert!(
-            (j2p.big_q - 1.5).abs() < 1e-12,
+            (j2p.big_q - 1.5).abs() < TRIG_VALUE_TOL,
             "Q: got {}, expected 1.5", j2p.big_q
         );
 
         // S = sin(90°) = 1.0 exactly
         assert!(
-            (j2p.big_s - 1.0).abs() < 1e-12,
+            (j2p.big_s - 1.0).abs() < TRIG_VALUE_TOL,
             "S: got {}, expected 1.0", j2p.big_s
         );
 
         // T = sin²(45°) = 1/2 = 0.5
         assert!(
-            (j2p.big_t - 0.5).abs() < 1e-12,
+            (j2p.big_t - 0.5).abs() < TRIG_VALUE_TOL,
             "T: got {}, expected 0.5", j2p.big_t
         );
 
@@ -523,20 +545,20 @@ mod tests {
         let eta2 = 0.75;
         let expected_g = 1.0 / (eta2 * (1.0 + expected_eta));
         assert!(
-            (j2p.big_g - expected_g).abs() < 1e-12,
+            (j2p.big_g - expected_g).abs() < TRIG_VALUE_TOL,
             "G: got {}, expected {expected_g}", j2p.big_g
         );
 
         // ex = 0.5·cos(60°) = 0.5·0.5 = 0.25
         assert!(
-            (j2p.ex - 0.25).abs() < 1e-12,
+            (j2p.ex - 0.25).abs() < TRIG_VALUE_TOL,
             "ex: got {}, expected 0.25", j2p.ex
         );
 
         // ey = 0.5·sin(60°) = √3/4
         let expected_ey = 3.0_f64.sqrt() / 4.0;
         assert!(
-            (j2p.ey - expected_ey).abs() < 1e-12,
+            (j2p.ey - expected_ey).abs() < TRIG_VALUE_TOL,
             "ey: got {}, expected {expected_ey}", j2p.ey
         );
     }

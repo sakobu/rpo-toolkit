@@ -124,12 +124,12 @@ pub enum PropagationModel {
 }
 
 impl PropagationModel {
-    /// Propagate ROE forward by `dt_seconds` from `epoch_0`.
+    /// Propagate ROE forward by `dt_s` from `epoch_0`.
     ///
     /// # Invariants
     /// - `chief_mean_0.a_km > 0` and `0 <= chief_mean_0.e < 1`
     /// - `chief_mean_0` must be **mean** Keplerian elements, not osculating
-    /// - `dt_seconds` must be finite
+    /// - `dt_s` must be finite (seconds)
     ///
     /// # Errors
     /// Returns `PropagationError` if eccentricity or SMA are out of range.
@@ -138,17 +138,17 @@ impl PropagationModel {
         roe_0: &QuasiNonsingularROE,
         chief_mean_0: &KeplerianElements,
         epoch_0: Epoch,
-        dt_seconds: f64,
+        dt_s: f64,
     ) -> Result<PropagatedState, PropagationError> {
         match self {
             Self::J2Stm => {
-                let (roe, chief_mean) = propagate_roe_stm(roe_0, chief_mean_0, dt_seconds)?;
-                Ok(make_propagated_state(roe, chief_mean, epoch_0, dt_seconds)?)
+                let (roe, chief_mean) = propagate_roe_stm(roe_0, chief_mean_0, dt_s)?;
+                Ok(make_propagated_state(roe, chief_mean, epoch_0, dt_s)?)
             }
             Self::J2DragStm { drag } => {
                 let (roe, chief_mean) =
-                    propagate_roe_j2_drag(roe_0, chief_mean_0, drag, dt_seconds)?;
-                Ok(make_propagated_state(roe, chief_mean, epoch_0, dt_seconds)?)
+                    propagate_roe_j2_drag(roe_0, chief_mean_0, drag, dt_s)?;
+                Ok(make_propagated_state(roe, chief_mean, epoch_0, dt_s)?)
             }
         }
     }
@@ -159,7 +159,7 @@ impl PropagationModel {
     /// - `chief_mean_0.a_km > 0` and `0 <= chief_mean_0.e < 1`
     /// - `chief_mean_0` must be **mean** Keplerian elements, not osculating
     /// - `n_steps > 0`
-    /// - `dt_seconds` must be finite
+    /// - `dt_s` must be finite (seconds)
     ///
     /// # Errors
     /// Returns `PropagationError` if `n_steps` is zero.
@@ -168,7 +168,7 @@ impl PropagationModel {
         roe_0: &QuasiNonsingularROE,
         chief_mean_0: &KeplerianElements,
         epoch_0: Epoch,
-        dt_seconds: f64,
+        dt_s: f64,
         n_steps: usize,
     ) -> Result<Vec<PropagatedState>, PropagationError> {
         if n_steps == 0 {
@@ -178,7 +178,7 @@ impl PropagationModel {
         let n_steps_u32 = u32::try_from(n_steps).map_err(|_| {
             PropagationError::StepCountOverflow { n_steps }
         })?;
-        let step = dt_seconds / f64::from(n_steps_u32);
+        let step = dt_s / f64::from(n_steps_u32);
         let mut states = Vec::with_capacity(n_steps + 1);
 
         // Initial state at t=0
@@ -202,15 +202,15 @@ fn make_propagated_state(
     roe: QuasiNonsingularROE,
     chief_mean: KeplerianElements,
     epoch_0: Epoch,
-    dt_seconds: f64,
+    dt_s: f64,
 ) -> Result<PropagatedState, PropagationError> {
     let ric = roe_to_ric(&roe, &chief_mean)?;
     Ok(PropagatedState {
-        epoch: epoch_0 + Duration::from_seconds(dt_seconds),
+        epoch: epoch_0 + Duration::from_seconds(dt_s),
         roe,
         chief_mean,
         ric,
-        elapsed_s: dt_seconds,
+        elapsed_s: dt_s,
     })
 }
 
@@ -219,6 +219,27 @@ fn make_propagated_state(
 mod tests {
     use super::*;
     use crate::test_helpers::{iss_like_elements, test_epoch};
+
+
+    /// Elapsed time at t=0 should be exactly zero. 1e-15 accounts for
+    /// floating-point representation of 0.0 through the propagator chain.
+    const ELAPSED_ZERO_TOL: f64 = 1e-15;
+
+    /// ROE at t=0 should match initial values. STM at tau=0 is identity
+    /// within machine precision; 1e-10 is conservative.
+    const ROE_INITIAL_TOL: f64 = 1e-10;
+
+    /// Elapsed time at end of one orbital period. Accumulated step error
+    /// from floating-point addition of step sizes.
+    const PERIOD_ELAPSED_TOL: f64 = 1e-6;
+
+    /// Zero-drag J2+drag must match J2-only to machine precision.
+    /// The 6×6 J2 block is structurally identical when drag rates are zero.
+    const J2_DRAG_MATCH_TOL: f64 = 1e-14;
+
+    /// RIC position agreement between J2 and zero-drag J2+drag propagators.
+    /// The ROE→RIC mapping introduces additional O(1e-10) error.
+    const RIC_POSITION_MATCH_TOL: f64 = 1e-10;
 
     #[test]
     fn propagator_initial_state() {
@@ -235,8 +256,8 @@ mod tests {
         };
 
         let state = prop.propagate(&roe, &chief, epoch, 0.0).unwrap();
-        assert!((state.elapsed_s).abs() < 1e-15);
-        assert!((state.roe.da - roe.da).abs() < 1e-10);
+        assert!((state.elapsed_s).abs() < ELAPSED_ZERO_TOL);
+        assert!((state.roe.da - roe.da).abs() < ROE_INITIAL_TOL);
         assert_eq!(state.epoch, epoch);
     }
 
@@ -260,8 +281,8 @@ mod tests {
             .expect("propagation should succeed");
 
         assert_eq!(states.len(), 11); // 10 steps + initial
-        assert!((states[0].elapsed_s).abs() < 1e-15);
-        assert!((states[10].elapsed_s - period).abs() < 1e-6);
+        assert!((states[0].elapsed_s).abs() < ELAPSED_ZERO_TOL);
+        assert!((states[10].elapsed_s - period).abs() < PERIOD_ELAPSED_TOL);
     }
 
     #[test]
@@ -361,31 +382,31 @@ mod tests {
         let s_drag = drag_prop.propagate(&roe, &chief, epoch, tau).unwrap();
 
         assert!(
-            (s_j2.roe.da - s_drag.roe.da).abs() < 1e-14,
+            (s_j2.roe.da - s_drag.roe.da).abs() < J2_DRAG_MATCH_TOL,
             "da mismatch"
         );
         assert!(
-            (s_j2.roe.dlambda - s_drag.roe.dlambda).abs() < 1e-14,
+            (s_j2.roe.dlambda - s_drag.roe.dlambda).abs() < J2_DRAG_MATCH_TOL,
             "dlambda mismatch"
         );
         assert!(
-            (s_j2.roe.dex - s_drag.roe.dex).abs() < 1e-14,
+            (s_j2.roe.dex - s_drag.roe.dex).abs() < J2_DRAG_MATCH_TOL,
             "dex mismatch"
         );
         assert!(
-            (s_j2.roe.dey - s_drag.roe.dey).abs() < 1e-14,
+            (s_j2.roe.dey - s_drag.roe.dey).abs() < J2_DRAG_MATCH_TOL,
             "dey mismatch"
         );
         assert!(
-            (s_j2.roe.dix - s_drag.roe.dix).abs() < 1e-14,
+            (s_j2.roe.dix - s_drag.roe.dix).abs() < J2_DRAG_MATCH_TOL,
             "dix mismatch"
         );
         assert!(
-            (s_j2.roe.diy - s_drag.roe.diy).abs() < 1e-14,
+            (s_j2.roe.diy - s_drag.roe.diy).abs() < J2_DRAG_MATCH_TOL,
             "diy mismatch"
         );
         assert!(
-            (s_j2.ric.position_ric_km - s_drag.ric.position_ric_km).norm() < 1e-10,
+            (s_j2.ric.position_ric_km - s_drag.ric.position_ric_km).norm() < RIC_POSITION_MATCH_TOL,
             "RIC position mismatch"
         );
     }

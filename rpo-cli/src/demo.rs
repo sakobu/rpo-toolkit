@@ -3,6 +3,8 @@ use std::error::Error;
 use hifitime::Epoch;
 
 use rpo_core::{
+    // Constants
+    constants::SECONDS_PER_DAY,
     // Elements layer
     compute_roe, keplerian_to_state, roe_to_ric, state_to_keplerian,
     // Propagation layer
@@ -195,8 +197,8 @@ pub(crate) fn run_demo() -> Result<(), Box<dyn Error>> {
     println!("    T = sin²i:     {:.10}", j2p.big_t);
 
     // Secular rates in intuitive units
-    let raan_deg_day = j2p.raan_dot_rad_s.to_degrees() * 86400.0;
-    let aop_deg_day = j2p.aop_dot_rad_s.to_degrees() * 86400.0;
+    let raan_deg_day = j2p.raan_dot_rad_s.to_degrees() * SECONDS_PER_DAY;
+    let aop_deg_day = j2p.aop_dot_rad_s.to_degrees() * SECONDS_PER_DAY;
     println!("\n  Secular rates:");
     println!("    dΩ/dt = {:.6e} rad/s  ({raan_deg_day:+.3}°/day — RAAN regression)", j2p.raan_dot_rad_s);
     println!("    dω/dt = {:.6e} rad/s  ({aop_deg_day:+.3}°/day — apsidal advance)", j2p.aop_dot_rad_s);

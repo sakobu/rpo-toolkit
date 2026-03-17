@@ -16,19 +16,19 @@ use crate::types::{KeplerianElements, Matrix6, QuasiNonsingularROE};
 ///
 /// # Arguments
 /// * `chief_mean` - Chief mean Keplerian elements at epoch
-/// * `tau` - Propagation time (seconds)
+/// * `tau_s` - Propagation time (seconds)
 ///
 /// # Invariants
 /// - `chief_mean.a_km > 0`
 /// - `0 <= chief_mean.e < 1`
 /// - `chief_mean` must be **mean** Keplerian elements, not osculating
-/// - `tau` must be finite
+/// - `tau_s` must be finite
 ///
 /// # Errors
 /// Returns `PropagationError` if eccentricity or SMA are out of range.
-pub fn compute_stm(chief_mean: &KeplerianElements, tau: f64) -> Result<Matrix6, PropagationError> {
+pub fn compute_stm(chief_mean: &KeplerianElements, tau_s: f64) -> Result<Matrix6, PropagationError> {
     let j2p = compute_j2_params(chief_mean)?;
-    Ok(compute_stm_with_params(&j2p, chief_mean, tau))
+    Ok(compute_stm_with_params(&j2p, chief_mean, tau_s))
 }
 
 /// Compute the J2-perturbed QNS STM using pre-computed [`J2Params`] (Koenig Eq. A6).
@@ -38,15 +38,15 @@ pub fn compute_stm(chief_mean: &KeplerianElements, tau: f64) -> Result<Matrix6, 
 /// # Arguments
 /// * `j2p` - Pre-computed J2 perturbation parameters
 /// * `chief_mean` - Chief mean Keplerian elements at epoch
-/// * `tau` - Propagation time (seconds)
+/// * `tau_s` - Propagation time (seconds)
 ///
 /// # Invariants
 /// - `j2p` must correspond to `chief_mean` (caller responsibility)
 /// - `chief_mean` must be **mean** Keplerian elements, not osculating
-/// - `tau` must be finite
+/// - `tau_s` must be finite
 #[must_use]
 #[allow(clippy::similar_names)]
-pub fn compute_stm_with_params(j2p: &J2Params, chief_mean: &KeplerianElements, tau: f64) -> Matrix6 {
+pub fn compute_stm_with_params(j2p: &J2Params, chief_mean: &KeplerianElements, tau_s: f64) -> Matrix6 {
     let n = j2p.n_rad_s;
     let kappa = j2p.kappa;
     let e = chief_mean.e;
@@ -61,8 +61,8 @@ pub fn compute_stm_with_params(j2p: &J2Params, chief_mean: &KeplerianElements, t
     // Eq. A1: secular angle rates and propagated angles
     let omega_dot = j2p.aop_dot_rad_s; // ω̇ = κQ
     let omega_i = chief_mean.aop_rad;
-    let omega_f = omega_i + omega_dot * tau;
-    let d_omega = omega_dot * tau; // ω̇τ
+    let omega_f = omega_i + omega_dot * tau_s;
+    let d_omega = omega_dot * tau_s; // ω̇τ
 
     // Eq. A2: eccentricity vector components at initial and final times
     let ex_i = j2p.ex;
@@ -77,38 +77,38 @@ pub fn compute_stm_with_params(j2p: &J2Params, chief_mean: &KeplerianElements, t
     phi[(0, 0)] = 1.0;
 
     // Row 1: δλ (relative mean longitude)
-    phi[(1, 0)] = -(1.5 * n + 3.5 * kappa * big_e * big_p) * tau;
+    phi[(1, 0)] = -(1.5 * n + 3.5 * kappa * big_e * big_p) * tau_s;
     phi[(1, 1)] = 1.0;
-    phi[(1, 2)] = kappa * ex_i * big_f * big_g * big_p * tau;
-    phi[(1, 3)] = kappa * ey_i * big_f * big_g * big_p * tau;
-    phi[(1, 4)] = -kappa * big_f * big_s * tau;
+    phi[(1, 2)] = kappa * ex_i * big_f * big_g * big_p * tau_s;
+    phi[(1, 3)] = kappa * ey_i * big_f * big_g * big_p * tau_s;
+    phi[(1, 4)] = -kappa * big_f * big_s * tau_s;
     phi[(1, 5)] = 0.0;
 
     // Row 2: δex (relative eccentricity vector x)
-    phi[(2, 0)] = 3.5 * kappa * ey_f * big_q * tau;
+    phi[(2, 0)] = 3.5 * kappa * ey_f * big_q * tau_s;
     phi[(2, 1)] = 0.0;
-    phi[(2, 2)] = d_omega.cos() - 4.0 * kappa * ex_i * ey_f * big_g * big_q * tau;
-    phi[(2, 3)] = -d_omega.sin() - 4.0 * kappa * ey_i * ey_f * big_g * big_q * tau;
-    phi[(2, 4)] = 5.0 * kappa * ey_f * big_s * tau;
+    phi[(2, 2)] = d_omega.cos() - 4.0 * kappa * ex_i * ey_f * big_g * big_q * tau_s;
+    phi[(2, 3)] = -d_omega.sin() - 4.0 * kappa * ey_i * ey_f * big_g * big_q * tau_s;
+    phi[(2, 4)] = 5.0 * kappa * ey_f * big_s * tau_s;
     phi[(2, 5)] = 0.0;
 
     // Row 3: δey (relative eccentricity vector y)
-    phi[(3, 0)] = -3.5 * kappa * ex_f * big_q * tau;
+    phi[(3, 0)] = -3.5 * kappa * ex_f * big_q * tau_s;
     phi[(3, 1)] = 0.0;
-    phi[(3, 2)] = d_omega.sin() + 4.0 * kappa * ex_i * ex_f * big_g * big_q * tau;
-    phi[(3, 3)] = d_omega.cos() + 4.0 * kappa * ey_i * ex_f * big_g * big_q * tau;
-    phi[(3, 4)] = -5.0 * kappa * ex_f * big_s * tau;
+    phi[(3, 2)] = d_omega.sin() + 4.0 * kappa * ex_i * ex_f * big_g * big_q * tau_s;
+    phi[(3, 3)] = d_omega.cos() + 4.0 * kappa * ey_i * ex_f * big_g * big_q * tau_s;
+    phi[(3, 4)] = -5.0 * kappa * ex_f * big_s * tau_s;
     phi[(3, 5)] = 0.0;
 
     // Row 4: δix is constant
     phi[(4, 4)] = 1.0;
 
     // Row 5: δiy (relative inclination vector y)
-    phi[(5, 0)] = 3.5 * kappa * big_s * tau;
+    phi[(5, 0)] = 3.5 * kappa * big_s * tau_s;
     phi[(5, 1)] = 0.0;
-    phi[(5, 2)] = -4.0 * kappa * ex_i * big_g * big_s * tau;
-    phi[(5, 3)] = -4.0 * kappa * ey_i * big_g * big_s * tau;
-    phi[(5, 4)] = 2.0 * kappa * big_t * tau;
+    phi[(5, 2)] = -4.0 * kappa * ex_i * big_g * big_s * tau_s;
+    phi[(5, 3)] = -4.0 * kappa * ey_i * big_g * big_s * tau_s;
+    phi[(5, 4)] = 2.0 * kappa * big_t * tau_s;
     phi[(5, 5)] = 1.0;
 
     phi
@@ -121,7 +121,7 @@ pub fn compute_stm_with_params(j2p: &J2Params, chief_mean: &KeplerianElements, t
 /// # Arguments
 /// * `roe` - Initial quasi-nonsingular ROE
 /// * `chief_mean` - Chief mean Keplerian elements at epoch
-/// * `tau` - Propagation time (seconds)
+/// * `tau_s` - Propagation time (seconds)
 ///
 /// # Invariants
 /// - `chief_mean.a_km > 0`
@@ -134,14 +134,14 @@ pub fn compute_stm_with_params(j2p: &J2Params, chief_mean: &KeplerianElements, t
 pub fn propagate_roe_stm(
     roe: &QuasiNonsingularROE,
     chief_mean: &KeplerianElements,
-    tau: f64,
+    tau_s: f64,
 ) -> Result<(QuasiNonsingularROE, KeplerianElements), PropagationError> {
     let j2p = compute_j2_params(chief_mean)?;
-    let stm = compute_stm_with_params(&j2p, chief_mean, tau);
+    let stm = compute_stm_with_params(&j2p, chief_mean, tau_s);
     let roe_vec = roe.to_vector();
     let propagated = stm * roe_vec;
 
-    let chief_prop = propagate_chief_mean(chief_mean, &j2p, tau);
+    let chief_prop = propagate_chief_mean(chief_mean, &j2p, tau_s);
 
     Ok((QuasiNonsingularROE::from_vector(&propagated), chief_prop))
 }
@@ -153,20 +153,20 @@ pub fn propagate_roe_stm(
 /// # Invariants
 /// - `j2p` must correspond to `chief` (caller responsibility)
 /// - `chief` must be **mean** Keplerian elements, not osculating
-/// - `tau` must be finite
+/// - `tau_s` must be finite
 #[must_use]
 pub fn propagate_chief_mean(
     chief: &KeplerianElements,
     j2p: &J2Params,
-    tau: f64,
+    tau_s: f64,
 ) -> KeplerianElements {
     KeplerianElements {
         a_km: chief.a_km,
         e: chief.e,
         i_rad: chief.i_rad,
-        raan_rad: (chief.raan_rad + j2p.raan_dot_rad_s * tau).rem_euclid(TWO_PI),
-        aop_rad: (chief.aop_rad + j2p.aop_dot_rad_s * tau).rem_euclid(TWO_PI),
-        mean_anomaly_rad: (chief.mean_anomaly_rad + j2p.m_dot_rad_s * tau).rem_euclid(TWO_PI),
+        raan_rad: (chief.raan_rad + j2p.raan_dot_rad_s * tau_s).rem_euclid(TWO_PI),
+        aop_rad: (chief.aop_rad + j2p.aop_dot_rad_s * tau_s).rem_euclid(TWO_PI),
+        mean_anomaly_rad: (chief.mean_anomaly_rad + j2p.m_dot_rad_s * tau_s).rem_euclid(TWO_PI),
     }
 }
 
@@ -178,6 +178,63 @@ mod tests {
         iss_like_elements, koenig_table2_case1, koenig_table2_case1_roe, koenig_table2_case2,
     };
 
+
+    /// STM at tau=0 should be near identity. 1e-10 is conservative given
+    /// J2 auxiliary computations operate on O(1e3) quantities with machine-
+    /// epsilon precision (~1e-16 × 1e3 = 1e-13).
+    const STM_IDENTITY_TOL: f64 = 1e-10;
+
+    /// Forward-backward ROE recovery tolerance for non-secular components
+    /// (da, dex, dey, dix, diy). STM conditioning over a 1-hour forward
+    /// then 1-hour backward propagation introduces ~O(1e-8) roundtrip error.
+    const ROE_ROUNDTRIP_TOL: f64 = 1e-8;
+
+    /// Forward-backward dlambda recovery tolerance. Secular drift
+    /// accumulation makes dlambda more sensitive than other ROE components,
+    /// requiring a looser tolerance than `ROE_ROUNDTRIP_TOL`.
+    const DLAMBDA_ROUNDTRIP_TOL: f64 = 1e-6;
+
+    /// da conservation tolerance. da is structurally conserved (STM row 0
+    /// is identity), so errors come from matrix-vector multiply noise.
+    const DA_CONSERVATION_TOL: f64 = 1e-8;
+
+    /// Tight da conservation for short-propagation structural tests where
+    /// the matrix entries are smaller and numerical noise is lower.
+    const DA_EXACT_TOL: f64 = 1e-12;
+
+    /// Machine-precision tolerance for STM entries that are structurally
+    /// exact (0 or 1), e.g. row 0 and row 4 of the J2 STM.
+    const STM_EXACT_ENTRY_TOL: f64 = 1e-14;
+
+    /// Tolerance for STM coefficients computed from Koenig Eq. A6 against
+    /// hand-computed values. Limited by trig function composition and
+    /// J2 auxiliary precision. Entries like phi[1,0], phi[5,0], phi[2,3], etc.
+    const STM_COEFFICIENT_TOL: f64 = 1e-6;
+
+    /// Tolerance for STM entries that should be near-zero because a
+    /// multiplicative factor (e.g. ey_i ≈ 0 at aop=180°) kills the term.
+    const STM_NEAR_ZERO_TOL: f64 = 1e-12;
+
+    /// Tolerance for comparing an STM entry to its leading-order cosine
+    /// approximation. The omitted secular term contributes O(1e-4) residual.
+    const STM_COS_APPROX_TOL: f64 = 1e-4;
+
+    /// Relative tolerance fraction for along-track drift comparison.
+    /// Combined Keplerian + J2 drift allows 10% relative deviation.
+    const DRIFT_RELATIVE_FRACTION: f64 = 0.1;
+
+    /// Absolute floor in composite drift tolerance max(relative, absolute).
+    /// Prevents division-by-zero when expected drift is near zero.
+    const DRIFT_COMPOSITE_FLOOR: f64 = 1e-10;
+
+    /// Minimum STM entry magnitude to confirm a "substantial" contribution
+    /// (i.e. the entry is not spuriously near-zero due to geometry).
+    const SUBSTANTIAL_ENTRY_FLOOR: f64 = 1e-3;
+
+    /// Relative tolerance on eccentricity vector magnitude conservation.
+    /// Magnitude changes are second-order under J2, so 1% is conservative.
+    const DE_MAGNITUDE_RELATIVE_TOL: f64 = 0.01;
+
     #[test]
     fn zero_tau_gives_near_identity() {
         let chief = iss_like_elements();
@@ -186,7 +243,7 @@ mod tests {
 
         let diff = (stm - identity).norm();
         assert!(
-            diff < 1e-10,
+            diff < STM_IDENTITY_TOL,
             "STM at tau=0 should be near identity, diff={diff}"
         );
     }
@@ -208,31 +265,31 @@ mod tests {
         let (roe_back, _) = propagate_roe_stm(&roe_fwd, &chief_fwd, -tau).unwrap();
 
         assert!(
-            (roe_back.da - roe.da).abs() < 1e-8,
+            (roe_back.da - roe.da).abs() < ROE_ROUNDTRIP_TOL,
             "da not recovered: {} vs {}",
             roe_back.da,
             roe.da
         );
         assert!(
-            wrap_angle(roe_back.dlambda - roe.dlambda).abs() < 1e-6,
+            wrap_angle(roe_back.dlambda - roe.dlambda).abs() < DLAMBDA_ROUNDTRIP_TOL,
             "dlambda not recovered: {} vs {}",
             roe_back.dlambda,
             roe.dlambda
         );
         assert!(
-            (roe_back.dex - roe.dex).abs() < 1e-8,
+            (roe_back.dex - roe.dex).abs() < ROE_ROUNDTRIP_TOL,
             "dex not recovered"
         );
         assert!(
-            (roe_back.dey - roe.dey).abs() < 1e-8,
+            (roe_back.dey - roe.dey).abs() < ROE_ROUNDTRIP_TOL,
             "dey not recovered"
         );
         assert!(
-            (roe_back.dix - roe.dix).abs() < 1e-8,
+            (roe_back.dix - roe.dix).abs() < ROE_ROUNDTRIP_TOL,
             "dix not recovered"
         );
         assert!(
-            (roe_back.diy - roe.diy).abs() < 1e-8,
+            (roe_back.diy - roe.diy).abs() < ROE_ROUNDTRIP_TOL,
             "diy not recovered"
         );
     }
@@ -272,14 +329,14 @@ mod tests {
 
         assert!(
             (roe_prop.dlambda - expected_dlambda).abs()
-                < (expected_dlambda.abs() * 0.1).max(1e-10),
+                < (expected_dlambda.abs() * DRIFT_RELATIVE_FRACTION).max(DRIFT_COMPOSITE_FLOOR),
             "Along-track drift mismatch: got {}, expected {expected_dlambda}",
             roe_prop.dlambda
         );
 
         // δa should remain constant
         assert!(
-            (roe_prop.da - da).abs() < 1e-12,
+            (roe_prop.da - da).abs() < DA_EXACT_TOL,
             "da should be constant: {} vs {da}",
             roe_prop.da
         );
@@ -302,7 +359,7 @@ mod tests {
         let (roe_prop, _) = propagate_roe_stm(&roe, &chief, period).unwrap();
 
         assert!(
-            (roe_prop.da - da).abs() < 1e-8,
+            (roe_prop.da - da).abs() < DA_CONSERVATION_TOL,
             "da should be preserved over one orbit: {} vs {da}",
             roe_prop.da
         );
@@ -321,43 +378,43 @@ mod tests {
         let stm = compute_stm(&chief, period).unwrap();
 
         // Row 0: δa is conserved → phi[0,0]=1, all others = 0
-        assert!((stm[(0, 0)] - 1.0).abs() < 1e-14, "phi[0,0] should be 1.0");
+        assert!((stm[(0, 0)] - 1.0).abs() < STM_EXACT_ENTRY_TOL, "phi[0,0] should be 1.0");
         for c in 1..6 {
-            assert!(stm[(0, c)].abs() < 1e-14, "phi[0,{c}] should be 0, got {}", stm[(0, c)]);
+            assert!(stm[(0, c)].abs() < STM_EXACT_ENTRY_TOL, "phi[0,{c}] should be 0, got {}", stm[(0, c)]);
         }
 
         // Row 4: δix is conserved → phi[4,4]=1, all others = 0
-        assert!((stm[(4, 4)] - 1.0).abs() < 1e-14, "phi[4,4] should be 1.0");
+        assert!((stm[(4, 4)] - 1.0).abs() < STM_EXACT_ENTRY_TOL, "phi[4,4] should be 1.0");
         for c in 0..6 {
             if c != 4 {
-                assert!(stm[(4, c)].abs() < 1e-14, "phi[4,{c}] should be 0, got {}", stm[(4, c)]);
+                assert!(stm[(4, c)].abs() < STM_EXACT_ENTRY_TOL, "phi[4,{c}] should be 0, got {}", stm[(4, c)]);
             }
         }
 
         // phi[1,0] = -(1.5·n + 3.5·κ·E·P)·τ
         let expected_10 = -(1.5 * j2p.n_rad_s + 3.5 * j2p.kappa * j2p.big_e * j2p.big_p) * period;
         assert!(
-            (stm[(1, 0)] - expected_10).abs() < 1e-6,
+            (stm[(1, 0)] - expected_10).abs() < STM_COEFFICIENT_TOL,
             "phi[1,0]: got {}, expected {expected_10}", stm[(1, 0)]
         );
 
         // phi[5,0] = 3.5·κ·S·τ
         let expected_50 = 3.5 * j2p.kappa * j2p.big_s * period;
         assert!(
-            (stm[(5, 0)] - expected_50).abs() < 1e-6,
+            (stm[(5, 0)] - expected_50).abs() < STM_COEFFICIENT_TOL,
             "phi[5,0]: got {}, expected {expected_50}", stm[(5, 0)]
         );
 
         // phi[2,2] ≈ cos(ω̇·τ) at leading order (ey_i ≈ 0 so secular term vanishes)
         let d_omega = j2p.aop_dot_rad_s * period;
         assert!(
-            (stm[(2, 2)] - d_omega.cos()).abs() < 1e-4,
+            (stm[(2, 2)] - d_omega.cos()).abs() < STM_COS_APPROX_TOL,
             "phi[2,2]: got {}, expected ~cos(dω)={}", stm[(2, 2)], d_omega.cos()
         );
 
         // phi[1,3] ≈ 0 because ey_i ≈ 0 at aop=180°
         assert!(
-            stm[(1, 3)].abs() < 1e-12,
+            stm[(1, 3)].abs() < STM_NEAR_ZERO_TOL,
             "phi[1,3] should be ~0 (ey_i≈0), got {}", stm[(1, 3)]
         );
 
@@ -373,7 +430,7 @@ mod tests {
         let expected_23 = -d_omega.sin()
             - 4.0 * j2p.kappa * j2p.ey * ey_f * j2p.big_g * j2p.big_q * period;
         assert!(
-            (stm[(2, 3)] - expected_23).abs() < 1e-6,
+            (stm[(2, 3)] - expected_23).abs() < STM_COEFFICIENT_TOL,
             "phi[2,3]: got {}, expected {expected_23}", stm[(2, 3)]
         );
 
@@ -381,7 +438,7 @@ mod tests {
         let expected_32 = d_omega.sin()
             + 4.0 * j2p.kappa * j2p.ex * ex_f * j2p.big_g * j2p.big_q * period;
         assert!(
-            (stm[(3, 2)] - expected_32).abs() < 1e-6,
+            (stm[(3, 2)] - expected_32).abs() < STM_COEFFICIENT_TOL,
             "phi[3,2]: got {}, expected {expected_32}", stm[(3, 2)]
         );
 
@@ -389,27 +446,27 @@ mod tests {
         let expected_33 = d_omega.cos()
             + 4.0 * j2p.kappa * j2p.ey * ex_f * j2p.big_g * j2p.big_q * period;
         assert!(
-            (stm[(3, 3)] - expected_33).abs() < 1e-6,
+            (stm[(3, 3)] - expected_33).abs() < STM_COEFFICIENT_TOL,
             "phi[3,3]: got {}, expected {expected_33}", stm[(3, 3)]
         );
 
         // phi[5,5] = 1.0 (δiy diagonal, identity)
         assert!(
-            (stm[(5, 5)] - 1.0).abs() < 1e-14,
+            (stm[(5, 5)] - 1.0).abs() < STM_EXACT_ENTRY_TOL,
             "phi[5,5] should be 1.0, got {}", stm[(5, 5)]
         );
 
         // phi[5,2] = -4κ·ex_i·G·S·τ
         let expected_52 = -4.0 * j2p.kappa * j2p.ex * j2p.big_g * j2p.big_s * period;
         assert!(
-            (stm[(5, 2)] - expected_52).abs() < 1e-6,
+            (stm[(5, 2)] - expected_52).abs() < STM_COEFFICIENT_TOL,
             "phi[5,2]: got {}, expected {expected_52}", stm[(5, 2)]
         );
 
         // phi[5,3] = -4κ·ey_i·G·S·τ ≈ 0 (ey_i ≈ 0)
         let expected_53 = -4.0 * j2p.kappa * j2p.ey * j2p.big_g * j2p.big_s * period;
         assert!(
-            (stm[(5, 3)] - expected_53).abs() < 1e-12,
+            (stm[(5, 3)] - expected_53).abs() < STM_NEAR_ZERO_TOL,
             "phi[5,3]: got {}, expected ~0 (ey_i≈0)", stm[(5, 3)]
         );
     }
@@ -432,24 +489,24 @@ mod tests {
         // phi[1,3] = κ·ey_i·F·G·P·τ should be nonzero
         let expected_13 = j2p.kappa * j2p.ey * j2p.big_f * j2p.big_g * j2p.big_p * period;
         assert!(
-            (stm[(1, 3)] - expected_13).abs() < 1e-6,
+            (stm[(1, 3)] - expected_13).abs() < STM_COEFFICIENT_TOL,
             "phi[1,3]: got {}, expected {expected_13}", stm[(1, 3)]
         );
 
         // phi[1,2] = κ·ex_i·F·G·P·τ should also be nonzero (ex_i = -0.1)
         let expected_12 = j2p.kappa * j2p.ex * j2p.big_f * j2p.big_g * j2p.big_p * period;
         assert!(
-            (stm[(1, 2)] - expected_12).abs() < 1e-6,
+            (stm[(1, 2)] - expected_12).abs() < STM_COEFFICIENT_TOL,
             "phi[1,2]: got {}, expected {expected_12}", stm[(1, 2)]
         );
 
         // Both ex and ey columns contribute substantially
         assert!(
-            stm[(1, 2)].abs() > 1e-3,
+            stm[(1, 2)].abs() > SUBSTANTIAL_ENTRY_FLOOR,
             "phi[1,2] should be substantial, got {}", stm[(1, 2)]
         );
         assert!(
-            stm[(1, 3)].abs() > 1e-3,
+            stm[(1, 3)].abs() > SUBSTANTIAL_ENTRY_FLOOR,
             "phi[1,3] should be substantial, got {}", stm[(1, 3)]
         );
     }
@@ -470,14 +527,14 @@ mod tests {
 
         // δa is a first-order constant in the J2 STM → should be conserved
         assert!(
-            (roe_prop.da - roe.da).abs() < 1e-8,
+            (roe_prop.da - roe.da).abs() < DA_CONSERVATION_TOL,
             "δa should be conserved over 10 orbits: initial={}, final={}",
             roe.da, roe_prop.da
         );
 
         // δix is also conserved (row 4 identity)
         assert!(
-            (roe_prop.dix - roe.dix).abs() < 1e-8,
+            (roe_prop.dix - roe.dix).abs() < DA_CONSERVATION_TOL,
             "δix should be conserved over 10 orbits: initial={}, final={}",
             roe.dix, roe_prop.dix
         );
@@ -487,7 +544,7 @@ mod tests {
         let de_initial = (roe.dex.powi(2) + roe.dey.powi(2)).sqrt();
         let de_final = (roe_prop.dex.powi(2) + roe_prop.dey.powi(2)).sqrt();
         assert!(
-            (de_final - de_initial).abs() / de_initial < 0.01,
+            (de_final - de_initial).abs() / de_initial < DE_MAGNITUDE_RELATIVE_TOL,
             "δe magnitude should be ~conserved: initial={de_initial}, final={de_final}"
         );
     }

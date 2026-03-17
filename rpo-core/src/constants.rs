@@ -12,6 +12,9 @@ pub const J2: f64 = 1.082_626_68e-3;
 /// Two pi
 pub const TWO_PI: f64 = 2.0 * std::f64::consts::PI;
 
+/// Seconds per solar day (exact).
+pub const SECONDS_PER_DAY: f64 = 86_400.0;
+
 /// Tolerance for near-circular orbit detection
 pub const ECC_TOL: f64 = 1e-10;
 

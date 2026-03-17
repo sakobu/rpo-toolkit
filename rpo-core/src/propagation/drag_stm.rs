@@ -19,22 +19,22 @@ use crate::types::{KeplerianElements, Matrix9, QuasiNonsingularROE};
 ///
 /// # Arguments
 /// * `chief_mean` - Chief mean Keplerian elements at epoch
-/// * `tau` - Propagation time (seconds)
+/// * `tau_s` - Propagation time (seconds)
 ///
 /// # Invariants
 /// - `chief_mean.a_km > 0`
 /// - `0 <= chief_mean.e < 1`
 /// - `chief_mean` must be **mean** Keplerian elements, not osculating
-/// - `tau` must be finite
+/// - `tau_s` must be finite
 ///
 /// # Errors
 /// Returns `PropagationError` if eccentricity or SMA are out of range.
 pub fn compute_j2_drag_stm(
     chief_mean: &KeplerianElements,
-    tau: f64,
+    tau_s: f64,
 ) -> Result<Matrix9, PropagationError> {
     let j2p = compute_j2_params(chief_mean)?;
-    Ok(compute_j2_drag_stm_with_params(&j2p, chief_mean, tau))
+    Ok(compute_j2_drag_stm_with_params(&j2p, chief_mean, tau_s))
 }
 
 /// Compute the J2+drag 9×9 QNS STM using pre-computed [`J2Params`] (Koenig Appendix D).
@@ -54,18 +54,18 @@ pub fn compute_j2_drag_stm(
 /// # Arguments
 /// * `j2p` - Pre-computed J2 perturbation parameters
 /// * `chief_mean` - Chief mean Keplerian elements at epoch
-/// * `tau` - Propagation time (seconds)
+/// * `tau_s` - Propagation time (seconds)
 ///
 /// # Invariants
 /// - `j2p` must correspond to `chief_mean` (caller responsibility)
 /// - `chief_mean` must be **mean** Keplerian elements, not osculating
-/// - `tau` must be finite
+/// - `tau_s` must be finite
 #[must_use]
 #[allow(clippy::similar_names)]
 pub fn compute_j2_drag_stm_with_params(
     j2p: &J2Params,
     chief_mean: &KeplerianElements,
-    tau: f64,
+    tau_s: f64,
 ) -> Matrix9 {
     let kappa = j2p.kappa;
     let e = chief_mean.e;
@@ -77,23 +77,23 @@ pub fn compute_j2_drag_stm_with_params(
     let big_q = j2p.big_q;
     let big_s = j2p.big_s;
 
-    let omega_f = chief_mean.aop_rad + j2p.aop_dot_rad_s * tau;
+    let omega_f = chief_mean.aop_rad + j2p.aop_dot_rad_s * tau_s;
     let ex_f = e * omega_f.cos();
     let ey_f = e * omega_f.sin();
 
-    let tau2 = tau * tau;
+    let tau2 = tau_s * tau_s;
 
     let mut phi = Matrix9::zeros();
 
     // === Upper-left 6×6: reuse J2-only STM (Eq. A6) from stm.rs ===
-    let j2_block = compute_stm_with_params(j2p, chief_mean, tau);
+    let j2_block = compute_stm_with_params(j2p, chief_mean, tau_s);
     phi.fixed_view_mut::<6, 6>(0, 0).copy_from(&j2_block);
 
     // === Upper-right 6×3: Drag coupling (Eq. D2) ===
     // Columns 6,7,8 correspond to δȧ, δėx, δėy
 
     // Row 0 (δa): only δȧ contributes
-    phi[(0, 6)] = tau;
+    phi[(0, 6)] = tau_s;
 
     // Row 1 (δλ): δȧ causes quadratic along-track drift
     phi[(1, 6)] = -(0.75 * n + 1.75 * kappa * big_e * big_p) * tau2;
@@ -101,13 +101,13 @@ pub fn compute_j2_drag_stm_with_params(
 
     // Row 2 (δex): drag coupling
     phi[(2, 6)] = 1.75 * kappa * ey_f * big_q * tau2;
-    phi[(2, 7)] = omega_f.cos() * tau - 2.0 * kappa * e * ey_f * big_g * big_q * tau2;
-    phi[(2, 8)] = -omega_f.sin() * tau;
+    phi[(2, 7)] = omega_f.cos() * tau_s - 2.0 * kappa * e * ey_f * big_g * big_q * tau2;
+    phi[(2, 8)] = -omega_f.sin() * tau_s;
 
     // Row 3 (δey): drag coupling
     phi[(3, 6)] = -1.75 * kappa * ex_f * big_q * tau2;
-    phi[(3, 7)] = omega_f.sin() * tau + 2.0 * kappa * e * ex_f * big_g * big_q * tau2;
-    phi[(3, 8)] = omega_f.cos() * tau;
+    phi[(3, 7)] = omega_f.sin() * tau_s + 2.0 * kappa * e * ex_f * big_g * big_q * tau2;
+    phi[(3, 8)] = omega_f.cos() * tau_s;
 
     // Row 4 (δix): no drag coupling
     // (already zero)
@@ -136,7 +136,7 @@ pub fn compute_j2_drag_stm_with_params(
 /// * `roe` - Initial quasi-nonsingular ROE
 /// * `chief_mean` - Chief mean Keplerian elements at epoch
 /// * `drag` - DMF differential drag configuration
-/// * `tau` - Propagation time (seconds)
+/// * `tau_s` - Propagation time (seconds)
 ///
 /// # Invariants
 /// - `chief_mean.a_km > 0`
@@ -151,10 +151,10 @@ pub fn propagate_roe_j2_drag(
     roe: &QuasiNonsingularROE,
     chief_mean: &KeplerianElements,
     drag: &DragConfig,
-    tau: f64,
+    tau_s: f64,
 ) -> Result<(QuasiNonsingularROE, KeplerianElements), PropagationError> {
     let j2p = compute_j2_params(chief_mean)?;
-    let stm = compute_j2_drag_stm_with_params(&j2p, chief_mean, tau);
+    let stm = compute_j2_drag_stm_with_params(&j2p, chief_mean, tau_s);
 
     // Build 9-element augmented state vector
     let state = SVector::<f64, 9>::from_column_slice(&[
@@ -174,7 +174,7 @@ pub fn propagate_roe_j2_drag(
     let roe_prop =
         QuasiNonsingularROE::from_vector(&propagated.fixed_view::<6, 1>(0, 0).into_owned());
 
-    let chief_prop = propagate_chief_mean(chief_mean, &j2p, tau);
+    let chief_prop = propagate_chief_mean(chief_mean, &j2p, tau_s);
 
     Ok((roe_prop, chief_prop))
 }
@@ -184,6 +184,72 @@ mod tests {
     use super::*;
     use crate::propagation::stm::compute_stm;
     use crate::test_helpers::{eccentric_elements, iss_like_elements, koenig_table2_case1, test_drag_config};
+
+
+    /// Upper-left 6×6 of 9×9 drag STM must match J2-only STM to machine
+    /// precision when drag rates are zero (structurally identical matrices).
+    const J2_BLOCK_MATCH_TOL: f64 = 1e-14;
+
+    /// 9×9 STM at tau=0 identity deviation. Same reasoning as stm.rs:
+    /// J2 auxiliaries on O(1e3) quantities × machine epsilon.
+    const IDENTITY_9X9_TOL: f64 = 1e-10;
+
+    /// Forward-backward ROE recovery with drag. Drag introduces additional
+    /// secular error vs J2-only, requiring a looser tolerance.
+    const DRAG_ROUNDTRIP_TOL: f64 = 1e-6;
+
+    /// 1% relative error for linear da drift from drag (δa ≈ δȧ·τ).
+    /// Higher-order J2 coupling introduces small deviations from linearity.
+    const DRAG_LINEAR_RELATIVE_TOL: f64 = 0.01;
+
+    /// Allowable deviation from the theoretical quadratic ratio 4.0
+    /// for δλ(2τ)/δλ(τ). ISS-like J2 cross-coupling causes minor
+    /// departure from pure quadratic scaling.
+    const DRAG_QUADRATIC_RATIO_TOL: f64 = 0.5;
+
+    /// Minimum drift magnitude to confirm eccentricity vector has moved
+    /// from zero. Well above machine epsilon for the O(1e-11) drag rates.
+    const ECCENTRICITY_DRIFT_FLOOR: f64 = 1e-15;
+
+    /// Machine-precision tolerance for structurally exact matrix entries:
+    /// lower-right 3×3 identity and lower-left 3×6 zero blocks.
+    const IDENTITY_BLOCK_TOL: f64 = 1e-14;
+
+    /// Tolerance for phi[0,6] = τ (linear δȧ→δa coupling). Limited by
+    /// floating-point representation of the period value.
+    const PHI_LINEAR_TOL: f64 = 1e-4;
+
+    /// Tolerance for phi[1,6] quadratic coefficient entry. The large
+    /// τ² factor amplifies small coefficient errors.
+    const PHI_QUADRATIC_TOL: f64 = 1e-2;
+
+    /// Quadratic scaling tolerance for δλ(10T)/δλ(5T) ≈ 4.0. Allows
+    /// 10% deviation from ideal quadratic behavior.
+    const QUADRATIC_SCALING_TOL: f64 = 0.4;
+
+    /// Tighter quadratic ratio tolerance for paper-traced regression
+    /// (Koenig Appendix D coefficient verification).
+    const QUADRATIC_RATIO_TOL: f64 = 0.1;
+
+    /// Relative tolerance on quadratic coupling coefficient compared to
+    /// analytical value -(0.75·n + 1.75·κ·E·P).
+    const QUADRATIC_COEFF_RELATIVE_TOL: f64 = 1e-6;
+
+    /// δix must remain exactly zero under pure drag input (structural
+    /// zero in STM row 4, drag columns). 1e-30 is far below any possible
+    /// numerical contribution.
+    const DIX_ZERO_TOL: f64 = 1e-30;
+
+    /// Tolerance for phi[0,6]=τ in coefficient verification tests.
+    /// Tighter than `PHI_LINEAR_TOL` because the entry is structurally exact.
+    const PHI_LINEAR_EXACT_TOL: f64 = 1e-9;
+
+    /// Tolerance for phi[1,6] coefficient in the dedicated coefficient test.
+    const PHI_QUADRATIC_COEFF_TOL: f64 = 1e-4;
+
+    /// Relative tolerance on phi[1,6]/phi[0,6] ratio. The ratio cancels τ,
+    /// leaving only the coefficient which can be verified to high precision.
+    const PHI_RATIO_RELATIVE_TOL: f64 = 1e-9;
 
     #[test]
     fn zero_drag_equals_j2_stm() {
@@ -198,7 +264,7 @@ mod tests {
             for c in 0..6 {
                 let diff = (stm_drag[(r, c)] - stm_j2[(r, c)]).abs();
                 assert!(
-                    diff < 1e-14,
+                    diff < J2_BLOCK_MATCH_TOL,
                     "Mismatch at ({r},{c}): drag={}, j2={}, diff={diff}",
                     stm_drag[(r, c)],
                     stm_j2[(r, c)]
@@ -216,7 +282,7 @@ mod tests {
 
         let diff = (stm - identity).norm();
         assert!(
-            diff < 1e-10,
+            diff < IDENTITY_9X9_TOL,
             "STM at tau=0 should be near 9x9 identity, diff={diff}"
         );
     }
@@ -239,27 +305,27 @@ mod tests {
         let (roe_back, _) = propagate_roe_j2_drag(&roe_fwd, &chief_fwd, &drag, -tau).unwrap();
 
         assert!(
-            (roe_back.da - roe.da).abs() < 1e-6,
+            (roe_back.da - roe.da).abs() < DRAG_ROUNDTRIP_TOL,
             "da not recovered: {} vs {}",
             roe_back.da,
             roe.da
         );
         assert!(
-            (roe_back.dex - roe.dex).abs() < 1e-6,
+            (roe_back.dex - roe.dex).abs() < DRAG_ROUNDTRIP_TOL,
             "dex not recovered: {} vs {}",
             roe_back.dex,
             roe.dex
         );
         assert!(
-            (roe_back.dey - roe.dey).abs() < 1e-6,
+            (roe_back.dey - roe.dey).abs() < DRAG_ROUNDTRIP_TOL,
             "dey not recovered"
         );
         assert!(
-            (roe_back.dix - roe.dix).abs() < 1e-6,
+            (roe_back.dix - roe.dix).abs() < DRAG_ROUNDTRIP_TOL,
             "dix not recovered"
         );
         assert!(
-            (roe_back.diy - roe.diy).abs() < 1e-6,
+            (roe_back.diy - roe.diy).abs() < DRAG_ROUNDTRIP_TOL,
             "diy not recovered"
         );
     }
@@ -282,7 +348,7 @@ mod tests {
         let expected_da = da_dot * tau;
         let rel_err = ((roe_prop.da - expected_da) / expected_da).abs();
         assert!(
-            rel_err < 0.01,
+            rel_err < DRAG_LINEAR_RELATIVE_TOL,
             "da should drift linearly: got {}, expected {expected_da}, rel_err={rel_err}",
             roe_prop.da
         );
@@ -306,7 +372,7 @@ mod tests {
         // Quadratic: drift at 2τ ≈ 4× drift at τ
         let ratio = roe_2.dlambda / roe_1.dlambda;
         assert!(
-            (ratio - 4.0).abs() < 0.5,
+            (ratio - 4.0).abs() < DRAG_QUADRATIC_RATIO_TOL,
             "Along-track drift should be quadratic: ratio={ratio}, expected ~4.0"
         );
     }
@@ -328,12 +394,12 @@ mod tests {
 
         // Eccentricity vector should have drifted from zero
         assert!(
-            roe_prop.dex.abs() > 1e-15,
+            roe_prop.dex.abs() > ECCENTRICITY_DRIFT_FLOOR,
             "dex should have drifted, got {}",
             roe_prop.dex
         );
         assert!(
-            roe_prop.dey.abs() > 1e-15,
+            roe_prop.dey.abs() > ECCENTRICITY_DRIFT_FLOOR,
             "dey should have drifted, got {}",
             roe_prop.dey
         );
@@ -351,7 +417,7 @@ mod tests {
             for c in 0..6 {
                 let diff = (stm_drag[(r, c)] - stm_j2[(r, c)]).abs();
                 assert!(
-                    diff < 1e-14,
+                    diff < J2_BLOCK_MATCH_TOL,
                     "Eccentric mismatch at ({r},{c}): drag={}, j2={}, diff={diff}",
                     stm_drag[(r, c)],
                     stm_j2[(r, c)]
@@ -381,7 +447,7 @@ mod tests {
 
         // phi[0,6] = τ (linear δa from δȧ)
         assert!(
-            (stm[(0, 6)] - period).abs() < 1e-4,
+            (stm[(0, 6)] - period).abs() < PHI_LINEAR_TOL,
             "phi[0,6]: got {}, expected {period}", stm[(0, 6)]
         );
 
@@ -389,20 +455,20 @@ mod tests {
         let tau2 = period * period;
         let expected_16 = -(0.75 * j2p.n_rad_s + 1.75 * j2p.kappa * j2p.big_e * j2p.big_p) * tau2;
         assert!(
-            (stm[(1, 6)] - expected_16).abs() < 1e-2,
+            (stm[(1, 6)] - expected_16).abs() < PHI_QUADRATIC_TOL,
             "phi[1,6]: got {}, expected {expected_16}", stm[(1, 6)]
         );
 
         // Lower-right 3×3 identity block
-        assert!((stm[(6, 6)] - 1.0).abs() < 1e-14, "phi[6,6] should be 1.0");
-        assert!((stm[(7, 7)] - 1.0).abs() < 1e-14, "phi[7,7] should be 1.0");
-        assert!((stm[(8, 8)] - 1.0).abs() < 1e-14, "phi[8,8] should be 1.0");
+        assert!((stm[(6, 6)] - 1.0).abs() < IDENTITY_BLOCK_TOL, "phi[6,6] should be 1.0");
+        assert!((stm[(7, 7)] - 1.0).abs() < IDENTITY_BLOCK_TOL, "phi[7,7] should be 1.0");
+        assert!((stm[(8, 8)] - 1.0).abs() < IDENTITY_BLOCK_TOL, "phi[8,8] should be 1.0");
 
         // Lower-left 3×6 block should be all zeros
         for r in 6..9 {
             for c in 0..6 {
                 assert!(
-                    stm[(r, c)].abs() < 1e-14,
+                    stm[(r, c)].abs() < IDENTITY_BLOCK_TOL,
                     "phi[{r},{c}] should be 0, got {}", stm[(r, c)]
                 );
             }
@@ -431,7 +497,7 @@ mod tests {
         // Quadratic: δλ(2T) / δλ(T) ≈ 4.0
         let ratio = roe_2t.dlambda / roe_1t.dlambda;
         assert!(
-            (ratio - 4.0).abs() < 0.1,
+            (ratio - 4.0).abs() < QUADRATIC_RATIO_TOL,
             "Quadratic ratio: got {ratio}, expected ~4.0"
         );
 
@@ -441,7 +507,7 @@ mod tests {
         let expected_coeff = -(0.75 * j2p.n_rad_s + 1.75 * j2p.kappa * j2p.big_e * j2p.big_p);
         let actual_coeff = roe_1t.dlambda / (da_dot * period * period);
         assert!(
-            (actual_coeff - expected_coeff).abs() / expected_coeff.abs() < 1e-6,
+            (actual_coeff - expected_coeff).abs() / expected_coeff.abs() < QUADRATIC_COEFF_RELATIVE_TOL,
             "Quadratic coefficient: got {actual_coeff}, expected {expected_coeff}"
         );
     }
@@ -492,17 +558,17 @@ mod tests {
         let rel_err_da_10t = ((roe_10t.da - expected_da_10t) / expected_da_10t).abs();
 
         assert!(
-            rel_err_da_1t < 0.01,
+            rel_err_da_1t < DRAG_LINEAR_RELATIVE_TOL,
             "δa linear drift at 1T: got {}, expected {expected_da_1t}, rel_err={rel_err_da_1t}",
             roe_1t.da
         );
         assert!(
-            rel_err_da_5t < 0.01,
+            rel_err_da_5t < DRAG_LINEAR_RELATIVE_TOL,
             "δa linear drift at 5T: got {}, expected {expected_da_5t}, rel_err={rel_err_da_5t}",
             roe_5t.da
         );
         assert!(
-            rel_err_da_10t < 0.01,
+            rel_err_da_10t < DRAG_LINEAR_RELATIVE_TOL,
             "δa linear drift at 10T: got {}, expected {expected_da_10t}, rel_err={rel_err_da_10t}",
             roe_10t.da
         );
@@ -513,7 +579,7 @@ mod tests {
         //    Tolerance: 10% (allows for any small non-quadratic J2-driven cross-coupling)
         let ratio_dlambda = roe_10t.dlambda / roe_5t.dlambda;
         assert!(
-            (ratio_dlambda - 4.0).abs() < 0.4,
+            (ratio_dlambda - 4.0).abs() < QUADRATIC_SCALING_TOL,
             "δλ quadratic scaling: δλ(10T)/δλ(5T) = {ratio_dlambda}, expected ~4.0 (within 10%)"
         );
 
@@ -537,11 +603,11 @@ mod tests {
         //    The drag coupling block has phi[4, 6..9] = 0 by construction.
         //    Starting from zero ROE, δix must remain zero to machine precision.
         assert!(
-            roe_1t.dix.abs() < 1e-30,
+            roe_1t.dix.abs() < DIX_ZERO_TOL,
             "δix must remain 0 at 1T under pure drag input; got {}", roe_1t.dix
         );
         assert!(
-            roe_10t.dix.abs() < 1e-30,
+            roe_10t.dix.abs() < DIX_ZERO_TOL,
             "δix must remain 0 at 10T under pure drag input; got {}", roe_10t.dix
         );
     }
@@ -570,7 +636,7 @@ mod tests {
         // The δȧ coupling to δa is purely linear, with no J2 corrections.
         let expected_phi_0_6 = period;
         assert!(
-            (stm[(0, 6)] - expected_phi_0_6).abs() < 1e-9,
+            (stm[(0, 6)] - expected_phi_0_6).abs() < PHI_LINEAR_EXACT_TOL,
             "phi[0,6] = tau: got {}, expected {expected_phi_0_6}",
             stm[(0, 6)]
         );
@@ -582,7 +648,7 @@ mod tests {
         let expected_phi_1_6 =
             -(0.75 * j2p.n_rad_s + 1.75 * j2p.kappa * j2p.big_e * j2p.big_p) * tau2;
         assert!(
-            (stm[(1, 6)] - expected_phi_1_6).abs() < 1e-4,
+            (stm[(1, 6)] - expected_phi_1_6).abs() < PHI_QUADRATIC_COEFF_TOL,
             "phi[1,6] = -(3/4·n + 7/4·κ·E·P)·τ²: got {}, expected {expected_phi_1_6}",
             stm[(1, 6)]
         );
@@ -601,7 +667,7 @@ mod tests {
         let expected_ratio =
             -(0.75 * j2p.n_rad_s + 1.75 * j2p.kappa * j2p.big_e * j2p.big_p) * period;
         assert!(
-            (ratio - expected_ratio).abs() / expected_ratio.abs() < 1e-9,
+            (ratio - expected_ratio).abs() / expected_ratio.abs() < PHI_RATIO_RELATIVE_TOL,
             "phi[1,6]/phi[0,6] ratio: got {ratio}, expected {expected_ratio}"
         );
     }

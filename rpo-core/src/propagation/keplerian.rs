@@ -57,6 +57,23 @@ mod tests {
     use crate::elements::keplerian_conversions::keplerian_to_state;
     use crate::test_helpers::{eccentric_elements, iss_like_elements, test_epoch};
 
+
+    /// Position closure after one full orbital period. Limited by Kepler
+    /// equation convergence tolerance (1e-14 rad) propagated through the
+    /// vis-viva equation and PQW→ECI rotation.
+    const ORBIT_CLOSURE_TOL_KM: f64 = 1e-10;
+
+    /// n_steps=0 returns the exact initial state (no computation, clone only).
+    const ZERO_STEP_IDENTITY_TOL: f64 = 1e-15;
+
+    /// Two-body specific energy conservation (km²/s²). Limited by Kepler
+    /// convergence tolerance chain: M→E→ν→r,v.
+    const ENERGY_CONSERVATION_TOL: f64 = 1e-10;
+
+    /// Two-body angular momentum conservation (km²/s). Same error chain
+    /// as energy conservation — cross product amplifies position/velocity errors.
+    const ANGULAR_MOMENTUM_TOL: f64 = 1e-10;
+
     #[test]
     fn propagate_keplerian_circular_closure() {
         let epoch = test_epoch();
@@ -70,7 +87,7 @@ mod tests {
 
         let pos_err = (trajectory.last().unwrap().position_eci_km - initial.position_eci_km).norm();
         assert!(
-            pos_err < 1e-10,
+            pos_err < ORBIT_CLOSURE_TOL_KM,
             "Circular orbit closure error: {pos_err} km"
         );
     }
@@ -86,7 +103,7 @@ mod tests {
 
         let pos_err = (trajectory.last().unwrap().position_eci_km - initial.position_eci_km).norm();
         assert!(
-            pos_err < 1e-10,
+            pos_err < ORBIT_CLOSURE_TOL_KM,
             "Eccentric orbit closure error: {pos_err} km"
         );
     }
@@ -100,7 +117,7 @@ mod tests {
         let trajectory = propagate_keplerian(&initial, 3600.0, 0).unwrap();
         assert_eq!(trajectory.len(), 1, "n_steps=0 should return 1 state");
         assert!(
-            (trajectory[0].position_eci_km - initial.position_eci_km).norm() < 1e-15,
+            (trajectory[0].position_eci_km - initial.position_eci_km).norm() < ZERO_STEP_IDENTITY_TOL,
             "n_steps=0 should return the initial state"
         );
     }
@@ -126,7 +143,7 @@ mod tests {
             let energy_k = v * v / 2.0 - MU_EARTH / r;
             let err = (energy_k - energy_0).abs();
             assert!(
-                err < 1e-10,
+                err < ENERGY_CONSERVATION_TOL,
                 "Energy conservation violated at step {k}: error = {err} km²/s²"
             );
         }
@@ -148,11 +165,9 @@ mod tests {
 
         for (k, state) in trajectory.iter().enumerate() {
             let h_k = state.position_eci_km.cross(&state.velocity_eci_km_s);
-            // 1e-10 km²/s: limited by Kepler equation convergence tolerance (1e-14 rad)
-            // propagated through the vis-viva equation and PQW→ECI rotation
             let err = (h_k - h_0).norm();
             assert!(
-                err < 1e-10,
+                err < ANGULAR_MOMENTUM_TOL,
                 "Angular momentum conservation violated at step {k}: error = {err} km²/s"
             );
         }

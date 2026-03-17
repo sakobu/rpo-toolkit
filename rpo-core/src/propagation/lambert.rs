@@ -159,8 +159,8 @@ pub(crate) fn build_transfer(
     arrival: &StateVector,
     v1_vec: Vector3<f64>,
     v2_vec: Vector3<f64>,
-    tof: f64,
-    c3: f64,
+    tof_s: f64,
+    c3_km2_s2: f64,
     direction: TransferDirection,
 ) -> LambertTransfer {
     let departure_dv = v1_vec - departure.velocity_eci_km_s;
@@ -181,8 +181,8 @@ pub(crate) fn build_transfer(
         departure_dv_eci_km_s: departure_dv,
         arrival_dv_eci_km_s: arrival_dv,
         total_dv_km_s: total_dv,
-        tof_s: tof,
-        c3_km2_s2: c3,
+        tof_s,
+        c3_km2_s2,
         direction,
     }
 }
@@ -240,6 +240,11 @@ fn transfer_from_solution(
 /// - `arrival.epoch > departure.epoch` (positive time of flight)
 /// - Departure and arrival positions must be non-degenerate (separation > `LAMBERT_MIN_SEPARATION_KM`)
 /// - Transfer angle must not be exactly 0 or π (degenerate geometry)
+///
+/// # Near-degenerate behavior
+/// For transfer angles within a few degrees of 0 or π, the Izzo solver
+/// may produce large Δv or return `IzzoConvergenceFailure`. The
+/// `near_180_degree_transfer` test documents this graceful degradation.
 ///
 /// # Errors
 /// Returns `LambertError` if the solver fails or inputs are invalid.
@@ -321,6 +326,12 @@ mod tests {
     use crate::test_helpers::{leo_400km_elements, leo_800km_target_elements, test_epoch};
     use crate::types::KeplerianElements;
     use hifitime::Duration;
+    
+
+    /// Keplerian propagation endpoint position agreement with Lambert transfer
+    /// endpoints. 1e-6 km accounts for accumulated Kepler equation convergence
+    /// error over the full arc.
+    const ARC_ENDPOINT_TOL_KM: f64 = 1e-6;
 
     #[test]
     fn izzo_coplanar_transfer() {
@@ -437,10 +448,10 @@ mod tests {
         let arr_err = (arc.last().unwrap().position_eci_km - transfer.arrival_state.position_eci_km).norm();
 
         assert!(
-            dep_err < 1e-6,
+            dep_err < ARC_ENDPOINT_TOL_KM,
             "Departure position mismatch: {dep_err} km"
         );
-        assert!(arr_err < 1e-6, "Arrival position mismatch: {arr_err} km");
+        assert!(arr_err < ARC_ENDPOINT_TOL_KM, "Arrival position mismatch: {arr_err} km");
     }
 
     #[test]

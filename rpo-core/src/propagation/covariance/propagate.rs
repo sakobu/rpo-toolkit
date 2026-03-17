@@ -73,21 +73,21 @@ pub fn ric_accuracy_to_roe_covariance(
 /// - `chief_mean.a_km > 0` and `0 <= chief_mean.e < 1`
 /// - `chief_mean` must be **mean** Keplerian elements, not osculating
 /// - `covariance_roe` should be symmetric positive semi-definite (PSD)
-/// - `tau` must be finite
+/// - `tau_s` must be finite
 ///
 /// # Arguments
 /// * `covariance_roe` - Initial 6×6 ROE covariance (symmetric PSD)
 /// * `chief_mean` - Chief mean Keplerian elements at initial epoch
-/// * `tau` - Propagation time (seconds)
+/// * `tau_s` - Propagation time (seconds)
 ///
 /// # Errors
 /// Returns `CovarianceError::StmFailure` if STM computation fails.
 pub fn propagate_covariance(
     covariance_roe: &Matrix6,
     chief_mean: &KeplerianElements,
-    tau: f64,
+    tau_s: f64,
 ) -> Result<Matrix6, CovarianceError> {
-    let phi = compute_stm(chief_mean, tau)?;
+    let phi = compute_stm(chief_mean, tau_s)?;
     let p1 = phi * covariance_roe * phi.transpose();
     Ok(symmetrize6(&p1))
 }
@@ -102,15 +102,15 @@ pub fn propagate_covariance(
 /// - `j2p` must correspond to `chief_mean` (caller responsibility)
 /// - `chief_mean` must be **mean** Keplerian elements, not osculating
 /// - `covariance_roe` should be symmetric PSD
-/// - `tau` must be finite
+/// - `tau_s` must be finite
 #[must_use]
 pub fn propagate_covariance_with_params(
     covariance_roe: &Matrix6,
     j2p: &J2Params,
     chief_mean: &KeplerianElements,
-    tau: f64,
+    tau_s: f64,
 ) -> Matrix6 {
-    let phi = compute_stm_with_params(j2p, chief_mean, tau);
+    let phi = compute_stm_with_params(j2p, chief_mean, tau_s);
     let p1 = phi * covariance_roe * phi.transpose();
     symmetrize6(&p1)
 }
@@ -126,22 +126,22 @@ pub fn propagate_covariance_with_params(
 /// - `chief_mean.a_km > 0` and `0 <= chief_mean.e < 1`
 /// - `chief_mean` must be **mean** Keplerian elements, not osculating
 /// - `covariance_roe` should be symmetric PSD
-/// - `tau` must be finite
+/// - `tau_s` must be finite
 /// - Drag rates are treated as deterministic (no uncertainty on drag state)
 ///
 /// # Arguments
 /// * `covariance_roe` - Initial 6×6 ROE covariance
 /// * `chief_mean` - Chief mean Keplerian elements
-/// * `tau` - Propagation time (seconds)
+/// * `tau_s` - Propagation time (seconds)
 ///
 /// # Errors
 /// Returns `CovarianceError::StmFailure` if STM computation fails.
 pub fn propagate_covariance_with_drag(
     covariance_roe: &Matrix6,
     chief_mean: &KeplerianElements,
-    tau: f64,
+    tau_s: f64,
 ) -> Result<Matrix6, CovarianceError> {
-    let phi9 = compute_j2_drag_stm(chief_mean, tau)?;
+    let phi9 = compute_j2_drag_stm(chief_mean, tau_s)?;
 
     // Embed 6×6 covariance into upper-left block of 9×9
     let mut p9 = Matrix9::zeros();
@@ -298,7 +298,7 @@ pub fn compute_collision_metrics(
 /// - `j2p` must correspond to `chief_mean` (caller responsibility)
 /// - `chief_mean` must be **mean** Keplerian elements, not osculating
 /// - `p_post_dep` should be symmetric PSD
-/// - `tau` must be finite
+/// - `tau_s` must be finite
 ///
 /// # Arguments
 /// * `p_post_dep` - Post-departure 6×6 ROE covariance (symmetric PSD)
@@ -306,7 +306,7 @@ pub fn compute_collision_metrics(
 /// * `j2p` - Pre-computed J2 perturbation parameters
 /// * `chief_mean` - Chief mean Keplerian elements at departure epoch
 /// * `propagator` - Propagation model (determines J2 vs J2+drag STM)
-/// * `tau` - Propagation time from departure (seconds)
+/// * `tau_s` - Propagation time from departure (seconds)
 ///
 /// # Returns
 /// Tuple of (propagated covariance, propagated ROE state vector).
@@ -316,17 +316,17 @@ pub(crate) fn propagate_sample(
     j2p: &J2Params,
     chief_mean: &KeplerianElements,
     propagator: &PropagationModel,
-    tau: f64,
+    tau_s: f64,
 ) -> (Matrix6, nalgebra::SVector<f64, 6>) {
     match propagator {
         PropagationModel::J2Stm => {
-            let phi = compute_stm_with_params(j2p, chief_mean, tau);
+            let phi = compute_stm_with_params(j2p, chief_mean, tau_s);
             let p = symmetrize6(&(phi * p_post_dep * phi.transpose()));
             let roe = phi * roe_vec_0;
             (p, roe)
         }
         PropagationModel::J2DragStm { drag: _ } => {
-            let phi9 = compute_j2_drag_stm_with_params(j2p, chief_mean, tau);
+            let phi9 = compute_j2_drag_stm_with_params(j2p, chief_mean, tau_s);
             // Embed 6×6 covariance in upper-left block of 9×9
             let mut p9 = Matrix9::zeros();
             p9.fixed_view_mut::<6, 6>(0, 0).copy_from(p_post_dep);
@@ -358,7 +358,6 @@ mod tests {
     use crate::constants::COVARIANCE_SYMMETRY_TOL;
     use crate::test_helpers::iss_like_elements;
 
-    // ── Test tolerances (documented per CLAUDE.md policy) ──────────────────
 
     /// PSD eigenvalue floor: eigenvalues below this are numerical noise,
     /// not a true PSD violation. 1e-10 is ~100× above machine epsilon
