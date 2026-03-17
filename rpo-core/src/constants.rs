@@ -87,3 +87,9 @@ pub const COVARIANCE_SIGMA_FLOOR: f64 = 1e-15;
 /// Minimum spacecraft dry mass (kg) after dispersion.
 /// Prevents non-physical zero or negative mass in dispersed samples.
 pub const MIN_SPACECRAFT_MASS_KG: f64 = 0.1;
+
+/// Tolerance for floating-point comparison of elapsed time (seconds).
+/// Used in test assertions that check whether an elapsed time falls within
+/// a mission or trajectory duration. 1e-6 s = 1 µs, well above f64
+/// rounding error for orbital-period-scale times (~5500 s).
+pub const ELAPSED_TIME_TOL_S: f64 = 1e-6;

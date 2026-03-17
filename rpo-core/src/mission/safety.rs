@@ -487,11 +487,11 @@ mod tests {
         assert!(worst.operational.min_rc_elapsed_s >= 0.0, "R/C elapsed_s should be non-negative");
         assert!(worst.operational.min_3d_elapsed_s >= 0.0, "3D elapsed_s should be non-negative");
         assert!(
-            worst.operational.min_rc_elapsed_s <= period + 1e-6,
+            worst.operational.min_rc_elapsed_s <= period + crate::constants::ELAPSED_TIME_TOL_S,
             "R/C elapsed_s should be within trajectory span"
         );
         assert!(
-            worst.operational.min_3d_elapsed_s <= period + 1e-6,
+            worst.operational.min_3d_elapsed_s <= period + crate::constants::ELAPSED_TIME_TOL_S,
             "3D elapsed_s should be within trajectory span"
         );
 

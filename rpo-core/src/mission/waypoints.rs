@@ -325,6 +325,32 @@ mod tests {
     use crate::types::QuasiNonsingularROE;
     use nalgebra::Vector3;
 
+    /// Tolerance for f64 scalar/vector roundtrips where both values come from
+    /// the same computation path (serde, kept-leg identity, Δv sums).
+    /// No independent evaluation — agreement limited only by f64 representation.
+    const SCALAR_ROUNDTRIP_TOL: f64 = 1e-14;
+
+    /// Tolerance for propagated state agreement when the same propagation model
+    /// is evaluated at t=0 (identity) or at the exact same query time.
+    /// Single STM evaluation — error is f64 arithmetic only.
+    const SAME_PATH_PROPAGATION_TOL: f64 = 1e-12;
+
+    /// Tolerance for cross-path propagation agreement: comparing a freshly
+    /// propagated state against the last point of a discretized trajectory.
+    /// Different evaluation paths (direct propagation vs. trajectory sampling
+    /// at `n_steps` resolution) introduce ~1e-10 accumulated error.
+    const CROSS_PATH_PROPAGATION_TOL: f64 = 1e-10;
+
+    /// Tolerance for accumulated floating-point error across multiple legs.
+    /// Summing 3 TOFs via iterator `.sum()` vs. the mission's precomputed
+    /// `total_duration_s` can diverge by O(1e-6) due to associativity.
+    const MULTI_LEG_ACCUMULATION_TOL: f64 = 1e-6;
+
+    /// Physical bound for near-origin RIC position (km).
+    /// A zero-ROE departure state maps to the chief origin; 1e-6 km = 1 mm
+    /// accounts for linearization residual in the ROE→RIC mapping.
+    const ZERO_ROE_POSITION_BOUND_KM: f64 = 1e-6;
+
     fn default_config() -> MissionConfig {
         MissionConfig::default()
     }
@@ -396,7 +422,7 @@ mod tests {
         // Total duration should be sum of leg TOFs
         let sum_tof: f64 = mission.legs.iter().map(|l| l.tof_s).sum();
         assert!(
-            (mission.total_duration_s - sum_tof).abs() < 1e-6,
+            (mission.total_duration_s - sum_tof).abs() < MULTI_LEG_ACCUMULATION_TOL,
             "Total duration should match sum of leg TOFs"
         );
     }
@@ -459,7 +485,7 @@ mod tests {
         assert!(state.is_some(), "Should find state at mid-mission");
         let s = state.unwrap();
         assert!(
-            (s.elapsed_s - query_t).abs() < 1e-12,
+            (s.elapsed_s - query_t).abs() < SAME_PATH_PROPAGATION_TOL,
             "elapsed_s should exactly match query time"
         );
 
@@ -495,7 +521,7 @@ mod tests {
             .unwrap().expect("t=0 should be valid");
         let first = &mission.legs[0].trajectory[0];
         assert!(
-            (at_start.ric.position_ric_km - first.ric.position_ric_km).norm() < 1e-12,
+            (at_start.ric.position_ric_km - first.ric.position_ric_km).norm() < SAME_PATH_PROPAGATION_TOL,
             "Start position should match trajectory[0]"
         );
 
@@ -504,7 +530,7 @@ mod tests {
             .unwrap().expect("t=tof should be valid");
         let last = mission.legs[0].trajectory.last().unwrap();
         assert!(
-            (at_end.ric.position_ric_km - last.ric.position_ric_km).norm() < 1e-10,
+            (at_end.ric.position_ric_km - last.ric.position_ric_km).norm() < CROSS_PATH_PROPAGATION_TOL,
             "End position should match trajectory.last()"
         );
     }
@@ -543,7 +569,7 @@ mod tests {
         // elapsed_s should be the local time within the second leg
         let expected_local_t = tof * 0.37;
         assert!(
-            (state.elapsed_s - expected_local_t).abs() < 1e-10,
+            (state.elapsed_s - expected_local_t).abs() < CROSS_PATH_PROPAGATION_TOL,
             "elapsed_s should be local time within leg: got {} expected {}",
             state.elapsed_s,
             expected_local_t,
@@ -576,7 +602,7 @@ mod tests {
         // First point should match trajectory[0]
         let first_orig = &mission.legs[0].trajectory[0];
         assert!(
-            (resampled[0].ric.position_ric_km - first_orig.ric.position_ric_km).norm() < 1e-12,
+            (resampled[0].ric.position_ric_km - first_orig.ric.position_ric_km).norm() < SAME_PATH_PROPAGATION_TOL,
             "Resampled first point should match original"
         );
     }
@@ -647,7 +673,7 @@ mod tests {
             serde_json::from_str(&json).expect("deserialize should work");
 
         assert_eq!(mission.legs.len(), deserialized.legs.len());
-        assert!((mission.total_dv_km_s - deserialized.total_dv_km_s).abs() < 1e-14);
+        assert!((mission.total_dv_km_s - deserialized.total_dv_km_s).abs() < SCALAR_ROUNDTRIP_TOL);
     }
 
     fn three_wp_waypoints(tof: f64) -> Vec<Waypoint> {
@@ -688,7 +714,7 @@ mod tests {
 
         assert_eq!(full.legs.len(), replanned.legs.len());
         assert!(
-            (full.total_dv_km_s - replanned.total_dv_km_s).abs() < 1e-14,
+            (full.total_dv_km_s - replanned.total_dv_km_s).abs() < SCALAR_ROUNDTRIP_TOL,
             "Total Δv should match"
         );
     }
@@ -720,11 +746,11 @@ mod tests {
         // First two legs should be identical
         for i in 0..2 {
             assert!(
-                (original.legs[i].total_dv_km_s - replanned.legs[i].total_dv_km_s).abs() < 1e-14,
+                (original.legs[i].total_dv_km_s - replanned.legs[i].total_dv_km_s).abs() < SCALAR_ROUNDTRIP_TOL,
                 "Kept leg {i} Δv should be identical"
             );
             assert!(
-                (original.legs[i].tof_s - replanned.legs[i].tof_s).abs() < 1e-14,
+                (original.legs[i].tof_s - replanned.legs[i].tof_s).abs() < SCALAR_ROUNDTRIP_TOL,
                 "Kept leg {i} TOF should be identical"
             );
         }
@@ -785,12 +811,12 @@ mod tests {
         assert_eq!(replanned.legs.len(), 3);
         // Leg 0 should be identical
         assert!(
-            (original.legs[0].total_dv_km_s - replanned.legs[0].total_dv_km_s).abs() < 1e-14,
+            (original.legs[0].total_dv_km_s - replanned.legs[0].total_dv_km_s).abs() < SCALAR_ROUNDTRIP_TOL,
             "Kept leg 0 should be identical"
         );
         // Leg 1 should differ (different target)
         assert!(
-            (original.legs[1].total_dv_km_s - replanned.legs[1].total_dv_km_s).abs() > 1e-10,
+            (original.legs[1].total_dv_km_s - replanned.legs[1].total_dv_km_s).abs() > CROSS_PATH_PROPAGATION_TOL,
             "Replanned leg 1 should differ from original"
         );
     }
@@ -874,7 +900,7 @@ mod tests {
         // Both kept legs should be identical to original
         for i in 0..2 {
             assert!(
-                (original.legs[i].total_dv_km_s - replanned.legs[i].total_dv_km_s).abs() < 1e-14,
+                (original.legs[i].total_dv_km_s - replanned.legs[i].total_dv_km_s).abs() < SCALAR_ROUNDTRIP_TOL,
                 "Kept leg {i} should be identical"
             );
         }
@@ -907,17 +933,17 @@ mod tests {
         );
         // to_position_ric_km should match the target
         assert!(
-            (leg.to_position_ric_km - target_pos).norm() < 1e-14,
+            (leg.to_position_ric_km - target_pos).norm() < SCALAR_ROUNDTRIP_TOL,
             "to_position_ric_km should match target"
         );
         // target_velocity_ric_km_s should be zeros
         assert!(
-            leg.target_velocity_ric_km_s.norm() < 1e-14,
+            leg.target_velocity_ric_km_s.norm() < SCALAR_ROUNDTRIP_TOL,
             "target_velocity_ric_km_s should be zeros"
         );
         // from_position_ric_km: departure ROE is zero → from_position_ric_km should be near origin
         assert!(
-            leg.from_position_ric_km.norm() < 1e-6,
+            leg.from_position_ric_km.norm() < ZERO_ROE_POSITION_BOUND_KM,
             "from_position_ric_km should be near origin for zero ROE departure"
         );
     }
@@ -958,7 +984,7 @@ mod tests {
         assert!(at_end.is_some(), "Mission endpoint should be included");
 
         // At 2*tof + epsilon: should return None
-        let past_end = get_mission_state_at_time(&mission, 2.0 * tof + 1e-6, &propagator).unwrap();
+        let past_end = get_mission_state_at_time(&mission, 2.0 * tof + crate::constants::ELAPSED_TIME_TOL_S, &propagator).unwrap();
         assert!(past_end.is_none(), "Past mission end should return None");
     }
 
@@ -986,15 +1012,15 @@ mod tests {
         let leg = &deserialized.legs[0];
         assert_eq!(leg.iterations, mission.legs[0].iterations);
         assert!(
-            (leg.position_error_km - mission.legs[0].position_error_km).abs() < 1e-14,
+            (leg.position_error_km - mission.legs[0].position_error_km).abs() < SCALAR_ROUNDTRIP_TOL,
             "position_error_km should survive roundtrip"
         );
         assert!(
-            (leg.to_position_ric_km - mission.legs[0].to_position_ric_km).norm() < 1e-14,
+            (leg.to_position_ric_km - mission.legs[0].to_position_ric_km).norm() < SCALAR_ROUNDTRIP_TOL,
             "to_position_ric_km should survive roundtrip"
         );
         assert!(
-            (leg.from_position_ric_km - mission.legs[0].from_position_ric_km).norm() < 1e-14,
+            (leg.from_position_ric_km - mission.legs[0].from_position_ric_km).norm() < SCALAR_ROUNDTRIP_TOL,
             "from_position_ric_km should survive roundtrip"
         );
     }
@@ -1061,13 +1087,13 @@ mod tests {
             "3D elapsed_s should be non-negative"
         );
         assert!(
-            safety.operational.min_rc_elapsed_s <= mission.total_duration_s + 1e-6,
+            safety.operational.min_rc_elapsed_s <= mission.total_duration_s + crate::constants::ELAPSED_TIME_TOL_S,
             "R/C elapsed_s ({}) should be within mission duration ({})",
             safety.operational.min_rc_elapsed_s,
             mission.total_duration_s,
         );
         assert!(
-            safety.operational.min_3d_elapsed_s <= mission.total_duration_s + 1e-6,
+            safety.operational.min_3d_elapsed_s <= mission.total_duration_s + crate::constants::ELAPSED_TIME_TOL_S,
             "3D elapsed_s ({}) should be within mission duration ({})",
             safety.operational.min_3d_elapsed_s,
             mission.total_duration_s,
