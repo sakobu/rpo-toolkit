@@ -16,4 +16,4 @@ pub use roe_to_ric::{
     compute_t_matrix, compute_t_position, compute_t_velocity, ric_position_to_roe, roe_to_ric,
     RicError,
 };
-pub use roe::compute_roe;
+pub use roe::{compute_roe, wrap_angle};

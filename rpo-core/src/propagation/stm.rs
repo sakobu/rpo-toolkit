@@ -173,7 +173,7 @@ pub fn propagate_chief_mean(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::elements::roe::wrap_angle;
+    use crate::wrap_angle;
     use crate::test_helpers::{
         iss_like_elements, koenig_table2_case1, koenig_table2_case1_roe, koenig_table2_case2,
     };

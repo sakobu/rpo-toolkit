@@ -1,7 +1,7 @@
 //! Quasi-nonsingular relative orbital element (ROE) computation.
 
 use crate::constants::TWO_PI;
-use crate::elements::keplerian_conversions::{validate_elements, ConversionError};
+use crate::elements::keplerian_conversions::ConversionError;
 use crate::types::{KeplerianElements, QuasiNonsingularROE};
 
 /// Compute quasi-nonsingular relative orbital elements (Koenig Eq. 2).
@@ -19,7 +19,7 @@ pub fn compute_roe(
     chief: &KeplerianElements,
     deputy: &KeplerianElements,
 ) -> Result<QuasiNonsingularROE, ConversionError> {
-    validate_elements(chief)?;
+    chief.validate()?;
 
     let da = (deputy.a_km - chief.a_km) / chief.a_km;
 

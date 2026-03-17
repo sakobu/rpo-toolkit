@@ -6,7 +6,7 @@
 
 use nalgebra::{SMatrix, Vector3};
 
-use crate::elements::keplerian_conversions::{validate_elements, ConversionError};
+use crate::elements::keplerian_conversions::ConversionError;
 use crate::types::{KeplerianElements, QuasiNonsingularROE, RICState};
 
 /// Errors from RIC ↔ ROE operations.
@@ -53,7 +53,7 @@ impl From<ConversionError> for RicError {
 /// # Errors
 /// Returns `ConversionError::KeplerFailure` if `chief.a_km <= 0` or `chief.e` is outside [0, 1).
 pub fn compute_t_matrix(chief: &KeplerianElements) -> Result<SMatrix<f64, 6, 6>, ConversionError> {
-    validate_elements(chief)?;
+    chief.validate()?;
     let a = chief.a_km;
     let n = chief.mean_motion()?;
     let u = chief.mean_arg_of_lat();

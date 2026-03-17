@@ -340,7 +340,7 @@ fn compare_stm_vs_rk4(
     let a = chief.a_km * 1000.0; // convert to meters
     [
         a * (stm_roe.da - numerical_roe.da).abs(),
-        a * (crate::elements::roe::wrap_angle(stm_roe.dlambda - numerical_roe.dlambda)).abs(),
+        a * (crate::wrap_angle(stm_roe.dlambda - numerical_roe.dlambda)).abs(),
         a * (stm_roe.dex - numerical_roe.dex).abs(),
         a * (stm_roe.dey - numerical_roe.dey).abs(),
         a * (stm_roe.dix - numerical_roe.dix).abs(),

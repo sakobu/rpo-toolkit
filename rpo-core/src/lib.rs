@@ -23,7 +23,7 @@ pub use elements::{
     apply_maneuver, compute_b_matrix, compute_roe, compute_t_matrix, compute_t_position,
     compute_t_velocity, eci_to_ric_dcm, eci_to_ric_dv, eci_to_ric_relative, keplerian_to_state,
     ric_position_to_roe, ric_to_eci_dv, ric_to_eci_position, ric_to_eci_state, roe_to_ric,
-    state_to_keplerian, ConversionError, DcmError, RicError,
+    state_to_keplerian, wrap_angle, ConversionError, DcmError, RicError,
 };
 pub use mission::{
     analyze_safety, analyze_trajectory_safety, classify_separation,

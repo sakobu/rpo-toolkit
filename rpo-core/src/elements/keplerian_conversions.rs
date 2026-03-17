@@ -58,21 +58,6 @@ impl From<KeplerError> for ConversionError {
     }
 }
 
-/// Validate that Keplerian elements have positive SMA and bound eccentricity.
-///
-/// # Errors
-/// Returns `ConversionError::KeplerFailure(KeplerError::InvalidSemiMajorAxis)` if `ke.a_km <= 0`.
-/// Returns `ConversionError::KeplerFailure(KeplerError::InvalidEccentricity)` if `ke.e < 0` or `ke.e >= 1`.
-pub(crate) fn validate_elements(ke: &KeplerianElements) -> Result<(), ConversionError> {
-    if ke.a_km <= 0.0 {
-        return Err(KeplerError::InvalidSemiMajorAxis { a_km: ke.a_km }.into());
-    }
-    if ke.e < 0.0 || ke.e >= 1.0 {
-        return Err(KeplerError::InvalidEccentricity { e: ke.e }.into());
-    }
-    Ok(())
-}
-
 /// Convert an ECI state vector to Keplerian orbital elements.
 ///
 /// Handles edge cases:
@@ -197,7 +182,7 @@ pub fn state_to_keplerian(sv: &StateVector) -> Result<KeplerianElements, Convers
 /// # Errors
 /// Returns `ConversionError::KeplerFailure` if `ke.a_km <= 0` or `ke.e` is outside [0, 1).
 pub fn keplerian_to_state(ke: &KeplerianElements, epoch: Epoch) -> Result<StateVector, ConversionError> {
-    validate_elements(ke)?;
+    ke.validate()?;
 
     let nu = ke.true_anomaly()?;
     let p = ke.a_km * (1.0 - ke.e * ke.e); // semi-latus rectum

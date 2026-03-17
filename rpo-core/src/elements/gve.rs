@@ -5,7 +5,7 @@
 
 use nalgebra::{SMatrix, Vector3};
 
-use crate::elements::keplerian_conversions::{validate_elements, ConversionError};
+use crate::elements::keplerian_conversions::ConversionError;
 use crate::types::{KeplerianElements, QuasiNonsingularROE};
 
 /// Compute the 6×3 GVE control input matrix (D'Amico Eq. 2.38).
@@ -25,7 +25,7 @@ use crate::types::{KeplerianElements, QuasiNonsingularROE};
 /// # Errors
 /// Returns `ConversionError::KeplerFailure` if `chief.a_km <= 0` or `chief.e` is outside [0, 1).
 pub fn compute_b_matrix(chief: &KeplerianElements) -> Result<SMatrix<f64, 6, 3>, ConversionError> {
-    validate_elements(chief)?;
+    chief.validate()?;
     let a = chief.a_km;
     let n = chief.mean_motion()?;
     let u = chief.mean_arg_of_lat();

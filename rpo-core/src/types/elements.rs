@@ -68,7 +68,29 @@ pub struct KeplerianElements {
 }
 
 impl KeplerianElements {
+    /// Validate that the orbital elements are physically meaningful.
+    ///
+    /// # Invariants
+    /// - `a_km > 0` (positive semi-major axis)
+    /// - `0 <= e < 1` (bound elliptical orbit)
+    ///
+    /// # Errors
+    /// Returns `KeplerError::InvalidSemiMajorAxis` if `self.a_km <= 0`.
+    /// Returns `KeplerError::InvalidEccentricity` if `self.e` is outside [0, 1).
+    pub fn validate(&self) -> Result<(), KeplerError> {
+        if self.a_km <= 0.0 {
+            return Err(KeplerError::InvalidSemiMajorAxis { a_km: self.a_km });
+        }
+        if self.e < 0.0 || self.e >= 1.0 {
+            return Err(KeplerError::InvalidEccentricity { e: self.e });
+        }
+        Ok(())
+    }
+
     /// Mean motion n = sqrt(μ/a³) (rad/s).
+    ///
+    /// # Invariants
+    /// - `a_km > 0` (semi-major axis appears as a³ in denominator)
     ///
     /// # Errors
     /// Returns `KeplerError::InvalidSemiMajorAxis` if `self.a_km <= 0`.
@@ -81,6 +103,9 @@ impl KeplerianElements {
 
     /// Orbital period T = 2π/n (seconds).
     ///
+    /// # Invariants
+    /// - `a_km > 0` (propagated from `mean_motion()`)
+    ///
     /// # Errors
     /// Returns `KeplerError::InvalidSemiMajorAxis` if `self.a_km <= 0` (propagated
     /// from `mean_motion()`).
@@ -91,6 +116,16 @@ impl KeplerianElements {
 
     /// Solve Kepler's equation M = E - e*sin(E) for eccentric anomaly E,
     /// then compute true anomaly ν.
+    ///
+    /// Uses Newton-Raphson iteration with convergence tolerance `KEPLER_TOL`.
+    /// For high eccentricity (e >= 0.8), the initial guess is shifted to π
+    /// to avoid divergence of the standard M-based starting point.
+    ///
+    /// # Invariants
+    /// - `0 <= e < 1` (elliptical orbit; parabolic/hyperbolic not supported)
+    /// - `mean_anomaly_rad` should be finite
+    /// - Convergence degrades as `e → 1`; near-parabolic orbits may require
+    ///   more iterations than `KEPLER_MAX_ITER`
     ///
     /// # Errors
     /// Returns `KeplerError::InvalidEccentricity` if `self.e` is outside [0, 1).
