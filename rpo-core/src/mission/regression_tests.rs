@@ -257,7 +257,7 @@ fn verify_lambert_against_nyx(dep: &StateVector, arr: &StateVector) {
         &transfer.departure_state, tof, 0,
         &SpacecraftConfig::default(), dynamics, &almanac,
     ).expect("nyx propagation should succeed");
-    let propagated = results.last().unwrap().1.clone();
+    let propagated = results.last().unwrap().state.clone();
 
     let pos_err = (propagated.position_eci_km - arr.position_eci_km).norm();
     assert!(
@@ -548,14 +548,14 @@ fn j2_stm_vs_nyx_two_body() {
         &chief_sv, duration, 0,
         &SpacecraftConfig::default(), chief_dynamics, &almanac,
     ).expect("chief nyx propagation failed");
-    let chief_nyx = chief_results.last().unwrap().1.clone();
+    let chief_nyx = chief_results.last().unwrap().state.clone();
 
     let deputy_dynamics = SpacecraftDynamics::new(OrbitalDynamics::two_body());
     let deputy_results = nyx_bridge::nyx_propagate_segment(
         &deputy_sv, duration, 0,
         &SpacecraftConfig::default(), deputy_dynamics, &almanac,
     ).expect("deputy nyx propagation failed");
-    let deputy_nyx = deputy_results.last().unwrap().1.clone();
+    let deputy_nyx = deputy_results.last().unwrap().state.clone();
 
     // Compute ROEs from nyx final states
     let chief_ke_final = state_to_keplerian(&chief_nyx).unwrap();
@@ -639,7 +639,7 @@ fn full_physics_propagate_one_orbit() {
     )
     .expect("full physics propagation should succeed");
 
-    let final_state = &results.last().unwrap().1;
+    let final_state = &results.last().unwrap().state;
     let r = final_state.position_eci_km.norm();
     let v = final_state.velocity_eci_km_s.norm();
 

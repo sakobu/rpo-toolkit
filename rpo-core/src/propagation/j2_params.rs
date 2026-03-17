@@ -71,6 +71,24 @@ pub struct J2Params {
 /// - `0 <= mean.e < 1` (`e = 1` → `η = 0` → division by zero in `G = 1/(η²(1+η))`)
 /// - `mean` must be **mean** Keplerian elements, not osculating
 ///
+/// # Singularities and regime boundaries
+/// - **e → 1:** `η = √(1−e²)` → 0, causing `G = 1/(η²(1+η))` → ∞ and
+///   `κ = (3/4)·n·J2·(R_E/p)²` → ∞ (since `p = a(1−e²)` → 0). All
+///   downstream secular rates diverge. Rejected at the boundary by
+///   `e < 1` validation.
+/// - **Near-parabolic (e > ~0.9):** G and κ grow rapidly, amplifying all STM
+///   entries that depend on them. Numerically valid but poorly conditioned for
+///   the downstream linearized STM.
+/// - **Near-equatorial (i → 0 or π):** S = sin(2i) → 0 zeroes out
+///   inclination-coupling terms in the STM. P → 2, Q → 4, R → ±1. RAAN
+///   secular rate reaches maximum magnitude. No singularity — the QNS
+///   formulation is well-defined at all inclinations.
+/// - **Near-polar (i → π/2):** P → −1, Q → −1, R → 0. RAAN rate vanishes.
+///   Well-conditioned.
+/// - **Near-circular (e → 0):** η → 1, G → 0.5, ex → 0, ey → 0. All
+///   quantities are well-conditioned. This is the regime the QNS formulation
+///   is designed for.
+///
 /// # Errors
 /// Returns `PropagationError::KeplerFailure` if `e` is outside [0, 1) or `a_km <= 0`.
 #[allow(clippy::many_single_char_names, clippy::similar_names)]

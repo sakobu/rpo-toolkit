@@ -15,6 +15,7 @@ use crate::mission::types::{Waypoint, WaypointMission};
 use crate::mission::waypoints::plan_waypoint_mission;
 use crate::propagation::nyx_bridge::{
     apply_impulse, build_full_physics_dynamics, build_nyx_safety_states, nyx_propagate_segment,
+    ChiefDeputySnapshot,
 };
 use crate::propagation::propagator::{PropagatedState, PropagationModel};
 use crate::types::{DepartureState, SpacecraftConfig, StateVector};
@@ -161,7 +162,7 @@ pub(crate) fn run_single_sample(
     let maneuver_disp = config.dispersions.maneuver.as_ref();
     let traj_steps = config.trajectory_steps.max(1);
     // u32 → usize: always widening on 32-bit and 64-bit platforms.
-    let mut all_safety_pairs: Vec<(f64, StateVector, StateVector)> =
+    let mut all_safety_pairs: Vec<ChiefDeputySnapshot> =
         Vec::with_capacity(traj_steps as usize * active_mission.legs.len());
 
     // Build dynamics once before the loop; clone per propagation call.
@@ -198,24 +199,28 @@ pub(crate) fn run_single_sample(
             almanac,
         )?;
 
-        // Collect chief/deputy pairs for safety analysis
-        for (c_entry, d_entry) in chief_traj.iter().zip(deputy_traj.iter()) {
-            all_safety_pairs.push((
-                elapsed_total + c_entry.0,
-                c_entry.1.clone(),
-                d_entry.1.clone(),
-            ));
-        }
-
-        // Update states to end of leg
+        // Extract final states before consuming trajectories into safety pairs.
         chief_state = chief_traj
             .last()
-            .map(|(_, s)| s.clone())
+            .map(|ts| ts.state.clone())
             .ok_or(MonteCarloError::EmptyEnsemble)?;
         deputy_state = deputy_traj
             .last()
-            .map(|(_, s)| s.clone())
+            .map(|ts| ts.state.clone())
             .ok_or(MonteCarloError::EmptyEnsemble)?;
+
+        // Skip t=0 sample from each leg's safety analysis: at the maneuver
+        // instant, positions haven't separated yet — distance is physically
+        // meaningless (consistent with validation.rs:225).
+        for (idx, (c_entry, d_entry)) in chief_traj.into_iter().zip(deputy_traj.into_iter()).enumerate() {
+            if idx > 0 {
+                all_safety_pairs.push(ChiefDeputySnapshot {
+                    elapsed_s: elapsed_total + c_entry.elapsed_s,
+                    chief: c_entry.state,
+                    deputy: d_entry.state,
+                });
+            }
+        }
 
         // Apply dispersed arrival Δv
         let arr_dv = if let Some(disp) = maneuver_disp {

@@ -27,6 +27,12 @@ use crate::types::{KeplerianElements, Matrix9, QuasiNonsingularROE};
 /// - `chief_mean` must be **mean** Keplerian elements, not osculating
 /// - `tau_s` must be finite
 ///
+/// # Singularities and regime boundaries
+/// Inherits all regime behavior from the J2-only STM (see [`compute_stm`](super::stm::compute_stm)).
+/// Additionally, the drag coupling block (Eq. D2) contains τ² terms, so
+/// drag-induced errors grow quadratically with propagation time — faster
+/// than the linear growth of the J2-only secular terms.
+///
 /// # Errors
 /// Returns `PropagationError` if eccentricity or SMA are out of range.
 pub fn compute_j2_drag_stm(
@@ -60,6 +66,11 @@ pub fn compute_j2_drag_stm(
 /// - `j2p` must correspond to `chief_mean` (caller responsibility)
 /// - `chief_mean` must be **mean** Keplerian elements, not osculating
 /// - `tau_s` must be finite
+///
+/// # Singularities and regime boundaries
+/// See [`compute_j2_drag_stm`] — identical regime behavior. This variant
+/// skips input validation, so the caller must ensure `chief_mean` is within
+/// the valid regime (0 ≤ e < 1, a > 0).
 #[must_use]
 #[allow(clippy::similar_names)]
 pub fn compute_j2_drag_stm_with_params(
@@ -143,7 +154,19 @@ pub fn compute_j2_drag_stm_with_params(
 /// - `0 <= chief_mean.e < 1`
 /// - `chief_mean` must be **mean** Keplerian elements, not osculating
 /// - Drag rates in `drag` are assumed constant over the propagation interval
-/// - ROE must satisfy linearization validity (`dimensionless_norm() < ~0.01`)
+/// - ROE linearization validity: `dimensionless_norm()` should be ≪ 1.
+///   The STM is derived by linearizing about the chief orbit (Koenig Sec. III),
+///   so propagation error scales as O(‖δα‖²). Empirically, accuracy degrades
+///   noticeably above ‖δα‖ ≈ 0.01 (1% of chief SMA in relative separation).
+///   This is an order-of-magnitude guideline, not a sharp threshold.
+///
+/// # Singularities and regime boundaries
+/// Inherits all STM regime behavior from [`compute_j2_drag_stm`]. Additionally:
+/// - **Large ROE:** Same linearization limits as [`propagate_roe_stm`](super::stm::propagate_roe_stm).
+/// - **Long arcs with drag:** The constant-drag-rate assumption degrades as
+///   altitude changes over the arc alter the true atmospheric density. For
+///   propagation intervals exceeding a few orbital periods, re-extract DMF
+///   rates or use full-physics propagation.
 ///
 /// # Errors
 /// Returns `PropagationError` if eccentricity or SMA are out of range.

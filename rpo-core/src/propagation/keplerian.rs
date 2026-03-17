@@ -20,6 +20,20 @@ use crate::types::StateVector;
 /// - `initial` must represent a bound orbit (`e < 1`, `a > 0`)
 /// - `duration_s` must be finite
 ///
+/// # Singularities and regime boundaries
+/// - **Near-parabolic (e → 1):** Kepler's equation (M = E − e·sin E)
+///   becomes ill-conditioned. The Newton-Raphson solver in
+///   [`keplerian_to_state`] may converge slowly or require more iterations.
+///   The function delegates convergence handling to the conversion layer.
+/// - **Near-circular (e → 0):** Well-conditioned. The argument of perigee is
+///   geometrically undefined for circular orbits, but the ECI state vector
+///   produced by the Keplerian-to-state roundtrip remains numerically stable
+///   because position and velocity are always well-defined.
+/// - **Multi-orbit propagation:** Energy and angular momentum are conserved
+///   to machine precision per step (exact two-body solution), but the
+///   Keplerian-to-ECI conversion introduces O(1e-14) roundtrip noise that
+///   accumulates over many orbits.
+///
 /// # Errors
 /// Returns `ConversionError` if the initial state represents an unbound orbit
 /// or has a zero position vector.

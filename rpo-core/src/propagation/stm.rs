@@ -24,6 +24,22 @@ use crate::types::{KeplerianElements, Matrix6, QuasiNonsingularROE};
 /// - `chief_mean` must be **mean** Keplerian elements, not osculating
 /// - `tau_s` must be finite
 ///
+/// # Singularities and regime boundaries
+/// - **No classical singularities:** The QNS formulation (Koenig Eq. A6) avoids
+///   the e = 0 and i = 0 singularities present in classical orbital elements.
+///   The STM is well-defined for all valid inputs (0 ≤ e < 1, any i).
+/// - **Near-parabolic (e → 1):** STM entries involving κ and G grow rapidly
+///   (see [`compute_j2_params`] regime boundary notes). The STM remains
+///   algebraically valid but downstream linearization error increases.
+/// - **Near-equatorial (i → 0 or π):** S = sin(2i) → 0 decouples the
+///   inclination vector from other ROE components. The STM becomes
+///   block-diagonal between in-plane {δa, δλ, δex, δey} and
+///   out-of-plane {δix, δiy}.
+/// - **Large τ:** Secular terms in the STM grow linearly with τ. For
+///   propagation over many orbits, accumulated linearization error may
+///   exceed the tolerance of the application. Accuracy is best validated
+///   against full nonlinear propagation for multi-orbit arcs.
+///
 /// # Errors
 /// Returns `PropagationError` if eccentricity or SMA are out of range.
 pub fn compute_stm(chief_mean: &KeplerianElements, tau_s: f64) -> Result<Matrix6, PropagationError> {
@@ -44,6 +60,11 @@ pub fn compute_stm(chief_mean: &KeplerianElements, tau_s: f64) -> Result<Matrix6
 /// - `j2p` must correspond to `chief_mean` (caller responsibility)
 /// - `chief_mean` must be **mean** Keplerian elements, not osculating
 /// - `tau_s` must be finite
+///
+/// # Singularities and regime boundaries
+/// See [`compute_stm`] — identical regime behavior. This variant skips
+/// input validation, so the caller must ensure `chief_mean` is within the
+/// valid regime (0 ≤ e < 1, a > 0).
 #[must_use]
 #[allow(clippy::similar_names)]
 pub fn compute_stm_with_params(j2p: &J2Params, chief_mean: &KeplerianElements, tau_s: f64) -> Matrix6 {
@@ -127,7 +148,20 @@ pub fn compute_stm_with_params(j2p: &J2Params, chief_mean: &KeplerianElements, t
 /// - `chief_mean.a_km > 0`
 /// - `0 <= chief_mean.e < 1`
 /// - `chief_mean` must be **mean** Keplerian elements, not osculating
-/// - ROE must satisfy linearization validity (`dimensionless_norm() < ~0.01`)
+/// - ROE linearization validity: `dimensionless_norm()` should be ≪ 1.
+///   The STM is derived by linearizing about the chief orbit (Koenig Sec. III),
+///   so propagation error scales as O(‖δα‖²). Empirically, accuracy degrades
+///   noticeably above ‖δα‖ ≈ 0.01 (1% of chief SMA in relative separation).
+///   This is an order-of-magnitude guideline, not a sharp threshold.
+///
+/// # Singularities and regime boundaries
+/// Inherits the STM regime behavior from [`compute_stm`]. Additionally:
+/// - **Large ROE:** For ‖δα‖ approaching or exceeding 0.01, the propagated
+///   state will diverge from the true nonlinear relative motion. The function
+///   does not enforce this bound; the caller is responsible.
+/// - **Long arcs:** Linearization error accumulates with propagation time.
+///   For multi-orbit arcs with non-negligible ROE, validate against
+///   full nonlinear propagation.
 ///
 /// # Errors
 /// Returns `PropagationError` if eccentricity or SMA are out of range.

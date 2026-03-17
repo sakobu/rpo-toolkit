@@ -185,10 +185,23 @@ pub fn load_full_almanac() -> Result<Arc<Almanac>, NyxBridgeError> {
 /// Takes separate configs because differential drag arises from different
 /// ballistic coefficients between chief and deputy.
 ///
+/// # Invariants
+/// - `chief_initial` and `deputy_initial` must represent bound orbits (`e < 1`, `a > 0`)
+/// - `chief_config` and `deputy_config` must have positive `mass_kg`,
+///   `drag_area_m2`, and `srp_area_m2`
+/// - `almanac` must contain Earth frame data (EME2000/J2000) for dynamics setup
+///
 /// # Near-zero guard
 /// If chief and deputy have identical ballistic coefficients, all rates
 /// will be near-zero. Returns `DragConfig::zero()` when extracted rates
 /// are below `DMF_NOISE_THRESHOLD` (1e-15).
+///
+/// # Singularities and regime boundaries
+/// - **Near-parabolic orbits:** Keplerian conversion at arc endpoints may
+///   lose precision for high-eccentricity orbits.
+/// - **Very small separation:** If chief and deputy are nearly co-located,
+///   the ROE difference is dominated by numerical noise, making the secular
+///   fit unreliable. The near-zero guard mitigates this for drag rates.
 ///
 /// # Errors
 /// Returns [`NyxBridgeError`] if almanac frame lookup, dynamics setup,
@@ -215,13 +228,13 @@ pub fn extract_dmf_rates(
     let chief_results = nyx_propagate_segment(
         chief_initial, duration, 0, chief_config, chief_dynamics, almanac,
     )?;
-    let chief_final = &chief_results.last().ok_or(NyxBridgeError::EmptyResult)?.1;
+    let chief_final = &chief_results.last().ok_or(NyxBridgeError::EmptyResult)?.state;
 
     let deputy_dynamics = build_full_physics_dynamics(almanac)?;
     let deputy_results = nyx_propagate_segment(
         deputy_initial, duration, 0, deputy_config, deputy_dynamics, almanac,
     )?;
-    let deputy_final = &deputy_results.last().ok_or(NyxBridgeError::EmptyResult)?.1;
+    let deputy_final = &deputy_results.last().ok_or(NyxBridgeError::EmptyResult)?.state;
 
     // Compute final ROE
     let chief_ke_f = state_to_keplerian(chief_final)?;
@@ -258,6 +271,10 @@ pub fn extract_dmf_rates(
 ///
 /// Spacecraft-specific properties (Cd, drag area, Cr, SRP area) are set on
 /// the `Spacecraft` object via [`config_to_spacecraft`], not here.
+///
+/// # Invariants
+/// - `almanac` must contain Earth frame data (`IAU_EARTH`) for the
+///   body-fixed gravity and drag models
 ///
 /// # Errors
 /// Returns [`NyxBridgeError::FrameLookup`] if `IAU_EARTH` frame data is unavailable,
@@ -325,15 +342,39 @@ pub(crate) fn spacecraft_to_state(sc: &Spacecraft) -> StateVector {
     }
 }
 
+/// An ECI state vector at a specific elapsed time from propagation start.
+///
+/// Replaces bare `(f64, StateVector)` tuples to satisfy the CLAUDE.md naming
+/// rule: public/crate-visible quantities with physical units must carry unit
+/// suffixes in their field names.
+#[derive(Debug, Clone)]
+pub(crate) struct TimedState {
+    /// Elapsed time since propagation start (seconds).
+    pub elapsed_s: f64,
+    /// ECI state at this time.
+    pub state: StateVector,
+}
+
+/// A chief/deputy ECI state pair at a specific elapsed time.
+///
+/// Used to pass time-tagged chief-deputy snapshots to safety analysis
+/// routines where both states share the same elapsed-time reference.
+#[derive(Debug, Clone)]
+pub(crate) struct ChiefDeputySnapshot {
+    /// Elapsed time since mission/leg start (seconds).
+    pub elapsed_s: f64,
+    /// Chief ECI state at this time.
+    pub chief: StateVector,
+    /// Deputy ECI state at this time.
+    pub deputy: StateVector,
+}
+
 /// Propagate a spacecraft through nyx for a given duration, returning
 /// the final state. Optionally returns intermediate states at evenly-spaced
 /// sample times.
 ///
 /// When `n_samples` is 0, returns only the final state.
 /// When `n_samples` > 0, returns `n_samples + 1` points (initial + samples).
-///
-/// Returns `Vec<(elapsed_s, state)>` — each tuple contains the elapsed
-/// time in seconds since propagation start and the ECI state at that time.
 ///
 /// # Invariants
 /// - `sv` must represent a bound orbit (`e < 1`, `a > 0`)
@@ -348,18 +389,18 @@ pub(crate) fn nyx_propagate_segment(
     config: &SpacecraftConfig,
     dynamics: SpacecraftDynamics,
     almanac: &Arc<Almanac>,
-) -> Result<Vec<(f64, StateVector)>, NyxBridgeError> {
+) -> Result<Vec<TimedState>, NyxBridgeError> {
     if n_samples == 0 {
         let sc = config_to_spacecraft(sv, config);
         let propagator = Propagator::default(dynamics);
         let final_sc = propagator
             .with(sc, almanac.clone())
             .for_duration(Duration::from_seconds(duration_s))?;
-        Ok(vec![(duration_s, spacecraft_to_state(&final_sc))])
+        Ok(vec![TimedState { elapsed_s: duration_s, state: spacecraft_to_state(&final_sc) }])
     } else {
         let dt = duration_s / f64::from(n_samples);
         let mut results = Vec::with_capacity(n_samples as usize + 1);
-        results.push((0.0, sv.clone()));
+        results.push(TimedState { elapsed_s: 0.0, state: sv.clone() });
         let mut current_sv = sv.clone();
 
         for i in 1..=n_samples {
@@ -370,7 +411,7 @@ pub(crate) fn nyx_propagate_segment(
                 .for_duration(Duration::from_seconds(dt))?;
             current_sv = spacecraft_to_state(&final_sc);
             let elapsed = f64::from(i) * dt;
-            results.push((elapsed, current_sv.clone()));
+            results.push(TimedState { elapsed_s: elapsed, state: current_sv.clone() });
         }
 
         Ok(results)
@@ -405,23 +446,29 @@ pub(crate) fn apply_impulse(
 /// elements (acceptable for validation — safety uses ROE/RIC, not the Keplerian
 /// field except for `a_km` scaling, where osculating ≈ mean for near-circular orbits).
 ///
+/// # Invariants
+/// - Each `StateVector` in the input must represent a valid ECI state with
+///   non-zero position (required for Keplerian element extraction and RIC
+///   frame construction)
+/// - Each pair must represent a bound orbit (`e < 1`, `a > 0`)
+///
 /// # Errors
 /// Returns [`NyxBridgeError::Conversion`] if Keplerian element extraction fails.
 pub(crate) fn build_nyx_safety_states(
-    chief_deputy_pairs: &[(f64, StateVector, StateVector)],
+    chief_deputy_pairs: &[ChiefDeputySnapshot],
 ) -> Result<Vec<PropagatedState>, NyxBridgeError> {
     let mut states = Vec::with_capacity(chief_deputy_pairs.len());
-    for (elapsed_s, chief, deputy) in chief_deputy_pairs {
-        let chief_ke = state_to_keplerian(chief)?;
-        let deputy_ke = state_to_keplerian(deputy)?;
+    for snapshot in chief_deputy_pairs {
+        let chief_ke = state_to_keplerian(&snapshot.chief)?;
+        let deputy_ke = state_to_keplerian(&snapshot.deputy)?;
         let roe = compute_roe(&chief_ke, &deputy_ke)?;
-        let ric = eci_to_ric_relative(chief, deputy)?;
+        let ric = eci_to_ric_relative(&snapshot.chief, &snapshot.deputy)?;
         states.push(PropagatedState {
-            epoch: chief.epoch,
+            epoch: snapshot.chief.epoch,
             roe,
             chief_mean: chief_ke,
             ric,
-            elapsed_s: *elapsed_s,
+            elapsed_s: snapshot.elapsed_s,
         });
     }
     Ok(states)

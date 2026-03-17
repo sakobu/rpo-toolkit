@@ -13,7 +13,7 @@ use crate::elements::eci_ric_dcm::{eci_to_ric_relative, DcmError};
 use crate::mission::safety::{analyze_trajectory_safety, SafetyError};
 use crate::propagation::nyx_bridge::{
     apply_impulse, build_full_physics_dynamics, build_nyx_safety_states, nyx_propagate_segment,
-    NyxBridgeError,
+    ChiefDeputySnapshot, NyxBridgeError,
 };
 use crate::propagation::propagator::PropagatedState;
 use crate::types::{RICState, SpacecraftConfig, StateVector};
@@ -177,7 +177,7 @@ pub fn validate_mission_nyx(
     let mut deputy_state = deputy_initial.clone();
     let mut cumulative_time = 0.0_f64;
     let mut leg_points = Vec::with_capacity(mission.legs.len());
-    let mut safety_pairs: Vec<(f64, StateVector, StateVector)> = Vec::new();
+    let mut safety_pairs: Vec<ChiefDeputySnapshot> = Vec::new();
 
     for leg in &mission.legs {
         let tof = leg.tof_s;
@@ -213,9 +213,9 @@ pub fn validate_mission_nyx(
         for (idx, (chief_sample, deputy_sample)) in
             chief_results.iter().zip(deputy_results.iter()).enumerate()
         {
-            let numerical_ric = eci_to_ric_relative(&chief_sample.1, &deputy_sample.1)?;
-            let elapsed = cumulative_time + chief_sample.0;
-            let analytical_ric = find_closest_analytical_ric(&leg.trajectory, chief_sample.0);
+            let numerical_ric = eci_to_ric_relative(&chief_sample.state, &deputy_sample.state)?;
+            let elapsed = cumulative_time + chief_sample.elapsed_s;
+            let analytical_ric = find_closest_analytical_ric(&leg.trajectory, chief_sample.elapsed_s);
 
             let pos_err =
                 (numerical_ric.position_ric_km - analytical_ric.position_ric_km).norm();
@@ -225,7 +225,11 @@ pub fn validate_mission_nyx(
             // Skip t=0 sample from safety: at the maneuver instant, positions
             // haven't separated yet — distance is physically meaningless.
             if idx > 0 {
-                safety_pairs.push((elapsed, chief_sample.1.clone(), deputy_sample.1.clone()));
+                safety_pairs.push(ChiefDeputySnapshot {
+                    elapsed_s: elapsed,
+                    chief: chief_sample.state.clone(),
+                    deputy: deputy_sample.state.clone(),
+                });
             }
             points.push(ValidationPoint {
                 elapsed_s: elapsed,
@@ -241,12 +245,12 @@ pub fn validate_mission_nyx(
         chief_state = chief_results
             .last()
             .ok_or(ValidationError::EmptyTrajectory)?
-            .1
+            .state
             .clone();
         let deputy_coast_end = deputy_results
             .last()
             .ok_or(ValidationError::EmptyTrajectory)?
-            .1
+            .state
             .clone();
         deputy_state =
             apply_impulse(&deputy_coast_end, &chief_state, &leg.arrival_maneuver.dv_ric_km_s)?;
