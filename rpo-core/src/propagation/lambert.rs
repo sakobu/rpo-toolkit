@@ -1,7 +1,8 @@
 //! Lambert transfer solver for far-field orbital transfers.
 //!
-//! Uses nyx-space's Izzo solver with multi-revolution transfers,
-//! C3 computation, and short/long-way selection.
+//! Uses nyx-space's implementation of Izzo's method (Izzo, D. "Revisiting
+//! Lambert's Problem." *Celestial Mechanics and Dynamical Astronomy*, 2015)
+//! with multi-revolution transfers, C3 computation, and short/long-way selection.
 //!
 //! The simple [`solve_lambert`] API calls Izzo by default.
 //! Use [`solve_lambert_with_config`] for direction and multi-rev control,

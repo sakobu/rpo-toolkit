@@ -170,6 +170,10 @@ pub fn load_full_almanac() -> Result<Arc<Almanac>, NyxBridgeError> {
 
 /// Extract density-model-free (DMF) drag rates by running a short nyx simulation.
 ///
+/// Implements the DMF formulation from Koenig Sec. VIII (Eqs. 73–77): the
+/// augmented 9×9 STM assumes constant differential drag rates, which this
+/// function estimates via a secular fit over a short full-physics arc.
+///
 /// Algorithm:
 /// 1. Build full-physics dynamics for both chief and deputy
 /// 2. Propagate both for 2 orbital periods under full physics
