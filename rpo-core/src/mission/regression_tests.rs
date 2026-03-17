@@ -23,9 +23,170 @@ use crate::test_helpers::{
     damico_table21_case1_roe, damico_table21_chief, deputy_from_roe, iss_like_elements,
     koenig_table2_case1, koenig_table2_case1_roe, koenig_table2_case2, koenig_table2_case2_roe,
     koenig_table2_case3, koenig_table2_case3_roe, leo_400km_elements, leo_800km_target_elements,
-    rk4_j2_propagate, test_drag_config, test_epoch,
+    rk4_j2_propagate, test_drag_config, test_epoch, DMF_RATE_NONZERO_LOWER_BOUND,
+    DMF_RATE_UPPER_BOUND,
 };
 use crate::types::{KeplerianElements, QuasiNonsingularROE, SpacecraftConfig, StateVector};
+
+// =========================================================================
+// Named tolerance constants
+// =========================================================================
+//
+// Categories:
+//   ENERGY_*     — orbital energy conservation bounds
+//   ROE_*        — ROE component conservation / drift bounds
+//   PERCH_*      — perch orbit ROE structural bounds
+//   LAMBERT_*    — Lambert solver + nyx cross-validation position/velocity bounds
+//   STM_*        — STM vs. numerical integrator accuracy bounds (Koenig Table 4)
+//   DRAG_*       — drag STM self-consistency bounds
+//   DMF_*        — DMF rate extraction bounds
+//   ORBIT_*      — orbit stability bounds
+
+/// Relative energy conservation tolerance over N orbits with J2 perturbation.
+/// J2 causes osculating energy to oscillate via short-period terms but not drift
+/// secularly; the amplitude of the short-period oscillation is O(J2) ~ 1e-6.
+/// We use 1e-5 to allow margin above the oscillation floor.
+const ENERGY_J2_RELATIVE_TOL: f64 = 1e-5;
+
+/// Relative energy conservation tolerance for full-physics dynamics (drag + SRP).
+/// Drag and SRP cause real secular energy dissipation, so this is looser than
+/// the J2-only bound. One orbit of ISS-like drag dissipates O(1e-5) relative
+/// energy; 1e-4 provides a 10x margin.
+const ENERGY_FULL_PHYSICS_RELATIVE_TOL: f64 = 1e-4;
+
+/// Radius relative change tolerance over 1 orbit.
+/// A bound orbit should return to approximately the same radius after one period.
+/// J2 short-period oscillations are O(1e-3) relative; 1% covers the largest
+/// short-period radial oscillation for LEO eccentricities.
+const ORBIT_RADIUS_RELATIVE_TOL: f64 = 0.01;
+
+/// SMA relative conservation tolerance over 10 orbits.
+/// J2 does not cause secular SMA drift; osculating SMA oscillates by O(J2*a)
+/// which is < 0.1% for LEO. We use 0.001 (0.1%) as the bound.
+const ORBIT_SMA_RELATIVE_TOL: f64 = 0.001;
+
+/// ROE da/dix secular conservation tolerance.
+/// The J2 STM preserves da and dix exactly (rows 0 and 4 of the STM are
+/// identity for these components). Nonzero change comes only from f64
+/// arithmetic in the STM evaluation; 1e-8 covers accumulated roundoff
+/// over 10-orbit propagation of ~200 m physical separations.
+const ROE_SECULAR_CONSERVATION_TOL: f64 = 1e-8;
+
+/// Near-zero ROE threshold for structural zeros.
+/// V-bar perch orbits have identically zero da, dex, dey by construction.
+/// Residual nonzero values arise from floating-point representation of the
+/// perch geometry; 1e-10 corresponds to < 0.001 mm physical error.
+const PERCH_ROE_ZERO_BOUND: f64 = 1e-10;
+
+/// Lower bound for perch ROE nonzero components.
+/// A V-bar perch at 5 km along-track must have nonzero dlambda;
+/// 1e-6 corresponds to ~7 mm physical offset — well below any meaningful perch.
+const PERCH_ROE_NONZERO_LOWER_BOUND: f64 = 1e-6;
+
+/// Cross-method ROE agreement tolerance.
+/// When comparing J2 STM against nyx two-body (which lacks J2), da should
+/// remain approximately constant in both. The ~1e-6 threshold accounts for
+/// osculating-to-mean element differences in the two-body baseline and
+/// numerical truncation across the nyx boundary.
+const ROE_CROSS_METHOD_DA_TOL: f64 = 1e-6;
+
+/// J2 da secular identity tolerance.
+/// Under J2-only dynamics, da is preserved identically (the STM has Φ(0,0)=1
+/// with no coupling). Starting from zero ROE, da should remain at machine
+/// precision level. 1e-12 is ~10x f64 epsilon for the working range.
+const ROE_DA_IDENTITY_TOL: f64 = 1e-12;
+
+/// Lower bound for physically meaningful diy drift under J2.
+/// Differential RAAN regression for a 0.001 rad inclination offset over 10
+/// ISS orbits (~15 hours) produces diy drift of O(1e-5). We use 1e-10 as
+/// a permissive floor to confirm the drift is nonzero.
+const ROE_DIY_DRIFT_LOWER_BOUND: f64 = 1e-10;
+
+/// Physical upper bound for diy drift over 10 ISS orbits (J2 STM vs nyx).
+/// RAAN regression rate is ~5 deg/day; over 15 hours with 0.001 rad
+/// inclination offset, differential diy should not exceed ~0.01 rad.
+/// 0.2 rad is a generous physical ceiling for cross-method comparison.
+const ROE_DIY_DRIFT_UPPER_BOUND: f64 = 0.2;
+
+/// Physical reasonableness upper bound for diy drift in 10 ISS orbits.
+/// Used for J2-only propagation sanity check. With 0.001 rad inclination
+/// offset, differential RAAN produces diy drift of O(1e-5 to 1e-3).
+/// 0.1 rad is an order-of-magnitude ceiling.
+const ROE_DIY_PHYSICAL_REASONABLENESS_BOUND: f64 = 0.1;
+
+/// Lower bound for dlambda drift from J2 coupling with da.
+/// A 1 km SMA offset over 10 orbits produces secular dlambda drift via
+/// n-dot coupling. The drift is O(1e-4); 1e-8 as a floor just confirms
+/// the effect is nonzero.
+const ROE_DLAMBDA_DRIFT_LOWER_BOUND: f64 = 1e-8;
+
+/// Nyx two-body diy drift tolerance.
+/// Without J2, nyx two-body should produce minimal diy drift. We allow 1e-4
+/// to cover osculating-element mapping noise at the nyx boundary.
+const ROE_NYX_TWO_BODY_DIY_TOL: f64 = 1e-4;
+
+/// Lambert + nyx two-body position verification tolerance (km).
+/// After propagating a Lambert solution with nyx two-body dynamics,
+/// final position should match the target within 1 km. The residual comes
+/// from Lambert solver convergence tolerance and nyx integrator truncation.
+const LAMBERT_POSITION_TOL_KM: f64 = 1.0;
+
+/// Lambert + nyx two-body velocity verification tolerance (km/s).
+/// Velocity agreement after Lambert + nyx propagation. 0.01 km/s = 10 m/s
+/// accounts for integration truncation and the Lambert Δv residual.
+const LAMBERT_VELOCITY_TOL_KM_S: f64 = 0.01;
+
+/// Koenig Table 4 Case 1 error bounds (meters).
+/// 10x the published QNS J2 STM errors vs. Harris-Priester gravity model.
+/// Our comparison is J2 STM vs. J2-only RK4, so errors are dominated by
+/// linearization rather than unmodeled harmonics; 10x provides generous margin.
+const KOENIG_T4C1_DA_BOUND_M: f64 = 385.0;
+const KOENIG_T4C1_DLAMBDA_BOUND_M: f64 = 18088.0;
+const KOENIG_T4C1_DEX_BOUND_M: f64 = 135.0;
+const KOENIG_T4C1_DEY_BOUND_M: f64 = 113.0;
+const KOENIG_T4C1_DIX_BOUND_M: f64 = 9.0;
+const KOENIG_T4C1_DIY_BOUND_M: f64 = 25.0;
+
+/// Eccentricity vector magnitude conservation tolerance.
+/// The STM rotates the eccentricity vector by ω̇τ without growth.
+/// 5% relative change over 10 orbits accommodates linearization and
+/// higher-order J2 coupling not captured by the first-order STM.
+const ROE_ECC_VECTOR_RELATIVE_TOL: f64 = 0.05;
+
+/// ROE→RIC trajectory RMS position error bound (meters).
+/// D'Amico Fig. 2.8 shows <3m for two-body. J2 adds secular drift over
+/// 1 orbit plus mean-vs-osculating modeling differences. 50m is generous
+/// enough to catch bugs without false positives.
+const ROE_TO_RIC_RMS_POSITION_BOUND_M: f64 = 50.0;
+
+/// Drag STM relative error tolerance for da drift linearity.
+/// da drift should track da_dot * t to within 10%. The residual comes from
+/// quadratic and coupling terms in the 9×9 STM that are not purely linear.
+const DRAG_DA_DRIFT_RELATIVE_TOL: f64 = 0.1;
+
+/// Quadratic dlambda ratio tolerance.
+/// With constant da_dot, dlambda grows quadratically: ratio at 10/5 orbits ≈ 4.
+/// Tolerance of 1.0 allows ~25% deviation from the ideal ratio,
+/// covering higher-order STM terms and J2 coupling.
+const DRAG_DLAMBDA_QUADRATIC_RATIO_TOL: f64 = 1.0;
+
+/// ISS-like orbit radius bounds (km).
+/// ISS altitude is ~400 km; radius is ~6778 km. These bounds cover
+/// periapsis/apoapsis variation for nearby LEO orbits after full-physics propagation.
+const ORBIT_RADIUS_LOWER_KM: f64 = 6000.0;
+const ORBIT_RADIUS_UPPER_KM: f64 = 7500.0;
+
+/// ISS-like orbit velocity bounds (km/s).
+/// Circular velocity at ~400 km LEO is ~7.67 km/s. These bounds cover
+/// the full range including eccentric and perturbed orbits.
+const ORBIT_VELOCITY_LOWER_KM_S: f64 = 6.5;
+const ORBIT_VELOCITY_UPPER_KM_S: f64 = 8.5;
+
+/// Lambert transfer total Δv reasonableness bounds (km/s).
+/// A 200 km + inclination offset transfer should require a physically
+/// meaningful Δv (> 0.1 km/s) but not an escape-class impulse (< 10 km/s).
+const LAMBERT_DV_LOWER_KM_S: f64 = 0.1;
+const LAMBERT_DV_UPPER_KM_S: f64 = 10.0;
 
 // =========================================================================
 // RK4 J2 Integrator Self-Validation
@@ -50,18 +211,18 @@ fn rk4_j2_integrator_self_validation() {
         - MU_EARTH / sv_1orbit.position_eci_km.norm();
 
     // J2 causes osculating energy to oscillate (short-period terms) but not drift secularly.
-    // Over 1 orbit, relative change should be < 1e-5 (J2 oscillation amplitude).
+    // Over 1 orbit, relative change should be < ENERGY_J2_RELATIVE_TOL (J2 oscillation amplitude).
     let rel_energy_change = ((energy_1 - energy_0) / energy_0).abs();
     assert!(
-        rel_energy_change < 1e-5,
-        "Energy change over 1 orbit = {rel_energy_change:.2e} (should be < 1e-5)"
+        rel_energy_change < ENERGY_J2_RELATIVE_TOL,
+        "Energy change over 1 orbit = {rel_energy_change:.2e} (should be < {ENERGY_J2_RELATIVE_TOL})"
     );
 
     // Position magnitude should remain roughly the same (bound orbit)
     let r0 = sv.position_eci_km.norm();
     let r1 = sv_1orbit.position_eci_km.norm();
     assert!(
-        (r1 - r0).abs() / r0 < 0.01,
+        (r1 - r0).abs() / r0 < ORBIT_RADIUS_RELATIVE_TOL,
         "Radius changed by {:.4}% over 1 orbit — integrator may be unstable",
         (r1 - r0).abs() / r0 * 100.0
     );
@@ -108,7 +269,7 @@ fn full_mission_scenario() {
     // Lambert transfer assertions
     let transfer = plan.transfer.as_ref().expect("should have Lambert transfer");
     assert!(
-        transfer.total_dv_km_s > 0.1 && transfer.total_dv_km_s < 10.0,
+        transfer.total_dv_km_s > LAMBERT_DV_LOWER_KM_S && transfer.total_dv_km_s < LAMBERT_DV_UPPER_KM_S,
         "total Δv = {} km/s unreasonable",
         transfer.total_dv_km_s
     );
@@ -123,19 +284,19 @@ fn full_mission_scenario() {
 
     // Perch ROE assertions
     assert!(
-        plan.perch_roe.dlambda.abs() > 1e-6,
+        plan.perch_roe.dlambda.abs() > PERCH_ROE_NONZERO_LOWER_BOUND,
         "V-bar perch should have nonzero dlambda"
     );
     assert!(
-        plan.perch_roe.da.abs() < 1e-10,
+        plan.perch_roe.da.abs() < PERCH_ROE_ZERO_BOUND,
         "V-bar perch da should be near-zero"
     );
     assert!(
-        plan.perch_roe.dex.abs() < 1e-10,
+        plan.perch_roe.dex.abs() < PERCH_ROE_ZERO_BOUND,
         "V-bar perch dex should be near-zero"
     );
     assert!(
-        plan.perch_roe.dey.abs() < 1e-10,
+        plan.perch_roe.dey.abs() < PERCH_ROE_ZERO_BOUND,
         "V-bar perch dey should be near-zero"
     );
 }
@@ -158,7 +319,7 @@ fn drag_stm_self_consistency() {
     let j2_prop = PropagationModel::J2Stm;
     let j2_5 = j2_prop.propagate(&zero_roe, &chief, epoch, 5.0 * period).unwrap();
     assert!(
-        j2_5.roe.da.abs() < 1e-12,
+        j2_5.roe.da.abs() < ROE_DA_IDENTITY_TOL,
         "J2-only da from zero ROE should stay near zero, got {}",
         j2_5.roe.da
     );
@@ -178,18 +339,18 @@ fn drag_stm_self_consistency() {
     let rel_err_5 = ((drag_5.roe.da - expected_da_5) / expected_da_5).abs();
     let rel_err_10 = ((drag_10.roe.da - expected_da_10) / expected_da_10).abs();
     assert!(
-        rel_err_5 < 0.1,
+        rel_err_5 < DRAG_DA_DRIFT_RELATIVE_TOL,
         "da drift at 5 orbits: relative error {rel_err_5:.4} > 10%"
     );
     assert!(
-        rel_err_10 < 0.1,
+        rel_err_10 < DRAG_DA_DRIFT_RELATIVE_TOL,
         "da drift at 10 orbits: relative error {rel_err_10:.4} > 10%"
     );
 
     // Along-track (dlambda) grows quadratically: ratio at 10/5 orbits ≈ 4
     let ratio = drag_10.roe.dlambda / drag_5.roe.dlambda;
     assert!(
-        (ratio - 4.0).abs() < 1.0,
+        (ratio - 4.0).abs() < DRAG_DLAMBDA_QUADRATIC_RATIO_TOL,
         "dlambda(10)/dlambda(5) = {ratio:.2}, expected ≈ 4.0"
     );
 }
@@ -214,7 +375,7 @@ fn j2_effect_physical_reasonableness() {
     // da should remain constant under J2 (no secular da drift)
     let da_change = (state_10.roe.da - roe_0.da).abs();
     assert!(
-        da_change < 1e-8,
+        da_change < ROE_SECULAR_CONSERVATION_TOL,
         "da should be constant under J2, changed by {da_change}"
     );
 
@@ -223,20 +384,20 @@ fn j2_effect_physical_reasonableness() {
     // With small inclination offset, differential RAAN produces diy drift
     let diy_drift = (state_10.roe.diy - roe_0.diy).abs();
     assert!(
-        diy_drift > 1e-10,
+        diy_drift > ROE_DIY_DRIFT_LOWER_BOUND,
         "diy should drift under J2 differential RAAN, got {diy_drift}"
     );
     // Physically: 10 orbits ≈ 15 hours for ISS, RAAN drift ~3 deg
     // differential diy should be order 1e-5 to 1e-3
     assert!(
-        diy_drift < 0.1,
+        diy_drift < ROE_DIY_PHYSICAL_REASONABLENESS_BOUND,
         "diy drift {diy_drift} seems too large for 10 ISS orbits"
     );
 
     // dlambda should drift from J2 mean motion coupling with da offset
     let dlambda_drift = (state_10.roe.dlambda - roe_0.dlambda).abs();
     assert!(
-        dlambda_drift > 1e-8,
+        dlambda_drift > ROE_DLAMBDA_DRIFT_LOWER_BOUND,
         "dlambda should drift from da + J2, got {dlambda_drift}"
     );
 }
@@ -261,14 +422,14 @@ fn verify_lambert_against_nyx(dep: &StateVector, arr: &StateVector) {
 
     let pos_err = (propagated.position_eci_km - arr.position_eci_km).norm();
     assert!(
-        pos_err < 1.0,
-        "position error = {pos_err:.4} km (expected < 1.0 km)"
+        pos_err < LAMBERT_POSITION_TOL_KM,
+        "position error = {pos_err:.4} km (expected < {LAMBERT_POSITION_TOL_KM} km)"
     );
 
     let vel_err = (propagated.velocity_eci_km_s - transfer.arrival_state.velocity_eci_km_s).norm();
     assert!(
-        vel_err < 0.01,
-        "velocity error = {vel_err:.6} km/s (expected < 0.01 km/s)"
+        vel_err < LAMBERT_VELOCITY_TOL_KM_S,
+        "velocity error = {vel_err:.6} km/s (expected < {LAMBERT_VELOCITY_TOL_KM_S} km/s)"
     );
 }
 
@@ -363,12 +524,12 @@ fn koenig_table4_j2_stm_accuracy_case1() {
     let errors = compare_stm_vs_rk4(&chief, &roe, 10.0);
 
     // Bounds: 10× Koenig Table 4 QNS J2 values (Harris-Priester)
-    assert!(errors[0] < 385.0,   "aδa  = {:.1}m (bound 385m)", errors[0]);
-    assert!(errors[1] < 18088.0, "aδλ  = {:.1}m (bound 18088m)", errors[1]);
-    assert!(errors[2] < 135.0,   "aδex = {:.1}m (bound 135m)", errors[2]);
-    assert!(errors[3] < 113.0,   "aδey = {:.1}m (bound 113m)", errors[3]);
-    assert!(errors[4] < 9.0,     "aδix = {:.1}m (bound 9m)", errors[4]);
-    assert!(errors[5] < 25.0,    "aδiy = {:.1}m (bound 25m)", errors[5]);
+    assert!(errors[0] < KOENIG_T4C1_DA_BOUND_M,      "aδa  = {:.1}m (bound {KOENIG_T4C1_DA_BOUND_M}m)", errors[0]);
+    assert!(errors[1] < KOENIG_T4C1_DLAMBDA_BOUND_M,  "aδλ  = {:.1}m (bound {KOENIG_T4C1_DLAMBDA_BOUND_M}m)", errors[1]);
+    assert!(errors[2] < KOENIG_T4C1_DEX_BOUND_M,      "aδex = {:.1}m (bound {KOENIG_T4C1_DEX_BOUND_M}m)", errors[2]);
+    assert!(errors[3] < KOENIG_T4C1_DEY_BOUND_M,      "aδey = {:.1}m (bound {KOENIG_T4C1_DEY_BOUND_M}m)", errors[3]);
+    assert!(errors[4] < KOENIG_T4C1_DIX_BOUND_M,      "aδix = {:.1}m (bound {KOENIG_T4C1_DIX_BOUND_M}m)", errors[4]);
+    assert!(errors[5] < KOENIG_T4C1_DIY_BOUND_M,      "aδiy = {:.1}m (bound {KOENIG_T4C1_DIY_BOUND_M}m)", errors[5]);
 
     // Print actual errors for diagnostic purposes
     eprintln!("Case 1 STM vs RK4 J2 errors (m): da={:.2}, dλ={:.2}, dex={:.2}, dey={:.2}, dix={:.2}, diy={:.2}",
@@ -403,8 +564,8 @@ fn rk4_j2_eccentric_orbit_stability() {
             - MU_EARTH / sv_final.position_eci_km.norm();
         let rel_energy = ((energy_f - energy_0) / energy_0).abs();
         assert!(
-            rel_energy < 1e-5,
-            "{label}: energy change = {rel_energy:.2e} over 10 orbits (should be < 1e-5)"
+            rel_energy < ENERGY_J2_RELATIVE_TOL,
+            "{label}: energy change = {rel_energy:.2e} over 10 orbits (should be < {ENERGY_J2_RELATIVE_TOL})"
         );
 
         // Orbit should remain bound (can convert back to Keplerian)
@@ -417,7 +578,7 @@ fn rk4_j2_eccentric_orbit_stability() {
         // SMA should be approximately conserved (J2 doesn't cause secular SMA drift)
         let rel_sma = ((ke_final.a_km - chief.a_km) / chief.a_km).abs();
         assert!(
-            rel_sma < 0.001,
+            rel_sma < ORBIT_SMA_RELATIVE_TOL,
             "{label}: SMA changed by {:.4}% over 10 orbits", rel_sma * 100.0
         );
     }
@@ -444,23 +605,23 @@ fn stm_structural_properties_eccentric() {
 
         // δa must be exactly conserved
         assert!(
-            (roe_prop.da - roe.da).abs() < 1e-8,
+            (roe_prop.da - roe.da).abs() < ROE_SECULAR_CONSERVATION_TOL,
             "{label}: δa not conserved: {} → {}", roe.da, roe_prop.da
         );
 
         // δix must be exactly conserved
         assert!(
-            (roe_prop.dix - roe.dix).abs() < 1e-8,
+            (roe_prop.dix - roe.dix).abs() < ROE_SECULAR_CONSERVATION_TOL,
             "{label}: δix not conserved: {} → {}", roe.dix, roe_prop.dix
         );
 
         // |δe| approximately conserved (rotation, not growth)
         let de_0 = (roe.dex.powi(2) + roe.dey.powi(2)).sqrt();
         let de_f = (roe_prop.dex.powi(2) + roe_prop.dey.powi(2)).sqrt();
-        if de_0 > 1e-10 {
+        if de_0 > PERCH_ROE_ZERO_BOUND {
             let rel_de = (de_f - de_0).abs() / de_0;
             assert!(
-                rel_de < 0.05,
+                rel_de < ROE_ECC_VECTOR_RELATIVE_TOL,
                 "{label}: |δe| changed by {:.2}% over 10 orbits", rel_de * 100.0
             );
         }
@@ -513,8 +674,8 @@ fn damico_roe_to_ric_trajectory_accuracy() {
     // 1 orbit plus modeling differences (mean vs osculating). 50m is generous
     // enough to catch bugs without false positives.
     assert!(
-        rms_position_m < 50.0,
-        "RMS RIC position error = {rms_position_m:.2}m (expected < 50m)"
+        rms_position_m < ROE_TO_RIC_RMS_POSITION_BOUND_M,
+        "RMS RIC position error = {rms_position_m:.2}m (expected < {ROE_TO_RIC_RMS_POSITION_BOUND_M}m)"
     );
 
     eprintln!(
@@ -569,13 +730,13 @@ fn j2_stm_vs_nyx_two_body() {
 
     // da should be constant in both (Keplerian preserves SMA)
     assert!(
-        (nyx_roe.da - roe_0.da).abs() < 1e-6,
+        (nyx_roe.da - roe_0.da).abs() < ROE_CROSS_METHOD_DA_TOL,
         "nyx da should be approximately constant: initial={}, final={}",
         roe_0.da,
         nyx_roe.da
     );
     assert!(
-        (stm_state.roe.da - roe_0.da).abs() < 1e-6,
+        (stm_state.roe.da - roe_0.da).abs() < ROE_CROSS_METHOD_DA_TOL,
         "STM da should be approximately constant: initial={}, final={}",
         roe_0.da,
         stm_state.roe.da
@@ -586,14 +747,14 @@ fn j2_stm_vs_nyx_two_body() {
     // for 0.001 rad inclination offset produces diy drift of ~1e-5 to 1e-3 rad
     let stm_diy_drift = (stm_state.roe.diy - roe_0.diy).abs();
     assert!(
-        stm_diy_drift > 1e-8 && stm_diy_drift < 0.2,
-        "J2 STM diy drift = {stm_diy_drift} should be in [1e-8, 0.2] rad"
+        stm_diy_drift > ROE_SECULAR_CONSERVATION_TOL && stm_diy_drift < ROE_DIY_DRIFT_UPPER_BOUND,
+        "J2 STM diy drift = {stm_diy_drift} should be in [{ROE_SECULAR_CONSERVATION_TOL}, {ROE_DIY_DRIFT_UPPER_BOUND}] rad"
     );
 
     // nyx two-body should have minimal diy drift (no J2)
     let nyx_diy_drift = (nyx_roe.diy - roe_0.diy).abs();
     assert!(
-        nyx_diy_drift < stm_diy_drift * 10.0 || nyx_diy_drift < 1e-4,
+        nyx_diy_drift < stm_diy_drift * 10.0 || nyx_diy_drift < ROE_NYX_TWO_BODY_DIY_TOL,
         "nyx two-body diy drift = {nyx_diy_drift} should be small compared to J2 drift"
     );
 }
@@ -645,12 +806,12 @@ fn full_physics_propagate_one_orbit() {
 
     // ISS-like orbit: ~6800 km altitude, ~7.5 km/s
     assert!(
-        r > 6000.0 && r < 7500.0,
-        "final radius = {r:.1} km (expected 6000-7500)"
+        r > ORBIT_RADIUS_LOWER_KM && r < ORBIT_RADIUS_UPPER_KM,
+        "final radius = {r:.1} km (expected {ORBIT_RADIUS_LOWER_KM}-{ORBIT_RADIUS_UPPER_KM})"
     );
     assert!(
-        v > 6.5 && v < 8.5,
-        "final velocity = {v:.4} km/s (expected 6.5-8.5)"
+        v > ORBIT_VELOCITY_LOWER_KM_S && v < ORBIT_VELOCITY_UPPER_KM_S,
+        "final velocity = {v:.4} km/s (expected {ORBIT_VELOCITY_LOWER_KM_S}-{ORBIT_VELOCITY_UPPER_KM_S})"
     );
 
     // Energy should be approximately conserved
@@ -661,8 +822,8 @@ fn full_physics_propagate_one_orbit() {
     let rel_energy = ((energy_f - energy_0) / energy_0).abs();
     // Full physics (drag, SRP) will cause some energy change, but not catastrophic
     assert!(
-        rel_energy < 1e-4,
-        "energy change = {rel_energy:.2e} (expected < 1e-4)"
+        rel_energy < ENERGY_FULL_PHYSICS_RELATIVE_TOL,
+        "energy change = {rel_energy:.2e} (expected < {ENERGY_FULL_PHYSICS_RELATIVE_TOL})"
     );
 }
 
@@ -696,7 +857,7 @@ fn extract_dmf_rates_nonzero() {
 
     // da_dot should be nonzero: higher B* deputy decays faster
     assert!(
-        drag.da_dot.abs() > 1e-16,
+        drag.da_dot.abs() > DMF_RATE_NONZERO_LOWER_BOUND,
         "da_dot should be nonzero for different B*, got {:.2e}",
         drag.da_dot
     );
@@ -711,7 +872,7 @@ fn extract_dmf_rates_nonzero() {
     // Physical reasonableness: for ISS-like orbit, differential da_dot
     // should be order 1e-12 to 1e-9 (dimensionless, per second)
     assert!(
-        drag.da_dot.abs() < 1e-6,
+        drag.da_dot.abs() < DMF_RATE_UPPER_BOUND,
         "da_dot = {:.2e} seems unreasonably large",
         drag.da_dot
     );

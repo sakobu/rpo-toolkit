@@ -147,6 +147,11 @@ fn compute_report_statistics(leg_points: &[Vec<ValidationPoint>]) -> (f64, f64, 
 /// 3. Build safety states from accumulated chief/deputy pairs.
 /// 4. Compute aggregate statistics and return report.
 ///
+/// # Invariants
+/// - `mission.legs` must be non-empty (at least one maneuver leg)
+/// - `chief_initial` and `deputy_initial` must be valid bound ECI states at mission start epoch
+/// - `almanac` must contain Earth frame data (`IAU_EARTH`) and planetary ephemerides
+///
 /// # Arguments
 /// * `mission` — Analytical waypoint mission (from `plan_waypoint_mission`)
 /// * `chief_initial` — Chief ECI state at mission start
@@ -284,7 +289,9 @@ mod tests {
     use crate::elements::keplerian_conversions::keplerian_to_state;
     use crate::propagation::nyx_bridge;
     use crate::propagation::propagator::PropagationModel;
-    use crate::test_helpers::{iss_like_elements, test_epoch};
+    use crate::test_helpers::{
+        iss_like_elements, test_epoch, DMF_RATE_NONZERO_LOWER_BOUND, DMF_RATE_UPPER_BOUND,
+    };
     use crate::mission::types::ValidationPoint;
     use crate::types::{RICState, SpacecraftConfig};
 
@@ -321,21 +328,21 @@ mod tests {
         let (max_pos, mean_pos, rms_pos, max_vel) = super::compute_report_statistics(&[leg]);
 
         assert!(
-            (max_pos - 3.0).abs() < 1e-15,
+            (max_pos - 3.0).abs() < EXACT_ARITHMETIC_TOL,
             "max_pos = {max_pos}, expected 3.0"
         );
         assert!(
-            (mean_pos - 2.0).abs() < 1e-15,
+            (mean_pos - 2.0).abs() < EXACT_ARITHMETIC_TOL,
             "mean_pos = {mean_pos}, expected 2.0"
         );
         // rms = sqrt((1 + 9 + 4) / 3) = sqrt(14/3) ≈ 2.160
         let expected_rms = (14.0_f64 / 3.0).sqrt();
         assert!(
-            (rms_pos - expected_rms).abs() < 1e-12,
+            (rms_pos - expected_rms).abs() < RMS_COMPUTATION_TOL,
             "rms_pos = {rms_pos}, expected {expected_rms}"
         );
         assert!(
-            (max_vel - 0.03).abs() < 1e-15,
+            (max_vel - 0.03).abs() < EXACT_ARITHMETIC_TOL,
             "max_vel = {max_vel}, expected 0.03"
         );
 
@@ -380,6 +387,25 @@ mod tests {
     /// Below this threshold (km), R/C separations are operationally "at V-bar"
     /// and relative-error comparison is not meaningful.
     const SAFETY_RC_NEAR_ZERO_KM: f64 = 0.01;
+
+    /// Tolerance for exact-arithmetic statistics (max, mean, sum).
+    /// These involve only addition/comparison of representable f64 values,
+    /// so agreement to machine epsilon is expected.
+    const EXACT_ARITHMETIC_TOL: f64 = 1e-15;
+
+    /// Tolerance for RMS computation.
+    /// `sqrt` introduces ~1 ULP of floating-point error beyond the exact sum,
+    /// so we allow a slightly wider tolerance than exact arithmetic.
+    const RMS_COMPUTATION_TOL: f64 = 1e-12;
+
+    /// Guard threshold for improvement ratio computation (km).
+    /// When the J2-only error is below this threshold, the improvement ratio
+    /// is numerically meaningless (division by near-zero). Skip the diagnostic.
+    const IMPROVEMENT_RATIO_GUARD_KM: f64 = 1e-10;
+
+    /// Below this threshold (km), e/i separation values are too small
+    /// for a meaningful relative-error comparison.
+    const SAFETY_EI_NEAR_ZERO_KM: f64 = 1e-6;
 
     /// Single-leg transfer with nonzero initial ROE and mixed-axis waypoint,
     /// validated against nyx full-physics propagation.
@@ -628,7 +654,7 @@ mod tests {
 
         // Sanity: da_dot should be nonzero, negative, and physically reasonable
         assert!(
-            drag.da_dot.abs() > 1e-16,
+            drag.da_dot.abs() > DMF_RATE_NONZERO_LOWER_BOUND,
             "da_dot should be nonzero, got {:.2e}",
             drag.da_dot,
         );
@@ -638,7 +664,7 @@ mod tests {
             drag.da_dot,
         );
         assert!(
-            drag.da_dot.abs() < 1e-6,
+            drag.da_dot.abs() < DMF_RATE_UPPER_BOUND,
             "da_dot = {:.2e} seems unreasonably large",
             drag.da_dot,
         );
@@ -707,7 +733,7 @@ mod tests {
         );
 
         // Diagnostic: improvement ratio (not hard-asserted — SRP/3rd-body may dominate)
-        if j2_report.max_position_error_km > 1e-10 {
+        if j2_report.max_position_error_km > IMPROVEMENT_RATIO_GUARD_KM {
             let improvement = j2_report.max_position_error_km / drag_report.max_position_error_km;
             eprintln!("Drag/J2 improvement ratio: {improvement:.2}×");
             if improvement < 1.0 {
@@ -872,7 +898,7 @@ mod tests {
 
         // e/i separation: relative agreement within 50%
         let ei_ref = analytical.passive.min_ei_separation_km.max(numerical.passive.min_ei_separation_km);
-        if ei_ref > 1e-6 {
+        if ei_ref > SAFETY_EI_NEAR_ZERO_KM {
             let ei_rel_err =
                 (analytical.passive.min_ei_separation_km - numerical.passive.min_ei_separation_km).abs() / ei_ref;
             eprintln!("  e/i relative error: {ei_rel_err:.2}");

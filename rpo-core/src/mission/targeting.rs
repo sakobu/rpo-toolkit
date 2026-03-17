@@ -23,6 +23,9 @@ const JACOBIAN_PINV_TOL: f64 = 1e-10;
 /// Golden-section bracket half-width in orbital periods around the best multi-start TOF.
 const TOF_REFINE_HALF_WINDOW: f64 = 0.5;
 
+/// Golden ratio for golden-section TOF refinement: (√5 − 1) / 2.
+const GOLDEN_RATIO: f64 = 0.618_033_988_749_894_9;
+
 /// Clamp each component of a vector to `[-cap, cap]`.
 fn clamp_dv(dv: &Vector3<f64>, cap: f64) -> Vector3<f64> {
     Vector3::new(
@@ -375,7 +378,7 @@ pub fn optimize_tof(
     })?;
 
     // Golden section search around best TOF
-    let golden = (5.0_f64.sqrt() - 1.0) / 2.0;
+    let golden = GOLDEN_RATIO;
     let mut lo = (center_tof - TOF_REFINE_HALF_WINDOW * period).max(tof_min);
     let mut hi = (center_tof + TOF_REFINE_HALF_WINDOW * period).min(tof_max);
 
@@ -432,6 +435,31 @@ mod tests {
     use crate::test_helpers::iss_like_elements;
     use crate::types::QuasiNonsingularROE;
     use hifitime::Epoch;
+
+    /// Tolerance for deterministic Δv reproducibility: same inputs through the
+    /// same code path must produce bitwise-identical results.
+    /// Limited only by f64 representation noise — no independent evaluation.
+    const DETERMINISTIC_DV_TOL: f64 = 1e-14;
+
+    /// Relative tolerance for analytical-vs-finite-difference Jacobian comparison.
+    /// The analytical Jacobian (T·Φ·B) and central-difference FD Jacobian agree
+    /// to ~1e-6 due to FD truncation error; 1e-5 gives comfortable margin.
+    const JACOBIAN_FD_REL_TOL: f64 = 1e-5;
+
+    /// Finite-difference perturbation step size (km/s) for Jacobian verification.
+    /// Small enough for accurate central differences, large enough to avoid
+    /// catastrophic cancellation in f64 subtraction.
+    const JACOBIAN_FD_STEP_KM_S: f64 = 1e-7;
+
+    /// Near-zero threshold for switching from relative to absolute error in
+    /// Jacobian element comparison. When the FD reference value is below this
+    /// magnitude, relative error is meaningless — use absolute error instead.
+    const JACOBIAN_NEAR_ZERO_THRESHOLD: f64 = 1e-10;
+
+    /// Extremely tight position tolerance (km) used to force targeting
+    /// non-convergence in a single iteration. No real mission would use this;
+    /// it exists solely to exercise the TargetingConvergence error path.
+    const FORCED_NONCONVERGENCE_TOL_KM: f64 = 1e-12;
 
     fn test_epoch() -> Epoch {
         crate::test_helpers::test_epoch()
@@ -589,7 +617,7 @@ mod tests {
         .expect("should converge");
 
         assert!(
-            (leg1.total_dv_km_s - leg2.total_dv_km_s).abs() < 1e-14,
+            (leg1.total_dv_km_s - leg2.total_dv_km_s).abs() < DETERMINISTIC_DV_TOL,
             "Same inputs should give same Δv"
         );
     }
@@ -676,7 +704,7 @@ mod tests {
 
         let tof_s = period * 0.75;
         let dv1 = Vector3::new(0.001, 0.002, 0.0005);
-        let fd_step = 1e-7;
+        let fd_step = JACOBIAN_FD_STEP_KM_S;
 
         // Analytical Jacobian
         let jac_analytical = compute_analytical_jacobian(&chief, tof_s).unwrap();
@@ -703,13 +731,13 @@ mod tests {
             for j in 0..3 {
                 let a = jac_analytical[(i, j)];
                 let f = jac_fd[(i, j)];
-                let rel_err = if f.abs() > 1e-10 {
+                let rel_err = if f.abs() > JACOBIAN_NEAR_ZERO_THRESHOLD {
                     (a - f).abs() / f.abs()
                 } else {
                     (a - f).abs()
                 };
                 assert!(
-                    rel_err < 1e-5,
+                    rel_err < JACOBIAN_FD_REL_TOL,
                     "Jacobian mismatch at ({i},{j}): analytical={a:.6e}, fd={f:.6e}, rel_err={rel_err:.2e}"
                 );
             }
@@ -725,7 +753,7 @@ mod tests {
         let propagator = PropagationModel::J2Stm;
         let config = TargetingConfig {
             max_iterations: 1,
-            position_tol_km: 1e-12, // extremely tight tolerance
+            position_tol_km: FORCED_NONCONVERGENCE_TOL_KM,
             ..TargetingConfig::default()
         };
         let departure = DepartureState { roe: zero_roe(), chief, epoch };

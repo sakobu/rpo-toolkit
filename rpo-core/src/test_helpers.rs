@@ -178,6 +178,16 @@ pub fn koenig_table2_case3_roe() -> QuasiNonsingularROE {
     }
 }
 
+/// Lower bound for DMF differential drag rate (nonzero sanity check).
+/// Any physically meaningful differential drag rate should exceed this
+/// threshold; values below indicate extraction failure or zero B* difference.
+pub const DMF_RATE_NONZERO_LOWER_BOUND: f64 = 1e-16;
+
+/// Upper bound for DMF differential drag rate (reasonableness check).
+/// Differential semi-major axis decay of ~1e-6 km/s (~86 m/day) already
+/// exceeds any LEO scenario; values above indicate extraction errors.
+pub const DMF_RATE_UPPER_BOUND: f64 = 1e-6;
+
 /// Construct deputy Keplerian elements from chief + ROE by inverting the QNS ROE formulas.
 ///
 /// Inverts Koenig Eq. 2 to recover deputy elements from chief elements and ROE.

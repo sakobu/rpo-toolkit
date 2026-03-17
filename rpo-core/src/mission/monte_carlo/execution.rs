@@ -157,7 +157,7 @@ pub(crate) fn run_single_sample(
     let mut deputy_state = dispersed_deputy;
     let mut total_dv = 0.0_f64;
     let mut waypoint_miss_km = Vec::with_capacity(active_mission.legs.len());
-    let mut elapsed_total = 0.0_f64;
+    let mut elapsed_total_s = 0.0_f64;
 
     let maneuver_disp = config.dispersions.maneuver.as_ref();
     let traj_steps = config.trajectory_steps.max(1);
@@ -215,7 +215,7 @@ pub(crate) fn run_single_sample(
         for (idx, (c_entry, d_entry)) in chief_traj.into_iter().zip(deputy_traj.into_iter()).enumerate() {
             if idx > 0 {
                 all_safety_pairs.push(ChiefDeputySnapshot {
-                    elapsed_s: elapsed_total + c_entry.elapsed_s,
+                    elapsed_s: elapsed_total_s + c_entry.elapsed_s,
                     chief: c_entry.state,
                     deputy: d_entry.state,
                 });
@@ -236,7 +236,7 @@ pub(crate) fn run_single_sample(
         let miss = (ric_rel.position_ric_km - leg.to_position_ric_km).norm();
         waypoint_miss_km.push(miss);
 
-        elapsed_total += leg.tof_s;
+        elapsed_total_s += leg.tof_s;
     }
 
     // Build safety states and compute safety metrics.

@@ -57,7 +57,6 @@ pub(crate) fn compute_percentile_stats(values: &[f64]) -> Result<PercentileStats
             return sorted[0];
         }
         let rank = (p_percent * n).div_ceil(100);
-        // u32 → usize: always widening on 32-bit and 64-bit platforms.
         let idx = rank.saturating_sub(1).min(n - 1) as usize;
         sorted[idx]
     };
@@ -103,7 +102,7 @@ pub(crate) fn compute_dispersion_envelope(
         let mut radial_values = Vec::with_capacity(sample_trajectories.len());
         let mut intrack_values = Vec::with_capacity(sample_trajectories.len());
         let mut crosstrack_values = Vec::with_capacity(sample_trajectories.len());
-        let mut elapsed = 0.0_f64;
+        let mut elapsed_s = 0.0_f64;
         let mut needs_elapsed = true;
 
         for traj in sample_trajectories {
@@ -113,7 +112,7 @@ pub(crate) fn compute_dispersion_envelope(
                 intrack_values.push(state.ric.position_ric_km.y);
                 crosstrack_values.push(state.ric.position_ric_km.z);
                 if needs_elapsed {
-                    elapsed = state.elapsed_s;
+                    elapsed_s = state.elapsed_s;
                     needs_elapsed = false;
                 }
             }
@@ -135,7 +134,7 @@ pub(crate) fn compute_dispersion_envelope(
         };
 
         envelopes.push(DispersionEnvelope {
-            elapsed_s: elapsed,
+            elapsed_s,
             radial_km: r_stats,
             in_track_km: i_stats,
             cross_track_km: c_stats,

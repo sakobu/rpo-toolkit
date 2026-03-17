@@ -283,6 +283,41 @@ mod tests {
     use crate::test_helpers::{iss_like_elements, test_epoch};
     use crate::types::KeplerianElements;
 
+    /// Tolerance for ROE identity comparison: classify_separation computes
+    /// the same ROE as a direct compute_roe call on the same elements.
+    /// Both paths invoke the identical function — error is f64 arithmetic only.
+    const ROE_IDENTITY_TOL: f64 = 1e-14;
+
+    /// Tolerance for dimensionless separation near-zero check.
+    /// When δa, δex, δey, δix are all structurally zero (only δλ/δiy differ),
+    /// the norm should be negligible; 1e-10 accommodates Keplerian→ROE roundtrip noise.
+    const DIMENSIONLESS_NEAR_ZERO_TOL: f64 = 1e-10;
+
+    /// Tolerance for structural zeros: ROE components that are set to exactly 0.0
+    /// in the perch geometry constructor and never undergo arithmetic.
+    /// 1e-15 is near the f64 machine epsilon floor.
+    const STRUCTURAL_ZERO_TOL: f64 = 1e-15;
+
+    /// Tolerance for perch ROE expected-value comparison.
+    /// A single division (offset_km / a_km) introduces one ULP of rounding;
+    /// 1e-12 is conservative for this single-operation error.
+    const PERCH_ROE_EXPECTED_TOL: f64 = 1e-12;
+
+    /// Tolerance for the perch ROE→Keplerian→ROE roundtrip.
+    /// The roundtrip involves atan2, sin/cos, and rem_euclid operations that
+    /// accumulate ~1e-10 error on dimensionless ROE components.
+    const PERCH_ROE_ROUNDTRIP_TOL: f64 = 1e-10;
+
+    /// Tolerance for serde JSON roundtrip of ROE values.
+    /// JSON serialization preserves f64 to full precision; 1e-12 matches
+    /// the single-division error in the original perch ROE computation.
+    const SERDE_ROUNDTRIP_TOL: f64 = 1e-12;
+
+    /// Minimum Δv difference (km/s) between 0-rev and 1-rev Lambert solutions.
+    /// This is a structural check — different solution branches must produce
+    /// detectably different Δv. 1e-6 km/s = 1 mm/s is well above numerical noise.
+    const MULTI_REV_DV_DIFFERENCE_MIN: f64 = 1e-6;
+
     #[test]
     fn classify_proximity_for_close_spacecraft() {
         let epoch = test_epoch();
@@ -339,7 +374,7 @@ mod tests {
 
         // δa, δex, δey, δix should all be zero (same a, e, i, aop)
         assert!(
-            sep < 1e-10,
+            sep < DIMENSIONLESS_NEAR_ZERO_TOL,
             "dimensionless_separation should exclude δλ and δiy, got {sep}"
         );
     }
@@ -428,27 +463,27 @@ mod tests {
             // ROE from classify should match direct compute_roe
             let direct_roe = compute_roe(&chief_elements, &deputy_elements).unwrap();
             assert!(
-                (roe.da - direct_roe.da).abs() < 1e-14,
+                (roe.da - direct_roe.da).abs() < ROE_IDENTITY_TOL,
                 "da mismatch"
             );
             assert!(
-                (roe.dlambda - direct_roe.dlambda).abs() < 1e-14,
+                (roe.dlambda - direct_roe.dlambda).abs() < ROE_IDENTITY_TOL,
                 "dlambda mismatch"
             );
             assert!(
-                (roe.dex - direct_roe.dex).abs() < 1e-14,
+                (roe.dex - direct_roe.dex).abs() < ROE_IDENTITY_TOL,
                 "dex mismatch"
             );
             assert!(
-                (roe.dey - direct_roe.dey).abs() < 1e-14,
+                (roe.dey - direct_roe.dey).abs() < ROE_IDENTITY_TOL,
                 "dey mismatch"
             );
             assert!(
-                (roe.dix - direct_roe.dix).abs() < 1e-14,
+                (roe.dix - direct_roe.dix).abs() < ROE_IDENTITY_TOL,
                 "dix mismatch"
             );
             assert!(
-                (roe.diy - direct_roe.diy).abs() < 1e-14,
+                (roe.diy - direct_roe.diy).abs() < ROE_IDENTITY_TOL,
                 "diy mismatch"
             );
         } else {
@@ -467,13 +502,13 @@ mod tests {
         // V-bar maps to δλ only
         let expected_dlambda = 5.0 / chief.a_km;
         assert!(
-            (roe.dlambda - expected_dlambda).abs() < 1e-12,
+            (roe.dlambda - expected_dlambda).abs() < PERCH_ROE_EXPECTED_TOL,
             "dlambda should be {expected_dlambda}, got {}",
             roe.dlambda
         );
-        assert!(roe.da.abs() < 1e-15, "da should be zero for V-bar");
-        assert!(roe.dex.abs() < 1e-15, "dex should be zero");
-        assert!(roe.dey.abs() < 1e-15, "dey should be zero");
+        assert!(roe.da.abs() < STRUCTURAL_ZERO_TOL, "da should be zero for V-bar");
+        assert!(roe.dex.abs() < STRUCTURAL_ZERO_TOL, "dex should be zero");
+        assert!(roe.dey.abs() < STRUCTURAL_ZERO_TOL, "dey should be zero");
 
         // Verify the RIC position has along-track component
         let ric = roe_to_ric(&roe, &chief).unwrap();
@@ -494,11 +529,11 @@ mod tests {
         // R-bar maps to δa only
         let expected_da = 2.0 / chief.a_km;
         assert!(
-            (roe.da - expected_da).abs() < 1e-12,
+            (roe.da - expected_da).abs() < PERCH_ROE_EXPECTED_TOL,
             "da should be {expected_da}, got {}",
             roe.da
         );
-        assert!(roe.dlambda.abs() < 1e-15, "dlambda should be zero for R-bar");
+        assert!(roe.dlambda.abs() < STRUCTURAL_ZERO_TOL, "dlambda should be zero for R-bar");
     }
 
     #[test]
@@ -540,37 +575,37 @@ mod tests {
         let recovered_roe = compute_roe(&chief, &deputy_ke).unwrap();
 
         assert!(
-            (original_roe.da - recovered_roe.da).abs() < 1e-10,
+            (original_roe.da - recovered_roe.da).abs() < PERCH_ROE_ROUNDTRIP_TOL,
             "da roundtrip: {} vs {}",
             original_roe.da,
             recovered_roe.da
         );
         assert!(
-            (original_roe.dlambda - recovered_roe.dlambda).abs() < 1e-10,
+            (original_roe.dlambda - recovered_roe.dlambda).abs() < PERCH_ROE_ROUNDTRIP_TOL,
             "dlambda roundtrip: {} vs {}",
             original_roe.dlambda,
             recovered_roe.dlambda
         );
         assert!(
-            (original_roe.dex - recovered_roe.dex).abs() < 1e-10,
+            (original_roe.dex - recovered_roe.dex).abs() < PERCH_ROE_ROUNDTRIP_TOL,
             "dex roundtrip: {} vs {}",
             original_roe.dex,
             recovered_roe.dex
         );
         assert!(
-            (original_roe.dey - recovered_roe.dey).abs() < 1e-10,
+            (original_roe.dey - recovered_roe.dey).abs() < PERCH_ROE_ROUNDTRIP_TOL,
             "dey roundtrip: {} vs {}",
             original_roe.dey,
             recovered_roe.dey
         );
         assert!(
-            (original_roe.dix - recovered_roe.dix).abs() < 1e-10,
+            (original_roe.dix - recovered_roe.dix).abs() < PERCH_ROE_ROUNDTRIP_TOL,
             "dix roundtrip: {} vs {}",
             original_roe.dix,
             recovered_roe.dix
         );
         assert!(
-            (original_roe.diy - recovered_roe.diy).abs() < 1e-10,
+            (original_roe.diy - recovered_roe.diy).abs() < PERCH_ROE_ROUNDTRIP_TOL,
             "diy roundtrip: {} vs {}",
             original_roe.diy,
             recovered_roe.diy
@@ -634,9 +669,9 @@ mod tests {
         assert!(plan.transfer.is_none(), "proximity should have no Lambert transfer");
 
         let expected_dlambda = 5.0 / chief_ke.a_km;
-        assert!(plan.perch_roe.da.abs() < 1e-15,
+        assert!(plan.perch_roe.da.abs() < STRUCTURAL_ZERO_TOL,
             "V-bar perch should have δa = 0, got {}", plan.perch_roe.da);
-        assert!((plan.perch_roe.dlambda - expected_dlambda).abs() < 1e-12,
+        assert!((plan.perch_roe.dlambda - expected_dlambda).abs() < PERCH_ROE_EXPECTED_TOL,
             "V-bar perch should have δλ = {expected_dlambda}, got {}", plan.perch_roe.dlambda);
     }
 
@@ -649,9 +684,9 @@ mod tests {
         assert!(plan.transfer.is_none(), "proximity should have no Lambert transfer");
 
         let expected_da = 2.0 / chief_ke.a_km;
-        assert!((plan.perch_roe.da - expected_da).abs() < 1e-12,
+        assert!((plan.perch_roe.da - expected_da).abs() < PERCH_ROE_EXPECTED_TOL,
             "R-bar perch should have δa = {expected_da}, got {}", plan.perch_roe.da);
-        assert!(plan.perch_roe.dlambda.abs() < 1e-15,
+        assert!(plan.perch_roe.dlambda.abs() < STRUCTURAL_ZERO_TOL,
             "R-bar perch should have δλ = 0, got {}", plan.perch_roe.dlambda);
     }
 
@@ -676,7 +711,7 @@ mod tests {
 
         let expected_dlambda = 5.0 / chief_ke.a_km;
         assert!(
-            (deserialized.perch_roe.dlambda - expected_dlambda).abs() < 1e-12,
+            (deserialized.perch_roe.dlambda - expected_dlambda).abs() < SERDE_ROUNDTRIP_TOL,
             "perch_roe should survive serde roundtrip"
         );
     }
@@ -733,7 +768,7 @@ mod tests {
         let dv_0 = plan_0.transfer.as_ref().unwrap().total_dv_km_s;
         let dv_1 = plan_1.transfer.as_ref().unwrap().total_dv_km_s;
         assert!(
-            (dv_0 - dv_1).abs() > 1e-6,
+            (dv_0 - dv_1).abs() > MULTI_REV_DV_DIFFERENCE_MIN,
             "Multi-rev should produce different Δv: 0-rev={dv_0:.6}, 1-rev={dv_1:.6}"
         );
     }

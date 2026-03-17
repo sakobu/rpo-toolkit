@@ -27,6 +27,9 @@ pub use types::{
     MonteCarloReport, PercentileStats, SampleResult, SpacecraftDispersion, StateDispersion,
 };
 
+/// Default master seed when `MonteCarloConfig.seed` is `None`.
+const DEFAULT_MC_SEED: u64 = 42;
+
 /// Errors from Monte Carlo ensemble analysis.
 #[derive(Debug)]
 pub enum MonteCarloError {
@@ -182,7 +185,7 @@ pub fn run_monte_carlo(input: &MonteCarloInput<'_>) -> Result<MonteCarloReport, 
     }
 
     let start = Instant::now();
-    let master_seed = config.seed.unwrap_or(42);
+    let master_seed = config.seed.unwrap_or(DEFAULT_MC_SEED);
 
     // Run samples in parallel
     let results: Vec<Result<execution::SampleOutput, MonteCarloError>> = (0..config.num_samples)
