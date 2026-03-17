@@ -296,7 +296,7 @@ mod tests {
     use crate::types::{RICState, SpacecraftConfig};
 
     // =========================================================================
-    // Phase 5: Mission Validation Pipeline Tests
+    // Mission Validation Pipeline Tests
     // =========================================================================
 
     /// Verify `compute_report_statistics` with known error values.
@@ -356,7 +356,7 @@ mod tests {
 
 
     // =========================================================================
-    // Phase 6: Full-Physics Integration Tests
+    // Full-Physics Integration Tests
     // =========================================================================
 
     /// Position tolerance for a single-leg transfer (~1 orbit).

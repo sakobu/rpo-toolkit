@@ -172,6 +172,9 @@ impl From<NyxBridgeError> for MonteCarloError {
 /// - `input.nominal_mission.legs` is non-empty (caller responsibility).
 /// - Results are deterministic for a given `input.config.seed`.
 ///
+/// # Arguments
+/// * `input` — Monte Carlo input bundle (mission, config, dispersions, almanac)
+///
 /// # Errors
 /// - [`MonteCarloError::ZeroSamples`] if `num_samples == 0`.
 /// - [`MonteCarloError::AllSamplesFailed`] if every sample fails (with

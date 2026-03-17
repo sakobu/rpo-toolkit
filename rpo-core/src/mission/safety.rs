@@ -150,6 +150,10 @@ pub fn analyze_safety(
 /// - Trajectory states must be time-ordered
 /// - Each state's ROE and RIC position must be self-consistent
 ///
+/// # Arguments
+/// * `trajectory` — Time-ordered slice of propagated states along one leg
+/// * `chief_elements` — Chief Keplerian elements (provides SMA for e/i scaling)
+///
 /// # Errors
 /// Returns `SafetyError::EmptyTrajectory` if the trajectory slice is empty.
 pub fn analyze_trajectory_safety(

@@ -144,6 +144,14 @@ struct ConvergedSolution {
 /// - CW STM is singular at integer orbital periods for radial/cross-track
 ///   targets; use non-integer period TOFs to avoid singular Jacobian
 ///
+/// # Arguments
+/// * `departure` — Departure ROE state, chief elements, and epoch
+/// * `target_position` — Target RIC position (km)
+/// * `target_velocity` — Target RIC velocity (km/s)
+/// * `tof_s` — Time of flight (seconds)
+/// * `config` — Targeting solver configuration (tolerances, max iterations)
+/// * `propagator` — Propagation model (J2 or J2+Drag)
+///
 /// # Errors
 /// Returns `MissionError::TargetingConvergence` if the solver fails to converge,
 /// or `MissionError::SingularJacobian` if the Jacobian cannot be inverted.
@@ -333,6 +341,14 @@ fn build_leg(
 /// - `departure.chief` must be **mean** Keplerian elements, not osculating
 /// - `tof_config.min_periods > 0` and `tof_config.max_periods > tof_config.min_periods`
 /// - `tof_config.num_starts > 0`
+///
+/// # Arguments
+/// * `departure` — Departure ROE state, chief elements, and epoch
+/// * `target_position` — Target RIC position (km)
+/// * `target_velocity` — Target RIC velocity (km/s)
+/// * `targeting_config` — Targeting solver configuration
+/// * `tof_config` — TOF optimization bounds and search configuration
+/// * `propagator` — Propagation model (J2 or J2+Drag)
 ///
 /// # Errors
 /// Returns `MissionError::TofOptimizationFailure` if no valid TOF is found.

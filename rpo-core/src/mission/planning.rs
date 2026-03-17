@@ -30,6 +30,11 @@ const PERCH_OFFSET_MIN_KM: f64 = 1e-10;
 /// - Position vectors must be non-zero
 /// - `config.roe_threshold > 0`
 ///
+/// # Arguments
+/// * `chief` — Chief spacecraft ECI state
+/// * `deputy` — Deputy spacecraft ECI state
+/// * `config` — Proximity threshold configuration
+///
 /// # Errors
 /// Returns `MissionError::Conversion` if either state cannot be converted
 /// to Keplerian elements (e.g., escape trajectory or zero position).
@@ -66,6 +71,10 @@ pub fn classify_separation(
 ///
 /// # Invariants
 /// - Both states should be at the same epoch for meaningful results
+///
+/// # Arguments
+/// * `chief` — Chief spacecraft ECI state
+/// * `deputy` — Deputy spacecraft ECI state
 #[must_use]
 pub fn eci_separation_km(chief: &StateVector, deputy: &StateVector) -> f64 {
     (deputy.position_eci_km - chief.position_eci_km).norm()
@@ -84,6 +93,10 @@ pub fn eci_separation_km(chief: &StateVector, deputy: &StateVector) -> f64 {
 /// - `chief.a_km > 0` (used as normalizing denominator in ROE computation)
 /// - Both elements must be at the same epoch
 ///
+/// # Arguments
+/// * `chief` — Chief Keplerian elements (provides normalizing SMA)
+/// * `deputy` — Deputy Keplerian elements
+///
 /// # Errors
 /// Returns `ConversionError` if `chief` has invalid SMA or eccentricity.
 pub fn dimensionless_separation(
@@ -98,6 +111,10 @@ pub fn dimensionless_separation(
 ///
 /// # Invariants
 /// - `chief.a_km > 0` (used as normalizing denominator)
+///
+/// # Arguments
+/// * `perch` — Perch geometry specification (V-bar, R-bar, or custom ROE)
+/// * `chief` — Chief Keplerian elements (provides normalizing SMA)
 ///
 /// # Errors
 /// Returns `MissionError::InvalidVBarOffset` or `MissionError::InvalidRBarOffset`
@@ -164,6 +181,14 @@ pub fn perch_to_roe(
 /// - For multi-rev (`lambert_config.revolutions > 0`), `lambert_tof_s` must
 ///   be long enough to accommodate the requested number of revolutions
 /// - Position vectors must be non-zero
+///
+/// # Arguments
+/// * `chief` — Chief spacecraft ECI state at departure
+/// * `deputy` — Deputy spacecraft ECI state at departure
+/// * `perch` — Target perch geometry
+/// * `config` — Proximity threshold configuration
+/// * `lambert_tof_s` — Time of flight for Lambert transfer (seconds, far-field only)
+/// * `lambert_config` — Lambert solver configuration (direction, revolutions)
 ///
 /// # Errors
 /// Returns `MissionError` if the Lambert solver fails or the perch geometry is invalid.

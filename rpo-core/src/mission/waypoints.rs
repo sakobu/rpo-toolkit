@@ -100,6 +100,12 @@ fn build_mission(
 /// - Each `Waypoint.tof_s`, if `Some`, must be > 0
 /// - All epochs must be consistent (no backward time jumps)
 ///
+/// # Arguments
+/// * `initial` — Departure state (ROE, chief elements, epoch)
+/// * `waypoints` — Ordered list of target waypoints (RIC position/velocity, optional TOF)
+/// * `config` — Mission configuration (targeting, TOF optimization, safety)
+/// * `propagator` — Propagation model (J2 or J2+Drag)
+///
 /// # Errors
 /// Returns `MissionError::EmptyWaypoints` if no waypoints are provided,
 /// or propagates targeting/propagation errors from individual legs.
@@ -258,6 +264,11 @@ pub fn replan_from_waypoint(
 /// - `elapsed_s` must be finite
 /// - `mission` must have been produced by `plan_waypoint_mission`
 ///
+/// # Arguments
+/// * `mission` — Completed waypoint mission
+/// * `elapsed_s` — Elapsed time from mission start (seconds)
+/// * `propagator` — Propagation model (must match the one used to plan)
+///
 /// # Errors
 /// Returns `PropagationError` if propagation fails (e.g., invalid orbital elements).
 pub fn get_mission_state_at_time(
@@ -299,6 +310,11 @@ pub fn get_mission_state_at_time(
 /// # Invariants
 /// - `n_steps > 0`
 /// - `leg` must have been produced by `solve_leg` or `plan_waypoint_mission`
+///
+/// # Arguments
+/// * `leg` — Maneuver leg to resample
+/// * `n_steps` — Number of time intervals (produces `n_steps + 1` states)
+/// * `propagator` — Propagation model (must match the one used to plan)
 ///
 /// # Errors
 /// Returns `PropagationError::ZeroSteps` if `n_steps` is zero.
