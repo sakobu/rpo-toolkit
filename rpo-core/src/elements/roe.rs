@@ -8,10 +8,19 @@ use crate::types::{KeplerianElements, QuasiNonsingularROE};
 ///
 /// The ROEs are normalized by the chief semi-major axis.
 ///
+/// # Arguments
+/// * `chief` — chief Keplerian elements (provides normalization via `a_km`)
+/// * `deputy` — deputy Keplerian elements (must be at the same epoch as `chief`)
+///
 /// # Invariants
 /// - `chief.a_km > 0` (used as normalizing denominator)
 /// - Both elements must be at the same epoch
-/// - Near-equatorial orbits (`i ≈ 0`): `diy` degrades as `sin(i) → 0`
+///
+/// # Singularities
+/// - **Near-equatorial** (`i_c → 0`): `diy = ΔΩ · sin(i_c)` degrades gracefully
+///   toward zero regardless of `ΔΩ` magnitude. No NaN or error is produced, but
+///   the out-of-plane RAAN separation is lost. This is inherent to the QNS ROE
+///   definition, not a numerical artifact.
 ///
 /// # Errors
 /// Returns `ConversionError::KeplerFailure` if `chief.a_km <= 0` or `chief.e` is outside [0, 1).

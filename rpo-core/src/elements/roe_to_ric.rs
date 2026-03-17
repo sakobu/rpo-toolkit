@@ -95,8 +95,14 @@ pub fn compute_t_matrix(chief: &KeplerianElements) -> Result<SMatrix<f64, 6, 6>,
 
 /// Compute the 3×6 position submatrix of the T matrix (top 3 rows).
 ///
+/// Delegates to [`compute_t_matrix`] and extracts rows 0–2.
+///
+/// # Arguments
+/// * `chief` — chief Keplerian elements
+///
 /// # Invariants
 /// - `chief.a_km > 0`
+/// - Near-circular assumption: accurate for `e < ~0.1` (see [`compute_t_matrix`])
 ///
 /// # Errors
 /// Returns `ConversionError` if `chief` has invalid SMA or eccentricity.
@@ -107,8 +113,14 @@ pub fn compute_t_position(chief: &KeplerianElements) -> Result<SMatrix<f64, 3, 6
 
 /// Compute the 3×6 velocity submatrix of the T matrix (bottom 3 rows).
 ///
+/// Delegates to [`compute_t_matrix`] and extracts rows 3–5.
+///
+/// # Arguments
+/// * `chief` — chief Keplerian elements
+///
 /// # Invariants
 /// - `chief.a_km > 0`
+/// - Near-circular assumption: accurate for `e < ~0.1` (see [`compute_t_matrix`])
 ///
 /// # Errors
 /// Returns `ConversionError` if `chief` has invalid SMA or eccentricity.
@@ -129,6 +141,13 @@ pub fn compute_t_velocity(chief: &KeplerianElements) -> Result<SMatrix<f64, 3, 6
 /// # Invariants
 /// - `chief.a_km > 0`
 /// - Result is the minimum-norm ROE; other valid ROE solutions exist
+///
+/// # Singularities
+/// `T_pos · T_pos^T` can become ill-conditioned at specific argument-of-latitude
+/// values where the 3×6 position mapping loses effective rank (e.g., when
+/// radial and in-track rows become nearly linearly dependent). In practice
+/// this is rare for typical ROE magnitudes, but callers should handle the
+/// `SingularPositionMatrix` error.
 ///
 /// # Errors
 /// Returns `RicError::SingularPositionMatrix` if `T_pos · T_pos^T` is singular.

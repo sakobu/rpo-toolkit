@@ -46,6 +46,9 @@ impl std::error::Error for DcmError {}
 ///
 /// Multiply: `v_ric = DCM * v_eci`. Inverse: `v_eci = DCM^T * v_ric`.
 ///
+/// # Arguments
+/// * `chief` — chief ECI state vector defining the RIC frame origin and orientation
+///
 /// # Invariants
 /// - `chief.position_eci_km` must be non-zero (defines radial direction)
 /// - `r × v` must be non-zero (defines orbital plane; fails for rectilinear orbits)
@@ -84,6 +87,10 @@ pub fn eci_to_ric_dcm(chief: &StateVector) -> Result<Matrix3, DcmError> {
 ///
 /// `dv_eci = DCM^T * dv_ric`
 ///
+/// # Arguments
+/// * `dv_ric` — delta-v vector in the RIC frame (km/s)
+/// * `chief` — chief ECI state vector defining the RIC frame
+///
 /// # Invariants
 /// - Chief state must define a valid RIC frame (non-zero position and angular momentum)
 /// - Preserves vector magnitude: `|dv_eci| = |dv_ric|`
@@ -98,6 +105,10 @@ pub fn ric_to_eci_dv(dv_ric: &Vector3<f64>, chief: &StateVector) -> Result<Vecto
 /// Transform a Δv from ECI frame to RIC frame.
 ///
 /// `dv_ric = DCM * dv_eci`
+///
+/// # Arguments
+/// * `dv_eci` — delta-v vector in the ECI frame (km/s)
+/// * `chief` — chief ECI state vector defining the RIC frame
 ///
 /// # Invariants
 /// - Chief state must define a valid RIC frame (non-zero position and angular momentum)
@@ -125,6 +136,10 @@ pub fn eci_to_ric_dv(dv_eci: &Vector3<f64>, chief: &StateVector) -> Result<Vecto
 ///
 /// This is the exact instantaneous kinematic relation for the RIC frame
 /// defined by the chief position and velocity.
+///
+/// # Arguments
+/// * `chief` — chief ECI state vector (defines the RIC frame origin and orientation)
+/// * `deputy` — deputy ECI state vector (must be at the same epoch as `chief`)
 ///
 /// # Invariants
 /// - Chief state must define a valid RIC frame (non-zero position and angular momentum)
@@ -161,6 +176,10 @@ pub fn eci_to_ric_relative(chief: &StateVector, deputy: &StateVector) -> Result<
 ///
 /// `r_deputy_eci = r_chief_eci + DCM^T * ric_offset`
 ///
+/// # Arguments
+/// * `chief` — chief ECI state vector defining the RIC frame
+/// * `ric_offset` — position offset in the RIC frame (km)
+///
 /// # Invariants
 /// - Chief state must define a valid RIC frame (non-zero position and angular momentum)
 ///
@@ -178,6 +197,10 @@ pub fn ric_to_eci_position(chief: &StateVector, ric_offset: &Vector3<f64>) -> Re
 ///
 /// Position: `r_chief + C^T · ρ`
 /// Velocity: `v_chief + C^T · (ρ̇ + ω × ρ)`
+///
+/// # Arguments
+/// * `chief` — chief ECI state vector defining the RIC frame
+/// * `ric_state` — relative RIC state (position in km, velocity in km/s)
 ///
 /// # Invariants
 /// - Chief state must define a valid RIC frame (non-zero position and angular momentum)

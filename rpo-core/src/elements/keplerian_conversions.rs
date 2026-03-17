@@ -64,10 +64,21 @@ impl From<KeplerError> for ConversionError {
 /// - Near-circular orbits (e < `ECC_TOL`): ω set to 0, true anomaly measured from ascending node
 /// - Near-equatorial orbits (i < `INC_TOL`): Ω set to 0, ω measured from x-axis
 ///
+/// # Arguments
+/// * `sv` — ECI state vector (position in km, velocity in km/s)
+///
 /// # Invariants
 /// - `sv.position_eci_km` must be non-zero (zero position → division by zero)
 /// - Orbit must be bound (`e < 1`); escape trajectories produce `Err(UnboundOrbit)`
 /// - Kepler's equation inversion (via `true_anomaly()`) may not converge for `e` near 1
+///
+/// # Singularities
+/// - **Near-circular** (`e < ECC_TOL`): ω is set to 0 and true anomaly is measured
+///   from the ascending node. A branch discontinuity exists at `e = ECC_TOL`.
+/// - **Near-equatorial** (`i < INC_TOL`): Ω is set to 0 and ω is measured from
+///   the x-axis. A branch discontinuity exists at `i = INC_TOL`.
+/// - **Near-parabolic** (`e → 1`): Kepler's equation convergence degrades;
+///   delegated to `true_anomaly()` which may fail with `KeplerError`.
 ///
 /// # Errors
 /// Returns `ConversionError::ZeroPositionVector` if the position vector norm is < `MIN_POSITION_NORM_KM`.
@@ -173,6 +184,10 @@ pub fn state_to_keplerian(sv: &StateVector) -> Result<KeplerianElements, Convers
 }
 
 /// Convert Keplerian orbital elements to an ECI state vector.
+///
+/// # Arguments
+/// * `ke` — Keplerian orbital elements (validated via `ke.validate()`)
+/// * `epoch` — epoch for the output state vector
 ///
 /// # Invariants
 /// - `ke.a_km > 0` (negative SMA produces invalid geometry)
