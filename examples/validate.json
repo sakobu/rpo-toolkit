@@ -7,15 +7,25 @@
   "deputy": {
     "epoch": "2024-01-01T00:00:00 UTC",
     "position_eci_km": [5199.839421, 4281.648523, 1398.070066],
-    "velocity_eci_km_s": [-3.993103, 2.970313, 5.764540]
+    "velocity_eci_km_s": [-3.993103, 2.970313, 5.76454]
+  },
+  "chief_config": {
+    "dry_mass_kg": 500.0,
+    "drag_area_m2": 1.0,
+    "coeff_drag": 2.2,
+    "srp_area_m2": 1.0,
+    "coeff_reflectivity": 1.8
+  },
+  "deputy_config": {
+    "dry_mass_kg": 12.0,
+    "drag_area_m2": 0.06,
+    "coeff_drag": 2.2,
+    "srp_area_m2": 0.06,
+    "coeff_reflectivity": 1.8
   },
   "proximity": { "roe_threshold": 0.005 },
   "perch": { "VBar": { "along_track_km": 5.0 } },
-  "lambert_tof_s": 12000.0,
-  "lambert_config": {
-    "direction": "Auto",
-    "revolutions": 1
-  },
+  "lambert_tof_s": 3600.0,
   "waypoints": [
     {
       "label": "Approach to 2 km (+R/C corridor)",
@@ -36,7 +46,6 @@
       "tof_s": 4200.0
     }
   ],
-
   "safety": {
     "min_ei_separation_km": 0.1,
     "min_distance_3d_km": 0.05

@@ -106,9 +106,12 @@ impl Default for SafetyConfig {
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct MissionConfig {
     /// Newton-Raphson targeting solver settings.
+    #[serde(default)]
     pub targeting: TargetingConfig,
     /// Time-of-flight optimization settings.
+    #[serde(default)]
     pub tof: TofOptConfig,
     /// Optional passive safety analysis settings.
+    #[serde(default)]
     pub safety: Option<SafetyConfig>,
 }

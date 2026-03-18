@@ -62,9 +62,6 @@ pub const DEFAULT_MANEUVER_MAGNITUDE_SIGMA: f64 = 0.01;
 /// Default 1-sigma maneuver pointing error (rad). 1° ≈ 0.01745 rad.
 pub const DEFAULT_MANEUVER_POINTING_SIGMA_RAD: f64 = 0.01745;
 
-/// Floor for computed collision probability (avoids exact-zero reporting).
-pub const COLLISION_PROBABILITY_FLOOR: f64 = 1e-15;
-
 /// Default collision probability threshold (km) — minimum 3D distance
 /// below which a sample is counted as a collision.
 pub const MC_DEFAULT_COLLISION_THRESHOLD_KM: f64 = 0.1;

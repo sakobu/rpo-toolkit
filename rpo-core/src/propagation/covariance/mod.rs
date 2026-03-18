@@ -2,7 +2,7 @@
 //!
 //! Implements P₁ = Φ P₀ Φᵀ using J2/drag STMs, RIC↔ROE covariance
 //! conversion via the T matrix, maneuver covariance updates via the
-//! B matrix, and collision probability from Mahalanobis distance.
+//! B matrix, and Mahalanobis distance computation.
 //!
 //! Mission-level orchestration (`propagate_mission_covariance`) lives in
 //! `mission::covariance` and threads these kernels across a multi-leg
@@ -17,7 +17,7 @@ use crate::elements::keplerian_conversions::ConversionError;
 use crate::propagation::propagator::PropagationError;
 
 pub use propagate::{
-    compute_collision_metrics, propagate_covariance, propagate_covariance_with_drag,
+    compute_mahalanobis_distance, propagate_covariance, propagate_covariance_with_drag,
     propagate_covariance_with_params, ric_accuracy_to_roe_covariance,
     roe_covariance_to_ric_position, update_covariance_at_maneuver,
 };

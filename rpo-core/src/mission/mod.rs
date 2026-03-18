@@ -24,7 +24,10 @@ pub use planning::{
     classify_separation, compute_transfer_eclipse, dimensionless_separation, eci_separation_km,
     plan_mission,
 };
-pub use safety::{analyze_safety, analyze_trajectory_safety, SafetyError};
+pub use safety::{
+    analyze_safety, analyze_trajectory_safety, assess_safety, RcContext, SafetyAssessment,
+    SafetyError,
+};
 pub use targeting::{optimize_tof, solve_leg};
 pub use types::{
     EclipseIntervalComparison, EclipseValidation, EclipseValidationPoint,
@@ -38,7 +41,7 @@ pub use validation::{validate_mission_nyx, ValidationError};
 pub use covariance::propagate_mission_covariance;
 pub use monte_carlo::{
     run_monte_carlo, MonteCarloError,
-    CovarianceValidation, DispersionConfig, DispersionEnvelope, Distribution,
+    CovarianceCrossCheck, DispersionConfig, DispersionEnvelope, Distribution,
     EnsembleStatistics, ManeuverDispersion, MonteCarloConfig, MonteCarloInput, MonteCarloMode,
     MonteCarloReport, PercentileStats, SampleResult, SpacecraftDispersion, StateDispersion,
 };

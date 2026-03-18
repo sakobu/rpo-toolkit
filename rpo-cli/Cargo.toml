@@ -8,6 +8,7 @@ license.workspace = true
 
 [dependencies]
 rpo-core = { path = "../rpo-core" }
+anise = "0.9"
 hifitime = "4"
 clap = { version = "4", features = ["derive"] }
 serde = { version = "1", features = ["derive"] }

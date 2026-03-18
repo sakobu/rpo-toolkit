@@ -88,10 +88,10 @@ pub struct CovarianceState {
     pub covariance_ric_position_km2: SMatrix<f64, 3, 3>,
     /// 3-sigma position bounds per RIC axis (km): sqrt(diag) × 3
     pub sigma3_position_ric_km: Vector3<f64>,
-    /// Mahalanobis distance from chief (dimensionless)
+    /// Mahalanobis distance from chief (dimensionless).
+    /// Measures deputy-chief separation in sigma-space; smaller values
+    /// indicate closer proximity relative to the covariance ellipsoid.
     pub mahalanobis_distance: f64,
-    /// Approximate collision probability (from Mahalanobis distance)
-    pub collision_probability: f64,
 }
 
 /// Covariance evolution summary for a single maneuver leg.
@@ -101,8 +101,8 @@ pub struct LegCovarianceReport {
     pub states: Vec<CovarianceState>,
     /// Maximum 3-sigma position uncertainty across leg (km, any axis)
     pub max_sigma3_position_km: f64,
-    /// Maximum collision probability across leg
-    pub max_collision_probability: f64,
+    /// Minimum Mahalanobis distance across leg (closest approach in sigma-space)
+    pub min_mahalanobis_distance: f64,
 }
 
 /// Complete mission covariance propagation report.
@@ -116,8 +116,8 @@ pub struct MissionCovarianceReport {
     pub maneuver_uncertainty: Option<ManeuverUncertainty>,
     /// Overall maximum 3-sigma position uncertainty (km)
     pub max_sigma3_position_km: f64,
-    /// Overall maximum collision probability
-    pub max_collision_probability: f64,
+    /// Minimum Mahalanobis distance across entire mission (closest approach in sigma-space)
+    pub min_mahalanobis_distance: f64,
     /// Predicted nominal RIC position at mission end (km).
     /// Used as the center for terminal 3-sigma box containment checks.
     pub terminal_position_ric_km: Vector3<f64>,

@@ -7,7 +7,7 @@ use hifitime::Duration;
 use nalgebra::Vector3;
 
 use crate::propagation::covariance::propagate::{
-    compute_collision_metrics, propagate_sample, roe_covariance_to_ric_position,
+    compute_mahalanobis_distance, propagate_sample, roe_covariance_to_ric_position,
     update_covariance_at_maneuver,
 };
 use crate::propagation::covariance::types::{
@@ -29,7 +29,7 @@ use crate::elements::roe_to_ric::roe_to_ric;
 /// For each leg in the mission:
 /// 1. Update covariance at departure maneuver (add execution error via B matrix)
 /// 2. Propagate covariance through the coast arc at `n_steps` sample points
-/// 3. At each sample: project to RIC, compute 3σ bounds and Pc
+/// 3. At each sample: project to RIC, compute 3σ bounds and Mahalanobis distance
 /// 4. Update covariance at arrival maneuver
 /// 5. Post-arrival covariance becomes next leg's initial covariance
 ///
@@ -64,7 +64,7 @@ pub fn propagate_mission_covariance(
     let mut current_p = *initial_covariance;
     let mut leg_reports = Vec::with_capacity(mission.legs.len());
     let mut overall_max_sigma3 = 0.0_f64;
-    let mut overall_max_pc = 0.0_f64;
+    let mut overall_min_mahal = f64::INFINITY;
     let mut terminal_ric_position = Vector3::zeros();
     let mut terminal_sigma3 = Vector3::zeros();
 
@@ -93,7 +93,7 @@ pub fn propagate_mission_covariance(
         //    covariance propagation and nominal ROE evolution.
         let mut states = Vec::with_capacity(n as usize + 1);
         let mut leg_max_sigma3 = 0.0_f64;
-        let mut leg_max_pc = 0.0_f64;
+        let mut leg_min_mahal = f64::INFINITY;
         let mut p_last = p_post_dep;
 
         for j in 0..=n {
@@ -122,13 +122,13 @@ pub fn propagate_mission_covariance(
                 3.0 * p_ric_pos[(2, 2)].sqrt(),
             );
 
-            // Collision metrics
-            let (mahal, pc) = compute_collision_metrics(&ric_position, &p_ric_pos);
+            // Mahalanobis distance (proximity diagnostic)
+            let mahal = compute_mahalanobis_distance(&ric_position, &p_ric_pos);
 
-            // Track per-leg maximums
+            // Track per-leg extremes
             let max_sigma3_component = sigma3.x.max(sigma3.y).max(sigma3.z);
             leg_max_sigma3 = leg_max_sigma3.max(max_sigma3_component);
-            leg_max_pc = leg_max_pc.max(pc);
+            leg_min_mahal = leg_min_mahal.min(mahal);
 
             // Overwrite each iteration; after the last leg's last sample,
             // these hold the mission terminal values.
@@ -144,7 +144,6 @@ pub fn propagate_mission_covariance(
                 covariance_ric_position_km2: p_ric_pos,
                 sigma3_position_ric_km: sigma3,
                 mahalanobis_distance: mahal,
-                collision_probability: pc,
             });
         }
 
@@ -165,12 +164,12 @@ pub fn propagate_mission_covariance(
 
         // 5. Build leg report
         overall_max_sigma3 = overall_max_sigma3.max(leg_max_sigma3);
-        overall_max_pc = overall_max_pc.max(leg_max_pc);
+        overall_min_mahal = overall_min_mahal.min(leg_min_mahal);
 
         leg_reports.push(LegCovarianceReport {
             states,
             max_sigma3_position_km: leg_max_sigma3,
-            max_collision_probability: leg_max_pc,
+            min_mahalanobis_distance: leg_min_mahal,
         });
     }
 
@@ -179,7 +178,7 @@ pub fn propagate_mission_covariance(
         navigation_accuracy: *navigation_accuracy,
         maneuver_uncertainty: maneuver_uncertainty.copied(),
         max_sigma3_position_km: overall_max_sigma3,
-        max_collision_probability: overall_max_pc,
+        min_mahalanobis_distance: overall_min_mahal,
         terminal_position_ric_km: terminal_ric_position,
         terminal_sigma3_position_ric_km: terminal_sigma3,
     })

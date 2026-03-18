@@ -150,11 +150,30 @@ fn compute_report_statistics(leg_points: &[Vec<ValidationPoint>]) -> (f64, f64, 
     (max_pos, mean_pos, rms_pos, max_vel)
 }
 
+/// Guard threshold for flat eclipse percentage segments in [`interpolate_crossing`].
+/// When |pct₁ − pct₀| < machine epsilon, the segment is flat and interpolation
+/// is undefined; fall back to the current sample epoch to avoid division by zero.
+const ECLIPSE_INTERPOLATION_FLAT_GUARD: f64 = f64::EPSILON;
+
+/// Shadow percentage at or above which the eclipse state is classified as full umbra
+/// rather than penumbra. Based on physical convention: >99% shadow is effectively total.
+const UMBRA_PERCENTAGE_THRESHOLD: f64 = 99.0;
+
 /// Compute eclipse intervals from per-sample ANISE eclipse percentages.
 ///
-/// Walks the sample array, detects transitions between sunlit (<1% eclipse)
-/// and shadow (>=1% eclipse) states, and records contiguous shadow intervals
-/// with worst-case shadow state.
+/// Walks the sample array with a sliding window, detects transitions between
+/// sunlit (<1% eclipse) and shadow (>=1% eclipse) states, and records
+/// contiguous shadow intervals with worst-case shadow state.
+///
+/// When a transition is detected between adjacent samples `(t₀, pct₀)` and
+/// `(t₁, pct₁)`, linear interpolation finds the crossing epoch:
+///
+/// ```text
+/// t_cross = t₀ + (t₁ - t₀) × (threshold - pct₀) / (pct₁ - pct₀)
+/// ```
+///
+/// This reduces eclipse boundary error from ±(`sample_interval`/2) to the
+/// non-linearity of the shadow geometry between samples.
 ///
 /// # Arguments
 /// * `samples` — Time-ordered pairs of `(epoch, eclipse_percentage)` where
@@ -176,21 +195,37 @@ fn compute_numerical_eclipse_intervals(
     let mut shadow_start = samples[0].0;
     let mut max_pct = 0.0_f64;
 
-    for &(epoch, pct) in samples {
-        if pct >= threshold {
+    // Check if first sample is already in shadow (no interpolation possible)
+    let (_, first_pct) = samples[0];
+    if first_pct >= threshold {
+        in_shadow = true;
+        shadow_start = samples[0].0;
+        max_pct = first_pct;
+    }
+
+    for i in 1..samples.len() {
+        let (prev_epoch, prev_pct) = samples[i - 1];
+        let (curr_epoch, curr_pct) = samples[i];
+
+        if curr_pct >= threshold {
             if in_shadow {
-                max_pct = max_pct.max(pct);
+                max_pct = max_pct.max(curr_pct);
             } else {
-                // Entering shadow
+                // Entering shadow: interpolate crossing epoch
                 in_shadow = true;
-                shadow_start = epoch;
-                max_pct = pct;
+                max_pct = curr_pct;
+                shadow_start = interpolate_crossing(
+                    prev_epoch, prev_pct, curr_epoch, curr_pct, threshold,
+                );
             }
         } else if in_shadow {
-            // Exiting shadow
+            // Exiting shadow: interpolate crossing epoch
             in_shadow = false;
-            let duration_s = (epoch - shadow_start).to_seconds();
-            let state = if max_pct >= 99.0 {
+            let shadow_end = interpolate_crossing(
+                prev_epoch, prev_pct, curr_epoch, curr_pct, threshold,
+            );
+            let duration_s = (shadow_end - shadow_start).to_seconds();
+            let state = if max_pct >= UMBRA_PERCENTAGE_THRESHOLD {
                 EclipseState::Umbra
             } else {
                 EclipseState::Penumbra {
@@ -199,7 +234,7 @@ fn compute_numerical_eclipse_intervals(
             };
             intervals.push(EclipseInterval {
                 start: shadow_start,
-                end: epoch,
+                end: shadow_end,
                 duration_s,
                 state,
             });
@@ -210,7 +245,7 @@ fn compute_numerical_eclipse_intervals(
     if in_shadow {
         let last_epoch = samples[samples.len() - 1].0;
         let duration_s = (last_epoch - shadow_start).to_seconds();
-        let state = if max_pct >= 99.0 {
+        let state = if max_pct >= UMBRA_PERCENTAGE_THRESHOLD {
             EclipseState::Umbra
         } else {
             EclipseState::Penumbra {
@@ -226,6 +261,29 @@ fn compute_numerical_eclipse_intervals(
     }
 
     intervals
+}
+
+/// Linearly interpolate the epoch at which the eclipse percentage crosses a threshold.
+///
+/// Given two adjacent samples `(t₀, pct₀)` and `(t₁, pct₁)` that straddle
+/// `threshold`, returns the interpolated crossing epoch. Falls back to `t₁`
+/// if `pct₁ == pct₀` (flat segment, avoids division by zero).
+fn interpolate_crossing(
+    t0: Epoch,
+    pct0: f64,
+    t1: Epoch,
+    pct1: f64,
+    threshold: f64,
+) -> Epoch {
+    let dpct = pct1 - pct0;
+    if dpct.abs() < ECLIPSE_INTERPOLATION_FLAT_GUARD {
+        return t1;
+    }
+    let dt_s = (t1 - t0).to_seconds();
+    let frac = (threshold - pct0) / dpct;
+    // Clamp to [0, 1] to stay within the sample interval
+    let frac = frac.clamp(0.0, 1.0);
+    t0 + hifitime::Duration::from_seconds(frac * dt_s)
 }
 
 /// Match analytical and numerical eclipse intervals by closest start epoch.
@@ -324,8 +382,8 @@ fn build_leg_comparison_points(
     eclipse_samples: &mut Vec<EclipseSample>,
 ) -> Result<Vec<ValidationPoint>, ValidationError> {
     let mut points = Vec::with_capacity(chief_results.len());
-    for (idx, (chief_sample, deputy_sample)) in
-        chief_results.iter().zip(deputy_results.iter()).enumerate()
+    for (chief_sample, deputy_sample) in
+        chief_results.iter().zip(deputy_results.iter())
     {
         let numerical_ric = eci_to_ric_relative(&chief_sample.state, &deputy_sample.state)?;
         let elapsed = cumulative_time + chief_sample.elapsed_s;
@@ -335,15 +393,15 @@ fn build_leg_comparison_points(
         let vel_err =
             (numerical_ric.velocity_ric_km_s - analytical_ric.velocity_ric_km_s).norm();
 
-        // Skip t=0 sample from safety: at the maneuver instant, positions
-        // haven't separated yet — distance is physically meaningless.
-        if idx > 0 {
-            safety_pairs.push(ChiefDeputySnapshot {
-                elapsed_s: elapsed,
-                chief: chief_sample.state.clone(),
-                deputy: deputy_sample.state.clone(),
-            });
-        }
+        // Include t=0 in safety pairs so that numerical safety analysis covers
+        // the same time domain as the analytical trajectory. At t=0, both models
+        // share the initial condition; any difference is the ROE→RIC vs ECI→RIC
+        // frame mapping residual.
+        safety_pairs.push(ChiefDeputySnapshot {
+            elapsed_s: elapsed,
+            chief: chief_sample.state.clone(),
+            deputy: deputy_sample.state.clone(),
+        });
         points.push(ValidationPoint {
             elapsed_s: elapsed,
             analytical_ric,
@@ -436,7 +494,7 @@ fn build_eclipse_validation(
     let mean_sun_err = if n == 0 {
         0.0
     } else {
-        sum_sun_err / f64::from(u32::try_from(n).expect("point count fits u32"))
+        sum_sun_err / f64::from(u32::try_from(n).ok()?)
     };
     let max_timing = comparisons
         .iter()
@@ -449,7 +507,7 @@ fn build_eclipse_validation(
             .iter()
             .flat_map(|c| [c.entry_error_s.abs(), c.exit_error_s.abs()])
             .sum();
-        let denom = 2.0 * f64::from(u32::try_from(comparisons.len()).expect("comparison count fits u32"));
+        let denom = 2.0 * f64::from(u32::try_from(comparisons.len()).ok()?);
         sum / denom
     };
     let matched_count = comparisons.len();
@@ -774,8 +832,9 @@ mod tests {
     const MOON_DIRECTION_VALIDATION_TOL_RAD: f64 = 0.0175;
 
     /// Maximum eclipse entry/exit timing error (seconds).
-    /// Dominated by sample-interval quantization in `validate_mission_nyx`.
-    /// At 50 samples/leg over ~4200s, sample spacing is ~84s → ±42s per transition.
+    /// With linear interpolation of eclipse boundaries between samples,
+    /// the error is dominated by the non-linearity of the shadow geometry
+    /// rather than sample-interval quantization.
     const ECLIPSE_TIMING_VALIDATION_TOL_S: f64 = 120.0;
 
     /// Single-leg transfer with nonzero initial ROE and mixed-axis waypoint,
@@ -1462,6 +1521,83 @@ mod tests {
             (intervals[0].duration_s - 20.0).abs() < INTERVAL_DURATION_TOL_S,
             "first interval duration = {}, expected ~20",
             intervals[0].duration_s
+        );
+    }
+
+    /// Interpolation accuracy tolerance for eclipse boundary tests.
+    /// Linear interpolation of a linear ramp should be exact to floating-point
+    /// precision; 1e-9 s provides margin for epoch arithmetic rounding.
+    const INTERPOLATION_ACCURACY_TOL_S: f64 = 1e-9;
+
+    /// Verify that eclipse boundary interpolation accurately locates the
+    /// threshold crossing for a linear ramp in eclipse percentage.
+    ///
+    /// Constructs samples with known linear transitions:
+    /// - t=0..90: sunlit (0%)
+    /// - t=90..110: linear ramp 0% → 100% (threshold 1% crossed at t≈90.2)
+    /// - t=110..190: full umbra (100%)
+    /// - t=190..210: linear ramp 100% → 0% (threshold 1% crossed at t≈209.8)
+    /// - t=210..300: sunlit (0%)
+    ///
+    /// With linear interpolation, the entry/exit epochs should be accurate
+    /// to floating-point precision (not quantized to sample boundaries).
+    #[test]
+    fn eclipse_boundary_interpolation_accuracy() {
+        let base = crate::test_helpers::test_epoch();
+
+        // 10s sample spacing, 31 samples from t=0 to t=300
+        let samples: Vec<(hifitime::Epoch, f64)> = (0..=30)
+            .map(|i| {
+                let t = f64::from(i) * 10.0;
+                let epoch = base + hifitime::Duration::from_seconds(t);
+                let pct = if t <= 90.0 {
+                    0.0
+                } else if t <= 110.0 {
+                    // Linear ramp: 0% at t=90, 100% at t=110
+                    (t - 90.0) / 20.0 * 100.0
+                } else if t <= 190.0 {
+                    100.0
+                } else if t <= 210.0 {
+                    // Linear ramp: 100% at t=190, 0% at t=210
+                    (210.0 - t) / 20.0 * 100.0
+                } else {
+                    0.0
+                };
+                (epoch, pct)
+            })
+            .collect();
+
+        let intervals = super::compute_numerical_eclipse_intervals(&samples);
+
+        assert_eq!(intervals.len(), 1, "should detect 1 eclipse interval");
+
+        // Entry: threshold (1%) crossing on 0%→50% ramp between t=90 and t=100
+        // Interpolation: t_cross = 90 + 10 × (1 - 0) / (50 - 0) = 90.2
+        let expected_entry_s = 90.2;
+        let actual_entry_s = (intervals[0].start - base).to_seconds();
+        let entry_err = (actual_entry_s - expected_entry_s).abs();
+        assert!(
+            entry_err < INTERPOLATION_ACCURACY_TOL_S,
+            "entry at {actual_entry_s:.6}s, expected {expected_entry_s:.6}s, error {entry_err:.2e}s"
+        );
+
+        // Exit: threshold (1%) crossing on 50%→0% ramp between t=200 and t=210
+        // Interpolation: t_cross = 200 + 10 × (1 - 50) / (0 - 50) = 200 + 10 × 49/50 = 209.8
+        let expected_exit_s = 209.8;
+        let actual_exit_s = (intervals[0].end - base).to_seconds();
+        let exit_err = (actual_exit_s - expected_exit_s).abs();
+        assert!(
+            exit_err < INTERPOLATION_ACCURACY_TOL_S,
+            "exit at {actual_exit_s:.6}s, expected {expected_exit_s:.6}s, error {exit_err:.2e}s"
+        );
+
+        // Duration should match
+        let expected_duration = expected_exit_s - expected_entry_s;
+        let duration_err = (intervals[0].duration_s - expected_duration).abs();
+        assert!(
+            duration_err < INTERPOLATION_ACCURACY_TOL_S,
+            "duration {:.6}s, expected {expected_duration:.6}s, error {duration_err:.2e}s",
+            intervals[0].duration_s,
         );
     }
 

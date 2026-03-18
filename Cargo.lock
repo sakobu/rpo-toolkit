@@ -2616,6 +2616,7 @@ dependencies = [
 name = "rpo-cli"
 version = "0.1.0"
 dependencies = [
+ "anise",
  "clap",
  "hifitime",
  "nalgebra 0.34.1",
@@ -2630,7 +2631,6 @@ version = "0.1.0"
 dependencies = [
  "anise",
  "hifitime",
- "libm",
  "nalgebra 0.34.1",
  "nyx-space",
  "rand 0.8.5",

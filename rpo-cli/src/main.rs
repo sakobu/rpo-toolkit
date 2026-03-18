@@ -6,12 +6,12 @@ use serde::Deserialize;
 
 use rpo_core::{
     // Elements layer
-    compute_roe, state_to_keplerian,
+    state_to_keplerian,
     // Propagation layer
     propagate_keplerian, propagate_mission_covariance, ric_accuracy_to_roe_covariance,
     PropagationModel,
     // Mission layer
-    compute_transfer_eclipse, extract_dmf_rates, load_full_almanac, plan_mission,
+    assess_safety, compute_transfer_eclipse, extract_dmf_rates, load_full_almanac, plan_mission,
     plan_waypoint_mission, run_monte_carlo, validate_mission_nyx,
     // Types
     DepartureState, DragConfig, EclipseValidation, KeplerianElements, LambertConfig,
@@ -19,17 +19,33 @@ use rpo_core::{
     MissionPhase, MissionPlan,
     MonteCarloConfig, MonteCarloInput, MonteCarloMode, MonteCarloReport, NavigationAccuracy,
     PercentileStats, PerchGeometry,
-    ProximityConfig, QuasiNonsingularROE, SafetyConfig, SafetyMetrics, SpacecraftConfig,
-    StateVector, TargetingConfig, TofOptConfig, TransferEclipseData, ValidationPoint,
+    ProximityConfig, QuasiNonsingularROE, RcContext, SafetyConfig, SafetyMetrics,
+    SpacecraftConfig, StateVector, TransferEclipseData, ValidationPoint,
     ValidationReport, Waypoint, WaypointMission,
 };
 
-mod demo;
+/// Default covariance sample count per leg used when the MC subcommand
+/// runs ancillary covariance propagation.
+const DEFAULT_COVARIANCE_SAMPLES: usize =
+    rpo_core::constants::DEFAULT_COVARIANCE_SAMPLES_PER_LEG;
 
-/// Default covariance sample count used when the MC subcommand runs an
-/// ancillary covariance propagation (the `covariance` subcommand uses a
-/// CLI-configurable value instead).
-const DEFAULT_COVARIANCE_SAMPLES: usize = 100;
+/// Position error threshold (km) below which the model is suitable for
+/// close-proximity planning. Derived from typical J2 STM accuracy for
+/// single-orbit LEO legs.
+const FIDELITY_CLOSE_PROXIMITY_KM: f64 = 0.05;
+
+/// Position error threshold (km) below which the model is suitable for
+/// preliminary safety screening. Above this, only coarse mission planning.
+const FIDELITY_SAFETY_SCREENING_KM: f64 = 0.2;
+
+/// Ratio threshold for flagging non-conservative analytical predictions.
+/// When numerical < analytical × this factor, the analytical model
+/// overestimates the safety margin by >10%.
+const NONCONSERVATIVE_RATIO: f64 = 0.9;
+
+/// Δv percentage threshold above which Lambert transfer is annotated as
+/// the dominant cost driver (far-field approach dominates the budget).
+const FAR_FIELD_DV_DRIVER_PCT: f64 = 90.0;
 
 // ---------------------------------------------------------------------------
 // CLI
@@ -44,18 +60,7 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
-    /// Run the built-in API demo
-    Demo,
-    /// Waypoint-based maneuver targeting
-    Target {
-        /// Path to JSON input file with chief/deputy states + waypoints
-        #[arg(short, long)]
-        input: PathBuf,
-        /// Output as JSON instead of human-readable text
-        #[arg(long)]
-        json: bool,
-    },
-    /// End-to-end far-field mission: Lambert transfer → perch → waypoint targeting
+    /// End-to-end mission: classification → Lambert transfer → perch → waypoint targeting
     Mission {
         /// Path to JSON input file with chief/deputy states, perch, and waypoints
         #[arg(short, long)]
@@ -73,23 +78,8 @@ enum Command {
         #[arg(long)]
         json: bool,
         /// Number of sample points per leg for validation comparison
-        #[arg(long, default_value_t = 20)]
+        #[arg(long, default_value_t = 50)]
         samples_per_leg: u32,
-        /// Auto-derive differential drag config from spacecraft properties via nyx
-        #[arg(long)]
-        auto_drag: bool,
-    },
-    /// Propagate covariance through a waypoint mission (supports far-field + proximity paths)
-    Covariance {
-        /// Path to JSON input file
-        #[arg(short, long)]
-        input: PathBuf,
-        /// Output as JSON instead of human-readable text
-        #[arg(long)]
-        json: bool,
-        /// Number of covariance sample points per leg
-        #[arg(long, default_value_t = 100)]
-        samples_per_leg: usize,
         /// Auto-derive differential drag config from spacecraft properties via nyx
         #[arg(long)]
         auto_drag: bool,
@@ -127,14 +117,6 @@ struct PropagatorConfig {
     drag: Option<DragConfig>,
 }
 
-#[derive(Deserialize, Default)]
-#[serde(default)]
-struct SolverConfig {
-    targeting: Option<TargetingConfig>,
-    tof_opt: Option<TofOptConfig>,
-    safety: Option<SafetyConfig>,
-}
-
 impl PropagatorConfig {
     fn make_propagator(&self) -> PropagationModel {
         match (self.propagator, &self.drag) {
@@ -147,31 +129,6 @@ impl PropagatorConfig {
     }
 }
 
-impl SolverConfig {
-    fn to_mission_config(&self) -> MissionConfig {
-        MissionConfig {
-            targeting: self.targeting.unwrap_or_default(),
-            tof: self.tof_opt.unwrap_or_default(),
-            safety: self.safety,
-        }
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Targeting input schema (separate — different shape from mission inputs)
-// ---------------------------------------------------------------------------
-
-#[derive(Deserialize)]
-struct TargetingInput {
-    chief: StateVector,
-    deputy: StateVector,
-    waypoints: Vec<WaypointInput>,
-    #[serde(flatten)]
-    solver: SolverConfig,
-    #[serde(flatten)]
-    prop: PropagatorConfig,
-}
-
 #[derive(Deserialize)]
 struct WaypointInput {
     position: [f64; 3],
@@ -181,7 +138,7 @@ struct WaypointInput {
 }
 
 // ---------------------------------------------------------------------------
-// Unified mission input schema (used by mission, validate, covariance, mc)
+// Unified mission input schema (used by mission, validate, mc)
 // ---------------------------------------------------------------------------
 
 #[derive(Deserialize)]
@@ -197,8 +154,8 @@ struct MissionInput {
     waypoints: Vec<WaypointInput>,
     #[serde(default)]
     proximity: Option<ProximityConfig>,
-    #[serde(flatten)]
-    solver: SolverConfig,
+    #[serde(flatten, default)]
+    config: MissionConfig,
     #[serde(flatten)]
     prop: PropagatorConfig,
     #[serde(default)]
@@ -265,6 +222,36 @@ struct PlannedMission {
     mission_config: MissionConfig,
 }
 
+/// Resolve the propagation model, optionally extracting differential drag rates
+/// from nyx full-physics dynamics via density-model-free (DMF) estimation.
+///
+/// When `auto_drag` is true, calls `extract_dmf_rates` and returns a
+/// `J2DragStm` propagator with the derived drag config. Otherwise returns
+/// the propagator from the input JSON.
+fn resolve_propagator(
+    auto_drag: bool,
+    transfer: &TransferResult,
+    chief_config: &SpacecraftConfig,
+    deputy_config: &SpacecraftConfig,
+    almanac: &std::sync::Arc<anise::prelude::Almanac>,
+    default_prop: PropagationModel,
+) -> Result<(PropagationModel, Option<DragConfig>), Box<dyn Error>> {
+    if !auto_drag {
+        return Ok((default_prop, None));
+    }
+    eprintln!("Extracting differential drag rates via nyx...");
+    let drag = extract_dmf_rates(
+        &transfer.perch_chief, &transfer.perch_deputy,
+        chief_config, deputy_config,
+        almanac,
+    ).map_err(|e| format!("DMF extraction failed: {e}"))?;
+    eprintln!(
+        "  da_dot={:.6e}, dex_dot={:.6e}, dey_dot={:.6e}",
+        drag.da_dot, drag.dex_dot, drag.dey_dot
+    );
+    Ok((PropagationModel::J2DragStm { drag }, Some(drag)))
+}
+
 /// Classify separation, solve Lambert if far-field, compute perch handoff states.
 fn compute_transfer(input: &MissionInput) -> Result<TransferResult, Box<dyn Error>> {
     let chief_ke = state_to_keplerian(&input.chief)?;
@@ -317,7 +304,7 @@ fn plan_from_transfer(
     propagator: PropagationModel,
 ) -> Result<PlannedMission, Box<dyn Error>> {
     let waypoints = convert_waypoints(&input.waypoints);
-    let mission_config = input.solver.to_mission_config();
+    let mission_config = input.config.clone();
 
     let departure = DepartureState {
         roe: transfer.plan.perch_roe,
@@ -402,81 +389,7 @@ fn convert_waypoints(inputs: &[WaypointInput]) -> Vec<Waypoint> {
 }
 
 // ---------------------------------------------------------------------------
-// Waypoint targeting from JSON input
-// ---------------------------------------------------------------------------
-
-fn run_targeting(input_path: &PathBuf, json_output: bool) -> Result<(), Box<dyn Error>> {
-    let input: TargetingInput = load_json(input_path)?;
-
-    let chief_ke = state_to_keplerian(&input.chief)?;
-    let deputy_ke = state_to_keplerian(&input.deputy)?;
-    let roe = compute_roe(&chief_ke, &deputy_ke)?;
-
-    let waypoints = convert_waypoints(&input.waypoints);
-
-    let mission_config = input.solver.to_mission_config();
-
-    let departure = DepartureState {
-        roe,
-        chief: chief_ke,
-        epoch: input.chief.epoch,
-    };
-
-    let prop = input.prop.make_propagator();
-    let mission = plan_waypoint_mission(
-        &departure, &waypoints, &mission_config, &prop,
-    )?;
-
-    if json_output {
-        println!("{}", serde_json::to_string_pretty(&mission)?);
-        return Ok(());
-    }
-
-    // --- Human-readable output ---
-    println!("Waypoint Mission Plan");
-    println!("=====================\n");
-
-    println!("Initial ROE:");
-    print_roe("  State", &roe, chief_ke.a_km);
-
-    println!("\n{} waypoint(s), {} leg(s)", waypoints.len(), mission.legs.len());
-    println!("Total Δv:       {:.6} km/s", mission.total_dv_km_s);
-    println!("Total duration: {:.1} s ({:.2} min)\n", mission.total_duration_s, mission.total_duration_s / 60.0);
-
-    println!(
-        "  {:>4}  {:>10}  {:>12}  {:>12}  {:>12}  {:>12}",
-        "Leg", "TOF (s)", "Δv1 (km/s)", "Δv2 (km/s)", "Total (km/s)", "Target I (km)"
-    );
-    println!("  {:-<4}  {:-<10}  {:-<12}  {:-<12}  {:-<12}  {:-<12}", "", "", "", "", "", "");
-    for (i, leg) in mission.legs.iter().enumerate() {
-        let dv1 = leg.departure_maneuver.dv_ric_km_s.norm();
-        let dv2 = leg.arrival_maneuver.dv_ric_km_s.norm();
-        let target_in = waypoints[i].position_ric_km.y;
-        println!(
-            "  {:>4}  {:>10.1}  {:>12.6}  {:>12.6}  {:>12.6}  {:>12.4}",
-            i + 1,
-            leg.tof_s,
-            dv1,
-            dv2,
-            leg.total_dv_km_s,
-            target_in,
-        );
-    }
-
-    if let Some(ref safety) = mission.safety {
-        let sc = mission_config.safety.unwrap_or_default();
-        print_safety_analysis(safety, &sc);
-    }
-
-    if let Some(ref eclipse) = mission.eclipse {
-        print_eclipse_summary(eclipse);
-    }
-
-    Ok(())
-}
-
-// ---------------------------------------------------------------------------
-// End-to-end far-field mission
+// End-to-end mission
 // ---------------------------------------------------------------------------
 
 fn run_end_to_end_mission(input_path: &PathBuf, json_output: bool) -> Result<(), Box<dyn Error>> {
@@ -497,6 +410,7 @@ fn run_end_to_end_mission(input_path: &PathBuf, json_output: bool) -> Result<(),
     }
 
     print_mission_human(&planned, &input, false, transfer_eclipse.as_ref());
+    print_mission_verdict(&planned, None);
     Ok(())
 }
 
@@ -522,23 +436,10 @@ fn run_validate(
     eprintln!("Phase 1: Classification + Lambert transfer...");
     let transfer = compute_transfer(&input)?;
 
-    let mut derived_drag: Option<DragConfig> = None;
-    let prop = if auto_drag {
-        eprintln!("Extracting differential drag rates via nyx...");
-        let drag = extract_dmf_rates(
-            &transfer.perch_chief, &transfer.perch_deputy,
-            &chief_config, &deputy_config,
-            &almanac,
-        ).map_err(|e| format!("DMF extraction failed: {e}"))?;
-        eprintln!(
-            "  da_dot={:.6e}, dex_dot={:.6e}, dey_dot={:.6e}",
-            drag.da_dot, drag.dex_dot, drag.dey_dot
-        );
-        derived_drag = Some(drag);
-        PropagationModel::J2DragStm { drag }
-    } else {
-        input.prop.make_propagator()
-    };
+    let (prop, derived_drag) = resolve_propagator(
+        auto_drag, &transfer, &chief_config, &deputy_config,
+        &almanac, input.prop.make_propagator(),
+    )?;
 
     eprintln!("Phase 2: Waypoint targeting...");
     let planned = plan_from_transfer(&input, transfer, prop)?;
@@ -604,89 +505,16 @@ fn run_validate(
     );
 
     if let Some(ref ev) = report.eclipse_validation {
-        print_eclipse_validation(ev);
+        let max_eclipse_s = planned.wp_mission.eclipse.as_ref()
+            .map_or(0.0, |e| e.summary.max_shadow_duration_s);
+        print_eclipse_validation(ev, max_eclipse_s);
     }
 
     if let Some(ref drag) = derived_drag {
         print_derived_drag(drag);
     }
 
-    print_mission_summary(&planned);
-
-    Ok(())
-}
-
-// ---------------------------------------------------------------------------
-// Covariance propagation from JSON input
-// ---------------------------------------------------------------------------
-
-fn run_covariance(
-    input_path: &PathBuf,
-    json_output: bool,
-    samples_per_leg: usize,
-    auto_drag: bool,
-) -> Result<(), Box<dyn Error>> {
-    let input: MissionInput = load_json(input_path)?;
-
-    eprintln!("Phase 1: Classification + Lambert transfer...");
-    let transfer = compute_transfer(&input)?;
-
-    let chief_config = input.chief_config.unwrap_or_default();
-    let deputy_config = input.deputy_config.unwrap_or_default();
-
-    let mut derived_drag: Option<DragConfig> = None;
-    let prop = if auto_drag {
-        eprintln!("Loading almanac (may download on first run)...");
-        let almanac = load_full_almanac().map_err(|e| format!("Almanac load failed: {e}"))?;
-        eprintln!("Extracting differential drag rates via nyx...");
-        let drag = extract_dmf_rates(
-            &transfer.perch_chief, &transfer.perch_deputy,
-            &chief_config, &deputy_config,
-            &almanac,
-        ).map_err(|e| format!("DMF extraction failed: {e}"))?;
-        eprintln!(
-            "  da_dot={:.6e}, dex_dot={:.6e}, dey_dot={:.6e}",
-            drag.da_dot, drag.dex_dot, drag.dey_dot
-        );
-        derived_drag = Some(drag);
-        PropagationModel::J2DragStm { drag }
-    } else {
-        input.prop.make_propagator()
-    };
-
-    eprintln!("Phase 2: Waypoint targeting...");
-    let planned = plan_from_transfer(&input, transfer, prop)?;
-
-    // Phase 3: Covariance propagation
-    let nav = input.navigation_accuracy.unwrap_or_default();
-    let unc = input.maneuver_uncertainty;
-    let initial_p = ric_accuracy_to_roe_covariance(&nav, &planned.transfer.plan.chief_at_arrival)
-        .map_err(|e| format!("Covariance initialization failed: {e}"))?;
-
-    eprintln!("Phase 3: Propagating covariance ({samples_per_leg} samples/leg)...");
-    let report = propagate_mission_covariance(
-        &planned.wp_mission,
-        &initial_p,
-        &nav,
-        unc.as_ref(),
-        &planned.propagator,
-        samples_per_leg,
-    )
-    .map_err(|e| format!("Covariance propagation failed: {e}"))?;
-
-    eprintln!("Covariance propagation complete.");
-
-    if json_output {
-        println!("{}", serde_json::to_string_pretty(&report)?);
-        return Ok(());
-    }
-
-    // --- Human-readable output ---
-    print_covariance_report(&report, &planned.wp_mission, planned.transfer.lambert_dv_km_s);
-
-    if let Some(ref drag) = derived_drag {
-        print_derived_drag(drag);
-    }
+    print_mission_verdict(&planned, Some(&report));
 
     Ok(())
 }
@@ -713,23 +541,10 @@ fn run_mc(input_path: &PathBuf, json_output: bool, auto_drag: bool) -> Result<()
     eprintln!("Loading almanac (may download on first run)...");
     let almanac = load_full_almanac().map_err(|e| format!("Almanac load failed: {e}"))?;
 
-    let mut derived_drag: Option<DragConfig> = None;
-    let prop = if auto_drag {
-        eprintln!("Extracting differential drag rates via nyx...");
-        let drag = extract_dmf_rates(
-            &transfer.perch_chief, &transfer.perch_deputy,
-            &chief_config, &deputy_config,
-            &almanac,
-        ).map_err(|e| format!("DMF extraction failed: {e}"))?;
-        eprintln!(
-            "  da_dot={:.6e}, dex_dot={:.6e}, dey_dot={:.6e}",
-            drag.da_dot, drag.dex_dot, drag.dey_dot
-        );
-        derived_drag = Some(drag);
-        PropagationModel::J2DragStm { drag }
-    } else {
-        input.prop.make_propagator()
-    };
+    let (prop, derived_drag) = resolve_propagator(
+        auto_drag, &transfer, &chief_config, &deputy_config,
+        &almanac, input.prop.make_propagator(),
+    )?;
 
     eprintln!("Phase 2: Waypoint targeting...");
     let planned = plan_from_transfer(&input, transfer, prop)?;
@@ -831,13 +646,12 @@ fn print_mission_human(
         println!("    Departure Δv: {:.4} km/s", lambert.departure_dv_eci_km_s.norm());
         println!("    Arrival Δv:   {:.4} km/s", lambert.arrival_dv_eci_km_s.norm());
         println!("    TOF:          {:.1} s ({:.2} min)", lambert.tof_s, lambert.tof_s / 60.0);
-        println!("    C3:           {:.4} km²/s²", lambert.c3_km2_s2);
         println!("    Direction:    {:?}", lambert.direction);
         if lambert_cfg.revolutions > 0 {
             println!("    Revolutions:  {}", lambert_cfg.revolutions);
         }
         let v_circ = (rpo_core::constants::MU_EARTH / lambert.departure_state.position_eci_km.norm()).sqrt();
-        println!("    Δv/v_circ:    {:.3}", lambert.total_dv_km_s / v_circ);
+        println!("    \u{0394}v/v_circ:    {:.1}%", lambert.total_dv_km_s / v_circ * 100.0);
     }
 
     if let Some(te) = transfer_eclipse {
@@ -900,22 +714,124 @@ fn print_mission_human(
 
     if let Some(ref eclipse) = planned.wp_mission.eclipse {
         print_eclipse_summary(eclipse);
+
+        // Combined mission eclipse: transfer + waypoint phases
+        if let Some(te) = transfer_eclipse {
+            let total_shadow = te.summary.total_shadow_duration_s
+                + eclipse.summary.total_shadow_duration_s;
+            let total_duration = planned.transfer.lambert_tof_s
+                + planned.wp_mission.total_duration_s;
+            if total_duration > 0.0 {
+                println!(
+                    "  Combined (transfer + waypoint): {:.0} s ({:.1}% of full mission)",
+                    total_shadow,
+                    total_shadow / total_duration * 100.0,
+                );
+            }
+        }
     }
 }
 
-/// Print the mission summary (Δv breakdown, total time).
-fn print_mission_summary(planned: &PlannedMission) {
+/// Print the mission verdict with Δv breakdown, safety summary, and model confidence.
+///
+/// When a `ValidationReport` is available (validate subcommand), uses the numerical
+/// safety values (more conservative) and includes model confidence assessment.
+fn print_mission_verdict(
+    planned: &PlannedMission,
+    validation: Option<&ValidationReport>,
+) {
     let lambert_dv_km_s = planned.transfer.lambert_dv_km_s;
     let waypoint_dv_km_s = planned.wp_mission.total_dv_km_s;
     let total_dv_km_s = lambert_dv_km_s + waypoint_dv_km_s;
     let lambert_tof_s = planned.transfer.plan.transfer.as_ref().map_or(0.0, |t| t.tof_s);
     let total_duration_s = lambert_tof_s + planned.wp_mission.total_duration_s;
 
-    println!("\nMission Summary:");
-    println!("  Lambert transfer Δv:   {:.4} km/s", lambert_dv_km_s);
-    println!("  Waypoint targeting Δv: {:.6} km/s", waypoint_dv_km_s);
-    println!("  Total mission Δv:      {:.4} km/s", total_dv_km_s);
-    println!("  Total mission time:    {:.1} s ({:.2} min)", total_duration_s, total_duration_s / 60.0);
+    println!("\nMission Summary");
+    println!("===============");
+
+    // Verdict (use numerical safety when available, otherwise analytical)
+    let sc = planned.mission_config.safety.unwrap_or_default();
+    if let Some(report) = validation {
+        let num_assessment = assess_safety(&report.numerical_safety, &sc);
+        let verdict = if num_assessment.overall_pass {
+            "FEASIBLE (safety metrics remain above threshold under nyx full-physics)"
+        } else {
+            "CAUTION (numerical safety below threshold)"
+        };
+        println!("  Verdict:               {verdict}");
+    } else if let Some(ref safety) = planned.wp_mission.safety {
+        let ana_assessment = assess_safety(safety, &sc);
+        let verdict = if ana_assessment.overall_pass {
+            "FEASIBLE (analytical safety above threshold)"
+        } else {
+            "CAUTION (analytical safety below threshold)"
+        };
+        println!("  Verdict:               {verdict}");
+    }
+
+    // Δv budget with interpretation
+    println!("\n  \u{0394}v Budget:");
+    if total_dv_km_s > 0.0 {
+        let lambert_pct = lambert_dv_km_s / total_dv_km_s * 100.0;
+        let wp_pct = waypoint_dv_km_s / total_dv_km_s * 100.0;
+        let lambert_note = if lambert_pct > FAR_FIELD_DV_DRIVER_PCT { " -- far-field driver" } else { "" };
+        println!(
+            "    Lambert transfer:    {:.4} km/s  ({:.1}%{lambert_note})",
+            lambert_dv_km_s, lambert_pct,
+        );
+        println!(
+            "    Waypoint targeting:  {:.4} km/s  ({:.1}%)",
+            waypoint_dv_km_s, wp_pct,
+        );
+    } else {
+        println!("    Lambert transfer:    {:.4} km/s", lambert_dv_km_s);
+        println!("    Waypoint targeting:  {:.6} km/s", waypoint_dv_km_s);
+    }
+    println!("    Total:               {:.4} km/s", total_dv_km_s);
+
+    println!(
+        "\n  Duration:              {:.1} min ({:.1} min transfer + {:.1} min proximity)",
+        total_duration_s / 60.0,
+        lambert_tof_s / 60.0,
+        planned.wp_mission.total_duration_s / 60.0,
+    );
+
+    // Safety summary — use numerical values when available
+    if let Some(report) = validation {
+        print_safety_summary("nyx", &report.numerical_safety, &sc);
+    } else if let Some(ref safety) = planned.wp_mission.safety {
+        print_safety_summary("analytical", safety, &sc);
+    }
+
+    // Model confidence (only with validation data)
+    if let Some(report) = validation {
+        println!("\n  Model Fidelity:");
+        println!(
+            "    Position error: max {:.3} km, mean {:.3} km",
+            report.max_position_error_km, report.mean_position_error_km,
+        );
+        if report.max_position_error_km < FIDELITY_CLOSE_PROXIMITY_KM {
+            println!("    Suitable for:  interactive planning, preliminary safety screening, close proximity");
+        } else if report.max_position_error_km < FIDELITY_SAFETY_SCREENING_KM {
+            println!("    Suitable for:  interactive planning, preliminary safety screening");
+        } else {
+            println!("    Suitable for:  preliminary mission planning only");
+        }
+        println!("    Not for:       high-confidence operational truth analysis");
+    }
+}
+
+/// Print compact safety metrics with threshold context.
+fn print_safety_summary(label: &str, safety: &SafetyMetrics, config: &SafetyConfig) {
+    println!("\n  Safety ({label}):");
+    println!(
+        "    Min 3D distance:     {:.3} km  (threshold: {:.2} km)",
+        safety.operational.min_distance_3d_km, config.min_distance_3d_km,
+    );
+    println!(
+        "    Abort safety (e/i):  {:.3} km  (threshold: {:.2} km)",
+        safety.passive.min_ei_separation_km, config.min_ei_separation_km,
+    );
 }
 
 /// Print auto-derived differential drag rates.
@@ -928,21 +844,19 @@ fn print_derived_drag(drag: &DragConfig) {
 
 /// Print safety analysis results with pass/fail assessment.
 fn print_safety_analysis(safety: &SafetyMetrics, config: &SafetyConfig) {
-    let ei_ok = safety.passive.min_ei_separation_km >= config.min_ei_separation_km;
-    let d3_ok = safety.operational.min_distance_3d_km >= config.min_distance_3d_km;
-    let overall = ei_ok && d3_ok;
+    let assessment = assess_safety(safety, config);
 
-    println!("\nOperational Safety:");
+    println!("\nOperational Safety (analytical, sampled every ~21 s):");
     println!(
         "  3D distance constraint:   {}",
-        if d3_ok { "PASS" } else { "FAIL" }
+        if assessment.distance_3d_pass { "PASS" } else { "FAIL" }
     );
     println!(
         "  Min 3D distance:          {:.4} km  (threshold: {:.2} km)",
         safety.operational.min_distance_3d_km, config.min_distance_3d_km
     );
     println!(
-        "    Leg: {}  Time: {:.1} s ({:.2} min)",
+        "    Leg: {}  Time: {:.1} s ({:.2} min, from WP start)",
         safety.operational.min_3d_leg_index + 1,
         safety.operational.min_3d_elapsed_s,
         safety.operational.min_3d_elapsed_s / 60.0,
@@ -953,12 +867,24 @@ fn print_safety_analysis(safety: &SafetyMetrics, config: &SafetyConfig) {
         safety.operational.min_3d_ric_position_km.y,
         safety.operational.min_3d_ric_position_km.z,
     );
+
+    // R/C plane distance with geometry context
+    match assessment.rc_context {
+        RcContext::AlongTrackDominated { along_track_km } => {
+            println!(
+                "  Min R/C plane dist:       {:.4} km  (along-track dominated: {:.2} km along-track)",
+                safety.operational.min_rc_separation_km, along_track_km,
+            );
+        }
+        RcContext::RadialCrossTrack => {
+            println!(
+                "  Min R/C plane dist:       {:.4} km",
+                safety.operational.min_rc_separation_km
+            );
+        }
+    }
     println!(
-        "  Min instantaneous R/C:    {:.4} km",
-        safety.operational.min_rc_separation_km
-    );
-    println!(
-        "    Leg: {}  Time: {:.1} s ({:.2} min)",
+        "    Leg: {}  Time: {:.1} s ({:.2} min, from WP start)",
         safety.operational.min_rc_leg_index + 1,
         safety.operational.min_rc_elapsed_s,
         safety.operational.min_rc_elapsed_s / 60.0,
@@ -970,25 +896,27 @@ fn print_safety_analysis(safety: &SafetyMetrics, config: &SafetyConfig) {
         safety.operational.min_rc_ric_position_km.z,
     );
 
-    println!("\nPassive / Abort Safety:");
+    println!("\nAbort Safety (free-drift e/i bound):");
     println!(
         "  e/i separation constraint: {}",
-        if ei_ok { "PASS" } else { "FAIL" }
+        if assessment.ei_separation_pass { "PASS" } else { "FAIL" }
     );
     println!(
         "  Min e/i separation:       {:.4} km  (threshold: {:.2} km)",
         safety.passive.min_ei_separation_km, config.min_ei_separation_km
     );
-    println!("  δe magnitude:             {:.6e}", safety.passive.de_magnitude);
-    println!("  δi magnitude:             {:.6e}", safety.passive.di_magnitude);
+    let margin = safety.passive.min_ei_separation_km - config.min_ei_separation_km;
+    if margin > 0.0 {
+        println!("  Margin:                   +{:.4} km above threshold", margin);
+    }
     println!(
-        "  e/i phase angle:          {:.2}°",
+        "  e/i phase angle:          {:.2}\u{00b0}",
         safety.passive.ei_phase_angle_rad.to_degrees()
     );
 
     println!(
         "\n  Overall:                  {}",
-        if overall { "PASS" } else { "FAIL" }
+        if assessment.overall_pass { "PASS" } else { "FAIL" }
     );
 }
 
@@ -997,7 +925,7 @@ fn print_eclipse_summary(eclipse: &MissionEclipseData) {
     println!("\nEclipse Summary:");
     println!("  Shadow intervals:   {}", eclipse.summary.intervals.len());
     println!(
-        "  Total shadow time:  {:.0} s ({:.1}% of mission)",
+        "  Total shadow time:  {:.0} s ({:.1}% of waypoint phase)",
         eclipse.summary.total_shadow_duration_s,
         eclipse.summary.time_in_shadow_fraction * 100.0,
     );
@@ -1011,7 +939,7 @@ fn print_eclipse_summary(eclipse: &MissionEclipseData) {
 }
 
 /// Print eclipse validation comparison (analytical vs ANISE).
-fn print_eclipse_validation(ev: &EclipseValidation) {
+fn print_eclipse_validation(ev: &EclipseValidation, max_eclipse_duration_s: f64) {
     println!("\n  Eclipse Validation (Analytical vs ANISE):");
     println!(
         "    Sun direction error:  max {:.4}\u{00b0}, mean {:.4}\u{00b0}",
@@ -1030,6 +958,13 @@ fn print_eclipse_validation(ev: &EclipseValidation) {
             ev.max_timing_error_s,
             ev.mean_timing_error_s,
         );
+        if max_eclipse_duration_s > 0.0 {
+            let pct = ev.max_timing_error_s / max_eclipse_duration_s * 100.0;
+            println!(
+                "      ({:.1}% of max eclipse; adequate for planning, not power-critical analysis)",
+                pct,
+            );
+        }
     }
     if ev.unmatched_interval_count > 0 {
         println!(
@@ -1039,15 +974,20 @@ fn print_eclipse_validation(ev: &EclipseValidation) {
     }
 }
 
-/// Print per-leg position error breakdown (max, mean, RMS).
-#[allow(clippy::cast_precision_loss)]
+/// Print per-leg position error breakdown (max, mean, RMS) with optional target range context.
 fn print_per_leg_errors(leg_points: &[Vec<ValidationPoint>]) {
     if leg_points.is_empty() {
         return;
     }
     println!("\n  Per-leg position error (km):");
-    println!("    {:>4}  {:>10}  {:>10}  {:>10}", "Leg", "Max", "Mean", "RMS");
-    println!("    {:->4}  {:->10}  {:->10}  {:->10}", "", "", "", "");
+    println!(
+        "    {:>4}  {:>10}  {:>10}  {:>10}",
+        "Leg", "Max", "Mean", "RMS"
+    );
+    println!(
+        "    {:->4}  {:->10}  {:->10}  {:->10}",
+        "", "", "", ""
+    );
     for (i, points) in leg_points.iter().enumerate() {
         if points.is_empty() {
             continue;
@@ -1058,7 +998,10 @@ fn print_per_leg_errors(leg_points: &[Vec<ValidationPoint>]) {
         let n = f64::from(u32::try_from(points.len()).unwrap_or(u32::MAX));
         let mean = sum / n;
         let rms = (sum_sq / n).sqrt();
-        println!("    {:>4}  {:>10.4}  {:>10.4}  {:>10.4}", i + 1, max, mean, rms);
+        println!(
+            "    {:>4}  {:>10.4}  {:>10.4}  {:>10.4}",
+            i + 1, max, mean, rms
+        );
     }
 }
 
@@ -1073,26 +1016,14 @@ pub(crate) fn print_roe(label: &str, roe: &QuasiNonsingularROE, chief_a: f64) {
     println!("    δiy      = {:+.6e}  (relative RAAN·sin i)", roe.diy);
 }
 
-/// Print a trajectory table (RIC positions at sampled points).
-pub(crate) fn print_trajectory_table(
-    trajectory: &[rpo_core::PropagatedState],
-    sample_every: usize,
-) {
-    println!(
-        "  {:>10}  {:>12}  {:>12}  {:>12}",
-        "Time (s)", "R (km)", "I (km)", "C (km)"
-    );
-    println!("  {:-<10}  {:-<12}  {:-<12}  {:-<12}", "", "", "", "");
-    for (k, state) in trajectory.iter().enumerate() {
-        if k % sample_every == 0 || k == trajectory.len() - 1 {
-            println!(
-                "  {:10.1}  {:12.6}  {:12.6}  {:12.6}",
-                state.elapsed_s,
-                state.ric.position_ric_km.x,
-                state.ric.position_ric_km.y,
-                state.ric.position_ric_km.z,
-            );
-        }
+/// Format a non-conservative direction flag for safety comparison.
+fn nonconservative_flag(analytical: f64, numerical: f64) -> &'static str {
+    // For minimum-distance metrics, numerical < analytical means the
+    // analytical model overestimates the margin (non-conservative).
+    if numerical < analytical * NONCONSERVATIVE_RATIO {
+        "  *"
+    } else {
+        ""
     }
 }
 
@@ -1108,21 +1039,34 @@ fn print_safety_comparison(report: &ValidationReport, config: &MissionConfig) {
         );
         println!(
             "    {:>20}  {:>12.4}  {:>12.4}  {:>8}",
-            "R/C sep (km)", ana.operational.min_rc_separation_km, num.operational.min_rc_separation_km, "N/A"
+            "R/C plane (km)", ana.operational.min_rc_separation_km, num.operational.min_rc_separation_km, "N/A"
+        );
+        let d3_flag = nonconservative_flag(
+            ana.operational.min_distance_3d_km,
+            num.operational.min_distance_3d_km,
         );
         println!(
-            "    {:>20}  {:>12.4}  {:>12.4}  {:>8.2}",
-            "3D dist (km)", ana.operational.min_distance_3d_km, num.operational.min_distance_3d_km, sc.min_distance_3d_km
+            "    {:>20}  {:>12.4}  {:>12.4}  {:>8.2}{}",
+            "3D dist (km)", ana.operational.min_distance_3d_km, num.operational.min_distance_3d_km,
+            sc.min_distance_3d_km, d3_flag,
+        );
+        let ei_flag = nonconservative_flag(
+            ana.passive.min_ei_separation_km,
+            num.passive.min_ei_separation_km,
         );
         println!(
-            "    {:>20}  {:>12.4}  {:>12.4}  {:>8.2}",
-            "e/i sep (km)", ana.passive.min_ei_separation_km, num.passive.min_ei_separation_km, sc.min_ei_separation_km
+            "    {:>20}  {:>12.4}  {:>12.4}  {:>8.2}{}",
+            "e/i sep (km)", ana.passive.min_ei_separation_km, num.passive.min_ei_separation_km,
+            sc.min_ei_separation_km, ei_flag,
         );
+        if !d3_flag.is_empty() || !ei_flag.is_empty() {
+            println!("  * = numerical margin is >10% smaller than analytical");
+        }
     } else {
         println!("    (no analytical safety available)");
         println!(
             "    {:>20}  {:>12.4}",
-            "R/C sep (km)", num.operational.min_rc_separation_km
+            "R/C plane (km)", num.operational.min_rc_separation_km
         );
         println!(
             "    {:>20}  {:>12.4}",
@@ -1132,82 +1076,6 @@ fn print_safety_comparison(report: &ValidationReport, config: &MissionConfig) {
             "    {:>20}  {:>12.4}",
             "e/i sep (km)", num.passive.min_ei_separation_km
         );
-    }
-}
-
-/// Print human-readable covariance propagation report.
-fn print_covariance_report(
-    report: &MissionCovarianceReport,
-    mission: &WaypointMission,
-    lambert_dv_km_s: f64,
-) {
-    println!("Covariance Propagation Report");
-    println!("==============================\n");
-
-    let nav = &report.navigation_accuracy;
-    println!(
-        "Navigation accuracy: {:.0}m/{:.0}m/{:.0}m position, {:.1}/{:.1}/{:.1} mm/s velocity (R/I/C)",
-        nav.position_sigma_ric_km[0] * 1000.0,
-        nav.position_sigma_ric_km[1] * 1000.0,
-        nav.position_sigma_ric_km[2] * 1000.0,
-        nav.velocity_sigma_ric_km_s[0] * 1e6,
-        nav.velocity_sigma_ric_km_s[1] * 1e6,
-        nav.velocity_sigma_ric_km_s[2] * 1e6,
-    );
-
-    if let Some(ref unc) = report.maneuver_uncertainty {
-        println!(
-            "Maneuver uncertainty: {:.1}% magnitude, {:.2}\u{00b0} pointing",
-            unc.magnitude_sigma * 100.0,
-            unc.pointing_sigma_rad.to_degrees(),
-        );
-    }
-
-    println!();
-
-    for (i, leg_report) in report.legs.iter().enumerate() {
-        let tof = mission.legs[i].tof_s;
-        println!("Leg {} (TOF: {:.0}s):", i + 1, tof);
-
-        // Find the max sigma3 per axis across the leg
-        let (max_r, max_i, max_c) = leg_report.states.iter().fold(
-            (0.0_f64, 0.0_f64, 0.0_f64),
-            |(r, it, c), s| {
-                (
-                    r.max(s.sigma3_position_ric_km.x),
-                    it.max(s.sigma3_position_ric_km.y),
-                    c.max(s.sigma3_position_ric_km.z),
-                )
-            },
-        );
-
-        println!(
-            "  Max 3\u{03c3} position: R={:.3} km, I={:.3} km, C={:.3} km",
-            max_r, max_i, max_c
-        );
-        println!(
-            "  Max collision probability: {:.2e}",
-            leg_report.max_collision_probability
-        );
-        println!();
-    }
-
-    println!(
-        "Overall max 3\u{03c3} position: {:.3} km",
-        report.max_sigma3_position_km
-    );
-    println!("Overall max Pc: {:.2e}", report.max_collision_probability);
-
-    println!("\n\u{0394}v Summary:");
-    if lambert_dv_km_s > 0.0 {
-        println!("  Waypoint targeting \u{0394}v: {:.6} km/s", mission.total_dv_km_s);
-        println!("  Lambert transfer \u{0394}v:   {:.4} km/s", lambert_dv_km_s);
-        println!(
-            "  Total mission \u{0394}v:      {:.4} km/s",
-            lambert_dv_km_s + mission.total_dv_km_s
-        );
-    } else {
-        println!("  Total \u{0394}v: {:.6} km/s", mission.total_dv_km_s);
     }
 }
 
@@ -1311,25 +1179,36 @@ fn print_mc_report(report: &MonteCarloReport, lambert_dv_km_s: f64) {
         }
     }
 
-    // Covariance validation
-    if let Some(ref cv) = report.covariance_validation {
-        println!("\nCovariance Validation:");
-        println!(
-            "  Terminal 3\u{03c3} box containment: {:.1}% of samples",
-            cv.terminal_3sigma_containment * 100.0,
-        );
+    // Covariance cross-check
+    if let Some(ref cv) = report.covariance_cross_check {
+        println!("\nCovariance Cross-Check:");
+        if matches!(report.config.mode, MonteCarloMode::ClosedLoop) {
+            println!(
+                "  Terminal 3\u{03c3} box containment: {:.1}% of closed-loop MC samples",
+                cv.terminal_3sigma_containment * 100.0,
+            );
+            println!("    (compared against open-loop covariance prediction)");
+        } else {
+            println!(
+                "  Terminal 3\u{03c3} box containment: {:.1}% of samples",
+                cv.terminal_3sigma_containment * 100.0,
+            );
+        }
         println!(
             "  Sigma ratio (R/I/C): {:.2} / {:.2} / {:.2}",
             cv.sigma_ratio_ric.x, cv.sigma_ratio_ric.y, cv.sigma_ratio_ric.z,
         );
         if matches!(report.config.mode, MonteCarloMode::ClosedLoop) {
             println!(
-                "    (ClosedLoop: ratios compare retargeted MC against open-loop covariance; values << 1 expected)"
+                "    (ClosedLoop: retargeting suppresses dispersion relative to open-loop covariance; values << 1 expected)"
             );
         }
         println!(
-            "  Pc: covariance={:.2e} (analytical), MC={:.2e} (empirical, HBR=100m)",
-            cv.covariance_collision_prob, cv.mc_collision_prob,
+            "  Closest Mahalanobis approach over mission: {:.2}",
+            cv.min_mahalanobis_distance,
+        );
+        println!(
+            "    (Open-loop covariance diagnostic only; <1 means the nominal trajectory enters the 1\u{03c3} covariance envelope)"
         );
     }
 }
@@ -1389,8 +1268,10 @@ fn main() -> Result<(), Box<dyn Error>> {
     let cli = Cli::parse();
 
     match cli.command {
-        None | Some(Command::Demo) => demo::run_demo(),
-        Some(Command::Target { input, json }) => run_targeting(&input, json),
+        None => {
+            Cli::parse_from(["rpo-cli", "--help"]);
+            Ok(())
+        }
         Some(Command::Mission { input, json }) => run_end_to_end_mission(&input, json),
         Some(Command::Validate {
             input,
@@ -1398,12 +1279,6 @@ fn main() -> Result<(), Box<dyn Error>> {
             samples_per_leg,
             auto_drag,
         }) => run_validate(&input, json, samples_per_leg, auto_drag),
-        Some(Command::Covariance {
-            input,
-            json,
-            samples_per_leg,
-            auto_drag,
-        }) => run_covariance(&input, json, samples_per_leg, auto_drag),
         Some(Command::Mc {
             input,
             json,

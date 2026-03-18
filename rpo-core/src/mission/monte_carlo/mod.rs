@@ -20,9 +20,9 @@ use crate::propagation::nyx_bridge::NyxBridgeError;
 use crate::propagation::propagator::PropagationError;
 
 use execution::{collect_ensemble_statistics, run_single_sample};
-use statistics::compute_covariance_validation;
+use statistics::compute_covariance_cross_check;
 pub use types::{
-    CovarianceValidation, DispersionConfig, DispersionEnvelope, Distribution,
+    CovarianceCrossCheck, DispersionConfig, DispersionEnvelope, Distribution,
     EnsembleStatistics, ManeuverDispersion, MonteCarloConfig, MonteCarloInput, MonteCarloMode,
     MonteCarloReport, PercentileStats, SampleResult, SpacecraftDispersion, StateDispersion,
 };
@@ -238,9 +238,9 @@ pub fn run_monte_carlo(input: &MonteCarloInput<'_>) -> Result<MonteCarloReport, 
     )?;
 
     // Covariance validation (if provided)
-    let covariance_validation = input
+    let covariance_cross_check = input
         .covariance_report
-        .map(|cov_report| compute_covariance_validation(cov_report, &statistics, &trajectories))
+        .map(|cov_report| compute_covariance_cross_check(cov_report, &statistics, &trajectories))
         .transpose()?;
 
     Ok(MonteCarloReport {
@@ -251,7 +251,7 @@ pub fn run_monte_carlo(input: &MonteCarloInput<'_>) -> Result<MonteCarloReport, 
         samples,
         num_failures,
         elapsed_wall_s: start.elapsed().as_secs_f64(),
-        covariance_validation,
+        covariance_cross_check,
     })
 }
 
@@ -671,7 +671,7 @@ mod tests {
 
     #[test]
     #[ignore] // Requires MetaAlmanac (network on first run)
-    fn nyx_mc_covariance_validation() {
+    fn nyx_mc_covariance_cross_check() {
         use crate::mission::covariance::propagate_mission_covariance;
         use crate::propagation::covariance::ric_accuracy_to_roe_covariance;
         use crate::propagation::covariance::types::NavigationAccuracy;
@@ -703,9 +703,9 @@ mod tests {
         let report = run_monte_carlo(&input).expect("MC with covariance should succeed");
 
         let cv = report
-            .covariance_validation
+            .covariance_cross_check
             .as_ref()
-            .expect("covariance_validation should be Some");
+            .expect("covariance_cross_check should be Some");
 
         assert!(cv.sigma_ratio_ric.x.is_finite(), "radial sigma ratio not finite");
         assert!(cv.sigma_ratio_ric.y.is_finite(), "in-track sigma ratio not finite");
@@ -715,6 +715,10 @@ mod tests {
             "terminal containment should be in [0, 1], got {}",
             cv.terminal_3sigma_containment
         );
-        assert!(cv.mc_collision_prob <= 1.0);
+        assert!(
+            cv.min_mahalanobis_distance >= 0.0,
+            "Mahalanobis distance should be non-negative, got {}",
+            cv.min_mahalanobis_distance
+        );
     }
 }

@@ -8,7 +8,7 @@ use crate::propagation::covariance::types::MissionCovarianceReport;
 use crate::propagation::propagator::PropagatedState;
 
 use super::types::{
-    CovarianceValidation, DispersionEnvelope, EnsembleStatistics, PercentileStats,
+    CovarianceCrossCheck, DispersionEnvelope, EnsembleStatistics, PercentileStats,
 };
 use super::MonteCarloError;
 
@@ -161,11 +161,11 @@ pub(crate) fn compute_dispersion_envelope(
 /// - If `trajectories` is empty, containment defaults to 0.0.
 /// - Returns `MonteCarloError::TooManySamples` if trajectory count exceeds u32
 ///   (should not happen — bounded by `MonteCarloConfig::num_samples: u32`).
-pub(crate) fn compute_covariance_validation(
+pub(crate) fn compute_covariance_cross_check(
     cov_report: &MissionCovarianceReport,
     statistics: &EnsembleStatistics,
     trajectories: &[Vec<PropagatedState>],
-) -> Result<CovarianceValidation, MonteCarloError> {
+) -> Result<CovarianceCrossCheck, MonteCarloError> {
     // Extract end-of-mission dispersion envelope.
     let last_env = statistics.dispersion_envelope.last();
 
@@ -216,10 +216,9 @@ pub(crate) fn compute_covariance_validation(
         0.0
     };
 
-    Ok(CovarianceValidation {
+    Ok(CovarianceCrossCheck {
         terminal_3sigma_containment,
-        covariance_collision_prob: cov_report.max_collision_probability,
-        mc_collision_prob: statistics.collision_probability,
+        min_mahalanobis_distance: cov_report.min_mahalanobis_distance,
         sigma_ratio_ric,
     })
 }
@@ -260,19 +259,18 @@ mod tests {
             covariance_ric_position_km2: SMatrix::<f64, 3, 3>::zeros(),
             sigma3_position_ric_km: sigma3_ric,
             mahalanobis_distance: 5.0,
-            collision_probability: 1e-10,
         };
         let scalar_max = sigma3_ric.x.max(sigma3_ric.y).max(sigma3_ric.z);
         MissionCovarianceReport {
             legs: vec![LegCovarianceReport {
                 states: vec![state],
                 max_sigma3_position_km: scalar_max,
-                max_collision_probability: 1e-10,
+                min_mahalanobis_distance: 5.0,
             }],
             navigation_accuracy: NavigationAccuracy::default(),
             maneuver_uncertainty: None,
             max_sigma3_position_km: scalar_max,
-            max_collision_probability: 1e-10,
+            min_mahalanobis_distance: 5.0,
             terminal_position_ric_km: terminal_pos,
             terminal_sigma3_position_ric_km: sigma3_ric,
         }
@@ -391,7 +389,7 @@ mod tests {
         // MC std_dev: R=1.0, I=10.0, C=0.3 (should give ratios of 1.0 per axis)
         let stats = mock_statistics(Vector3::new(1.0, 10.0, 0.3));
 
-        let cv = compute_covariance_validation(&cov, &stats, &[]).unwrap();
+        let cv = compute_covariance_cross_check(&cov, &stats, &[]).unwrap();
         let tol = COVARIANCE_VALIDATION_TOL;
         assert!(
             (cv.sigma_ratio_ric.x - 1.0).abs() < tol,
@@ -447,7 +445,7 @@ mod tests {
             make_traj(center + Vector3::new(0.0, 0.0, 1.0)),       // outside (C: 1.0 > 0.9)
         ];
 
-        let cv = compute_covariance_validation(&cov, &stats, &trajectories).unwrap();
+        let cv = compute_covariance_cross_check(&cov, &stats, &trajectories).unwrap();
         // 3/4 = 0.75
         assert!(
             (cv.terminal_3sigma_containment - 0.75).abs() < COVARIANCE_VALIDATION_TOL,
@@ -462,7 +460,7 @@ mod tests {
         let cov = mock_cov_report(Vector3::new(3.0, 30.0, 0.9));
         let stats = mock_statistics(Vector3::new(0.5, 5.0, 0.1));
 
-        let cv = compute_covariance_validation(&cov, &stats, &[]).unwrap();
+        let cv = compute_covariance_cross_check(&cov, &stats, &[]).unwrap();
         assert!(
             cv.terminal_3sigma_containment.abs() < COVARIANCE_VALIDATION_TOL,
             "empty trajectories should give 0.0, got {}",
@@ -477,7 +475,7 @@ mod tests {
         let mut stats = mock_statistics(Vector3::new(0.5, 5.0, 0.1));
         stats.dispersion_envelope.clear();
 
-        let cv = compute_covariance_validation(&cov, &stats, &[]).unwrap();
+        let cv = compute_covariance_cross_check(&cov, &stats, &[]).unwrap();
         let tol = COVARIANCE_VALIDATION_TOL;
         assert!(
             (cv.sigma_ratio_ric.x - 1.0).abs() < tol

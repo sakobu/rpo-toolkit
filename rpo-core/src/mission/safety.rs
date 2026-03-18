@@ -24,14 +24,27 @@
 
 use nalgebra::Vector3;
 
+use serde::{Deserialize, Serialize};
+
 use crate::propagation::propagator::PropagatedState;
 use crate::types::{KeplerianElements, QuasiNonsingularROE};
 
+use super::config::SafetyConfig;
 use super::types::{OperationalSafety, PassiveSafety, SafetyMetrics};
 
 /// Degenerate e/i vector guard for D'Amico Eq. 2.22 — below this magnitude,
 /// the e/i separation formula is undefined (division by zero).
 const ROE_MAG_EPSILON: f64 = 1e-15;
+
+/// R/C distance below which along-track dominance is checked (km).
+/// When the R/C plane minimum is below this value, the along-track
+/// component is examined to determine if the geometry is V-bar-like.
+const RC_ALONG_TRACK_THRESHOLD_KM: f64 = 0.01;
+
+/// Along-track must exceed R/C by this factor to classify as along-track
+/// dominated. A ratio of 10 means the along-track separation is at least
+/// an order of magnitude larger than the radial/cross-track distance.
+const RC_ALONG_TRACK_RATIO: f64 = 10.0;
 
 /// Errors from safety analysis operations.
 #[derive(Debug, Clone)]
@@ -49,6 +62,92 @@ impl std::fmt::Display for SafetyError {
 }
 
 impl std::error::Error for SafetyError {}
+
+/// Geometric context for the R/C plane minimum distance.
+///
+/// Classifies whether the R/C minimum is along-track dominated (common
+/// for V-bar approach/hold geometries) or reflects genuine proximity in
+/// the radial/cross-track plane. The classification is derived purely
+/// from the RIC position vector at the minimum point — it does not
+/// require knowledge of the perch type or mission design.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
+pub enum RcContext {
+    /// R/C minimum is along-track dominated: radial and cross-track
+    /// components are near zero while along-track separation is large.
+    /// Common for V-bar approach/hold geometries. The R/C metric is
+    /// not operationally meaningful in this configuration.
+    AlongTrackDominated {
+        /// Along-track component at the R/C minimum point (km).
+        along_track_km: f64,
+    },
+    /// R/C minimum reflects genuine proximity in the radial/cross-track
+    /// plane. This includes R-bar geometries, diagonal approaches, and
+    /// any configuration where R/C distance is operationally meaningful.
+    RadialCrossTrack,
+}
+
+/// Interpreted safety assessment combining metrics with thresholds.
+///
+/// Produced by [`assess_safety`] — separates factual measurements
+/// ([`SafetyMetrics`]) from threshold-based verdicts and geometric
+/// context. Both CLI and API consumers use this struct instead of
+/// reimplementing threshold comparisons.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SafetyAssessment {
+    /// Whether the 3D keep-out distance threshold is satisfied.
+    pub distance_3d_pass: bool,
+    /// Whether the e/i separation threshold is satisfied.
+    pub ei_separation_pass: bool,
+    /// Overall safety verdict (both checks must pass).
+    pub overall_pass: bool,
+    /// Geometric context for the R/C plane minimum.
+    pub rc_context: RcContext,
+}
+
+/// Assess safety metrics against thresholds and classify R/C geometry.
+///
+/// This is the interpretation layer — it takes raw measurements from
+/// [`SafetyMetrics`] and a [`SafetyConfig`], and produces verdicts
+/// plus geometric context for display by CLI, API, or frontend.
+///
+/// # R/C geometry classification
+///
+/// When the R/C plane minimum is near zero (below [`RC_ALONG_TRACK_THRESHOLD_KM`])
+/// and the along-track component is at least [`RC_ALONG_TRACK_RATIO`] times
+/// larger, the geometry is classified as [`RcContext::AlongTrackDominated`].
+/// This is a factual geometric observation — it does not depend on the
+/// perch type or mission design intent.
+///
+/// # Arguments
+/// * `metrics` — Safety measurements from [`analyze_safety`] or
+///   [`analyze_trajectory_safety`]
+/// * `config` — Safety thresholds for PASS/FAIL determination
+#[must_use]
+pub fn assess_safety(metrics: &SafetyMetrics, config: &SafetyConfig) -> SafetyAssessment {
+    let distance_3d_pass = metrics.operational.min_distance_3d_km >= config.min_distance_3d_km;
+    let ei_separation_pass =
+        metrics.passive.min_ei_separation_km >= config.min_ei_separation_km;
+    let overall_pass = distance_3d_pass && ei_separation_pass;
+
+    let along_track = metrics.operational.min_rc_ric_position_km.y.abs();
+    let rc = metrics.operational.min_rc_separation_km;
+    let rc_context = if rc < RC_ALONG_TRACK_THRESHOLD_KM
+        && along_track > RC_ALONG_TRACK_RATIO * rc
+    {
+        RcContext::AlongTrackDominated {
+            along_track_km: along_track,
+        }
+    } else {
+        RcContext::RadialCrossTrack
+    };
+
+    SafetyAssessment {
+        distance_3d_pass,
+        ei_separation_pass,
+        overall_pass,
+        rc_context,
+    }
+}
 
 /// Analyze passive safety of a single ROE state plus instantaneous RIC distances.
 ///
@@ -152,7 +251,6 @@ pub fn analyze_safety(
 ///
 /// # Arguments
 /// * `trajectory` — Time-ordered slice of propagated states along one leg
-/// * `chief_elements` — Chief Keplerian elements (provides SMA for e/i scaling)
 ///
 /// # Errors
 /// Returns `SafetyError::EmptyTrajectory` if the trajectory slice is empty.
@@ -628,5 +726,131 @@ mod tests {
             metrics.passive.min_ei_separation_km.abs() < SAFETY_METRIC_TOL,
             "Parallel e/i should give 0 separation, got {}", metrics.passive.min_ei_separation_km
         );
+    }
+
+    // --- SafetyAssessment / assess_safety tests ---
+
+    /// V-bar geometry: R/C = 0, along-track = 5 km → AlongTrackDominated.
+    #[test]
+    fn assess_vbar_along_track_dominated() {
+        let chief = iss_like_elements();
+        let roe = QuasiNonsingularROE::default();
+        let ric_pos = Vector3::new(0.0, 5.0, 0.0);
+        let metrics = analyze_safety(&roe, &chief, &ric_pos);
+        let config = SafetyConfig {
+            min_ei_separation_km: 0.1,
+            min_distance_3d_km: 0.05,
+        };
+        let assessment = assess_safety(&metrics, &config);
+
+        assert!(
+            matches!(assessment.rc_context, RcContext::AlongTrackDominated { along_track_km } if (along_track_km - 5.0).abs() < 1e-10),
+            "V-bar [0, 5, 0] should be AlongTrackDominated: {:?}",
+            assessment.rc_context
+        );
+    }
+
+    /// R-bar geometry: R/C = 5 km, along-track = 0 → RadialCrossTrack.
+    #[test]
+    fn assess_rbar_radial_cross_track() {
+        let chief = iss_like_elements();
+        let roe = QuasiNonsingularROE::default();
+        let ric_pos = Vector3::new(5.0, 0.0, 0.0);
+        let metrics = analyze_safety(&roe, &chief, &ric_pos);
+        let config = SafetyConfig::default();
+        let assessment = assess_safety(&metrics, &config);
+
+        assert_eq!(
+            assessment.rc_context,
+            RcContext::RadialCrossTrack,
+            "R-bar [5, 0, 0] should be RadialCrossTrack"
+        );
+    }
+
+    /// Diagonal geometry: R/C = √(0.5² + 0.5²) ≈ 0.71 km → RadialCrossTrack
+    /// even though along-track is larger.
+    #[test]
+    fn assess_diagonal_radial_cross_track() {
+        let chief = iss_like_elements();
+        let roe = QuasiNonsingularROE::default();
+        let ric_pos = Vector3::new(0.5, 5.0, 0.5);
+        let metrics = analyze_safety(&roe, &chief, &ric_pos);
+        let config = SafetyConfig::default();
+        let assessment = assess_safety(&metrics, &config);
+
+        assert_eq!(
+            assessment.rc_context,
+            RcContext::RadialCrossTrack,
+            "Diagonal [0.5, 5, 0.5] has R/C > threshold → RadialCrossTrack"
+        );
+    }
+
+    /// PASS/FAIL: 3D distance passes, e/i fails → overall FAIL.
+    #[test]
+    fn assess_ei_fail_overall_fail() {
+        let chief = iss_like_elements();
+        let roe = QuasiNonsingularROE::default(); // zero ROE → zero e/i separation
+        let ric_pos = Vector3::new(1.0, 2.0, 1.0);
+        let metrics = analyze_safety(&roe, &chief, &ric_pos);
+        let config = SafetyConfig {
+            min_ei_separation_km: 0.1,
+            min_distance_3d_km: 0.05,
+        };
+        let assessment = assess_safety(&metrics, &config);
+
+        assert!(assessment.distance_3d_pass, "3D distance should pass");
+        assert!(!assessment.ei_separation_pass, "e/i should fail (zero ROE)");
+        assert!(!assessment.overall_pass, "overall should fail");
+    }
+
+    /// PASS/FAIL: 3D distance fails, e/i passes → overall FAIL.
+    #[test]
+    fn assess_3d_fail_overall_fail() {
+        let chief = iss_like_elements();
+        let roe = QuasiNonsingularROE {
+            da: 0.0,
+            dlambda: 0.0,
+            dex: 0.001,
+            dey: 0.0,
+            dix: 0.0,
+            diy: 0.001,
+        };
+        // Very close 3D position
+        let ric_pos = Vector3::new(0.01, 0.01, 0.01);
+        let metrics = analyze_safety(&roe, &chief, &ric_pos);
+        let config = SafetyConfig {
+            min_ei_separation_km: 0.1,
+            min_distance_3d_km: 0.1,
+        };
+        let assessment = assess_safety(&metrics, &config);
+
+        assert!(!assessment.distance_3d_pass, "3D distance should fail");
+        assert!(assessment.ei_separation_pass, "e/i should pass");
+        assert!(!assessment.overall_pass, "overall should fail");
+    }
+
+    /// PASS/FAIL: both pass → overall PASS.
+    #[test]
+    fn assess_both_pass() {
+        let chief = iss_like_elements();
+        let roe = QuasiNonsingularROE {
+            da: 0.0,
+            dlambda: 0.0,
+            dex: 0.001,
+            dey: 0.0,
+            dix: 0.0,
+            diy: 0.001,
+        };
+        let ric_pos = Vector3::new(1.0, 2.0, 1.0);
+        let metrics = analyze_safety(&roe, &chief, &ric_pos);
+        let config = SafetyConfig {
+            min_ei_separation_km: 0.1,
+            min_distance_3d_km: 0.05,
+        };
+        let assessment = assess_safety(&metrics, &config);
+
+        assert!(assessment.distance_3d_pass, "3D distance should pass");
+        assert!(assessment.ei_separation_pass, "e/i should pass");
+        assert!(assessment.overall_pass, "overall should pass");
     }
 }

@@ -2,11 +2,11 @@
 //!
 //! Core algorithms for STM-based covariance propagation (P₁ = Φ P₀ Φᵀ),
 //! RIC↔ROE covariance conversion, maneuver covariance updates, and
-//! collision probability from Mahalanobis distance.
+//! Mahalanobis distance computation.
 
 use nalgebra::{Matrix3, SMatrix, Vector3};
 
-use crate::constants::{COLLISION_PROBABILITY_FLOOR, DV_NORM_ZERO_THRESHOLD_KM_S};
+use crate::constants::DV_NORM_ZERO_THRESHOLD_KM_S;
 use crate::elements::gve::compute_b_matrix;
 use crate::elements::roe_to_ric::{compute_t_matrix, compute_t_position};
 use crate::propagation::drag_stm::{compute_j2_drag_stm, compute_j2_drag_stm_with_params};
@@ -239,47 +239,35 @@ pub fn update_covariance_at_maneuver(
     Ok(symmetrize6(&p_post))
 }
 
-/// Compute Mahalanobis distance and approximate collision probability.
+/// Compute Mahalanobis distance between the nominal deputy RIC position
+/// and the chief (origin).
 ///
-/// Mahalanobis: d = sqrt(xᵀ × P⁻¹ × x) where x is the nominal RIC
-/// position and P is the 3×3 RIC position covariance.
+/// d = sqrt(xᵀ × P⁻¹ × x) where x is the nominal RIC position and P
+/// is the 3×3 RIC position covariance. This measures how many
+/// "sigma-equivalents" separate the deputy from the chief, accounting
+/// for the shape and orientation of the covariance ellipsoid.
 ///
-/// Collision probability approximation: Pc ≈ erfc(d / √2) using the
-/// complementary error function. This is conservative (assumes the
-/// most pessimistic axis dominates).
-///
-/// If the covariance is singular (degenerate axis), returns
-/// `(f64::INFINITY, 0.0)`.
+/// If the covariance is singular (degenerate axis), returns `f64::INFINITY`.
 ///
 /// # Invariants
 /// - `covariance_ric_pos` should be symmetric PSD (singular case handled gracefully)
-/// - Collision probability approximation assumes Gaussian distribution
 ///
 /// # Arguments
 /// * `ric_position_km` - Nominal deputy position in RIC frame (km)
 /// * `covariance_ric_pos` - 3×3 RIC position covariance (km²)
-///
-/// # Returns
-/// Tuple of (Mahalanobis distance, collision probability)
 #[must_use]
-pub fn compute_collision_metrics(
+pub fn compute_mahalanobis_distance(
     ric_position_km: &Vector3<f64>,
     covariance_ric_pos: &SMatrix<f64, 3, 3>,
-) -> (f64, f64) {
+) -> f64 {
     let Some(p_inv) = covariance_ric_pos.try_inverse() else {
-        return (f64::INFINITY, 0.0);
+        return f64::INFINITY;
     };
 
     // Mahalanobis distance: d = sqrt(xᵀ P⁻¹ x)
     let x = ric_position_km;
     let d_sq = (x.transpose() * p_inv * x)[(0, 0)];
-    let d = d_sq.sqrt();
-
-    // Pc ≈ erfc(d / √2)
-    let pc = libm::erfc(d / std::f64::consts::SQRT_2);
-    let pc = pc.clamp(COLLISION_PROBABILITY_FLOOR, 1.0);
-
-    (d, pc)
+    d_sq.sqrt()
 }
 
 /// Propagate covariance and nominal ROE at a single sample point.
@@ -524,7 +512,7 @@ mod tests {
         // sqrt(0^T * P^-1 * 0) = 0 exactly in floating-point
         let p = SMatrix::<f64, 3, 3>::identity();
         let x = Vector3::zeros();
-        let (d, _pc) = compute_collision_metrics(&x, &p);
+        let d = compute_mahalanobis_distance(&x, &p);
         assert!(
             d.abs() < COVARIANCE_SYMMETRY_TOL,
             "Mahalanobis at origin should be ~0: got {d}"
@@ -537,11 +525,11 @@ mod tests {
 
         // σ = 1
         let p1 = SMatrix::<f64, 3, 3>::identity();
-        let (d1, _) = compute_collision_metrics(&pos, &p1);
+        let d1 = compute_mahalanobis_distance(&pos, &p1);
 
         // σ = 2 → variance = 4
         let p2 = SMatrix::<f64, 3, 3>::identity() * 4.0;
-        let (d2, _) = compute_collision_metrics(&pos, &p2);
+        let d2 = compute_mahalanobis_distance(&pos, &p2);
 
         // 2× sigma → d/2
         let rel_err = (d2 - d1 / 2.0).abs() / d1;

@@ -303,15 +303,8 @@ pub struct EnsembleStatistics {
 /// - **`ClosedLoop`**: Sigma ratios << 1.0 because re-targeting from dispersed
 ///   states concentrates samples far within the open-loop uncertainty bounds.
 ///   Terminal containment often near 100%. These are expected, not a calibration failure.
-///
-/// **Note on collision probability**: The covariance and MC collision probabilities
-/// use different methodologies and should not be compared directly:
-/// - `covariance_collision_prob`: Analytical `erfc(d/sqrt(2))` where d is Mahalanobis
-///   distance. Conservative, no hard body radius, 1D tail probability.
-/// - `mc_collision_prob`: Empirical fraction of samples where min 3D distance drops
-///   below the collision threshold (100m hard body radius).
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct CovarianceValidation {
+pub struct CovarianceCrossCheck {
     /// Fraction of MC samples whose terminal RIC position falls within
     /// the covariance-predicted axis-aligned 3-sigma box at mission end.
     ///
@@ -319,10 +312,11 @@ pub struct CovarianceValidation {
     /// expect approximately 0.997 (99.7%). In `ClosedLoop` mode, often near 1.0
     /// since retargeting tends to concentrate samples within the bounds.
     pub terminal_3sigma_containment: f64,
-    /// Covariance-predicted collision probability (analytical, no HBR).
-    pub covariance_collision_prob: f64,
-    /// MC empirical collision probability (threshold-based, 100m HBR).
-    pub mc_collision_prob: f64,
+    /// Minimum Mahalanobis distance between nominal deputy and chief across
+    /// the covariance-predicted (open-loop) trajectory. Measures closest
+    /// approach in sigma-space; values < 1 indicate the deputy is within
+    /// the 1-sigma covariance envelope of the chief.
+    pub min_mahalanobis_distance: f64,
     /// Ratio of MC sigma to covariance sigma per RIC axis (expect ~1.0).
     pub sigma_ratio_ric: Vector3<f64>,
 }
@@ -344,6 +338,6 @@ pub struct MonteCarloReport {
     pub num_failures: u32,
     /// Wall-clock time for the MC run (seconds).
     pub elapsed_wall_s: f64,
-    /// Comparison against covariance predictions (if provided).
-    pub covariance_validation: Option<CovarianceValidation>,
+    /// Covariance cross-check against MC ensemble (if covariance report provided).
+    pub covariance_cross_check: Option<CovarianceCrossCheck>,
 }
