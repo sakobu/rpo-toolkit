@@ -16,7 +16,7 @@ use crate::types::{
 };
 
 use super::config::ProximityConfig;
-use super::errors::MissionError;
+use super::errors::{EclipseComputeError, MissionError};
 use super::types::{MissionPhase, MissionPlan, PerchGeometry};
 
 /// Minimum perch offset (km) — guards against degenerate zero-offset perch geometry.
@@ -181,21 +181,18 @@ pub fn perch_to_roe(
 /// * `arc_steps` — Number of arc steps for densification (e.g., 200).
 ///   Produces `arc_steps + 1` sample points along each trajectory.
 ///
-/// # Returns
+/// # Errors
 ///
-/// `None` if the arc densification or chief propagation fails (degenerate
-/// orbit). Otherwise returns [`TransferEclipseData`] with deputy-based
-/// summary and per-point data for both spacecraft.
-#[must_use]
+/// Returns [`EclipseComputeError::Conversion`] if arc densification or
+/// chief propagation fails (degenerate orbit geometry).
 pub fn compute_transfer_eclipse(
     transfer: &LambertTransfer,
     chief: &StateVector,
     arc_steps: u32,
-) -> Option<TransferEclipseData> {
-    let deputy_trajectory = transfer.densify_arc(arc_steps).ok()?;
+) -> Result<TransferEclipseData, EclipseComputeError> {
+    let deputy_trajectory = transfer.densify_arc(arc_steps)?;
     let chief_trajectory =
-        crate::propagation::keplerian::propagate_keplerian(chief, transfer.tof_s, arc_steps)
-            .ok()?;
+        crate::propagation::keplerian::propagate_keplerian(chief, transfer.tof_s, arc_steps)?;
 
     let deputy_celestial = compute_eclipse_from_states(&deputy_trajectory);
     let chief_celestial = compute_eclipse_from_states(&chief_trajectory);
@@ -203,7 +200,7 @@ pub fn compute_transfer_eclipse(
         chief_celestial.iter().map(|s| s.eclipse_state).collect();
     let summary = extract_eclipse_intervals(&deputy_celestial);
 
-    Some(TransferEclipseData {
+    Ok(TransferEclipseData {
         summary,
         deputy_celestial,
         chief_eclipse,

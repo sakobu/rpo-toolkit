@@ -35,7 +35,7 @@ pub use mission::{
     resample_leg_trajectory, run_monte_carlo, solve_lambert, solve_lambert_izzo,
     solve_lambert_with_config, solve_leg, validate_mission_nyx, LambertConfig, LambertError,
     LambertTransfer, MonteCarloError, SafetyError, TransferDirection, ValidationError,
-    MissionConfig, MissionError, NyxBridgeError, ProximityConfig, SafetyConfig,
+    EclipseComputeError, MissionConfig, MissionError, NyxBridgeError, ProximityConfig, SafetyConfig,
     TargetingConfig, TofOptConfig,
     EclipseIntervalComparison, EclipseValidation, EclipseValidationPoint,
     Maneuver, ManeuverLeg, MissionPhase, MissionPlan, OperationalSafety, PassiveSafety,

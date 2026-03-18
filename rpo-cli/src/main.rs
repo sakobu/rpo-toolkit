@@ -486,7 +486,7 @@ fn run_end_to_end_mission(input_path: &PathBuf, json_output: bool) -> Result<(),
     let planned = plan_from_transfer(&input, transfer, prop)?;
 
     let transfer_eclipse = planned.transfer.plan.transfer.as_ref().and_then(|t| {
-        compute_transfer_eclipse(t, &input.chief, 200)
+        compute_transfer_eclipse(t, &input.chief, 200).ok()
     });
 
     if json_output {
@@ -557,7 +557,7 @@ fn run_validate(
     eprintln!("Validation complete.");
 
     let transfer_eclipse = planned.transfer.plan.transfer.as_ref().and_then(|t| {
-        compute_transfer_eclipse(t, &input.chief, 200)
+        compute_transfer_eclipse(t, &input.chief, 200).ok()
     });
 
     if json_output {

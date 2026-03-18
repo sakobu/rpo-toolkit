@@ -375,7 +375,6 @@ fn build_leg_comparison_points(
 /// eclipse state, matches eclipse intervals, and computes aggregate statistics.
 ///
 /// Returns `None` if there are no eclipse samples.
-#[allow(clippy::cast_precision_loss)]
 fn build_eclipse_validation(
     eclipse_data: &crate::types::MissionEclipseData,
     eclipse_samples: &[EclipseSample],
@@ -437,7 +436,7 @@ fn build_eclipse_validation(
     let mean_sun_err = if n == 0 {
         0.0
     } else {
-        sum_sun_err / n as f64
+        sum_sun_err / f64::from(u32::try_from(n).expect("point count fits u32"))
     };
     let max_timing = comparisons
         .iter()
@@ -450,7 +449,7 @@ fn build_eclipse_validation(
             .iter()
             .flat_map(|c| [c.entry_error_s.abs(), c.exit_error_s.abs()])
             .sum();
-        let denom = 2.0 * comparisons.len() as f64;
+        let denom = 2.0 * f64::from(u32::try_from(comparisons.len()).expect("comparison count fits u32"));
         sum / denom
     };
     let matched_count = comparisons.len();

@@ -17,7 +17,7 @@ use crate::propagation::propagator::{PropagatedState, PropagationError, Propagat
 use crate::types::{DepartureState, LegEclipseData, MissionEclipseData};
 
 use super::config::{MissionConfig, SafetyConfig};
-use super::errors::MissionError;
+use super::errors::{EclipseComputeError, MissionError};
 use super::types::{ManeuverLeg, SafetyMetrics, Waypoint, WaypointMission};
 
 /// Compute worst-case safety metrics across all leg trajectories.
@@ -82,8 +82,12 @@ fn compute_worst_safety(
 /// [`CelestialSnapshot`] (via [`build_celestial_snapshot`]) and the deputy
 /// eclipse state (via [`ric_to_eci_position`] + [`compute_eclipse_state`]).
 ///
-/// Returns `None` only if all legs have empty trajectories or any element
-/// conversion fails (degenerate orbit).
+/// # Errors
+///
+/// Returns [`EclipseComputeError::Conversion`] if a Keplerian-to-ECI
+/// conversion fails, [`EclipseComputeError::Dcm`] if an RIC-to-ECI frame
+/// transformation fails, or [`EclipseComputeError::EmptyTrajectory`] if
+/// all legs have empty trajectories.
 ///
 /// # Cross-leg interval merging
 ///
@@ -103,7 +107,9 @@ fn compute_worst_safety(
 /// The Sun position for the deputy is obtained from the chief snapshot's
 /// direction and distance fields (already computed by `build_celestial_snapshot`),
 /// avoiding a redundant ephemeris call.
-fn compute_mission_eclipse(legs: &[ManeuverLeg]) -> Option<MissionEclipseData> {
+fn compute_mission_eclipse(
+    legs: &[ManeuverLeg],
+) -> Result<MissionEclipseData, EclipseComputeError> {
     let mut leg_data = Vec::with_capacity(legs.len());
     let mut merged_intervals: Vec<crate::types::EclipseInterval> = Vec::new();
 
@@ -122,19 +128,14 @@ fn compute_mission_eclipse(legs: &[ManeuverLeg]) -> Option<MissionEclipseData> {
         let mut deputy_states = Vec::with_capacity(leg.trajectory.len());
 
         for state in &leg.trajectory {
-            let Ok(chief_sv) = keplerian_to_state(&state.chief_mean, state.epoch) else {
-                return None;
-            };
+            let chief_sv = keplerian_to_state(&state.chief_mean, state.epoch)?;
 
             // Chief celestial snapshot (Sun + Moon ephemeris + shadow)
             let snapshot = build_celestial_snapshot(state.epoch, &chief_sv.position_eci_km);
 
             // Deputy eclipse: reconstruct deputy ECI from chief + RIC offset
-            let Ok(deputy_eci) =
-                ric_to_eci_position(&chief_sv, &state.ric.position_ric_km)
-            else {
-                return None;
-            };
+            let deputy_eci =
+                ric_to_eci_position(&chief_sv, &state.ric.position_ric_km)?;
             // Reconstruct Sun ECI from snapshot (avoids redundant ephemeris call)
             let sun_eci = chief_sv.position_eci_km
                 + snapshot.sun_direction_eci * snapshot.sun_distance_km;
@@ -154,7 +155,7 @@ fn compute_mission_eclipse(legs: &[ManeuverLeg]) -> Option<MissionEclipseData> {
     }
 
     if leg_data.iter().all(|d| d.chief_celestial.is_empty()) {
-        return None;
+        return Err(EclipseComputeError::EmptyTrajectory);
     }
 
     // Recompute aggregate metrics from merged intervals.
@@ -182,7 +183,7 @@ fn compute_mission_eclipse(legs: &[ManeuverLeg]) -> Option<MissionEclipseData> {
         _ => 0.0,
     };
 
-    Some(MissionEclipseData {
+    Ok(MissionEclipseData {
         summary: crate::types::EclipseSummary {
             intervals: merged_intervals,
             total_shadow_duration_s,
@@ -227,7 +228,7 @@ fn build_mission(
     let total_dv_km_s: f64 = legs.iter().map(|l| l.total_dv_km_s).sum();
     let total_duration_s: f64 = legs.iter().map(|l| l.tof_s).sum();
     let safety = compute_worst_safety(&legs, safety_config);
-    let eclipse = compute_mission_eclipse(&legs);
+    let eclipse = compute_mission_eclipse(&legs).ok();
     WaypointMission {
         legs,
         total_dv_km_s,

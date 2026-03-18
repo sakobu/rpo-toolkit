@@ -709,17 +709,11 @@ mod tests {
 
     // --- Shadow geometry test tolerances ---
 
-    /// Shadow fraction tolerance for penumbra boundary tests.
-    /// The linear interpolation model introduces small systematic errors near
-    /// transitions. 0.01 tolerance accommodates the difference between linear
-    /// and exact disk-overlap area models at LEO/GEO geometries.
-    const SHADOW_FRACTION_BOUNDARY_TOL: f64 = 0.01;
-
     /// Tolerance for penumbra midpoint test (shadow_fraction ~ 0.5).
-    /// Wider than SHADOW_FRACTION_BOUNDARY_TOL because the test constructs
-    /// the spacecraft position using small-angle geometry approximations,
-    /// which introduces systematic offset from the exact midpoint. 0.10
-    /// tolerance accommodates the approximation error at GEO distance.
+    /// The test constructs the spacecraft position using small-angle geometry
+    /// approximations, which introduces systematic offset from the exact
+    /// midpoint. 0.10 tolerance accommodates the approximation error at GEO
+    /// distance.
     const PENUMBRA_MIDPOINT_TOL: f64 = 0.10;
 
     /// Floating-point guard for monotonicity assertions.
@@ -1105,7 +1099,7 @@ mod tests {
         // Compute angular geometry at GEO behind Earth
         let theta_earth = (R_EARTH / geo_r).asin();
         let sc_to_sun_approx = AU_KM + geo_r; // approximate, Sun is far
-        let theta_sun = (SUN_RADIUS_KM / sc_to_sun_approx).asin();
+        let _theta_sun = (SUN_RADIUS_KM / sc_to_sun_approx).asin();
 
         // For shadow_fraction ~ 0.5, we need theta_sep = theta_earth
         // (midpoint of the penumbra band). Place spacecraft behind Earth
