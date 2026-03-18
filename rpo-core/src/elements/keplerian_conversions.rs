@@ -247,6 +247,25 @@ mod tests {
     use super::*;
     use crate::test_helpers::{eccentric_elements, iss_like_elements, test_epoch};
 
+    // Named tolerance constants for Keplerian↔ECI conversion tests
+
+    /// ECI position roundtrip error (keplerian→ECI→keplerian→ECI).
+    /// Two Kepler's equation solves accumulate ~O(1e-14) each;
+    /// 1e-10 km = 0.1 µm is conservative.
+    const POSITION_ROUNDTRIP_TOL_KM: f64 = 1e-10;
+
+    /// ECI velocity roundtrip error. Same roundtrip path as position.
+    /// 1e-10 km/s = 0.1 µm/s.
+    const VELOCITY_ROUNDTRIP_TOL_KM_S: f64 = 1e-10;
+
+    /// SMA roundtrip error. SMA extraction involves r and v norms;
+    /// for 8000 km orbits, relative precision ~1e-12 gives ~1e-8 km.
+    const SMA_ROUNDTRIP_TOL_KM: f64 = 1e-8;
+
+    /// Angular element (e, i, Ω, ω, M) roundtrip error.
+    /// atan2-based extraction introduces ~O(1e-15); 1e-10 rad is conservative.
+    const ANGLE_ROUNDTRIP_TOL: f64 = 1e-10;
+
     #[test]
     fn roundtrip_eci_keplerian() {
         let epoch = test_epoch();
@@ -259,11 +278,11 @@ mod tests {
         let vel_err = (sv.velocity_eci_km_s - sv2.velocity_eci_km_s).norm();
 
         assert!(
-            pos_err < 1e-10,
+            pos_err < POSITION_ROUNDTRIP_TOL_KM,
             "Position roundtrip error: {pos_err} km"
         );
         assert!(
-            vel_err < 1e-10,
+            vel_err < VELOCITY_ROUNDTRIP_TOL_KM_S,
             "Velocity roundtrip error: {vel_err} km/s"
         );
     }
@@ -279,8 +298,8 @@ mod tests {
         let pos_err = (sv.position_eci_km - sv2.position_eci_km).norm();
         let vel_err = (sv.velocity_eci_km_s - sv2.velocity_eci_km_s).norm();
 
-        assert!(pos_err < 1e-10, "Position roundtrip error: {pos_err} km");
-        assert!(vel_err < 1e-10, "Velocity roundtrip error: {vel_err} km/s");
+        assert!(pos_err < POSITION_ROUNDTRIP_TOL_KM, "Position roundtrip error: {pos_err} km");
+        assert!(vel_err < VELOCITY_ROUNDTRIP_TOL_KM_S, "Velocity roundtrip error: {vel_err} km/s");
     }
 
     #[test]
@@ -301,8 +320,8 @@ mod tests {
         let pos_err = (sv.position_eci_km - sv2.position_eci_km).norm();
         let vel_err = (sv.velocity_eci_km_s - sv2.velocity_eci_km_s).norm();
 
-        assert!(pos_err < 1e-10, "Position roundtrip error: {pos_err} km");
-        assert!(vel_err < 1e-10, "Velocity roundtrip error: {vel_err} km/s");
+        assert!(pos_err < POSITION_ROUNDTRIP_TOL_KM, "Position roundtrip error: {pos_err} km");
+        assert!(vel_err < VELOCITY_ROUNDTRIP_TOL_KM_S, "Velocity roundtrip error: {vel_err} km/s");
     }
 
     #[test]
@@ -319,13 +338,13 @@ mod tests {
         let sv = keplerian_to_state(&ke_orig, epoch).unwrap();
         let ke = state_to_keplerian(&sv).unwrap();
 
-        assert!((ke.a_km - ke_orig.a_km).abs() < 1e-8, "SMA mismatch");
-        assert!((ke.e - ke_orig.e).abs() < 1e-10, "Eccentricity mismatch");
-        assert!((ke.i_rad - ke_orig.i_rad).abs() < 1e-10, "Inclination mismatch");
-        assert!((ke.raan_rad - ke_orig.raan_rad).abs() < 1e-10, "RAAN mismatch");
-        assert!((ke.aop_rad - ke_orig.aop_rad).abs() < 1e-10, "AoP mismatch");
+        assert!((ke.a_km - ke_orig.a_km).abs() < SMA_ROUNDTRIP_TOL_KM, "SMA mismatch");
+        assert!((ke.e - ke_orig.e).abs() < ANGLE_ROUNDTRIP_TOL, "Eccentricity mismatch");
+        assert!((ke.i_rad - ke_orig.i_rad).abs() < ANGLE_ROUNDTRIP_TOL, "Inclination mismatch");
+        assert!((ke.raan_rad - ke_orig.raan_rad).abs() < ANGLE_ROUNDTRIP_TOL, "RAAN mismatch");
+        assert!((ke.aop_rad - ke_orig.aop_rad).abs() < ANGLE_ROUNDTRIP_TOL, "AoP mismatch");
         assert!(
-            (ke.mean_anomaly_rad - ke_orig.mean_anomaly_rad).abs() < 1e-10,
+            (ke.mean_anomaly_rad - ke_orig.mean_anomaly_rad).abs() < ANGLE_ROUNDTRIP_TOL,
             "Mean anomaly mismatch"
         );
     }

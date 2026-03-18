@@ -20,13 +20,15 @@ pub mod propagation;
 pub mod types;
 
 pub use elements::{
-    apply_maneuver, compute_b_matrix, compute_roe, compute_t_matrix, compute_t_position,
-    compute_t_velocity, eci_to_ric_dcm, eci_to_ric_dv, eci_to_ric_relative, keplerian_to_state,
-    ric_position_to_roe, ric_to_eci_dv, ric_to_eci_position, ric_to_eci_state, roe_to_ric,
-    state_to_keplerian, wrap_angle, ConversionError, DcmError, RicError,
+    apply_maneuver, compute_b_matrix, compute_celestial_snapshots, compute_eclipse_from_states,
+    compute_eclipse_state, compute_roe, compute_t_matrix, compute_t_position, compute_t_velocity,
+    eci_to_ric_dcm, eci_to_ric_dv, eci_to_ric_relative, extract_eclipse_intervals,
+    keplerian_to_state, moon_position_eci_km, ric_position_to_roe, ric_to_eci_dv,
+    ric_to_eci_position, ric_to_eci_state, roe_to_ric, state_to_keplerian, sun_position_eci_km,
+    wrap_angle, ConversionError, DcmError, RicError,
 };
 pub use mission::{
-    analyze_safety, analyze_trajectory_safety, classify_separation,
+    analyze_safety, analyze_trajectory_safety, classify_separation, compute_transfer_eclipse,
     dimensionless_separation, eci_separation_km, extract_dmf_rates,
     get_mission_state_at_time, load_default_almanac, load_full_almanac, optimize_tof,
     plan_mission, plan_waypoint_mission, propagate_mission_covariance, replan_from_waypoint,
@@ -35,6 +37,7 @@ pub use mission::{
     LambertTransfer, MonteCarloError, SafetyError, TransferDirection, ValidationError,
     MissionConfig, MissionError, NyxBridgeError, ProximityConfig, SafetyConfig,
     TargetingConfig, TofOptConfig,
+    EclipseIntervalComparison, EclipseValidation, EclipseValidationPoint,
     Maneuver, ManeuverLeg, MissionPhase, MissionPlan, OperationalSafety, PassiveSafety,
     PerchGeometry, SafetyMetrics, ValidationPoint, ValidationReport, Waypoint, WaypointMission,
     CovarianceValidation, DispersionConfig, DispersionEnvelope, Distribution,
@@ -50,8 +53,9 @@ pub use propagation::{
     DragConfig, J2Params, PropagatedState, PropagationError, PropagationModel,
 };
 pub use types::{
-    DepartureState, KeplerError, KeplerianElements, Matrix6, Matrix9,
-    QuasiNonsingularROE, RICState, SpacecraftConfig, StateVector,
+    CelestialSnapshot, DepartureState, EclipseInterval, EclipseState, EclipseSummary,
+    KeplerError, KeplerianElements, LegEclipseData, Matrix6, Matrix9, MissionEclipseData,
+    QuasiNonsingularROE, RICState, SpacecraftConfig, StateVector, TransferEclipseData,
 };
 
 #[cfg(test)]

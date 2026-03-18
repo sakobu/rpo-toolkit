@@ -192,6 +192,36 @@ mod tests {
     use super::*;
     use crate::test_helpers::{damico_table21_case1_roe, damico_table21_chief, iss_like_elements};
 
+    // Named tolerance constants for ROE↔RIC mapping tests
+    //
+    // Categories:
+    //   ZERO_ROE     — zero ROE → zero RIC (algebraic identity)
+    //   T_MATRIX     — T-matrix element and product agreement
+    //   RIC_POSITION — RIC position coordinate agreement
+    //   ROUNDTRIP    — RIC→ROE→RIC roundtrip precision
+
+    /// Zero ROE produces zero RIC state. Exact algebraic identity;
+    /// 1e-12 covers matrix multiplication roundoff for 6×6 × 6×1.
+    const ZERO_ROE_TOL: f64 = 1e-12;
+
+    /// T-matrix structural entries vs analytical D'Amico Eq. 2.17 values,
+    /// and T·roe vs roe_to_ric cross-validation. Agreement to ~O(1e-14);
+    /// 1e-10 is conservative.
+    const T_MATRIX_TOL: f64 = 1e-10;
+
+    /// Pseudo-inverse roundtrip (ROE→RIC→ROE). Dominated by pseudo-inverse
+    /// condition number; 1e-12 covers well-conditioned cases.
+    const ROUNDTRIP_TOL: f64 = 1e-12;
+
+    /// Pure δa radial offset: cross-track component is algebraically zero.
+    /// 1e-12 allows for trigonometric evaluation at non-zero mean anomaly.
+    const RADIAL_CROSS_TRACK_ZERO_TOL: f64 = 1e-12;
+
+    /// Pure δix cross-track offset: radial component tolerance.
+    /// D'Amico Eq. 2.17 gives δx ∝ cos(u)·δix; at u≠0 we need 1e-8
+    /// to cover the full T-matrix evaluation error chain.
+    const CROSS_TRACK_RADIAL_TOL: f64 = 1e-8;
+
     #[test]
     fn t_matrix_negative_sma_returns_error() {
         let chief = KeplerianElements {
@@ -245,8 +275,8 @@ mod tests {
         };
         let roe = QuasiNonsingularROE::default();
         let ric = roe_to_ric(&roe, &chief).unwrap();
-        assert!(ric.position_ric_km.norm() < 1e-12);
-        assert!(ric.velocity_ric_km_s.norm() < 1e-12);
+        assert!(ric.position_ric_km.norm() < ZERO_ROE_TOL);
+        assert!(ric.velocity_ric_km_s.norm() < ZERO_ROE_TOL);
     }
 
     #[test]
@@ -273,12 +303,12 @@ mod tests {
 
         // Radial position should be a * da = 1 km
         assert!(
-            (ric.position_ric_km.x - 1.0).abs() < 1e-8,
+            (ric.position_ric_km.x - 1.0).abs() < CROSS_TRACK_RADIAL_TOL,
             "Radial offset should be ~1 km, got {}",
             ric.position_ric_km.x
         );
         // Cross-track should be zero
-        assert!(ric.position_ric_km.z.abs() < 1e-12);
+        assert!(ric.position_ric_km.z.abs() < RADIAL_CROSS_TRACK_ZERO_TOL);
     }
 
     #[test]
@@ -305,7 +335,7 @@ mod tests {
         // At u=π/2, cross-track = a * dix * sin(u) = a * dix
         let expected_cross = chief.a_km * dix;
         assert!(
-            (ric.position_ric_km.z - expected_cross).abs() < 1e-8,
+            (ric.position_ric_km.z - expected_cross).abs() < CROSS_TRACK_RADIAL_TOL,
             "Cross-track should be ~{expected_cross} km, got {}",
             ric.position_ric_km.z
         );
@@ -332,12 +362,12 @@ mod tests {
 
         let ric_ref = roe_to_ric(&roe, &chief).unwrap();
 
-        assert!((ric_vec[0] - ric_ref.position_ric_km.x).abs() < 1e-10, "R mismatch");
-        assert!((ric_vec[1] - ric_ref.position_ric_km.y).abs() < 1e-10, "I mismatch");
-        assert!((ric_vec[2] - ric_ref.position_ric_km.z).abs() < 1e-10, "C mismatch");
-        assert!((ric_vec[3] - ric_ref.velocity_ric_km_s.x).abs() < 1e-10, "vR mismatch");
-        assert!((ric_vec[4] - ric_ref.velocity_ric_km_s.y).abs() < 1e-10, "vI mismatch");
-        assert!((ric_vec[5] - ric_ref.velocity_ric_km_s.z).abs() < 1e-10, "vC mismatch");
+        assert!((ric_vec[0] - ric_ref.position_ric_km.x).abs() < T_MATRIX_TOL, "R mismatch");
+        assert!((ric_vec[1] - ric_ref.position_ric_km.y).abs() < T_MATRIX_TOL, "I mismatch");
+        assert!((ric_vec[2] - ric_ref.position_ric_km.z).abs() < T_MATRIX_TOL, "C mismatch");
+        assert!((ric_vec[3] - ric_ref.velocity_ric_km_s.x).abs() < T_MATRIX_TOL, "vR mismatch");
+        assert!((ric_vec[4] - ric_ref.velocity_ric_km_s.y).abs() < T_MATRIX_TOL, "vI mismatch");
+        assert!((ric_vec[5] - ric_ref.velocity_ric_km_s.z).abs() < T_MATRIX_TOL, "vC mismatch");
     }
 
     /// T · roe matches roe_to_ric at multiple u values.
@@ -369,7 +399,7 @@ mod tests {
                 - ric_ref.position_ric_km)
                 .norm();
             assert!(
-                pos_err < 1e-10,
+                pos_err < T_MATRIX_TOL,
                 "Position mismatch at u={u_deg}°: err={pos_err}"
             );
         }
@@ -382,7 +412,7 @@ mod tests {
         let roe = QuasiNonsingularROE::default();
         let t = compute_t_matrix(&chief).unwrap();
         let ric_vec = t * roe.to_vector();
-        assert!(ric_vec.norm() < 1e-12);
+        assert!(ric_vec.norm() < ROUNDTRIP_TOL);
     }
 
     /// Position submatrix gives correct position.
@@ -401,9 +431,9 @@ mod tests {
         let pos = t_pos * roe.to_vector();
         let ric_ref = roe_to_ric(&roe, &chief).unwrap();
 
-        assert!((pos[0] - ric_ref.position_ric_km.x).abs() < 1e-10);
-        assert!((pos[1] - ric_ref.position_ric_km.y).abs() < 1e-10);
-        assert!((pos[2] - ric_ref.position_ric_km.z).abs() < 1e-10);
+        assert!((pos[0] - ric_ref.position_ric_km.x).abs() < T_MATRIX_TOL);
+        assert!((pos[1] - ric_ref.position_ric_km.y).abs() < T_MATRIX_TOL);
+        assert!((pos[2] - ric_ref.position_ric_km.z).abs() < T_MATRIX_TOL);
     }
 
     /// Pseudo-inverse roundtrip: ric_position_to_roe → T_pos·roe recovers position.
@@ -417,19 +447,19 @@ mod tests {
         let recovered_pos = t_pos * roe.to_vector();
 
         assert!(
-            (recovered_pos[0] - target_pos.x).abs() < 1e-10,
+            (recovered_pos[0] - target_pos.x).abs() < T_MATRIX_TOL,
             "R roundtrip: {} vs {}",
             recovered_pos[0],
             target_pos.x
         );
         assert!(
-            (recovered_pos[1] - target_pos.y).abs() < 1e-10,
+            (recovered_pos[1] - target_pos.y).abs() < T_MATRIX_TOL,
             "I roundtrip: {} vs {}",
             recovered_pos[1],
             target_pos.y
         );
         assert!(
-            (recovered_pos[2] - target_pos.z).abs() < 1e-10,
+            (recovered_pos[2] - target_pos.z).abs() < T_MATRIX_TOL,
             "C roundtrip: {} vs {}",
             recovered_pos[2],
             target_pos.z
@@ -448,18 +478,18 @@ mod tests {
 
         // At u=0: sin(u)=0, cos(u)=1
         // Row 0 (R): a·δa - a·cos(u)·δex - a·sin(u)·δey
-        assert!((t[(0, 0)] - a).abs() < 1e-10, "T[0,0]={}, expected {a}", t[(0, 0)]);
-        assert!((t[(0, 2)] - (-a)).abs() < 1e-10, "T[0,2]={}, expected {}", t[(0, 2)], -a);
-        assert!(t[(0, 3)].abs() < 1e-10, "T[0,3]={}, expected 0", t[(0, 3)]);
+        assert!((t[(0, 0)] - a).abs() < T_MATRIX_TOL, "T[0,0]={}, expected {a}", t[(0, 0)]);
+        assert!((t[(0, 2)] - (-a)).abs() < T_MATRIX_TOL, "T[0,2]={}, expected {}", t[(0, 2)], -a);
+        assert!(t[(0, 3)].abs() < T_MATRIX_TOL, "T[0,3]={}, expected 0", t[(0, 3)]);
 
         // Row 1 (I): a·δλ + 2a·sin(u)·δex - 2a·cos(u)·δey
-        assert!((t[(1, 1)] - a).abs() < 1e-10, "T[1,1]={}, expected {a}", t[(1, 1)]);
-        assert!(t[(1, 2)].abs() < 1e-10, "T[1,2]={}, expected 0 (2a·sin(0))", t[(1, 2)]);
-        assert!((t[(1, 3)] - (-2.0 * a)).abs() < 1e-10, "T[1,3]={}, expected {}", t[(1, 3)], -2.0 * a);
+        assert!((t[(1, 1)] - a).abs() < T_MATRIX_TOL, "T[1,1]={}, expected {a}", t[(1, 1)]);
+        assert!(t[(1, 2)].abs() < T_MATRIX_TOL, "T[1,2]={}, expected 0 (2a·sin(0))", t[(1, 2)]);
+        assert!((t[(1, 3)] - (-2.0 * a)).abs() < T_MATRIX_TOL, "T[1,3]={}, expected {}", t[(1, 3)], -2.0 * a);
 
         // Row 2 (C): a·sin(u)·δix - a·cos(u)·δiy
-        assert!(t[(2, 4)].abs() < 1e-10, "T[2,4]={}, expected 0 (a·sin(0))", t[(2, 4)]);
-        assert!((t[(2, 5)] - (-a)).abs() < 1e-10, "T[2,5]={}, expected {}", t[(2, 5)], -a);
+        assert!(t[(2, 4)].abs() < T_MATRIX_TOL, "T[2,4]={}, expected 0 (a·sin(0))", t[(2, 4)]);
+        assert!((t[(2, 5)] - (-a)).abs() < T_MATRIX_TOL, "T[2,5]={}, expected {}", t[(2, 5)], -a);
     }
 
     /// D'Amico Eq. 2.17: T-matrix entries at u=90° (sin=1, cos=0).
@@ -473,16 +503,16 @@ mod tests {
 
         // At u=π/2: sin(u)=1, cos(u)=0
         // Row 0: T[0,2]=0 (-a·cos(π/2)), T[0,3]=-a (-a·sin(π/2))
-        assert!(t[(0, 2)].abs() < 1e-10, "T[0,2]={}, expected ~0", t[(0, 2)]);
-        assert!((t[(0, 3)] - (-a)).abs() < 1e-10, "T[0,3]={}, expected {}", t[(0, 3)], -a);
+        assert!(t[(0, 2)].abs() < T_MATRIX_TOL, "T[0,2]={}, expected ~0", t[(0, 2)]);
+        assert!((t[(0, 3)] - (-a)).abs() < T_MATRIX_TOL, "T[0,3]={}, expected {}", t[(0, 3)], -a);
 
         // Row 1: T[1,2]=2a (2a·sin(π/2)), T[1,3]=0 (-2a·cos(π/2))
-        assert!((t[(1, 2)] - 2.0 * a).abs() < 1e-10, "T[1,2]={}, expected {}", t[(1, 2)], 2.0 * a);
-        assert!(t[(1, 3)].abs() < 1e-10, "T[1,3]={}, expected ~0", t[(1, 3)]);
+        assert!((t[(1, 2)] - 2.0 * a).abs() < T_MATRIX_TOL, "T[1,2]={}, expected {}", t[(1, 2)], 2.0 * a);
+        assert!(t[(1, 3)].abs() < T_MATRIX_TOL, "T[1,3]={}, expected ~0", t[(1, 3)]);
 
         // Row 2: T[2,4]=a (a·sin(π/2)), T[2,5]=0 (-a·cos(π/2))
-        assert!((t[(2, 4)] - a).abs() < 1e-10, "T[2,4]={}, expected {a}", t[(2, 4)]);
-        assert!(t[(2, 5)].abs() < 1e-10, "T[2,5]={}, expected ~0", t[(2, 5)]);
+        assert!((t[(2, 4)] - a).abs() < T_MATRIX_TOL, "T[2,4]={}, expected {a}", t[(2, 4)]);
+        assert!(t[(2, 5)].abs() < T_MATRIX_TOL, "T[2,5]={}, expected ~0", t[(2, 5)]);
     }
 
     /// D'Amico Table 2.1 Case 1: ROE → RIC at u=0.
@@ -496,17 +526,17 @@ mod tests {
 
         // R = a·(δa - δex·cos(0) - δey·sin(0)) = 0
         assert!(
-            ric.position_ric_km.x.abs() < 1e-10,
+            ric.position_ric_km.x.abs() < T_MATRIX_TOL,
             "R={}, expected 0", ric.position_ric_km.x
         );
         // I = a·(δλ + 2·δex·sin(0) - 2·δey·cos(0)) = -2·a·δey = -0.8 km
         assert!(
-            (ric.position_ric_km.y - (-0.8)).abs() < 1e-10,
+            (ric.position_ric_km.y - (-0.8)).abs() < T_MATRIX_TOL,
             "I={}, expected -0.8", ric.position_ric_km.y
         );
         // C = a·(δix·sin(0) - δiy·cos(0)) = -a·δiy = -0.2 km
         assert!(
-            (ric.position_ric_km.z - (-0.2)).abs() < 1e-10,
+            (ric.position_ric_km.z - (-0.2)).abs() < T_MATRIX_TOL,
             "C={}, expected -0.2", ric.position_ric_km.z
         );
     }
@@ -522,17 +552,17 @@ mod tests {
 
         // R = a·(-δey·sin(π/2)) = -a·δey = -0.4 km
         assert!(
-            (ric.position_ric_km.x - (-0.4)).abs() < 1e-8,
+            (ric.position_ric_km.x - (-0.4)).abs() < CROSS_TRACK_RADIAL_TOL,
             "R={}, expected -0.4", ric.position_ric_km.x
         );
         // I = a·(-2·δey·cos(π/2)) ≈ 0 (cos(π/2) ≈ 6e-17)
         assert!(
-            ric.position_ric_km.y.abs() < 1e-8,
+            ric.position_ric_km.y.abs() < CROSS_TRACK_RADIAL_TOL,
             "I={}, expected ~0", ric.position_ric_km.y
         );
         // C = a·(-δiy·cos(π/2)) ≈ 0
         assert!(
-            ric.position_ric_km.z.abs() < 1e-8,
+            ric.position_ric_km.z.abs() < CROSS_TRACK_RADIAL_TOL,
             "C={}, expected ~0", ric.position_ric_km.z
         );
     }

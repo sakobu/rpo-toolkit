@@ -180,6 +180,14 @@ mod tests {
     use crate::constants::{MU_EARTH, TWO_PI};
     use std::f64::consts::PI;
 
+    /// Period identity check tolerance. period() = 2π/n where n uses sqrt(µ/a³);
+    /// 1e-9 s covers accumulated f64 error for ~5550 s period.
+    const PERIOD_IDENTITY_TOL_S: f64 = 1e-9;
+
+    /// Eccentricity value tolerance for error-variant pattern matching.
+    /// 1e-15 confirms the exact f64 value is preserved in the error struct.
+    const ECCENTRICITY_MATCH_TOL: f64 = 1e-15;
+
     // ---------------------------------------------------------------------------
     // Helpers
     // ---------------------------------------------------------------------------
@@ -347,7 +355,7 @@ mod tests {
         let t_expected = TWO_PI / (MU_EARTH / (a_km * a_km * a_km)).sqrt();
         // Identity check (period = 2π / mean_motion)
         assert!(
-            (t - t_expected).abs() < 1e-9,
+            (t - t_expected).abs() < PERIOD_IDENTITY_TOL_S,
             "period: identity T = 2π/n failed; got {t}, expected {t_expected}"
         );
         // Approximate ISS sanity check
@@ -408,7 +416,7 @@ mod tests {
         let el = make_elements(7_000.0, 1.5, 0.0);
         let result = el.true_anomaly();
         assert!(
-            matches!(result, Err(KeplerError::InvalidEccentricity { e }) if (e - 1.5).abs() < 1e-15),
+            matches!(result, Err(KeplerError::InvalidEccentricity { e }) if (e - 1.5).abs() < ECCENTRICITY_MATCH_TOL),
             "e >= 1 should return InvalidEccentricity, got {result:?}"
         );
     }

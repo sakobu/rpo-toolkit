@@ -1,10 +1,12 @@
 //! Core domain types: state vectors, Keplerian elements, ROEs, and RIC states.
 
+pub mod eclipse;
 pub mod elements;
 pub mod roe;
 pub mod spacecraft;
 pub mod state;
 
+pub use eclipse::*;
 pub use elements::*;
 pub use roe::*;
 pub use spacecraft::*;

@@ -239,6 +239,39 @@ mod tests {
     use crate::test_helpers::{eccentric_elements, iss_like_elements, test_epoch};
     use crate::types::KeplerianElements;
 
+    // Named tolerance constants for ECI↔RIC DCM tests
+
+    /// DCM near identity for equatorial orbit at M=0.
+    /// Trigonometric functions at zero argument; 1e-10 is conservative.
+    const DCM_IDENTITY_TOL: f64 = 1e-10;
+
+    /// DCM orthogonality (DCM·DCMᵀ = I) and determinant (det = +1).
+    /// 3×3 matrix product accumulates ~O(1e-15); 1e-14 is tight.
+    const DCM_ORTHOGONALITY_TOL: f64 = 1e-14;
+
+    /// Δv RIC→ECI→RIC roundtrip. Two DCM multiplications; 1e-14.
+    const DV_ROUNDTRIP_TOL: f64 = 1e-14;
+
+    /// Geometric vs analytical RIC position (ECI DCM path vs ROE path).
+    /// Linearization error for 1 km separation dominates; 10 m = 0.010 km.
+    const GEOMETRIC_VS_ANALYTICAL_POSITION_TOL_KM: f64 = 0.010;
+
+    /// Geometric vs analytical RIC velocity agreement.
+    /// 0.1 m/s = 1e-4 km/s, dominated by linearization.
+    const GEOMETRIC_VS_ANALYTICAL_VELOCITY_TOL_KM_S: f64 = 1e-4;
+
+    /// Deputy ECI reconstruction roundtrip (ECI→RIC→ECI).
+    /// Two DCM multiplications at km scale; 1e-12 km.
+    const RECONSTRUCTION_TOL: f64 = 1e-12;
+
+    /// R̂ parallelism to position vector. Dot product residual
+    /// of two unit vectors; 1e-14.
+    const UNIT_VECTOR_PARALLEL_TOL: f64 = 1e-14;
+
+    /// Ĉ perpendicularity to r and v. Dot product of unit vector
+    /// with km-scale vector; 1e-10 residual.
+    const PERPENDICULARITY_TOL: f64 = 1e-10;
+
     /// Chief at (r,0,0) with v=(0,v,0) in equatorial plane → DCM ≈ Identity
     #[test]
     fn dcm_equatorial_orbit() {
@@ -257,7 +290,7 @@ mod tests {
         let identity = Matrix3::identity();
         let err = (dcm - identity).norm();
         assert!(
-            err < 1e-10,
+            err < DCM_IDENTITY_TOL,
             "DCM should be near identity for equatorial orbit at M=0, error={err}"
         );
     }
@@ -272,13 +305,13 @@ mod tests {
         let identity = Matrix3::identity();
         let orth_err = (product - identity).norm();
         assert!(
-            orth_err < 1e-14,
+            orth_err < DCM_ORTHOGONALITY_TOL,
             "DCM·DCM^T should be identity, error={orth_err}"
         );
 
         let det = dcm.determinant();
         assert!(
-            (det - 1.0).abs() < 1e-14,
+            (det - 1.0).abs() < DCM_ORTHOGONALITY_TOL,
             "DCM determinant should be +1, got {det}"
         );
     }
@@ -295,7 +328,7 @@ mod tests {
 
             let err = (dv_back - dv_ric).norm();
             assert!(
-                err < 1e-14,
+                err < DV_ROUNDTRIP_TOL,
                 "Δv roundtrip error = {err} km/s for orbit a={}, e={}",
                 ke.a_km,
                 ke.e
@@ -328,14 +361,14 @@ mod tests {
 
         let pos_err = (ric_geometric.position_ric_km - ric_analytical.position_ric_km).norm();
         assert!(
-            pos_err < 0.010, // 10 m agreement
+            pos_err < GEOMETRIC_VS_ANALYTICAL_POSITION_TOL_KM,
             "Geometric vs analytical RIC position disagree by {:.4} km (should be < 0.010 km)",
             pos_err
         );
 
         let vel_err = (ric_geometric.velocity_ric_km_s - ric_analytical.velocity_ric_km_s).norm();
         assert!(
-            vel_err < 1e-4, // 0.1 m/s agreement
+            vel_err < GEOMETRIC_VS_ANALYTICAL_VELOCITY_TOL_KM_S,
             "Geometric vs analytical RIC velocity disagree by {vel_err:.6} km/s",
         );
     }
@@ -364,11 +397,11 @@ mod tests {
         let vel_err = (deputy_reconstructed.velocity_eci_km_s - deputy_sv.velocity_eci_km_s).norm();
 
         assert!(
-            pos_err < 1e-12,
+            pos_err < RECONSTRUCTION_TOL,
             "Deputy position reconstruction error = {pos_err} km"
         );
         assert!(
-            vel_err < 1e-12,
+            vel_err < RECONSTRUCTION_TOL,
             "Deputy velocity reconstruction error = {vel_err} km/s"
         );
     }
@@ -391,7 +424,7 @@ mod tests {
             let r_hat_expected = sv.position_eci_km.normalize();
             let r_err = (r_hat_from_dcm - r_hat_expected).norm();
             assert!(
-                r_err < 1e-14,
+                r_err < UNIT_VECTOR_PARALLEL_TOL,
                 "R_hat not parallel to position at u={u_deg}°, error={r_err}"
             );
 
@@ -400,11 +433,11 @@ mod tests {
             let dot_r = c_hat.dot(&sv.position_eci_km);
             let dot_v = c_hat.dot(&sv.velocity_eci_km_s);
             assert!(
-                dot_r.abs() < 1e-10,
+                dot_r.abs() < PERPENDICULARITY_TOL,
                 "C_hat not ⊥ to r at u={u_deg}°, dot={dot_r}"
             );
             assert!(
-                dot_v.abs() < 1e-10,
+                dot_v.abs() < PERPENDICULARITY_TOL,
                 "C_hat not ⊥ to v at u={u_deg}°, dot={dot_v}"
             );
         }

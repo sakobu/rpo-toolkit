@@ -76,6 +76,33 @@ mod tests {
     use super::*;
     use crate::test_helpers::iss_like_elements;
 
+    // Named tolerance constants for ROE computation tests
+
+    /// Identical-orbit ROE: all components are algebraically zero.
+    /// 1e-15 is at machine epsilon for the O(1) normalization.
+    const ROE_IDENTITY_TOL: f64 = 1e-15;
+
+    /// SMA offset ROE: δa = Δa/a_c is an exact ratio.
+    /// Division introduces ~O(1e-16); 1e-12 is conservative.
+    const ROE_EXACT_RATIO_TOL: f64 = 1e-12;
+
+    /// D'Amico Table 2.1 roundtrip: construct deputy via deputy_from_roe,
+    /// then recover ROE via compute_roe. Two Kepler solves + trigonometric
+    /// inversions accumulate ~O(1e-12); 1e-10 provides margin.
+    const ROE_ROUNDTRIP_TOL: f64 = 1e-10;
+
+    /// Near-equatorial δiy bound: δiy = ΔΩ·sin(i_c) where sin(0.001°) ≈ 1.7e-5.
+    /// With ΔΩ = 0.01 rad, δiy ≈ 1.7e-7; 1e-4 is a generous upper bound.
+    const NEAR_EQUATORIAL_DIY_BOUND: f64 = 1e-4;
+
+    /// Inclination-only offset: δix = Δi is exact.
+    /// 1e-12 for the direct difference.
+    const INCLINATION_OFFSET_TOL: f64 = 1e-12;
+
+    /// Inclination-only offset: δiy = 0 is algebraic when only i changes.
+    /// 1e-15 is at machine epsilon.
+    const INCLINATION_ZERO_TOL: f64 = 1e-15;
+
     #[test]
     fn roe_negative_sma_returns_error() {
         let chief = KeplerianElements {
@@ -100,12 +127,12 @@ mod tests {
     fn roe_identical_orbits_are_zero() {
         let chief = iss_like_elements();
         let roe = compute_roe(&chief, &chief).unwrap();
-        assert!(roe.da.abs() < 1e-15);
-        assert!(roe.dlambda.abs() < 1e-15);
-        assert!(roe.dex.abs() < 1e-15);
-        assert!(roe.dey.abs() < 1e-15);
-        assert!(roe.dix.abs() < 1e-15);
-        assert!(roe.diy.abs() < 1e-15);
+        assert!(roe.da.abs() < ROE_IDENTITY_TOL);
+        assert!(roe.dlambda.abs() < ROE_IDENTITY_TOL);
+        assert!(roe.dex.abs() < ROE_IDENTITY_TOL);
+        assert!(roe.dey.abs() < ROE_IDENTITY_TOL);
+        assert!(roe.dix.abs() < ROE_IDENTITY_TOL);
+        assert!(roe.diy.abs() < ROE_IDENTITY_TOL);
     }
 
     #[test]
@@ -124,7 +151,7 @@ mod tests {
         let roe = compute_roe(&chief, &deputy).unwrap();
         let expected_da = 1.0 / 6786.0;
         assert!(
-            (roe.da - expected_da).abs() < 1e-12,
+            (roe.da - expected_da).abs() < ROE_EXACT_RATIO_TOL,
             "da mismatch: {} vs {expected_da}",
             roe.da
         );
@@ -146,29 +173,29 @@ mod tests {
         // Compute ROE from the constructed chief/deputy pair
         let computed_roe = compute_roe(&chief, &deputy).unwrap();
 
-        // Assert each ROE component matches within 1e-10 (dimensionless)
+        // Assert each ROE component matches within ROE_ROUNDTRIP_TOL (dimensionless)
         assert!(
-            (computed_roe.da - expected_roe.da).abs() < 1e-10,
+            (computed_roe.da - expected_roe.da).abs() < ROE_ROUNDTRIP_TOL,
             "δa: computed={}, expected={}", computed_roe.da, expected_roe.da
         );
         assert!(
-            (computed_roe.dlambda - expected_roe.dlambda).abs() < 1e-10,
+            (computed_roe.dlambda - expected_roe.dlambda).abs() < ROE_ROUNDTRIP_TOL,
             "δλ: computed={}, expected={}", computed_roe.dlambda, expected_roe.dlambda
         );
         assert!(
-            (computed_roe.dex - expected_roe.dex).abs() < 1e-10,
+            (computed_roe.dex - expected_roe.dex).abs() < ROE_ROUNDTRIP_TOL,
             "δex: computed={}, expected={}", computed_roe.dex, expected_roe.dex
         );
         assert!(
-            (computed_roe.dey - expected_roe.dey).abs() < 1e-10,
+            (computed_roe.dey - expected_roe.dey).abs() < ROE_ROUNDTRIP_TOL,
             "δey: computed={}, expected={}", computed_roe.dey, expected_roe.dey
         );
         assert!(
-            (computed_roe.dix - expected_roe.dix).abs() < 1e-10,
+            (computed_roe.dix - expected_roe.dix).abs() < ROE_ROUNDTRIP_TOL,
             "δix: computed={}, expected={}", computed_roe.dix, expected_roe.dix
         );
         assert!(
-            (computed_roe.diy - expected_roe.diy).abs() < 1e-10,
+            (computed_roe.diy - expected_roe.diy).abs() < ROE_ROUNDTRIP_TOL,
             "δiy: computed={}, expected={}", computed_roe.diy, expected_roe.diy
         );
     }
@@ -194,7 +221,7 @@ mod tests {
         // The result should be finite (no NaN/Inf) but very small
         assert!(roe.diy.is_finite(), "diy should be finite for near-equatorial");
         assert!(
-            roe.diy.abs() < 1e-4,
+            roe.diy.abs() < NEAR_EQUATORIAL_DIY_BOUND,
             "diy should be small for near-equatorial orbit (sin(i)≈0), got {}", roe.diy
         );
     }
@@ -214,10 +241,10 @@ mod tests {
 
         let roe = compute_roe(&chief, &deputy).unwrap();
         assert!(
-            (roe.dix - 0.001).abs() < 1e-12,
+            (roe.dix - 0.001).abs() < INCLINATION_OFFSET_TOL,
             "dix mismatch: {}",
             roe.dix
         );
-        assert!(roe.diy.abs() < 1e-15, "diy should be zero for RAAN-only offset");
+        assert!(roe.diy.abs() < INCLINATION_ZERO_TOL, "diy should be zero for RAAN-only offset");
     }
 }

@@ -209,6 +209,38 @@ mod tests {
     use crate::test_helpers::{damico_table21_case1_roe, damico_table21_chief, iss_like_elements};
     use crate::mission::config::SafetyConfig;
 
+    // Named tolerance constants for safety analysis tests
+    //
+    // Categories:
+    //   SAFETY_METRIC     — analytical safety metric agreement
+    //   EI_SEPARATION     — D'Amico Eq. 2.22/2.23 e/i separation
+    //   TRAJECTORY_MATCH  — trajectory point lookup and RIC matching
+    //   MONOTONICITY      — sampling density convergence guard
+
+    /// Analytical safety metric agreement (e/i separation, 3D distance).
+    /// Computed from ROE formulas with O(1e-15) precision; 1e-10 is conservative.
+    const SAFETY_METRIC_TOL: f64 = 1e-10;
+
+    /// D'Amico Eq. 2.22 e/i separation with exact perpendicular geometry.
+    /// a·d cross-product formula; 1e-9 km tolerance for 0.200 km separation.
+    const EI_SEPARATION_TOL_KM: f64 = 1e-9;
+
+    /// D'Amico Eq. 2.22 e/i separation for unequal-magnitude case.
+    /// Cross-product formula with sqrt; 1e-6 km for ~0.364 km expected.
+    const EI_SEPARATION_UNEQUAL_TOL_KM: f64 = 1e-6;
+
+    /// Trajectory point matching: find the point at a given elapsed_s.
+    /// Exact f64 comparison after propagation; 1e-12 s.
+    const ELAPSED_TIME_MATCH_TOL_S: f64 = 1e-12;
+
+    /// RIC position vector matching at trajectory points.
+    /// Same propagated value looked up by time; 1e-12 km.
+    const RIC_POSITION_MATCH_TOL_KM: f64 = 1e-12;
+
+    /// Sampling density monotonicity: finer ≤ coarser + epsilon.
+    /// 1e-12 guards against f64 non-determinism.
+    const SAMPLING_MONOTONICITY_GUARD: f64 = 1e-12;
+
     /// Empty trajectory returns `SafetyError::EmptyTrajectory`.
     #[test]
     fn empty_trajectory_returns_error() {
@@ -228,11 +260,11 @@ mod tests {
         let metrics = analyze_safety(&roe, &chief, &ric_pos);
 
         assert!(
-            metrics.operational.min_rc_separation_km < 1e-10,
+            metrics.operational.min_rc_separation_km < SAFETY_METRIC_TOL,
             "Min R/C separation should be ~0"
         );
         assert!(
-            metrics.operational.min_distance_3d_km < 1e-10,
+            metrics.operational.min_distance_3d_km < SAFETY_METRIC_TOL,
             "Min 3D distance should be ~0"
         );
     }
@@ -254,11 +286,11 @@ mod tests {
         let metrics = analyze_safety(&roe, &chief, &ric_pos);
 
         assert!(
-            metrics.passive.min_ei_separation_km < 1e-10,
+            metrics.passive.min_ei_separation_km < SAFETY_METRIC_TOL,
             "Pure δe with no δi should have zero e/i separation"
         );
         assert!(
-            (metrics.operational.min_rc_separation_km - 1.0).abs() < 1e-10,
+            (metrics.operational.min_rc_separation_km - 1.0).abs() < SAFETY_METRIC_TOL,
             "Instantaneous R/C should be 1.0 km for RIC [1,0,0]: {}",
             metrics.operational.min_rc_separation_km,
         );
@@ -310,7 +342,7 @@ mod tests {
         let metrics = analyze_safety(&roe, &chief, &ric_pos);
 
         assert!(
-            metrics.passive.min_ei_separation_km < 1e-10,
+            metrics.passive.min_ei_separation_km < SAFETY_METRIC_TOL,
             "Parallel e/i vectors should give zero e/i separation: {} km",
             metrics.passive.min_ei_separation_km
         );
@@ -370,11 +402,11 @@ mod tests {
         let metrics = analyze_safety(&roe, &chief, &ric_pos);
 
         assert!(
-            metrics.operational.min_rc_separation_km < 1e-10,
+            metrics.operational.min_rc_separation_km < SAFETY_METRIC_TOL,
             "R/C separation should be ~0 for zero ROE"
         );
         assert!(
-            (metrics.operational.min_distance_3d_km - 5.0).abs() < 1e-10,
+            (metrics.operational.min_distance_3d_km - 5.0).abs() < SAFETY_METRIC_TOL,
             "3D distance should be 5.0 km"
         );
         // e/i fails (zero ROE) but 3D passes
@@ -421,7 +453,7 @@ mod tests {
 
         // Finer sampling can only find a tighter or equal minimum
         assert!(
-            fine_metrics.operational.min_distance_3d_km <= coarse_metrics.operational.min_distance_3d_km + 1e-12,
+            fine_metrics.operational.min_distance_3d_km <= coarse_metrics.operational.min_distance_3d_km + SAMPLING_MONOTONICITY_GUARD,
             "200-step minimum ({:.6} km) should be ≤ 20-step minimum ({:.6} km)",
             fine_metrics.operational.min_distance_3d_km,
             coarse_metrics.operational.min_distance_3d_km,
@@ -501,20 +533,20 @@ mod tests {
 
         // RIC positions should match the trajectory points at those times
         let rc_match = trajectory.iter().find(|s| {
-            (s.elapsed_s - worst.operational.min_rc_elapsed_s).abs() < 1e-12
+            (s.elapsed_s - worst.operational.min_rc_elapsed_s).abs() < ELAPSED_TIME_MATCH_TOL_S
         });
         assert!(rc_match.is_some(), "Should find trajectory point matching R/C elapsed_s");
         assert!(
-            (rc_match.unwrap().ric.position_ric_km - worst.operational.min_rc_ric_position_km).norm() < 1e-12,
+            (rc_match.unwrap().ric.position_ric_km - worst.operational.min_rc_ric_position_km).norm() < RIC_POSITION_MATCH_TOL_KM,
             "R/C RIC position should match trajectory point"
         );
 
         let d3_match = trajectory.iter().find(|s| {
-            (s.elapsed_s - worst.operational.min_3d_elapsed_s).abs() < 1e-12
+            (s.elapsed_s - worst.operational.min_3d_elapsed_s).abs() < ELAPSED_TIME_MATCH_TOL_S
         });
         assert!(d3_match.is_some(), "Should find trajectory point matching 3D elapsed_s");
         assert!(
-            (d3_match.unwrap().ric.position_ric_km - worst.operational.min_3d_ric_position_km).norm() < 1e-12,
+            (d3_match.unwrap().ric.position_ric_km - worst.operational.min_3d_ric_position_km).norm() < RIC_POSITION_MATCH_TOL_KM,
             "3D RIC position should match trajectory point"
         );
     }
@@ -540,7 +572,7 @@ mod tests {
         let metrics = analyze_safety(&roe, &chief, &ric_pos);
 
         assert!(
-            (metrics.passive.min_ei_separation_km - 0.200).abs() < 1e-9,
+            (metrics.passive.min_ei_separation_km - 0.200).abs() < EI_SEPARATION_TOL_KM,
             "e/i separation: got {}, expected 0.200 km", metrics.passive.min_ei_separation_km
         );
     }
@@ -575,7 +607,7 @@ mod tests {
         let expected = std::f64::consts::SQRT_2 * 0.300 * 0.500
             / (0.300_f64.powi(2) + 0.500_f64.powi(2)).sqrt();
         assert!(
-            (metrics.passive.min_ei_separation_km - expected).abs() < 1e-6,
+            (metrics.passive.min_ei_separation_km - expected).abs() < EI_SEPARATION_UNEQUAL_TOL_KM,
             "e/i separation: got {}, expected {expected}", metrics.passive.min_ei_separation_km
         );
     }
@@ -593,7 +625,7 @@ mod tests {
         let metrics = analyze_safety(&roe, &chief, &ric_pos);
 
         assert!(
-            metrics.passive.min_ei_separation_km.abs() < 1e-10,
+            metrics.passive.min_ei_separation_km.abs() < SAFETY_METRIC_TOL,
             "Parallel e/i should give 0 separation, got {}", metrics.passive.min_ei_separation_km
         );
     }

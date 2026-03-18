@@ -95,6 +95,32 @@ mod tests {
     use super::*;
     use crate::test_helpers::iss_like_elements;
 
+    // Named tolerance constants for B-matrix (GVE) tests
+    //
+    // Categories:
+    //   STRUCTURAL_ZERO — B-matrix entries that are algebraically zero (decoupling)
+    //   SIGNAL_FLOOR    — minimum nonzero signal (confirms effect exists)
+    //   VALUE           — computed GVE values vs analytical expectations
+    //   ROUNDTRIP       — apply + reverse maneuver recovery
+
+    /// B-matrix structural zeros: in-plane/out-of-plane decoupling and
+    /// algebraic cancellations (e.g., δa from radial Δv, δey at u=0).
+    /// These are mathematically exact zeros; 1e-15 is at machine epsilon.
+    const STRUCTURAL_ZERO_TOL: f64 = 1e-15;
+
+    /// Minimum detectable nonzero signal from a 1 m/s impulse.
+    /// Used to confirm that a Δv *does* change the expected ROE component.
+    /// Physical magnitudes are O(1e-4) to O(1e-7); 1e-10 is well below.
+    const SIGNAL_FLOOR: f64 = 1e-10;
+
+    /// B-matrix element and ΔROE value tolerance. Computed values agree
+    /// with analytical formulas to ~O(1e-14); 1e-10 provides margin.
+    const VALUE_TOL: f64 = 1e-10;
+
+    /// Apply + reverse maneuver roundtrip. Two B-matrix multiplications
+    /// accumulate ~O(1e-15) per operation; 1e-14 allows margin.
+    const ROUNDTRIP_TOL: f64 = 1e-14;
+
     #[test]
     fn b_matrix_negative_sma_returns_error() {
         let chief = KeplerianElements {
@@ -131,8 +157,8 @@ mod tests {
             delta[0]
         );
         // δix and δiy should be zero (decoupled)
-        assert!(delta[4].abs() < 1e-15, "δix should be zero");
-        assert!(delta[5].abs() < 1e-15, "δiy should be zero");
+        assert!(delta[4].abs() < STRUCTURAL_ZERO_TOL, "δix should be zero");
+        assert!(delta[5].abs() < STRUCTURAL_ZERO_TOL, "δiy should be zero");
     }
 
     /// Radial Δv should change δλ and δex/δey but NOT δa.
@@ -145,9 +171,9 @@ mod tests {
         let delta = b * dv;
 
         // δa should be zero for pure radial
-        assert!(delta[0].abs() < 1e-15, "Radial Δv should not change δa");
+        assert!(delta[0].abs() < STRUCTURAL_ZERO_TOL, "Radial Δv should not change δa");
         // δλ should be nonzero
-        assert!(delta[1].abs() > 1e-10, "Radial Δv should change δλ");
+        assert!(delta[1].abs() > SIGNAL_FLOOR, "Radial Δv should change δλ");
     }
 
     /// Cross-track Δv should only affect δix and δiy.
@@ -160,14 +186,14 @@ mod tests {
         let delta = b * dv;
 
         // In-plane should be zero
-        assert!(delta[0].abs() < 1e-15, "δa should be zero for cross-track");
-        assert!(delta[1].abs() < 1e-15, "δλ should be zero for cross-track");
-        assert!(delta[2].abs() < 1e-15, "δex should be zero for cross-track");
-        assert!(delta[3].abs() < 1e-15, "δey should be zero for cross-track");
+        assert!(delta[0].abs() < STRUCTURAL_ZERO_TOL, "δa should be zero for cross-track");
+        assert!(delta[1].abs() < STRUCTURAL_ZERO_TOL, "δλ should be zero for cross-track");
+        assert!(delta[2].abs() < STRUCTURAL_ZERO_TOL, "δex should be zero for cross-track");
+        assert!(delta[3].abs() < STRUCTURAL_ZERO_TOL, "δey should be zero for cross-track");
 
         // Out-of-plane should be nonzero
         let di_mag = (delta[4] * delta[4] + delta[5] * delta[5]).sqrt();
-        assert!(di_mag > 1e-10, "Cross-track Δv should change δi vector");
+        assert!(di_mag > SIGNAL_FLOOR, "Cross-track Δv should change δi vector");
     }
 
     /// In-plane / out-of-plane decoupling.
@@ -178,16 +204,16 @@ mod tests {
 
         // B matrix should have zeros enforcing decoupling:
         // Rows 4,5 (δix, δiy) columns 0,1 (radial, along-track) = 0
-        assert!(b[(4, 0)].abs() < 1e-15);
-        assert!(b[(4, 1)].abs() < 1e-15);
-        assert!(b[(5, 0)].abs() < 1e-15);
-        assert!(b[(5, 1)].abs() < 1e-15);
+        assert!(b[(4, 0)].abs() < STRUCTURAL_ZERO_TOL);
+        assert!(b[(4, 1)].abs() < STRUCTURAL_ZERO_TOL);
+        assert!(b[(5, 0)].abs() < STRUCTURAL_ZERO_TOL);
+        assert!(b[(5, 1)].abs() < STRUCTURAL_ZERO_TOL);
 
         // Rows 0-3 (δa, δλ, δex, δey) column 2 (cross-track) = 0
-        assert!(b[(0, 2)].abs() < 1e-15);
-        assert!(b[(1, 2)].abs() < 1e-15);
-        assert!(b[(2, 2)].abs() < 1e-15);
-        assert!(b[(3, 2)].abs() < 1e-15);
+        assert!(b[(0, 2)].abs() < STRUCTURAL_ZERO_TOL);
+        assert!(b[(1, 2)].abs() < STRUCTURAL_ZERO_TOL);
+        assert!(b[(2, 2)].abs() < STRUCTURAL_ZERO_TOL);
+        assert!(b[(3, 2)].abs() < STRUCTURAL_ZERO_TOL);
     }
 
     /// D'Amico Eq. 2.52: optimal two-impulse Δv for eccentricity change.
@@ -214,7 +240,7 @@ mod tests {
 
         // δex from B-matrix should match target
         assert!(
-            (delta_roe[2] - target_dex).abs() < 1e-10,
+            (delta_roe[2] - target_dex).abs() < VALUE_TOL,
             "δex from B-matrix = {}, expected {target_dex}",
             delta_roe[2]
         );
@@ -222,7 +248,7 @@ mod tests {
         // At u=0: B[2,1] = 2·cos(0)/(n·a) = 2/(n·a), so δex = 2·Δv/(n·a) = target_dex ✓
         let expected_b21 = 2.0 / (n * a);
         assert!(
-            (b[(2, 1)] - expected_b21).abs() < 1e-15,
+            (b[(2, 1)] - expected_b21).abs() < STRUCTURAL_ZERO_TOL,
             "B[2,1] = {}, expected {expected_b21}",
             b[(2, 1)]
         );
@@ -231,28 +257,28 @@ mod tests {
         // But along-track Δv DOES change δa: B[0,1]=2/(n·a), so δa = 2·Δv/(n·a).
         let expected_da = 2.0 * dv_analytical / (n * a);
         assert!(
-            (delta_roe[0] - expected_da).abs() < 1e-10,
+            (delta_roe[0] - expected_da).abs() < VALUE_TOL,
             "δa from along-track Δv = {}, expected {expected_da}",
             delta_roe[0]
         );
 
         // Verify B[0,0]=0: radial Δv does NOT change δa
         assert!(
-            b[(0, 0)].abs() < 1e-15,
+            b[(0, 0)].abs() < STRUCTURAL_ZERO_TOL,
             "B[0,0] should be 0 (radial Δv doesn't change δa), got {}",
             b[(0, 0)]
         );
 
         // δey at u=0: B[3,1] = 2·sin(0)/(n·a) = 0
         assert!(
-            delta_roe[3].abs() < 1e-15,
+            delta_roe[3].abs() < STRUCTURAL_ZERO_TOL,
             "δey should be zero at u=0, got {}",
             delta_roe[3]
         );
 
         // Out-of-plane should be zero (decoupled)
-        assert!(delta_roe[4].abs() < 1e-15, "δix should be zero");
-        assert!(delta_roe[5].abs() < 1e-15, "δiy should be zero");
+        assert!(delta_roe[4].abs() < STRUCTURAL_ZERO_TOL, "δix should be zero");
+        assert!(delta_roe[5].abs() < STRUCTURAL_ZERO_TOL, "δiy should be zero");
     }
 
     /// Zero Δv should not change ROE.
@@ -270,7 +296,7 @@ mod tests {
 
         let result = apply_maneuver(&roe, &Vector3::zeros(), &chief).unwrap();
         let diff = (result.to_vector() - roe.to_vector()).norm();
-        assert!(diff < 1e-15, "Zero Δv should not change ROE, diff={diff}");
+        assert!(diff < STRUCTURAL_ZERO_TOL, "Zero Δv should not change ROE, diff={diff}");
     }
 
     /// Apply + reverse maneuver should recover original ROE.
@@ -292,7 +318,7 @@ mod tests {
 
         let diff = (after_rev.to_vector() - roe.to_vector()).norm();
         assert!(
-            diff < 1e-14,
+            diff < ROUNDTRIP_TOL,
             "Apply+reverse should recover original ROE, diff={diff}"
         );
     }

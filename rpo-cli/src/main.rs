@@ -11,16 +11,17 @@ use rpo_core::{
     propagate_keplerian, propagate_mission_covariance, ric_accuracy_to_roe_covariance,
     PropagationModel,
     // Mission layer
-    extract_dmf_rates, load_full_almanac, plan_mission, plan_waypoint_mission,
-    run_monte_carlo, validate_mission_nyx,
+    compute_transfer_eclipse, extract_dmf_rates, load_full_almanac, plan_mission,
+    plan_waypoint_mission, run_monte_carlo, validate_mission_nyx,
     // Types
-    DepartureState, DragConfig, KeplerianElements, LambertConfig, ManeuverUncertainty,
-    MissionConfig, MissionCovarianceReport, MissionPhase, MissionPlan, MonteCarloConfig,
-    MonteCarloInput, MonteCarloMode, MonteCarloReport, NavigationAccuracy, PercentileStats,
-    PerchGeometry,
+    DepartureState, DragConfig, EclipseValidation, KeplerianElements, LambertConfig,
+    ManeuverUncertainty, MissionConfig, MissionCovarianceReport, MissionEclipseData,
+    MissionPhase, MissionPlan,
+    MonteCarloConfig, MonteCarloInput, MonteCarloMode, MonteCarloReport, NavigationAccuracy,
+    PercentileStats, PerchGeometry,
     ProximityConfig, QuasiNonsingularROE, SafetyConfig, SafetyMetrics, SpacecraftConfig,
-    StateVector, TargetingConfig, TofOptConfig, ValidationPoint, ValidationReport, Waypoint,
-    WaypointMission,
+    StateVector, TargetingConfig, TofOptConfig, TransferEclipseData, ValidationPoint,
+    ValidationReport, Waypoint, WaypointMission,
 };
 
 mod demo;
@@ -234,6 +235,8 @@ struct MissionOutput<'a> {
     covariance: Option<MissionCovarianceReport>,
     #[serde(skip_serializing_if = "Option::is_none")]
     monte_carlo: Option<MonteCarloReport>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    transfer_eclipse: Option<TransferEclipseData>,
 }
 
 // ---------------------------------------------------------------------------
@@ -355,6 +358,7 @@ fn build_mission_output<'a>(planned: &'a PlannedMission, input: &MissionInput) -
         auto_drag_config: None,
         covariance: None,
         monte_carlo: None,
+        transfer_eclipse: None,
     })
 }
 
@@ -464,6 +468,10 @@ fn run_targeting(input_path: &PathBuf, json_output: bool) -> Result<(), Box<dyn 
         print_safety_analysis(safety, &sc);
     }
 
+    if let Some(ref eclipse) = mission.eclipse {
+        print_eclipse_summary(eclipse);
+    }
+
     Ok(())
 }
 
@@ -477,13 +485,18 @@ fn run_end_to_end_mission(input_path: &PathBuf, json_output: bool) -> Result<(),
     let prop = input.prop.make_propagator();
     let planned = plan_from_transfer(&input, transfer, prop)?;
 
+    let transfer_eclipse = planned.transfer.plan.transfer.as_ref().and_then(|t| {
+        compute_transfer_eclipse(t, &input.chief, 200)
+    });
+
     if json_output {
-        let output = build_mission_output(&planned, &input)?;
+        let mut output = build_mission_output(&planned, &input)?;
+        output.transfer_eclipse = transfer_eclipse;
         println!("{}", serde_json::to_string_pretty(&output)?);
         return Ok(());
     }
 
-    print_mission_human(&planned, &input, false);
+    print_mission_human(&planned, &input, false, transfer_eclipse.as_ref());
     Ok(())
 }
 
@@ -543,16 +556,21 @@ fn run_validate(
     ).map_err(|e| format!("Nyx validation failed: {e}"))?;
     eprintln!("Validation complete.");
 
+    let transfer_eclipse = planned.transfer.plan.transfer.as_ref().and_then(|t| {
+        compute_transfer_eclipse(t, &input.chief, 200)
+    });
+
     if json_output {
         let mut output = build_mission_output(&planned, &input)?;
         output.validation = Some(report);
         output.auto_drag_config = derived_drag;
+        output.transfer_eclipse = transfer_eclipse;
         println!("{}", serde_json::to_string_pretty(&output)?);
         return Ok(());
     }
 
     // --- Human-readable output ---
-    print_mission_human(&planned, &input, auto_drag);
+    print_mission_human(&planned, &input, auto_drag, transfer_eclipse.as_ref());
 
     // Validation details
     println!("\n\nPhase 3: Nyx Validation ({} samples/leg)", samples_per_leg);
@@ -584,6 +602,10 @@ fn run_validate(
         "  (analytical: {} steps/leg; numerical: {} nyx samples/leg)",
         planned.mission_config.targeting.trajectory_steps, samples_per_leg,
     );
+
+    if let Some(ref ev) = report.eclipse_validation {
+        print_eclipse_validation(ev);
+    }
 
     if let Some(ref drag) = derived_drag {
         print_derived_drag(drag);
@@ -775,7 +797,12 @@ fn run_mc(input_path: &PathBuf, json_output: bool, auto_drag: bool) -> Result<()
 // ---------------------------------------------------------------------------
 
 /// Print the common Phase 1 + Phase 2 output shared by mission/validate handlers.
-fn print_mission_human(planned: &PlannedMission, input: &MissionInput, auto_drag: bool) {
+fn print_mission_human(
+    planned: &PlannedMission,
+    input: &MissionInput,
+    auto_drag: bool,
+    transfer_eclipse: Option<&TransferEclipseData>,
+) {
     let transfer = &planned.transfer;
     let lambert_cfg = input.lambert_config.clone().unwrap_or_default();
 
@@ -811,6 +838,20 @@ fn print_mission_human(planned: &PlannedMission, input: &MissionInput, auto_drag
         }
         let v_circ = (rpo_core::constants::MU_EARTH / lambert.departure_state.position_eci_km.norm()).sqrt();
         println!("    Δv/v_circ:    {:.3}", lambert.total_dv_km_s / v_circ);
+    }
+
+    if let Some(te) = transfer_eclipse {
+        println!("\n  Transfer Eclipse:");
+        println!("    Deputy shadow intervals: {}", te.summary.intervals.len());
+        if te.summary.total_shadow_duration_s > 0.0 {
+            println!(
+                "    Deputy shadow time: {:.0} s ({:.1}% of transfer)",
+                te.summary.total_shadow_duration_s,
+                te.summary.time_in_shadow_fraction * 100.0,
+            );
+        } else {
+            println!("    No shadow during transfer");
+        }
     }
 
     println!();
@@ -855,6 +896,10 @@ fn print_mission_human(planned: &PlannedMission, input: &MissionInput, auto_drag
     if let Some(ref safety) = planned.wp_mission.safety {
         let sc = planned.mission_config.safety.unwrap_or_default();
         print_safety_analysis(safety, &sc);
+    }
+
+    if let Some(ref eclipse) = planned.wp_mission.eclipse {
+        print_eclipse_summary(eclipse);
     }
 }
 
@@ -945,6 +990,53 @@ fn print_safety_analysis(safety: &SafetyMetrics, config: &SafetyConfig) {
         "\n  Overall:                  {}",
         if overall { "PASS" } else { "FAIL" }
     );
+}
+
+/// Print eclipse summary (intervals, durations, shadow fraction).
+fn print_eclipse_summary(eclipse: &MissionEclipseData) {
+    println!("\nEclipse Summary:");
+    println!("  Shadow intervals:   {}", eclipse.summary.intervals.len());
+    println!(
+        "  Total shadow time:  {:.0} s ({:.1}% of mission)",
+        eclipse.summary.total_shadow_duration_s,
+        eclipse.summary.time_in_shadow_fraction * 100.0,
+    );
+    if eclipse.summary.max_shadow_duration_s > 0.0 {
+        println!(
+            "  Max single eclipse: {:.0} s ({:.1} min)",
+            eclipse.summary.max_shadow_duration_s,
+            eclipse.summary.max_shadow_duration_s / 60.0,
+        );
+    }
+}
+
+/// Print eclipse validation comparison (analytical vs ANISE).
+fn print_eclipse_validation(ev: &EclipseValidation) {
+    println!("\n  Eclipse Validation (Analytical vs ANISE):");
+    println!(
+        "    Sun direction error:  max {:.4}\u{00b0}, mean {:.4}\u{00b0}",
+        ev.max_sun_direction_error_rad.to_degrees(),
+        ev.mean_sun_direction_error_rad.to_degrees(),
+    );
+    println!(
+        "    Eclipse intervals:    {} analytical, {} numerical, {} matched",
+        ev.analytical_interval_count,
+        ev.numerical_interval_count,
+        ev.matched_interval_count,
+    );
+    if !ev.interval_comparisons.is_empty() {
+        println!(
+            "    Timing error:         max {:.1} s, mean {:.1} s (entry/exit)",
+            ev.max_timing_error_s,
+            ev.mean_timing_error_s,
+        );
+    }
+    if ev.unmatched_interval_count > 0 {
+        println!(
+            "    Unmatched intervals:  {}",
+            ev.unmatched_interval_count,
+        );
+    }
 }
 
 /// Print per-leg position error breakdown (max, mean, RMS).

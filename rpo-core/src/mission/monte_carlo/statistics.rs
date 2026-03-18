@@ -238,6 +238,10 @@ mod tests {
     use rand::SeedableRng;
     use rand_chacha::ChaCha20Rng;
 
+    /// Mean computation tolerance for NaN-filtered percentile test.
+    /// Mean of [1, 2, 3, 4, 5] = 3.0 exactly in f64; 1e-10 is conservative.
+    const MEAN_EXACT_TOL: f64 = 1e-10;
+
     /// Build a minimal `MissionCovarianceReport` with given terminal position
     /// and per-axis 3-sigma values.
     fn mock_cov_report(sigma3_ric: Vector3<f64>) -> MissionCovarianceReport {
@@ -365,7 +369,7 @@ mod tests {
         assert_eq!(stats.min, 1.0);
         assert_eq!(stats.max, 5.0);
         assert_eq!(stats.p50, 3.0);
-        assert!((stats.mean - 3.0).abs() < 1e-10, "mean should be 3.0, got {}", stats.mean);
+        assert!((stats.mean - 3.0).abs() < MEAN_EXACT_TOL, "mean should be 3.0, got {}", stats.mean);
     }
 
     /// All-NaN input produces EmptyEnsemble error (no finite data to summarize).

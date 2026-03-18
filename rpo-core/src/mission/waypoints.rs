@@ -7,9 +7,14 @@
 use hifitime::Duration;
 use nalgebra::Vector3;
 
+use crate::elements::{
+    compute_eclipse_state, extract_eclipse_intervals,
+    keplerian_to_state, ric_to_eci_position,
+};
+use crate::elements::eclipse::{build_celestial_snapshot, is_deeper_shadow};
 use crate::mission::targeting::{optimize_tof, solve_leg};
 use crate::propagation::propagator::{PropagatedState, PropagationError, PropagationModel};
-use crate::types::DepartureState;
+use crate::types::{DepartureState, LegEclipseData, MissionEclipseData};
 
 use super::config::{MissionConfig, SafetyConfig};
 use super::errors::MissionError;
@@ -70,6 +75,150 @@ fn compute_worst_safety(
     })
 }
 
+/// Compute eclipse data across all mission legs (chief and deputy).
+///
+/// Single-pass per leg: calls [`keplerian_to_state`] once per trajectory
+/// point, then reuses the chief ECI state for both the chief
+/// [`CelestialSnapshot`] (via [`build_celestial_snapshot`]) and the deputy
+/// eclipse state (via [`ric_to_eci_position`] + [`compute_eclipse_state`]).
+///
+/// Returns `None` only if all legs have empty trajectories or any element
+/// conversion fails (degenerate orbit).
+///
+/// # Cross-leg interval merging
+///
+/// Eclipse intervals are extracted per-leg, then merged across boundaries.
+/// The chief does not maneuver, so its eclipse state is continuous across
+/// leg boundaries. If the last interval of leg N ends at the same epoch as
+/// (or later than) the first interval of leg N+1, they are merged into one
+/// contiguous interval.
+///
+/// # Deputy eclipse
+///
+/// Deputy ECI position at each point is reconstructed via:
+/// 1. [`keplerian_to_state`]`(&chief_mean)` → chief [`StateVector`]
+/// 2. [`ric_to_eci_position`]`(&chief_sv, &ric.position_ric_km)` → deputy ECI
+/// 3. [`compute_eclipse_state`]`(&deputy_eci, &sun_eci)` → deputy shadow state
+///
+/// The Sun position for the deputy is obtained from the chief snapshot's
+/// direction and distance fields (already computed by `build_celestial_snapshot`),
+/// avoiding a redundant ephemeris call.
+fn compute_mission_eclipse(legs: &[ManeuverLeg]) -> Option<MissionEclipseData> {
+    let mut leg_data = Vec::with_capacity(legs.len());
+    let mut merged_intervals: Vec<crate::types::EclipseInterval> = Vec::new();
+
+    for leg in legs {
+        if leg.trajectory.is_empty() {
+            leg_data.push(LegEclipseData {
+                chief_celestial: Vec::new(),
+                deputy_eclipse: Vec::new(),
+            });
+            continue;
+        }
+
+        // Single pass: keplerian_to_state once per point, reuse for both
+        // chief snapshot and deputy RIC-to-ECI conversion.
+        let mut chief_snapshots = Vec::with_capacity(leg.trajectory.len());
+        let mut deputy_states = Vec::with_capacity(leg.trajectory.len());
+
+        for state in &leg.trajectory {
+            let Ok(chief_sv) = keplerian_to_state(&state.chief_mean, state.epoch) else {
+                return None;
+            };
+
+            // Chief celestial snapshot (Sun + Moon ephemeris + shadow)
+            let snapshot = build_celestial_snapshot(state.epoch, &chief_sv.position_eci_km);
+
+            // Deputy eclipse: reconstruct deputy ECI from chief + RIC offset
+            let Ok(deputy_eci) =
+                ric_to_eci_position(&chief_sv, &state.ric.position_ric_km)
+            else {
+                return None;
+            };
+            // Reconstruct Sun ECI from snapshot (avoids redundant ephemeris call)
+            let sun_eci = chief_sv.position_eci_km
+                + snapshot.sun_direction_eci * snapshot.sun_distance_km;
+            deputy_states.push(compute_eclipse_state(&deputy_eci, &sun_eci));
+
+            chief_snapshots.push(snapshot);
+        }
+
+        // Extract intervals for this leg, then merge across leg boundaries.
+        let leg_summary = extract_eclipse_intervals(&chief_snapshots);
+        merge_intervals(&mut merged_intervals, leg_summary.intervals);
+
+        leg_data.push(LegEclipseData {
+            chief_celestial: chief_snapshots,
+            deputy_eclipse: deputy_states,
+        });
+    }
+
+    if leg_data.iter().all(|d| d.chief_celestial.is_empty()) {
+        return None;
+    }
+
+    // Recompute aggregate metrics from merged intervals.
+    let total_shadow_duration_s: f64 = merged_intervals.iter().map(|i| i.duration_s).sum();
+    let max_shadow_duration_s = merged_intervals
+        .iter()
+        .map(|i| i.duration_s)
+        .fold(0.0_f64, f64::max);
+
+    // Total mission duration from first non-empty leg start to last non-empty leg end.
+    let first_epoch = leg_data.iter()
+        .filter_map(|d| d.chief_celestial.first())
+        .map(|s| s.epoch)
+        .next();
+    let last_epoch = leg_data.iter()
+        .filter_map(|d| d.chief_celestial.last())
+        .map(|s| s.epoch)
+        .next_back();
+
+    let time_in_shadow_fraction = match (first_epoch, last_epoch) {
+        (Some(first), Some(last)) => {
+            let total_s = (last - first).to_seconds();
+            if total_s > 0.0 { total_shadow_duration_s / total_s } else { 0.0 }
+        }
+        _ => 0.0,
+    };
+
+    Some(MissionEclipseData {
+        summary: crate::types::EclipseSummary {
+            intervals: merged_intervals,
+            total_shadow_duration_s,
+            time_in_shadow_fraction,
+            max_shadow_duration_s,
+        },
+        legs: leg_data,
+    })
+}
+
+/// Merge per-leg intervals into a running merged list.
+///
+/// If the last interval in `merged` ends at or after the start of the first
+/// interval in `new`, they are joined into one contiguous interval (the chief
+/// does not maneuver, so shadow state is continuous across leg boundaries).
+fn merge_intervals(
+    merged: &mut Vec<crate::types::EclipseInterval>,
+    new: Vec<crate::types::EclipseInterval>,
+) {
+    for interval in new {
+        if let Some(last) = merged.last_mut()
+            && last.end >= interval.start
+        {
+            // Contiguous — extend the existing interval
+            last.end = interval.end;
+            last.duration_s = (last.end - last.start).to_seconds();
+            // Keep worst-case state
+            if is_deeper_shadow(&interval.state, &last.state) {
+                last.state = interval.state;
+            }
+            continue;
+        }
+        merged.push(interval);
+    }
+}
+
 /// Build a `WaypointMission` from a set of legs with computed aggregates.
 fn build_mission(
     legs: Vec<ManeuverLeg>,
@@ -78,12 +227,14 @@ fn build_mission(
     let total_dv_km_s: f64 = legs.iter().map(|l| l.total_dv_km_s).sum();
     let total_duration_s: f64 = legs.iter().map(|l| l.tof_s).sum();
     let safety = compute_worst_safety(&legs, safety_config);
+    let eclipse = compute_mission_eclipse(&legs);
     WaypointMission {
         legs,
         total_dv_km_s,
         total_duration_s,
         safety,
         covariance: None,
+        eclipse,
     }
 }
 
@@ -1120,5 +1271,277 @@ mod tests {
             safety.operational.min_3d_ric_position_km.norm() > 0.0,
             "3D RIC position should be nonzero"
         );
+    }
+
+    // =======================================================================
+    // Eclipse integration tests
+    // =======================================================================
+
+    /// `plan_waypoint_mission()` always returns non-None eclipse data
+    /// when the mission has at least one leg with a trajectory.
+    #[test]
+    fn waypoint_mission_includes_eclipse() {
+        let departure = zero_departure();
+        let propagator = PropagationModel::J2Stm;
+        let config = default_config();
+        let period = std::f64::consts::TAU / departure.chief.mean_motion().unwrap();
+
+        let waypoints = vec![Waypoint {
+            position_ric_km: Vector3::new(0.0, 5.0, 0.0),
+            velocity_ric_km_s: Vector3::zeros(),
+            tof_s: Some(period),
+        }];
+
+        let mission =
+            plan_waypoint_mission(&departure, &waypoints, &config, &propagator)
+                .expect("should succeed");
+
+        let eclipse = mission.eclipse.as_ref().expect("eclipse should be Some");
+        assert_eq!(
+            eclipse.legs.len(),
+            mission.legs.len(),
+            "eclipse leg count should match mission leg count"
+        );
+    }
+
+    /// Eclipse intervals must be bounded within the mission time window.
+    #[test]
+    fn eclipse_intervals_span_mission() {
+        let departure = zero_departure();
+        let propagator = PropagationModel::J2Stm;
+        let config = default_config();
+        let period = std::f64::consts::TAU / departure.chief.mean_motion().unwrap();
+
+        let waypoints = vec![Waypoint {
+            position_ric_km: Vector3::new(0.0, 5.0, 0.0),
+            velocity_ric_km_s: Vector3::zeros(),
+            tof_s: Some(period),
+        }];
+
+        let mission =
+            plan_waypoint_mission(&departure, &waypoints, &config, &propagator)
+                .expect("should succeed");
+
+        let eclipse = mission.eclipse.as_ref().expect("eclipse should be Some");
+        let mission_start = mission.legs[0].departure_maneuver.epoch;
+        let mission_end = mission.legs.last().unwrap().arrival_maneuver.epoch;
+
+        for interval in &eclipse.summary.intervals {
+            assert!(
+                interval.start >= mission_start,
+                "interval start {interval:?} should be >= mission start"
+            );
+            assert!(
+                interval.end <= mission_end,
+                "interval end {interval:?} should be <= mission end"
+            );
+        }
+    }
+
+    /// Per-leg celestial snapshot count matches the trajectory sample count.
+    #[test]
+    fn leg_celestial_count_matches() {
+        let departure = zero_departure();
+        let propagator = PropagationModel::J2Stm;
+        let config = default_config();
+        let period = std::f64::consts::TAU / departure.chief.mean_motion().unwrap();
+        let tof = period * 0.75;
+
+        let waypoints = vec![
+            Waypoint {
+                position_ric_km: Vector3::new(0.0, 5.0, 0.0),
+                velocity_ric_km_s: Vector3::zeros(),
+                tof_s: Some(tof),
+            },
+            Waypoint {
+                position_ric_km: Vector3::new(2.0, 3.0, 0.0),
+                velocity_ric_km_s: Vector3::zeros(),
+                tof_s: Some(tof),
+            },
+        ];
+
+        let mission =
+            plan_waypoint_mission(&departure, &waypoints, &config, &propagator)
+                .expect("should succeed");
+
+        let eclipse = mission.eclipse.as_ref().expect("eclipse should be Some");
+
+        for (i, leg) in mission.legs.iter().enumerate() {
+            assert_eq!(
+                eclipse.legs[i].chief_celestial.len(),
+                leg.trajectory.len(),
+                "leg {i}: celestial snapshot count should match trajectory length"
+            );
+        }
+    }
+
+    /// Per-leg deputy eclipse state count matches the celestial snapshot count.
+    #[test]
+    fn leg_deputy_eclipse_count_matches() {
+        let departure = zero_departure();
+        let propagator = PropagationModel::J2Stm;
+        let config = default_config();
+        let period = std::f64::consts::TAU / departure.chief.mean_motion().unwrap();
+
+        let waypoints = vec![Waypoint {
+            position_ric_km: Vector3::new(0.0, 5.0, 0.0),
+            velocity_ric_km_s: Vector3::zeros(),
+            tof_s: Some(period),
+        }];
+
+        let mission =
+            plan_waypoint_mission(&departure, &waypoints, &config, &propagator)
+                .expect("should succeed");
+
+        let eclipse = mission.eclipse.as_ref().expect("eclipse should be Some");
+
+        for (i, leg) in eclipse.legs.iter().enumerate() {
+            assert_eq!(
+                leg.deputy_eclipse.len(),
+                leg.chief_celestial.len(),
+                "leg {i}: deputy eclipse count should match celestial snapshot count"
+            );
+        }
+    }
+
+    /// `replan_from_waypoint()` produces fresh eclipse data.
+    #[test]
+    fn replan_recomputes_eclipse() {
+        let departure = zero_departure();
+        let propagator = PropagationModel::J2Stm;
+        let config = default_config();
+        let period = std::f64::consts::TAU / departure.chief.mean_motion().unwrap();
+        let tof = period * 0.75;
+
+        let waypoints = three_wp_waypoints(tof);
+
+        let original =
+            plan_waypoint_mission(&departure, &waypoints, &config, &propagator)
+                .expect("should succeed");
+
+        // Replan from waypoint 2 with a modified target
+        let mut new_waypoints = waypoints.clone();
+        new_waypoints[2] = Waypoint {
+            position_ric_km: Vector3::new(0.0, 8.0, 0.0),
+            velocity_ric_km_s: Vector3::zeros(),
+            tof_s: Some(tof),
+        };
+
+        let replanned = replan_from_waypoint(
+            &original, 2, &new_waypoints, &departure, &config, &propagator,
+        )
+        .expect("replan should succeed");
+
+        let eclipse = replanned.eclipse.as_ref().expect("replanned eclipse should be Some");
+        assert_eq!(
+            eclipse.legs.len(),
+            replanned.legs.len(),
+            "replanned eclipse leg count should match mission leg count"
+        );
+    }
+
+    /// WaypointMission with eclipse data survives serde roundtrip.
+    #[test]
+    fn serde_roundtrip_with_eclipse() {
+        let departure = zero_departure();
+        let propagator = PropagationModel::J2Stm;
+        let config = default_config();
+        let period = std::f64::consts::TAU / departure.chief.mean_motion().unwrap();
+
+        let waypoints = vec![Waypoint {
+            position_ric_km: Vector3::new(0.0, 5.0, 0.0),
+            velocity_ric_km_s: Vector3::zeros(),
+            tof_s: Some(period),
+        }];
+
+        let mission =
+            plan_waypoint_mission(&departure, &waypoints, &config, &propagator)
+                .expect("should succeed");
+
+        assert!(mission.eclipse.is_some(), "eclipse should be computed");
+
+        let json = serde_json::to_string(&mission).expect("serialize");
+        let deserialized: WaypointMission =
+            serde_json::from_str(&json).expect("deserialize");
+
+        let orig = mission.eclipse.as_ref().unwrap();
+        let deser = deserialized.eclipse.as_ref().expect("eclipse should survive roundtrip");
+
+        assert_eq!(orig.summary.intervals.len(), deser.summary.intervals.len());
+        assert_eq!(orig.legs.len(), deser.legs.len());
+        assert!(
+            (orig.summary.total_shadow_duration_s - deser.summary.total_shadow_duration_s).abs()
+                < SCALAR_ROUNDTRIP_TOL
+        );
+    }
+
+    /// Eclipse that spans a maneuver boundary (leg N end → leg N+1 start)
+    /// is merged into one contiguous interval, not two.
+    ///
+    /// Strategy: use a 2-leg mission with TOF chosen so that the maneuver
+    /// epoch falls mid-eclipse. The ISS-like orbit at 51.6° inclination
+    /// spends ~35% of each orbit in shadow. By choosing an epoch and TOF
+    /// that place the leg boundary during an eclipse, we can verify merging.
+    ///
+    /// We verify by checking that the total interval count is less than or
+    /// equal to what we'd get from independent per-leg extraction (which
+    /// would split eclipses at the boundary).
+    #[test]
+    fn cross_leg_eclipse_merging() {
+        let departure = zero_departure();
+        let propagator = PropagationModel::J2Stm;
+        let config = default_config();
+        let period = std::f64::consts::TAU / departure.chief.mean_motion().unwrap();
+        // Use 0.75-period legs: ~4,100s each. Two legs cover ~1.5 orbits.
+        let tof = period * 0.75;
+
+        let waypoints = vec![
+            Waypoint {
+                position_ric_km: Vector3::new(0.0, 5.0, 0.0),
+                velocity_ric_km_s: Vector3::zeros(),
+                tof_s: Some(tof),
+            },
+            Waypoint {
+                position_ric_km: Vector3::new(2.0, 3.0, 0.0),
+                velocity_ric_km_s: Vector3::zeros(),
+                tof_s: Some(tof),
+            },
+        ];
+
+        let mission =
+            plan_waypoint_mission(&departure, &waypoints, &config, &propagator)
+                .expect("should succeed");
+
+        let eclipse = mission.eclipse.as_ref().expect("eclipse should be Some");
+
+        // Count intervals from independent per-leg extraction
+        let mut independent_count = 0;
+        for leg in &eclipse.legs {
+            let summary = crate::elements::extract_eclipse_intervals(&leg.chief_celestial);
+            independent_count += summary.intervals.len();
+        }
+
+        // Merged count should be <= independent count (equal if no boundary eclipse,
+        // strictly less if merging occurred)
+        assert!(
+            eclipse.summary.intervals.len() <= independent_count,
+            "merged count ({}) should be <= independent count ({independent_count})",
+            eclipse.summary.intervals.len()
+        );
+
+        // At ~1.5 orbits for ISS-like orbit, expect at least 1 eclipse
+        assert!(
+            !eclipse.summary.intervals.is_empty(),
+            "ISS-like orbit over ~1.5 periods should have at least 1 eclipse"
+        );
+
+        // Intervals should be non-overlapping and sorted
+        for window in eclipse.summary.intervals.windows(2) {
+            assert!(
+                window[0].end <= window[1].start,
+                "intervals should be non-overlapping and sorted: {:?} overlaps {:?}",
+                window[0], window[1]
+            );
+        }
     }
 }

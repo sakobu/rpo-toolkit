@@ -372,6 +372,7 @@ mod tests {
             total_duration_s: 0.0,
             safety: None,
             covariance: None,
+            eclipse: None,
         };
         let mc_config = MonteCarloConfig {
             num_samples: 0,

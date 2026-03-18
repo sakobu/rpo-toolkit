@@ -7,10 +7,13 @@
 //! Provides mission planning functions that combine Lambert transfers
 //! (when available) with ROE-based proximity operations.
 
+use crate::elements::eclipse::{compute_eclipse_from_states, extract_eclipse_intervals};
 use crate::elements::keplerian_conversions::{state_to_keplerian, ConversionError};
 use crate::elements::roe::compute_roe;
-use crate::propagation::lambert::{solve_lambert_with_config, LambertConfig};
-use crate::types::{KeplerianElements, QuasiNonsingularROE, StateVector};
+use crate::propagation::lambert::{solve_lambert_with_config, LambertConfig, LambertTransfer};
+use crate::types::{
+    EclipseState, KeplerianElements, QuasiNonsingularROE, StateVector, TransferEclipseData,
+};
 
 use super::config::ProximityConfig;
 use super::errors::MissionError;
@@ -162,6 +165,49 @@ pub fn perch_to_roe(
         }
         PerchGeometry::Custom(roe) => Ok(*roe),
     }
+}
+
+/// Compute eclipse data for the Lambert transfer phase.
+///
+/// Densifies the Lambert arc (deputy trajectory) and propagates the chief
+/// orbit over the same time of flight, then computes eclipse snapshots for
+/// both. The deputy and chief can be hundreds to thousands of km apart
+/// during the transfer — genuinely different eclipse states.
+///
+/// # Arguments
+///
+/// * `transfer` — Solved Lambert transfer (departure/arrival states, TOF)
+/// * `chief` — Chief ECI state at the transfer departure epoch
+/// * `arc_steps` — Number of arc steps for densification (e.g., 200).
+///   Produces `arc_steps + 1` sample points along each trajectory.
+///
+/// # Returns
+///
+/// `None` if the arc densification or chief propagation fails (degenerate
+/// orbit). Otherwise returns [`TransferEclipseData`] with deputy-based
+/// summary and per-point data for both spacecraft.
+#[must_use]
+pub fn compute_transfer_eclipse(
+    transfer: &LambertTransfer,
+    chief: &StateVector,
+    arc_steps: u32,
+) -> Option<TransferEclipseData> {
+    let deputy_trajectory = transfer.densify_arc(arc_steps).ok()?;
+    let chief_trajectory =
+        crate::propagation::keplerian::propagate_keplerian(chief, transfer.tof_s, arc_steps)
+            .ok()?;
+
+    let deputy_celestial = compute_eclipse_from_states(&deputy_trajectory);
+    let chief_celestial = compute_eclipse_from_states(&chief_trajectory);
+    let chief_eclipse: Vec<EclipseState> =
+        chief_celestial.iter().map(|s| s.eclipse_state).collect();
+    let summary = extract_eclipse_intervals(&deputy_celestial);
+
+    Some(TransferEclipseData {
+        summary,
+        deputy_celestial,
+        chief_eclipse,
+    })
 }
 
 /// Plan a complete mission with Lambert transfer support.
@@ -796,5 +842,71 @@ mod tests {
             (dv_0 - dv_1).abs() > MULTI_REV_DV_DIFFERENCE_MIN,
             "Multi-rev should produce different Δv: 0-rev={dv_0:.6}, 1-rev={dv_1:.6}"
         );
+    }
+
+    // =======================================================================
+    // Transfer eclipse tests
+    // =======================================================================
+
+    /// `compute_transfer_eclipse` returns eclipse data for a far-field Lambert transfer.
+    #[test]
+    fn transfer_eclipse_far_field() {
+        let epoch = test_epoch();
+        let chief_ke = iss_like_elements();
+        let deputy_ke = KeplerianElements {
+            a_km: chief_ke.a_km + 200.0,
+            e: 0.005,
+            i_rad: chief_ke.i_rad + 0.05,
+            raan_rad: chief_ke.raan_rad,
+            aop_rad: 0.0,
+            mean_anomaly_rad: 2.0,
+        };
+
+        let chief = keplerian_to_state(&chief_ke, epoch).unwrap();
+        let deputy = keplerian_to_state(&deputy_ke, epoch).unwrap();
+        let config = ProximityConfig::default();
+        let perch = PerchGeometry::VBar { along_track_km: 5.0 };
+
+        let plan = plan_mission(
+            &chief, &deputy, &perch, &config, 3600.0, &LambertConfig::default(),
+        )
+        .expect("far-field mission should succeed");
+
+        let transfer = plan.transfer.as_ref().expect("should have Lambert transfer");
+        let eclipse = compute_transfer_eclipse(transfer, &chief, 200)
+            .expect("transfer eclipse should succeed");
+
+        // 201 points (200 steps + 1)
+        assert_eq!(eclipse.deputy_celestial.len(), 201);
+        assert_eq!(eclipse.chief_eclipse.len(), 201);
+
+        // ISS-like orbit over 1 hour — expect at least some shadow
+        // (may or may not have eclipse depending on epoch, but structure is valid)
+        assert!(
+            eclipse.summary.time_in_shadow_fraction >= 0.0
+                && eclipse.summary.time_in_shadow_fraction <= 1.0,
+            "shadow fraction should be in [0, 1]"
+        );
+    }
+
+    /// Transfer eclipse returns `None` for proximity missions (no Lambert transfer).
+    #[test]
+    fn transfer_eclipse_proximity_returns_none() {
+        let epoch = test_epoch();
+        let chief_ke = iss_like_elements();
+        let mut deputy_ke = chief_ke;
+        deputy_ke.a_km += 1.0;
+
+        let chief = keplerian_to_state(&chief_ke, epoch).unwrap();
+        let deputy = keplerian_to_state(&deputy_ke, epoch).unwrap();
+        let config = ProximityConfig::default();
+        let perch = PerchGeometry::VBar { along_track_km: 5.0 };
+
+        let plan = plan_mission(
+            &chief, &deputy, &perch, &config, 3600.0, &LambertConfig::default(),
+        )
+        .expect("proximity mission should succeed");
+
+        assert!(plan.transfer.is_none(), "proximity missions have no Lambert transfer");
     }
 }

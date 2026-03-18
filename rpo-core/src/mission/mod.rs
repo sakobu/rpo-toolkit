@@ -21,11 +21,13 @@ pub use crate::propagation::lambert::{
     LambertTransfer, TransferDirection,
 };
 pub use planning::{
-    classify_separation, dimensionless_separation, eci_separation_km, plan_mission,
+    classify_separation, compute_transfer_eclipse, dimensionless_separation, eci_separation_km,
+    plan_mission,
 };
 pub use safety::{analyze_safety, analyze_trajectory_safety, SafetyError};
 pub use targeting::{optimize_tof, solve_leg};
 pub use types::{
+    EclipseIntervalComparison, EclipseValidation, EclipseValidationPoint,
     Maneuver, ManeuverLeg, MissionPhase, MissionPlan, OperationalSafety, PassiveSafety,
     PerchGeometry, SafetyMetrics, ValidationPoint, ValidationReport, Waypoint, WaypointMission,
 };

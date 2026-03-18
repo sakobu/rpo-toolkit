@@ -11,10 +11,9 @@
 use nalgebra::Vector3;
 use serde::{Deserialize, Serialize};
 
-use anise::prelude::Orbit;
 use nyx_space::tools::lambert::{self, LambertInput, LambertSolution, TransferKind};
 
-use crate::constants::EARTH_J2000;
+use crate::propagation::nyx_bridge::state_to_orbit;
 use crate::types::StateVector;
 
 /// Minimum position separation (km) between departure and arrival for a valid Lambert problem.
@@ -194,20 +193,6 @@ fn direction_to_kind(direction: TransferDirection) -> TransferKind {
         TransferDirection::ShortWay => TransferKind::ShortWay,
         TransferDirection::LongWay => TransferKind::LongWay,
     }
-}
-
-/// Convert a [`StateVector`] to an anise [`Orbit`].
-fn state_to_orbit(sv: &StateVector) -> Orbit {
-    Orbit::new(
-        sv.position_eci_km.x,
-        sv.position_eci_km.y,
-        sv.position_eci_km.z,
-        sv.velocity_eci_km_s.x,
-        sv.velocity_eci_km_s.y,
-        sv.velocity_eci_km_s.z,
-        sv.epoch,
-        EARTH_J2000,
-    )
 }
 
 /// Build a [`LambertTransfer`] from a nyx [`LambertSolution`].

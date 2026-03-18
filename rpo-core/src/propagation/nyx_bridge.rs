@@ -8,9 +8,9 @@ use std::sync::Arc;
 
 use anise::almanac::planetary::PlanetaryDataError;
 use anise::constants::celestial_objects::{MOON, SUN};
-use anise::constants::frames::IAU_EARTH_FRAME;
+use anise::constants::frames::{IAU_EARTH_FRAME, SUN_J2000, EARTH_J2000 as ANISE_EARTH_J2000};
 use anise::errors::AlmanacError;
-use anise::prelude::{Almanac, MetaAlmanac, Orbit};
+use anise::prelude::{Almanac, Frame, MetaAlmanac, Orbit};
 use hifitime::Duration;
 use nalgebra::Vector3;
 use nyx_space::cosmic::Spacecraft;
@@ -58,6 +58,11 @@ pub enum NyxBridgeError {
     EmptyResult,
     /// ECI↔RIC frame conversion failed.
     DcmFailure(DcmError),
+    /// ANISE ephemeris translation query failed (e.g., Sun/Moon position).
+    EphemerisQuery {
+        /// The underlying ephemeris error.
+        source: Box<anise::ephemerides::EphemerisError>,
+    },
 }
 
 impl std::fmt::Display for NyxBridgeError {
@@ -84,6 +89,9 @@ impl std::fmt::Display for NyxBridgeError {
             Self::DcmFailure(e) => {
                 write!(f, "frame conversion failed: {e}")
             }
+            Self::EphemerisQuery { source } => {
+                write!(f, "ephemeris query failed: {source}")
+            }
         }
     }
 }
@@ -92,6 +100,7 @@ impl std::error::Error for NyxBridgeError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Self::AlmanacLoad { source } => Some(source.as_ref()),
+            Self::EphemerisQuery { source } => Some(source.as_ref()),
             Self::FrameLookup { source } => Some(source),
             Self::DynamicsSetup { source } => Some(source),
             Self::Propagation { source } => Some(source),
@@ -308,16 +317,7 @@ pub(crate) fn build_full_physics_dynamics(
 /// - Epoch from `StateVector.epoch` (hifitime `Epoch`)
 /// - Mass, areas, coefficients from `SpacecraftConfig`
 pub(crate) fn config_to_spacecraft(sv: &StateVector, config: &SpacecraftConfig) -> Spacecraft {
-    let orbit = Orbit::new(
-        sv.position_eci_km.x,
-        sv.position_eci_km.y,
-        sv.position_eci_km.z,
-        sv.velocity_eci_km_s.x,
-        sv.velocity_eci_km_s.y,
-        sv.velocity_eci_km_s.z,
-        sv.epoch,
-        EARTH_J2000,
-    );
+    let orbit = state_to_orbit(sv);
     Spacecraft::from_srp_defaults(orbit, config.dry_mass_kg, config.srp_area_m2)
         .with_drag(config.drag_area_m2, config.coeff_drag)
         .with_cr(config.coeff_reflectivity)
@@ -340,6 +340,69 @@ pub(crate) fn spacecraft_to_state(sc: &Spacecraft) -> StateVector {
             sc.orbit.velocity_km_s.z,
         ),
     }
+}
+
+/// Convert a [`StateVector`] to an ANISE [`Orbit`] for ephemeris queries.
+///
+/// Uses the project's `EARTH_J2000` frame (with μ = 398600.4418 km³/s²).
+/// Position in km, velocity in km/s, epoch from the state vector.
+pub(crate) fn state_to_orbit(sv: &StateVector) -> Orbit {
+    Orbit::new(
+        sv.position_eci_km.x,
+        sv.position_eci_km.y,
+        sv.position_eci_km.z,
+        sv.velocity_eci_km_s.x,
+        sv.velocity_eci_km_s.y,
+        sv.velocity_eci_km_s.z,
+        sv.epoch,
+        EARTH_J2000,
+    )
+}
+
+/// Query ANISE for the solar eclipse percentage and Sun position at a given epoch.
+///
+/// Uses `almanac.solar_eclipsing()` with Earth as the eclipsing body for eclipse
+/// percentage, and `almanac.translate(SUN_J2000, ...)` for the Sun position vector.
+///
+/// # Arguments
+///
+/// * `spacecraft_orbit` — Spacecraft as an ANISE `Orbit` in J2000
+/// * `earth_frame` — Earth frame with radius info (from `almanac.frame_info(...)`)
+/// * `almanac` — Full-physics ANISE almanac (from `load_full_almanac`)
+///
+/// # Returns
+///
+/// `(eclipse_percentage, sun_position_eci_km)` where `eclipse_percentage` is 0–100
+/// and `sun_position_eci_km` is the Sun's geocentric ECI J2000 position in km.
+///
+/// # Errors
+///
+/// Returns [`NyxBridgeError`] if the eclipse or ephemeris query fails.
+pub(crate) fn query_anise_eclipse(
+    spacecraft_orbit: Orbit,
+    earth_frame: Frame,
+    almanac: &Arc<Almanac>,
+) -> Result<(f64, Vector3<f64>), NyxBridgeError> {
+    // Eclipse percentage via ANISE conical shadow model
+    let occultation = almanac
+        .solar_eclipsing(earth_frame, spacecraft_orbit, None)
+        .map_err(|e| NyxBridgeError::AlmanacLoad {
+            source: Box::new(e),
+        })?;
+
+    // Sun position in ECI J2000 via DE440s ephemeris
+    let sun_state = almanac
+        .translate(SUN_J2000, ANISE_EARTH_J2000, spacecraft_orbit.epoch, None)
+        .map_err(|e| NyxBridgeError::EphemerisQuery {
+            source: Box::new(e),
+        })?;
+    let sun_eci = Vector3::new(
+        sun_state.radius_km.x,
+        sun_state.radius_km.y,
+        sun_state.radius_km.z,
+    );
+
+    Ok((occultation.percentage, sun_eci))
 }
 
 /// An ECI state vector at a specific elapsed time from propagation start.
@@ -574,6 +637,38 @@ mod tests {
             "velocity roundtrip error = {vel_err} km/s"
         );
         assert_eq!(recovered.epoch, sv.epoch, "epoch should be preserved");
+    }
+
+    /// Verify that `state_to_orbit` preserves position, velocity, and epoch.
+    #[test]
+    fn state_to_orbit_preserves_state() {
+        let epoch = test_epoch();
+        let chief_ke = iss_like_elements();
+        let sv = keplerian_to_state(&chief_ke, epoch).unwrap();
+        let orbit = state_to_orbit(&sv);
+
+        let pos_err = (Vector3::new(
+            orbit.radius_km.x,
+            orbit.radius_km.y,
+            orbit.radius_km.z,
+        ) - sv.position_eci_km)
+            .norm();
+        let vel_err = (Vector3::new(
+            orbit.velocity_km_s.x,
+            orbit.velocity_km_s.y,
+            orbit.velocity_km_s.z,
+        ) - sv.velocity_eci_km_s)
+            .norm();
+
+        assert!(
+            pos_err < SPACECRAFT_ROUNDTRIP_TOL,
+            "position error = {pos_err}"
+        );
+        assert!(
+            vel_err < SPACECRAFT_ROUNDTRIP_TOL,
+            "velocity error = {vel_err}"
+        );
+        assert_eq!(orbit.epoch, sv.epoch, "epoch should be preserved");
     }
 
     /// `load_default_almanac` returns a valid almanac without panicking.

@@ -68,6 +68,10 @@ impl QuasiNonsingularROE {
 mod tests {
     use super::*;
 
+    /// Dimensionless norm computation tolerance. The norm is a max of
+    /// absolute values — exact arithmetic; 1e-15 covers f64 rounding.
+    const NORM_TOL: f64 = 1e-15;
+
     // ---------------------------------------------------------------------------
     // QuasiNonsingularROE::dimensionless_norm
     // ---------------------------------------------------------------------------
@@ -88,7 +92,7 @@ mod tests {
         // Expected: max(0.001, 0.002, 0.003, 0.004) = 0.004
         let expected = 0.004_f64;
         assert!(
-            (norm - expected).abs() < 1e-15,
+            (norm - expected).abs() < NORM_TOL,
             "dimensionless_norm: expected {expected}, got {norm}"
         );
     }
@@ -113,7 +117,7 @@ mod tests {
         };
         let norm = roe.dimensionless_norm();
         assert!(
-            (norm - 0.01).abs() < 1e-15,
+            (norm - 0.01).abs() < NORM_TOL,
             "dimensionless_norm da-dominated: expected 0.01, got {norm}"
         );
     }
@@ -131,7 +135,7 @@ mod tests {
         };
         let norm = roe.dimensionless_norm();
         assert!(
-            (norm - 0.1).abs() < 1e-15,
+            (norm - 0.1).abs() < NORM_TOL,
             "dimensionless_norm dex-dominated: expected 0.1, got {norm}"
         );
     }
@@ -150,7 +154,7 @@ mod tests {
         let norm = roe.dimensionless_norm();
         // max(0.005, 0.002, 0.003, 0.001) = 0.005
         assert!(
-            (norm - 0.005).abs() < 1e-15,
+            (norm - 0.005).abs() < NORM_TOL,
             "dimensionless_norm negative: expected 0.005, got {norm}"
         );
     }

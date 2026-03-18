@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 use crate::propagation::lambert::LambertTransfer;
 use crate::propagation::propagator::PropagatedState;
 use crate::propagation::covariance::types::MissionCovarianceReport;
-use crate::types::{KeplerianElements, QuasiNonsingularROE, RICState, SpacecraftConfig};
+use crate::types::{KeplerianElements, MissionEclipseData, QuasiNonsingularROE, RICState, SpacecraftConfig};
 
 
 /// Result of analyzing the separation between two spacecraft.
@@ -150,6 +150,10 @@ pub struct WaypointMission {
     /// Covariance propagation results (if computed via `propagate_mission_covariance`)
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub covariance: Option<MissionCovarianceReport>,
+    /// Eclipse data across all legs. `None` if a degenerate orbit prevents
+    /// ECI reconstruction, or if deserialized from JSON without eclipse data.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub eclipse: Option<MissionEclipseData>,
 }
 
 /// Operational safety metrics — instantaneous geometric distance measures.
@@ -269,4 +273,74 @@ pub struct ValidationReport {
     pub chief_config: SpacecraftConfig,
     /// Deputy spacecraft configuration used
     pub deputy_config: SpacecraftConfig,
+    /// Eclipse validation (analytical Meeus vs ANISE ephemeris).
+    /// Present when the mission includes eclipse data.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub eclipse_validation: Option<EclipseValidation>,
+}
+
+/// Per-sample eclipse comparison (analytical vs ANISE).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EclipseValidationPoint {
+    /// Time since mission start (seconds).
+    pub elapsed_s: f64,
+    /// Analytical eclipse percentage (0.0 = sunlit, 100.0 = umbra).
+    pub analytical_eclipse_pct: f64,
+    /// ANISE eclipse percentage (0.0 = sunlit, 100.0 = umbra).
+    pub numerical_eclipse_pct: f64,
+    /// Absolute difference in eclipse percentage.
+    pub eclipse_pct_error: f64,
+    /// Angular error between analytical (Meeus) and ANISE Sun directions (rad).
+    pub sun_direction_error_rad: f64,
+}
+
+/// Comparison of a single eclipse interval (analytical vs ANISE).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EclipseIntervalComparison {
+    /// Analytical interval start epoch.
+    #[serde(with = "crate::types::state::epoch_serde")]
+    pub analytical_start: Epoch,
+    /// ANISE interval start epoch.
+    #[serde(with = "crate::types::state::epoch_serde")]
+    pub numerical_start: Epoch,
+    /// Entry timing error (seconds). Positive = analytical enters shadow later.
+    pub entry_error_s: f64,
+    /// Analytical interval end epoch.
+    #[serde(with = "crate::types::state::epoch_serde")]
+    pub analytical_end: Epoch,
+    /// ANISE interval end epoch.
+    #[serde(with = "crate::types::state::epoch_serde")]
+    pub numerical_end: Epoch,
+    /// Exit timing error (seconds). Positive = analytical exits shadow later.
+    pub exit_error_s: f64,
+    /// Duration error (seconds).
+    pub duration_error_s: f64,
+}
+
+/// Aggregate eclipse validation results.
+///
+/// Produced by `validate_mission_nyx()` when the mission includes
+/// Phase 6 eclipse data (`WaypointMission.eclipse`).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EclipseValidation {
+    /// Per-sample eclipse comparison points.
+    pub points: Vec<EclipseValidationPoint>,
+    /// Per-interval timing comparison (matched analytical vs ANISE intervals).
+    pub interval_comparisons: Vec<EclipseIntervalComparison>,
+    /// Maximum Sun direction angular error across all points (rad).
+    pub max_sun_direction_error_rad: f64,
+    /// Mean Sun direction angular error (rad).
+    pub mean_sun_direction_error_rad: f64,
+    /// Maximum eclipse entry/exit timing error (seconds).
+    pub max_timing_error_s: f64,
+    /// Mean absolute eclipse entry/exit timing error (seconds).
+    pub mean_timing_error_s: f64,
+    /// Number of analytical intervals.
+    pub analytical_interval_count: usize,
+    /// Number of ANISE intervals.
+    pub numerical_interval_count: usize,
+    /// Number of matched interval pairs.
+    pub matched_interval_count: usize,
+    /// Number of unmatched intervals (present in one but not the other).
+    pub unmatched_interval_count: usize,
 }

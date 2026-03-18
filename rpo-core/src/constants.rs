@@ -96,3 +96,26 @@ pub const MIN_SPACECRAFT_MASS_KG: f64 = 0.1;
 /// a mission or trajectory duration. 1e-6 s = 1 µs, well above f64
 /// rounding error for orbital-period-scale times (~5500 s).
 pub const ELAPSED_TIME_TOL_S: f64 = 1e-6;
+
+// --- Eclipse & celestial body constants ---
+
+/// Astronomical Unit in kilometers (IAU 2012 exact definition).
+pub const AU_KM: f64 = 149_597_870.700;
+
+/// Mean solar radius in kilometers.
+pub const SUN_RADIUS_KM: f64 = 696_000.0;
+
+/// Mean obliquity of the ecliptic at J2000.0 (Meeus Eq. 22.2), in radians.
+/// 23 deg 26' 21.448" = 23.4392911 deg = 0.409092804 rad
+pub const OBLIQUITY_J2000_RAD: f64 = 0.409_092_804_22;
+
+/// Julian Date of J2000.0 epoch (2000-01-01T12:00:00 TT).
+pub const JD_J2000: f64 = 2_451_545.0;
+
+/// Days per Julian century.
+pub const DAYS_PER_JULIAN_CENTURY: f64 = 36_525.0;
+
+/// Eclipse percentage difference below which two samples agree on
+/// illumination state. Handles penumbra boundary: <1% difference is
+/// effectively the same illumination state.
+pub const ECLIPSE_PERCENTAGE_AGREEMENT_TOL: f64 = 1.0;

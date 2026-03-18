@@ -188,6 +188,11 @@ pub const DMF_RATE_NONZERO_LOWER_BOUND: f64 = 1e-16;
 /// exceeds any LEO scenario; values above indicate extraction errors.
 pub const DMF_RATE_UPPER_BOUND: f64 = 1e-6;
 
+/// Minimum sin(i) for `deputy_from_roe` δiy inversion.
+/// sin(0.001°) ≈ 1.7e-5; 1e-10 catches truly equatorial cases
+/// while allowing near-equatorial chief orbits.
+const NEAR_EQUATORIAL_SIN_I_THRESHOLD: f64 = 1e-10;
+
 /// Construct deputy Keplerian elements from chief + ROE by inverting the QNS ROE formulas.
 ///
 /// Inverts Koenig Eq. 2 to recover deputy elements from chief elements and ROE.
@@ -201,7 +206,7 @@ pub fn deputy_from_roe(chief: &KeplerianElements, roe: &QuasiNonsingularROE) -> 
     let i_d = chief.i_rad + roe.dix;
 
     assert!(
-        chief.i_rad.sin().abs() > 1e-10,
+        chief.i_rad.sin().abs() > NEAR_EQUATORIAL_SIN_I_THRESHOLD,
         "deputy_from_roe: chief inclination too close to zero for δiy inversion"
     );
     let d_raan = roe.diy / chief.i_rad.sin();
