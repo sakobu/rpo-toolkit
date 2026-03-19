@@ -199,7 +199,7 @@ The analytical engine (Phases 1-7) is complete. What's next:
 
 1. **API server** -- axum HTTP/WebSocket backend exposing the full mission planning pipeline. All types are already serde-serializable; the API layer is plumbing, not math.
 2. **R3F frontend** -- React Three Fiber 3D visualization: orbit arcs, RIC-frame relative motion, maneuver arrows, eclipse timeline, covariance uncertainty ellipses.
-3. **Extended orbit regimes** -- GEO/HEO validation, finite burns, multi-revolution Lambert.
+3. **Extended orbit regimes** -- GEO/HEO validation, finite burns.
 
 ## Testing
 
