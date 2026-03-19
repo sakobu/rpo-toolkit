@@ -117,26 +117,26 @@ flowchart TD
     F --> G["Monte Carlo\nensemble analysis\n(minutes)"]
 ```
 
-| Step | Function | Engine | Speed |
-|------|----------|--------|-------|
-| Classify separation | `classify_separation()` | Analytical | microseconds |
-| Lambert transfer | `solve_lambert()` | nyx-space | ~100 ms |
-| Waypoint targeting | `plan_waypoint_mission()` | Analytical | microseconds |
-| Safety analysis | `assess_safety()` | Analytical | microseconds |
-| Covariance + Mahalanobis | `propagate_mission_covariance()` | Analytical | microseconds |
-| Eclipse computation | inside `plan_waypoint_mission()` | Analytical | ~10 ms (full mission) |
-| Full-physics validation | `validate_mission_nyx()` | nyx-space | seconds |
-| Monte Carlo ensemble | `run_monte_carlo()` | nyx-space + rayon | minutes |
+| Step                     | Function                         | Engine            | Speed                 |
+| ------------------------ | -------------------------------- | ----------------- | --------------------- |
+| Classify separation      | `classify_separation()`          | Analytical        | microseconds          |
+| Lambert transfer         | `solve_lambert()`                | nyx-space         | ~100 ms               |
+| Waypoint targeting       | `plan_waypoint_mission()`        | Analytical        | microseconds          |
+| Safety analysis          | `assess_safety()`                | Analytical        | microseconds          |
+| Covariance + Mahalanobis | `propagate_mission_covariance()` | Analytical        | microseconds          |
+| Eclipse computation      | inside `plan_waypoint_mission()` | Analytical        | ~10 ms (full mission) |
+| Full-physics validation  | `validate_mission_nyx()`         | nyx-space         | seconds               |
+| Monte Carlo ensemble     | `run_monte_carlo()`              | nyx-space + rayon | minutes               |
 
 ### Speed Tiers
 
-| Engine | Speed | Use Case |
-|--------|-------|----------|
-| J2 STM | microseconds | Default interactive preview |
-| J2+Drag STM | microseconds | When chief/deputy have different ballistic coefficients |
-| Linear covariance (P = Phi P Phi^T) | microseconds | Live uncertainty overlay |
-| nyx full-physics | seconds | Single-run validation |
-| Full-physics MC | minutes to hours | Final ensemble validation (configurable N) |
+| Engine                              | Speed            | Use Case                                                |
+| ----------------------------------- | ---------------- | ------------------------------------------------------- |
+| J2 STM                              | microseconds     | Default interactive preview                             |
+| J2+Drag STM                         | microseconds     | When chief/deputy have different ballistic coefficients |
+| Linear covariance (P = Phi P Phi^T) | microseconds     | Live uncertainty overlay                                |
+| nyx full-physics                    | seconds          | Single-run validation                                   |
+| Full-physics MC                     | minutes to hours | Final ensemble validation (configurable N)              |
 
 ## Architecture
 
@@ -151,12 +151,12 @@ rpo-cli/src/
   main.rs       CLI convenience tool: mission, validate, mc subcommands
 ```
 
-| | Analytical Engine (rpo-core) | Numerical Engine (nyx-space) |
-|---|---|---|
-| **Speed** | Microseconds | Seconds to minutes |
-| **Perturbations** | J2 + differential drag (DMF) | Full: gravity field, drag, SRP, 3rd-body |
-| **Use cases** | Formation design, targeting, covariance, interactive UI | Lambert transfers, validation, Monte Carlo |
-| **Valid regime** | ROE-linear (delta-r/r < 0.5%) | Any separation |
+|                   | Analytical Engine (rpo-core)                            | Numerical Engine (nyx-space)               |
+| ----------------- | ------------------------------------------------------- | ------------------------------------------ |
+| **Speed**         | Microseconds                                            | Seconds to minutes                         |
+| **Perturbations** | J2 + differential drag (DMF)                            | Full: gravity field, drag, SRP, 3rd-body   |
+| **Use cases**     | Formation design, targeting, covariance, interactive UI | Lambert transfers, validation, Monte Carlo |
+| **Valid regime**  | ROE-linear (delta-r/r < 0.5%)                           | Any separation                             |
 
 Both engines produce serde-serializable output. The analytical engine powers interactive mission design; the numerical engine provides truth-model validation.
 
@@ -164,19 +164,19 @@ Both engines produce serde-serializable output. The analytical engine powers int
 
 Validated against nyx-space full-physics propagation (US Std Atm 1976, SRP with eclipses, Sun/Moon third-body) for ISS-class orbits (~400 km, ~97 deg), ~300 m-scale formations.
 
-| Scenario | Validated Within | Notes |
-|----------|-----------------|-------|
-| J2 STM, single leg (~1 orbit) | 500 m | Unmodeled perturbations ~50 m total |
-| J2 STM, multi-leg (~2-3 orbits) | 3 km | Includes cross-leg maneuver mismatch |
-| J2+Drag STM (~1 orbit) | 1 km | DMF fit error + unmodeled SRP/3rd-body |
-| Eclipse: Sun direction | 0.02 deg | Meeus Ch. 25 vs ANISE DE440s |
-| Eclipse: entry/exit timing | 120 s | Shadow boundary interpolation |
+| Scenario                        | Validated Within | Notes                                  |
+| ------------------------------- | ---------------- | -------------------------------------- |
+| J2 STM, single leg (~1 orbit)   | 500 m            | Unmodeled perturbations ~50 m total    |
+| J2 STM, multi-leg (~2-3 orbits) | 3 km             | Includes cross-leg maneuver mismatch   |
+| J2+Drag STM (~1 orbit)          | 1 km             | DMF fit error + unmodeled SRP/3rd-body |
+| Eclipse: Sun direction          | 0.02 deg         | Meeus Ch. 25 vs ANISE DE440s           |
+| Eclipse: entry/exit timing      | 120 s            | Shadow boundary interpolation          |
 
 Reproduce with: `cargo run -p rpo-cli -- validate --input examples/validate.json`
 
 ## Reference Papers
 
-- **Koenig, Guffanti, D'Amico** -- "New State Transition Matrices for Spacecraft Relative Motion in Perturbed Orbits", *Journal of Guidance, Control, and Dynamics*, 2017. Source for J2 STM (Eq. A6), J2+drag 9x9 STM (Sec. VIII), QNS ROE definitions, perturbation parameters (Eqs. 13-16).
+- **Koenig, Guffanti, D'Amico** -- "New State Transition Matrices for Spacecraft Relative Motion in Perturbed Orbits", _Journal of Guidance, Control, and Dynamics_, 2017. Source for J2 STM (Eq. A6), J2+drag 9x9 STM (Sec. VIII), QNS ROE definitions, perturbation parameters (Eqs. 13-16).
 - **D'Amico** -- "Autonomous Formation Flying in Low Earth Orbit", PhD thesis, TU Delft, 2010. Source for QNS ROE definition (Eq. 2.2), ROE-to-RIC mapping (Eq. 2.17), e/i vector separation for passive safety (Eq. 2.22).
 
 Every module in the codebase traces to specific equations in these papers.
@@ -185,11 +185,11 @@ Every module in the codebase traces to specific equations in these papers.
 
 The CLI is a convenience tool for sanity-checking analytical results. The primary interface will be the API server (see Roadmap).
 
-| Command | Purpose | Example |
-|---------|---------|---------|
-| `mission` | Analytical planning | `cargo run -p rpo-cli -- mission --input examples/mission.json --json` |
+| Command    | Purpose                       | Example                                                                       |
+| ---------- | ----------------------------- | ----------------------------------------------------------------------------- |
+| `mission`  | Analytical planning           | `cargo run -p rpo-cli -- mission --input examples/mission.json --json`        |
 | `validate` | + nyx full-physics validation | `cargo run -p rpo-cli -- validate --input examples/validate.json --auto-drag` |
-| `mc` | + Monte Carlo ensemble | `cargo run -p rpo-cli -- mc --input examples/mc.json --auto-drag` |
+| `mc`       | + Monte Carlo ensemble        | `cargo run -p rpo-cli -- mc --input examples/mc.json --auto-drag`             |
 
 All subcommands accept `--json` for machine-readable output. The `validate` and `mc` subcommands require spacecraft configs (`chief_config`, `deputy_config`) in the input JSON. See `examples/` for complete input file examples.
 
