@@ -23,8 +23,9 @@ use execution::{collect_ensemble_statistics, run_single_sample};
 use statistics::compute_covariance_cross_check;
 pub use types::{
     CovarianceCrossCheck, DispersionConfig, DispersionEnvelope, Distribution,
-    EnsembleStatistics, ManeuverDispersion, MonteCarloConfig, MonteCarloInput, MonteCarloMode,
-    MonteCarloReport, PercentileStats, SampleResult, SpacecraftDispersion, StateDispersion,
+    EnsembleStatistics, ManeuverDispersion, MonteCarloConfig, MonteCarloControl, MonteCarloInput,
+    MonteCarloMode, MonteCarloReport, PercentileStats, SampleResult, SpacecraftDispersion,
+    StateDispersion,
 };
 
 /// Default master seed when `MonteCarloConfig.seed` is `None`.
@@ -83,6 +84,8 @@ pub enum MonteCarloError {
     },
     /// ECI↔RIC frame conversion failed.
     DcmFailure(DcmError),
+    /// Operation was cancelled by the caller.
+    Cancelled,
 }
 
 impl fmt::Display for MonteCarloError {
@@ -118,6 +121,7 @@ impl fmt::Display for MonteCarloError {
                 write!(f, "trajectory count {count} exceeds u32 range")
             }
             Self::DcmFailure(e) => write!(f, "frame conversion failed: {e}"),
+            Self::Cancelled => write!(f, "Monte Carlo cancelled by caller"),
         }
     }
 }
@@ -190,11 +194,31 @@ pub fn run_monte_carlo(input: &MonteCarloInput<'_>) -> Result<MonteCarloReport, 
     let start = Instant::now();
     let master_seed = config.seed.unwrap_or(DEFAULT_MC_SEED);
 
-    // Run samples in parallel
+    // Run samples in parallel with optional cancel/progress
     let results: Vec<Result<execution::SampleOutput, MonteCarloError>> = (0..config.num_samples)
         .into_par_iter()
-        .map(|i| run_single_sample(input, i, master_seed))
+        .map(|i| {
+            // Check cancel before expensive nyx work
+            if let Some(ctrl) = input.control
+                && ctrl.cancel.load(std::sync::atomic::Ordering::Relaxed)
+            {
+                return Err(MonteCarloError::Cancelled);
+            }
+            let result = run_single_sample(input, i, master_seed);
+            // Report progress after completion
+            if let Some(ctrl) = input.control {
+                ctrl.progress.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            }
+            result
+        })
         .collect();
+
+    // Post-collection cancel check: if cancel was set mid-run, return Cancelled
+    if let Some(ctrl) = input.control
+        && ctrl.cancel.load(std::sync::atomic::Ordering::Relaxed)
+    {
+        return Err(MonteCarloError::Cancelled);
+    }
 
     // Separate successes from failures
     let mut samples = Vec::new();
@@ -396,6 +420,7 @@ mod tests {
             propagator: &propagator,
             almanac: &almanac,
             covariance_report: None,
+            control: None,
         };
 
         match run_monte_carlo(&input) {
@@ -425,6 +450,7 @@ mod tests {
             propagator: &propagator,
             almanac: &almanac,
             covariance_report: None,
+            control: None,
         };
 
         let report = run_monte_carlo(&input).expect("single sample should succeed");
@@ -454,6 +480,7 @@ mod tests {
             propagator: &propagator,
             almanac: &almanac,
             covariance_report: None,
+            control: None,
         };
 
         let report = run_monte_carlo(&input).expect("10 samples should succeed");
@@ -489,6 +516,7 @@ mod tests {
             propagator: &prop1,
             almanac: &alm1,
             covariance_report: None,
+            control: None,
         };
         let report1 = run_monte_carlo(&input1).expect("run 1 should succeed");
 
@@ -506,6 +534,7 @@ mod tests {
             propagator: &prop2,
             almanac: &alm2,
             covariance_report: None,
+            control: None,
         };
         let report2 = run_monte_carlo(&input2).expect("run 2 should succeed");
 
@@ -536,6 +565,7 @@ mod tests {
             propagator: &propagator,
             almanac: &almanac,
             covariance_report: None,
+            control: None,
         };
 
         let report = run_monte_carlo(&input).expect("MC should succeed");
@@ -568,6 +598,7 @@ mod tests {
             propagator: &propagator,
             almanac: &almanac,
             covariance_report: None,
+            control: None,
         };
 
         let report = run_monte_carlo(&input).expect("MC should succeed");
@@ -630,6 +661,7 @@ mod tests {
             propagator: &propagator,
             almanac: &almanac,
             covariance_report: None,
+            control: None,
         };
 
         let report = run_monte_carlo(&input).expect("MC should succeed");
@@ -656,6 +688,7 @@ mod tests {
             propagator: &propagator,
             almanac: &almanac,
             covariance_report: None,
+            control: None,
         };
 
         let report = run_monte_carlo(&input).expect("closed-loop MC should succeed");
@@ -698,6 +731,7 @@ mod tests {
             propagator: &propagator,
             almanac: &almanac,
             covariance_report: Some(&cov_report),
+            control: None,
         };
 
         let report = run_monte_carlo(&input).expect("MC with covariance should succeed");

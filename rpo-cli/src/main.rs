@@ -579,6 +579,7 @@ fn run_mc(input_path: &PathBuf, json_output: bool, auto_drag: bool) -> Result<()
         propagator: &planned.propagator,
         almanac: &almanac,
         covariance_report: covariance_report.as_ref(),
+        control: None,
     };
 
     let report =
