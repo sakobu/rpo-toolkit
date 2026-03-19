@@ -23,8 +23,8 @@ use crate::propagation::propagator::PropagatedState;
 use crate::types::{EclipseInterval, EclipseState, EclipseSummary, RICState, SpacecraftConfig, StateVector};
 
 use super::types::{
-    EclipseIntervalComparison, EclipseValidation, EclipseValidationPoint, ValidationPoint,
-    ValidationReport, WaypointMission,
+    EclipseIntervalComparison, EclipseValidation, EclipseValidationPoint, ManeuverLeg,
+    ValidationPoint, ValidationReport, WaypointMission,
 };
 
 /// Errors from nyx high-fidelity validation.
@@ -366,11 +366,20 @@ struct EclipseSample {
     chief_eci_km: Vector3<f64>,
 }
 
+/// Output from comparing nyx-propagated states against analytical trajectory for one leg.
+struct LegComparisonOutput {
+    /// Per-sample validation comparison points.
+    points: Vec<ValidationPoint>,
+    /// Chief/deputy ECI snapshot pairs for safety analysis.
+    safety_pairs: Vec<ChiefDeputySnapshot>,
+    /// Eclipse samples for validation (empty if eclipse validation disabled).
+    eclipse_samples: Vec<EclipseSample>,
+}
+
 /// Build comparison points for a single leg of the mission.
 ///
 /// Compares nyx-propagated chief/deputy states against analytical trajectory,
 /// collects safety pairs and eclipse samples for downstream analysis.
-#[allow(clippy::too_many_arguments)]
 fn build_leg_comparison_points(
     chief_results: &[TimedState],
     deputy_results: &[TimedState],
@@ -378,12 +387,13 @@ fn build_leg_comparison_points(
     cumulative_time: f64,
     earth_frame: Option<anise::prelude::Frame>,
     almanac: &Arc<Almanac>,
-    safety_pairs: &mut Vec<ChiefDeputySnapshot>,
-    eclipse_samples: &mut Vec<EclipseSample>,
-) -> Result<Vec<ValidationPoint>, ValidationError> {
+) -> Result<LegComparisonOutput, ValidationError> {
     let mut points = Vec::with_capacity(chief_results.len());
-    for (chief_sample, deputy_sample) in
-        chief_results.iter().zip(deputy_results.iter())
+    let mut safety_pairs = Vec::with_capacity(chief_results.len());
+    let mut eclipse_samples = Vec::new();
+
+    for (idx, (chief_sample, deputy_sample)) in
+        chief_results.iter().zip(deputy_results.iter()).enumerate()
     {
         let numerical_ric = eci_to_ric_relative(&chief_sample.state, &deputy_sample.state)?;
         let elapsed = cumulative_time + chief_sample.elapsed_s;
@@ -393,15 +403,16 @@ fn build_leg_comparison_points(
         let vel_err =
             (numerical_ric.velocity_ric_km_s - analytical_ric.velocity_ric_km_s).norm();
 
-        // Include t=0 in safety pairs so that numerical safety analysis covers
-        // the same time domain as the analytical trajectory. At t=0, both models
-        // share the initial condition; any difference is the ROE→RIC vs ECI→RIC
-        // frame mapping residual.
-        safety_pairs.push(ChiefDeputySnapshot {
-            elapsed_s: elapsed,
-            chief: chief_sample.state.clone(),
-            deputy: deputy_sample.state.clone(),
-        });
+        // Skip t=0 sample from safety: at the maneuver instant, positions
+        // haven't separated yet — distance is physically meaningless
+        // (consistent with monte_carlo/execution.rs).
+        if idx > 0 {
+            safety_pairs.push(ChiefDeputySnapshot {
+                elapsed_s: elapsed,
+                chief: chief_sample.state.clone(),
+                deputy: deputy_sample.state.clone(),
+            });
+        }
         points.push(ValidationPoint {
             elapsed_s: elapsed,
             analytical_ric,
@@ -424,7 +435,11 @@ fn build_leg_comparison_points(
             }
         }
     }
-    Ok(points)
+    Ok(LegComparisonOutput {
+        points,
+        safety_pairs,
+        eclipse_samples,
+    })
 }
 
 /// Build eclipse validation from collected ANISE samples and analytical eclipse data.
@@ -526,6 +541,56 @@ fn build_eclipse_validation(
     })
 }
 
+/// Propagate chief and deputy through a single leg in parallel via rayon.
+///
+/// Applies the leg's departure impulse to the deputy, then propagates both
+/// vehicles through nyx full-physics dynamics concurrently using [`rayon::join`].
+///
+/// # Invariants
+/// - `chief_state` and `deputy_state` must represent valid orbits.
+/// - `almanac` must contain required frames and force models.
+///
+/// # Errors
+/// - [`ValidationError`] if impulse application, dynamics setup, or propagation fails.
+fn propagate_leg_parallel(
+    chief_state: &StateVector,
+    deputy_state: &StateVector,
+    leg: &ManeuverLeg,
+    samples_per_leg: u32,
+    chief_config: &SpacecraftConfig,
+    deputy_config: &SpacecraftConfig,
+    almanac: &Arc<Almanac>,
+) -> Result<(Vec<TimedState>, Vec<TimedState>), ValidationError> {
+    // Build dynamics once; clone is cheap (Arc ref-count bumps).
+    let dynamics = build_full_physics_dynamics(almanac)?;
+
+    let (chief_result, deputy_result) = rayon::join(
+        || -> Result<Vec<TimedState>, ValidationError> {
+            Ok(nyx_propagate_segment(
+                chief_state,
+                leg.tof_s,
+                samples_per_leg,
+                chief_config,
+                dynamics.clone(),
+                almanac,
+            )?)
+        },
+        || -> Result<Vec<TimedState>, ValidationError> {
+            let deputy_post_burn =
+                apply_impulse(deputy_state, chief_state, &leg.departure_maneuver.dv_ric_km_s)?;
+            Ok(nyx_propagate_segment(
+                &deputy_post_burn,
+                leg.tof_s,
+                samples_per_leg,
+                deputy_config,
+                dynamics.clone(),
+                almanac,
+            )?)
+        },
+    );
+    Ok((chief_result?, deputy_result?))
+}
+
 /// Validate a waypoint mission against nyx full-physics propagation.
 ///
 /// Propagates chief and deputy through each mission leg using nyx with full
@@ -598,46 +663,28 @@ pub fn validate_mission_nyx(
     };
 
     for leg in &mission.legs {
-        let tof = leg.tof_s;
-
-        // Propagate chief for this leg
-        let chief_dynamics = build_full_physics_dynamics(almanac)?;
-        let chief_results = nyx_propagate_segment(
+        let (chief_results, deputy_results) = propagate_leg_parallel(
             &chief_state,
-            tof,
+            &deputy_state,
+            leg,
             samples_per_leg,
             chief_config,
-            chief_dynamics,
-            almanac,
-        )?;
-
-        // Apply departure Δv to deputy
-        let deputy_post_burn =
-            apply_impulse(&deputy_state, &chief_state, &leg.departure_maneuver.dv_ric_km_s)?;
-
-        // Propagate deputy for this leg
-        let deputy_dynamics = build_full_physics_dynamics(almanac)?;
-        let deputy_results = nyx_propagate_segment(
-            &deputy_post_burn,
-            tof,
-            samples_per_leg,
             deputy_config,
-            deputy_dynamics,
             almanac,
         )?;
 
         // Build comparison points for this leg
-        let points = build_leg_comparison_points(
+        let leg_output = build_leg_comparison_points(
             &chief_results,
             &deputy_results,
             &leg.trajectory,
             cumulative_time,
             earth_frame,
             almanac,
-            &mut safety_pairs,
-            &mut eclipse_samples,
         )?;
-        leg_points.push(points);
+        safety_pairs.extend(leg_output.safety_pairs);
+        eclipse_samples.extend(leg_output.eclipse_samples);
+        leg_points.push(leg_output.points);
 
         // Advance states for next leg
         chief_state = chief_results
@@ -652,7 +699,7 @@ pub fn validate_mission_nyx(
             .clone();
         deputy_state =
             apply_impulse(&deputy_coast_end, &chief_state, &leg.arrival_maneuver.dv_ric_km_s)?;
-        cumulative_time += tof;
+        cumulative_time += leg.tof_s;
     }
 
     // Compute safety from nyx trajectory

@@ -232,17 +232,17 @@ pub fn extract_dmf_rates(
     let period = chief_ke_0.period()?;
     let duration = 2.0 * period;
 
-    // Build dynamics and propagate both spacecraft
-    let chief_dynamics = build_full_physics_dynamics(almanac)?;
-    let chief_results = nyx_propagate_segment(
-        chief_initial, duration, 0, chief_config, chief_dynamics, almanac,
-    )?;
-    let chief_final = &chief_results.last().ok_or(NyxBridgeError::EmptyResult)?.state;
+    // Build dynamics once; clone is cheap (Arc ref-count bumps).
+    let dynamics = build_full_physics_dynamics(almanac)?;
 
-    let deputy_dynamics = build_full_physics_dynamics(almanac)?;
-    let deputy_results = nyx_propagate_segment(
-        deputy_initial, duration, 0, deputy_config, deputy_dynamics, almanac,
-    )?;
+    // Propagate chief and deputy in parallel (independent full-physics propagations)
+    let (chief_result, deputy_result) = rayon::join(
+        || nyx_propagate_segment(chief_initial, duration, 0, chief_config, dynamics.clone(), almanac),
+        || nyx_propagate_segment(deputy_initial, duration, 0, deputy_config, dynamics.clone(), almanac),
+    );
+    let chief_results = chief_result?;
+    let deputy_results = deputy_result?;
+    let chief_final = &chief_results.last().ok_or(NyxBridgeError::EmptyResult)?.state;
     let deputy_final = &deputy_results.last().ok_or(NyxBridgeError::EmptyResult)?.state;
 
     // Compute final ROE

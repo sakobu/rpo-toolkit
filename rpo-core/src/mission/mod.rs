@@ -16,10 +16,6 @@ mod regression_tests;
 
 pub use config::{MissionConfig, ProximityConfig, SafetyConfig, TargetingConfig, TofOptConfig};
 pub use errors::{EclipseComputeError, MissionError};
-pub use crate::propagation::lambert::{
-    solve_lambert, solve_lambert_izzo, solve_lambert_with_config, LambertConfig, LambertError,
-    LambertTransfer, TransferDirection,
-};
 pub use planning::{
     classify_separation, compute_transfer_eclipse, dimensionless_separation, eci_separation_km,
     plan_mission,
@@ -33,9 +29,6 @@ pub use types::{
     EclipseIntervalComparison, EclipseValidation, EclipseValidationPoint,
     Maneuver, ManeuverLeg, MissionPhase, MissionPlan, OperationalSafety, PassiveSafety,
     PerchGeometry, SafetyMetrics, ValidationPoint, ValidationReport, Waypoint, WaypointMission,
-};
-pub use crate::propagation::nyx_bridge::{
-    extract_dmf_rates, load_default_almanac, load_full_almanac, NyxBridgeError,
 };
 pub use validation::{validate_mission_nyx, ValidationError};
 pub use covariance::propagate_mission_covariance;

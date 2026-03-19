@@ -1,14 +1,41 @@
-//! Core astrodynamics library for RPO mission planning.
+//! # rpo-core -- Analytical RPO Mission Planning
 //!
-//! Provides Keplerian element conversions, quasi-nonsingular ROE computation
-//! (D'Amico / Koenig formulation), J2-perturbed propagation via the Koenig STM,
-//! J2+drag propagation via the DMF STM (Koenig Sec. VIII),
-//! linearized ROE-to-RIC frame mapping, Lambert transfers, and mission planning.
+//! Astrodynamics library for rendezvous and proximity operations (RPO) in
+//! low Earth orbit.  Implements quasi-nonsingular relative orbital elements
+//! (D'Amico / Koenig formulation), J2-perturbed propagation via closed-form
+//! STMs, impulsive maneuver targeting, passive safety analysis, and
+//! multi-waypoint mission planning.
 //!
-//! ## Module groups
-//! - `elements` — coordinate conversions, ROE computation, frame mapping
-//! - `propagation` — J2 params, STMs, propagation model, covariance
-//! - `mission` — classification, Lambert transfers, validation
+//! ## Quick start
+//!
+//! ```rust,no_run
+//! use rpo_core::prelude::*;
+//! ```
+//!
+//! The [`prelude`] re-exports the essentials for a typical mission planning
+//! workflow: state types, mission configuration, and the primary planning
+//! functions.
+//!
+//! ## Modules
+//!
+//! | Module | Purpose |
+//! |--------|---------|
+//! | [`types`] | Domain vocabulary: state vectors, Keplerian elements, ROEs, eclipse types |
+//! | [`elements`] | Static geometry: ECI/Keplerian/ROE/RIC conversions, frame transforms, eclipse |
+//! | [`propagation`] | Trajectory computation: J2 and J2+drag STMs, Lambert solver, covariance, nyx bridge |
+//! | [`mission`] | Mission orchestration: planning, targeting, safety, validation, Monte Carlo |
+//! | [`constants`] | Physical constants and named tolerances |
+//!
+//! ## Entry points
+//!
+//! Most workflows start with one of these functions:
+//!
+//! - [`mission::plan_waypoint_mission`] — multi-waypoint proximity operations
+//! - [`mission::plan_mission`] — classify + Lambert transfer for far-field
+//! - [`mission::classify_separation`] — proximity vs. far-field classification
+//! - [`mission::validate_mission_nyx`] — nyx full-physics validation
+//! - [`mission::run_monte_carlo`] — full-physics Monte Carlo ensemble
+//! - [`propagation::solve_lambert`] — Lambert transfer solver
 
 #![warn(missing_docs)]
 #![warn(clippy::pedantic)]
@@ -16,49 +43,9 @@
 pub mod constants;
 pub mod elements;
 pub mod mission;
+pub mod prelude;
 pub mod propagation;
 pub mod types;
-
-pub use elements::{
-    apply_maneuver, compute_b_matrix, compute_celestial_snapshots, compute_eclipse_from_states,
-    compute_eclipse_state, compute_roe, compute_t_matrix, compute_t_position, compute_t_velocity,
-    eci_to_ric_dcm, eci_to_ric_dv, eci_to_ric_relative, extract_eclipse_intervals,
-    keplerian_to_state, moon_position_eci_km, ric_position_to_roe, ric_to_eci_dv,
-    ric_to_eci_position, ric_to_eci_state, roe_to_ric, state_to_keplerian, sun_position_eci_km,
-    wrap_angle, ConversionError, DcmError, RicError,
-};
-pub use mission::{
-    analyze_safety, analyze_trajectory_safety, assess_safety, classify_separation,
-    compute_transfer_eclipse,
-    dimensionless_separation, eci_separation_km, extract_dmf_rates,
-    get_mission_state_at_time, load_default_almanac, load_full_almanac, optimize_tof,
-    plan_mission, plan_waypoint_mission, propagate_mission_covariance, replan_from_waypoint,
-    resample_leg_trajectory, run_monte_carlo, solve_lambert, solve_lambert_izzo,
-    solve_lambert_with_config, solve_leg, validate_mission_nyx, LambertConfig, LambertError,
-    LambertTransfer, MonteCarloError, RcContext, SafetyAssessment, SafetyError,
-    TransferDirection, ValidationError,
-    EclipseComputeError, MissionConfig, MissionError, NyxBridgeError, ProximityConfig, SafetyConfig,
-    TargetingConfig, TofOptConfig,
-    EclipseIntervalComparison, EclipseValidation, EclipseValidationPoint,
-    Maneuver, ManeuverLeg, MissionPhase, MissionPlan, OperationalSafety, PassiveSafety,
-    PerchGeometry, SafetyMetrics, ValidationPoint, ValidationReport, Waypoint, WaypointMission,
-    CovarianceCrossCheck, DispersionConfig, DispersionEnvelope, Distribution,
-    EnsembleStatistics, ManeuverDispersion, MonteCarloConfig, MonteCarloInput, MonteCarloMode,
-    MonteCarloReport, PercentileStats, SampleResult, SpacecraftDispersion, StateDispersion,
-};
-pub use propagation::{
-    compute_j2_drag_stm, compute_j2_params, compute_stm, compute_stm_with_params,
-    propagate_keplerian, ric_accuracy_to_roe_covariance,
-    propagate_roe_j2_drag, propagate_roe_stm,
-    CovarianceError, CovarianceState, LegCovarianceReport, ManeuverUncertainty,
-    MissionCovarianceReport, NavigationAccuracy,
-    DragConfig, J2Params, PropagatedState, PropagationError, PropagationModel,
-};
-pub use types::{
-    CelestialSnapshot, DepartureState, EclipseInterval, EclipseState, EclipseSummary,
-    KeplerError, KeplerianElements, LegEclipseData, Matrix6, Matrix9, MissionEclipseData,
-    QuasiNonsingularROE, RICState, SpacecraftConfig, StateVector, TransferEclipseData,
-};
 
 #[cfg(test)]
 mod test_helpers;

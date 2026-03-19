@@ -1,6 +1,7 @@
 //! Per-sample execution and ensemble statistics collection.
 
 use nalgebra::Vector3;
+use rand::Rng;
 use rand::SeedableRng;
 use rand_chacha::ChaCha20Rng;
 
@@ -24,6 +25,7 @@ use super::sampling::{disperse_maneuver, sample_distribution};
 use super::statistics::{compute_dispersion_envelope, compute_percentile_stats};
 use super::types::{
     EnsembleStatistics, MonteCarloConfig, MonteCarloInput, MonteCarloMode, SampleResult,
+    SpacecraftDispersion, StateDispersion,
 };
 use super::MonteCarloError;
 
@@ -33,6 +35,227 @@ pub(crate) struct SampleOutput {
     pub(crate) result: SampleResult,
     /// Full trajectory for dispersion envelope computation.
     pub(crate) trajectory: Vec<PropagatedState>,
+}
+
+/// Accumulated results from propagating all mission legs with dispersed maneuvers.
+struct LegPropagationResult {
+    /// Total Δv magnitude across all maneuvers (km/s).
+    total_dv_km_s: f64,
+    /// Per-waypoint RIC miss distance (km).
+    waypoint_miss_km: Vec<f64>,
+    /// Chief/deputy snapshot pairs for safety analysis.
+    safety_pairs: Vec<ChiefDeputySnapshot>,
+}
+
+/// Disperse the deputy initial state in RIC and validate the result.
+///
+/// Samples position and velocity deltas from the configured state dispersion,
+/// converts RIC deltas to ECI via DCM transpose, and validates that the
+/// resulting orbit is bound (`a > 0`, `0 <= e < 1`).
+///
+/// # Invariants
+/// - `initial_chief` must have a non-degenerate position vector (for DCM).
+///
+/// # Errors
+/// - [`MonteCarloError::NegativeSma`] / [`MonteCarloError::InvalidEccentricity`]
+///   if the dispersed state is not a bound orbit.
+/// - Sampling errors from [`sample_distribution`].
+/// - [`DcmError`] via [`MonteCarloError`] if DCM computation fails.
+fn disperse_deputy_state<R: Rng>(
+    initial_chief: &StateVector,
+    initial_deputy: &StateVector,
+    state_disp: Option<&StateDispersion>,
+    sample_index: u32,
+    rng: &mut R,
+) -> Result<StateVector, MonteCarloError> {
+    let dispersed = if let Some(disp) = state_disp {
+        let pos_ric_delta = Vector3::new(
+            sample_distribution(&disp.position_radial_km, rng)?,
+            sample_distribution(&disp.position_intrack_km, rng)?,
+            sample_distribution(&disp.position_crosstrack_km, rng)?,
+        );
+        let vel_ric_delta = Vector3::new(
+            sample_distribution(&disp.velocity_radial_km_s, rng)?,
+            sample_distribution(&disp.velocity_intrack_km_s, rng)?,
+            sample_distribution(&disp.velocity_crosstrack_km_s, rng)?,
+        );
+
+        // RIC → ECI via DCM transpose
+        let dcm = eci_to_ric_dcm(initial_chief)?;
+        let dcm_transpose = dcm.transpose();
+
+        StateVector {
+            epoch: initial_deputy.epoch,
+            position_eci_km: initial_deputy.position_eci_km + dcm_transpose * pos_ric_delta,
+            velocity_eci_km_s: initial_deputy.velocity_eci_km_s + dcm_transpose * vel_ric_delta,
+        }
+    } else {
+        initial_deputy.clone()
+    };
+
+    // Validity check: ensure dispersed state is a bound orbit
+    let ke = state_to_keplerian(&dispersed).map_err(|_| MonteCarloError::NegativeSma {
+        sample_index,
+        a_km: 0.0,
+    })?;
+    if ke.a_km <= 0.0 {
+        return Err(MonteCarloError::NegativeSma {
+            sample_index,
+            a_km: ke.a_km,
+        });
+    }
+    if ke.e >= 1.0 {
+        return Err(MonteCarloError::InvalidEccentricity {
+            sample_index,
+            e: ke.e,
+        });
+    }
+
+    Ok(dispersed)
+}
+
+/// Optionally disperse spacecraft configuration properties.
+///
+/// Samples additive deltas for drag coefficient, drag area, and dry mass
+/// from the configured spacecraft dispersion. Clamps area to non-negative
+/// and mass to [`MIN_SPACECRAFT_MASS_KG`].
+///
+/// Returns the nominal config unchanged if no spacecraft dispersion is configured.
+///
+/// # Errors
+/// Sampling errors from [`sample_distribution`].
+fn disperse_spacecraft<R: Rng>(
+    nominal: &SpacecraftConfig,
+    sc_disp: Option<&SpacecraftDispersion>,
+    rng: &mut R,
+) -> Result<SpacecraftConfig, MonteCarloError> {
+    if let Some(disp) = sc_disp {
+        Ok(SpacecraftConfig {
+            coeff_drag: nominal.coeff_drag + sample_distribution(&disp.coeff_drag, rng)?,
+            drag_area_m2: (nominal.drag_area_m2 + sample_distribution(&disp.drag_area_m2, rng)?)
+                .max(0.0),
+            dry_mass_kg: (nominal.dry_mass_kg + sample_distribution(&disp.dry_mass_kg, rng)?)
+                .max(MIN_SPACECRAFT_MASS_KG),
+            ..*nominal
+        })
+    } else {
+        Ok(*nominal)
+    }
+}
+
+/// Propagate chief and deputy through all mission legs with dispersed maneuvers.
+///
+/// For each leg: applies dispersed departure Δv, propagates both vehicles through
+/// nyx full-physics dynamics, collects chief/deputy snapshots for safety analysis
+/// (skipping t=0), applies dispersed arrival Δv, and computes waypoint miss distance.
+///
+/// # Invariants
+/// - `active_mission.legs` must be non-empty (caller responsibility).
+/// - `input.almanac` must contain required frames and force models.
+///
+/// # Errors
+/// - Maneuver dispersion errors from [`disperse_maneuver`].
+/// - Nyx propagation or impulse application errors.
+/// - [`MonteCarloError::EmptyEnsemble`] if a trajectory segment is empty.
+fn propagate_dispersed_legs<R: Rng>(
+    input: &MonteCarloInput<'_>,
+    dispersed_deputy: StateVector,
+    active_mission: &WaypointMission,
+    sample_deputy_config: &SpacecraftConfig,
+    rng: &mut R,
+) -> Result<LegPropagationResult, MonteCarloError> {
+    let maneuver_disp = input.config.dispersions.maneuver.as_ref();
+    let traj_steps = input.config.trajectory_steps.max(1);
+
+    let mut chief_state = input.initial_chief.clone();
+    let mut deputy_state = dispersed_deputy;
+    let mut total_dv = 0.0_f64;
+    let mut waypoint_miss_km = Vec::with_capacity(active_mission.legs.len());
+    let mut elapsed_total_s = 0.0_f64;
+    // u32 → usize: always widening on 32-bit and 64-bit platforms.
+    let mut safety_pairs: Vec<ChiefDeputySnapshot> =
+        Vec::with_capacity(traj_steps as usize * active_mission.legs.len());
+
+    // Build dynamics once; clone per propagation call.
+    // SpacecraftDynamics derives Clone (lightweight Arc ref-count bumps)
+    // vs full construction (frame lookups, harmonics, drag/SRP setup).
+    let dynamics_template = build_full_physics_dynamics(input.almanac)?;
+
+    for leg in &active_mission.legs {
+        // Apply dispersed departure Δv
+        let dep_dv = if let Some(disp) = maneuver_disp {
+            disperse_maneuver(&leg.departure_maneuver.dv_ric_km_s, disp, rng)?
+        } else {
+            leg.departure_maneuver.dv_ric_km_s
+        };
+        deputy_state = apply_impulse(&deputy_state, &chief_state, &dep_dv)?;
+        total_dv += dep_dv.norm();
+
+        // Propagate chief + deputy through this leg
+        let chief_traj = nyx_propagate_segment(
+            &chief_state,
+            leg.tof_s,
+            traj_steps,
+            input.chief_config,
+            dynamics_template.clone(),
+            input.almanac,
+        )?;
+        let deputy_traj = nyx_propagate_segment(
+            &deputy_state,
+            leg.tof_s,
+            traj_steps,
+            sample_deputy_config,
+            dynamics_template.clone(),
+            input.almanac,
+        )?;
+
+        // Extract final states before consuming trajectories into safety pairs.
+        chief_state = chief_traj
+            .last()
+            .map(|ts| ts.state.clone())
+            .ok_or(MonteCarloError::EmptyEnsemble)?;
+        deputy_state = deputy_traj
+            .last()
+            .map(|ts| ts.state.clone())
+            .ok_or(MonteCarloError::EmptyEnsemble)?;
+
+        // Skip t=0 sample from each leg's safety analysis: at the maneuver
+        // instant, positions haven't separated yet — distance is physically
+        // meaningless (consistent with validation.rs build_leg_comparison_points).
+        for (idx, (c_entry, d_entry)) in
+            chief_traj.into_iter().zip(deputy_traj).enumerate()
+        {
+            if idx > 0 {
+                safety_pairs.push(ChiefDeputySnapshot {
+                    elapsed_s: elapsed_total_s + c_entry.elapsed_s,
+                    chief: c_entry.state,
+                    deputy: d_entry.state,
+                });
+            }
+        }
+
+        // Apply dispersed arrival Δv
+        let arr_dv = if let Some(disp) = maneuver_disp {
+            disperse_maneuver(&leg.arrival_maneuver.dv_ric_km_s, disp, rng)?
+        } else {
+            leg.arrival_maneuver.dv_ric_km_s
+        };
+        deputy_state = apply_impulse(&deputy_state, &chief_state, &arr_dv)?;
+        total_dv += arr_dv.norm();
+
+        // Compute miss distance at waypoint arrival
+        let ric_rel = eci_to_ric_relative(&chief_state, &deputy_state)?;
+        let miss = (ric_rel.position_ric_km - leg.to_position_ric_km).norm();
+        waypoint_miss_km.push(miss);
+
+        elapsed_total_s += leg.tof_s;
+    }
+
+    Ok(LegPropagationResult {
+        total_dv_km_s: total_dv,
+        waypoint_miss_km,
+        safety_pairs,
+    })
 }
 
 /// Execute a single Monte Carlo sample.
@@ -54,206 +277,73 @@ pub(crate) struct SampleOutput {
 ///   if dispersion parameters are invalid.
 /// - [`MonteCarloError::EmptyEnsemble`] if a nyx trajectory segment is empty.
 /// - Propagation or nyx bridge errors from bridge functions.
-#[allow(clippy::similar_names, clippy::too_many_lines)]
+#[allow(clippy::similar_names)]
 pub(crate) fn run_single_sample(
     input: &MonteCarloInput<'_>,
     index: u32,
     master_seed: u64,
 ) -> Result<SampleOutput, MonteCarloError> {
     let config = input.config;
-    let initial_chief = input.initial_chief;
-    let initial_deputy = input.initial_deputy;
-    let nominal_mission = input.nominal_mission;
-    let deputy_config = input.deputy_config;
-    let chief_config = input.chief_config;
-    let almanac = input.almanac;
-
     let mut rng = ChaCha20Rng::seed_from_u64(master_seed.wrapping_add(u64::from(index)));
 
-    // Disperse deputy initial state in RIC, convert to ECI
-    let dispersed_deputy = if let Some(ref state_disp) = config.dispersions.state {
-        let pos_ric_delta = Vector3::new(
-            sample_distribution(&state_disp.position_radial_km, &mut rng)?,
-            sample_distribution(&state_disp.position_intrack_km, &mut rng)?,
-            sample_distribution(&state_disp.position_crosstrack_km, &mut rng)?,
-        );
-        let vel_ric_delta = Vector3::new(
-            sample_distribution(&state_disp.velocity_radial_km_s, &mut rng)?,
-            sample_distribution(&state_disp.velocity_intrack_km_s, &mut rng)?,
-            sample_distribution(&state_disp.velocity_crosstrack_km_s, &mut rng)?,
-        );
+    // Phase 1: Disperse deputy initial state + validate bound orbit
+    let dispersed_deputy = disperse_deputy_state(
+        input.initial_chief,
+        input.initial_deputy,
+        config.dispersions.state.as_ref(),
+        index,
+        &mut rng,
+    )?;
 
-        // RIC → ECI via DCM transpose
-        let dcm = eci_to_ric_dcm(initial_chief)?;
-        let dcm_transpose = dcm.transpose();
-        let pos_eci_delta = dcm_transpose * pos_ric_delta;
-        let vel_eci_delta = dcm_transpose * vel_ric_delta;
+    // Phase 2: Optionally disperse spacecraft properties
+    let sample_deputy_config = disperse_spacecraft(
+        input.deputy_config,
+        config.dispersions.spacecraft.as_ref(),
+        &mut rng,
+    )?;
 
-        StateVector {
-            epoch: initial_deputy.epoch,
-            position_eci_km: initial_deputy.position_eci_km + pos_eci_delta,
-            velocity_eci_km_s: initial_deputy.velocity_eci_km_s + vel_eci_delta,
-        }
-    } else {
-        initial_deputy.clone()
-    };
-
-    // Validity check: ensure dispersed state is a bound orbit
-    let ke = state_to_keplerian(&dispersed_deputy)
-        .map_err(|_| MonteCarloError::NegativeSma {
-            sample_index: index,
-            a_km: 0.0,
-        })?;
-    if ke.a_km <= 0.0 {
-        return Err(MonteCarloError::NegativeSma {
-            sample_index: index,
-            a_km: ke.a_km,
-        });
-    }
-    if ke.e >= 1.0 {
-        return Err(MonteCarloError::InvalidEccentricity {
-            sample_index: index,
-            e: ke.e,
-        });
-    }
-
-    // Optionally disperse spacecraft properties
-    let sample_deputy_config = if let Some(ref sc_disp) = config.dispersions.spacecraft {
-        SpacecraftConfig {
-            coeff_drag: deputy_config.coeff_drag
-                + sample_distribution(&sc_disp.coeff_drag, &mut rng)?,
-            drag_area_m2: (deputy_config.drag_area_m2
-                + sample_distribution(&sc_disp.drag_area_m2, &mut rng)?)
-            .max(0.0),
-            dry_mass_kg: (deputy_config.dry_mass_kg
-                + sample_distribution(&sc_disp.dry_mass_kg, &mut rng)?)
-            .max(MIN_SPACECRAFT_MASS_KG),
-            ..*deputy_config
-        }
-    } else {
-        *deputy_config
-    };
-
-    // Determine which mission plan to use for propagation
+    // Phase 3: Determine mission plan (open-loop nominal vs closed-loop retargeted)
     let (mission_to_use, converged) = match config.mode {
         MonteCarloMode::OpenLoop => (None, true),
         MonteCarloMode::ClosedLoop => {
             match retarget_from_dispersed(
-                initial_chief,
+                input.initial_chief,
                 &dispersed_deputy,
-                nominal_mission,
+                input.nominal_mission,
                 input.mission_config,
                 input.propagator,
             ) {
                 Ok(retargeted) => (Some(retargeted), true),
-                Err(_) => (None, false), // fall back to nominal plan
+                Err(_) => (None, false),
             }
         }
     };
-    let active_mission = mission_to_use.as_ref().unwrap_or(nominal_mission);
+    let active_mission = mission_to_use.as_ref().unwrap_or(input.nominal_mission);
 
-    // Propagate through legs with maneuver execution errors
-    let mut chief_state = initial_chief.clone();
-    let mut deputy_state = dispersed_deputy;
-    let mut total_dv = 0.0_f64;
-    let mut waypoint_miss_km = Vec::with_capacity(active_mission.legs.len());
-    let mut elapsed_total_s = 0.0_f64;
+    // Phase 4: Propagate through legs with dispersed maneuvers
+    let prop_result = propagate_dispersed_legs(
+        input,
+        dispersed_deputy,
+        active_mission,
+        &sample_deputy_config,
+        &mut rng,
+    )?;
 
-    let maneuver_disp = config.dispersions.maneuver.as_ref();
-    let traj_steps = config.trajectory_steps.max(1);
-    // u32 → usize: always widening on 32-bit and 64-bit platforms.
-    let mut all_safety_pairs: Vec<ChiefDeputySnapshot> =
-        Vec::with_capacity(traj_steps as usize * active_mission.legs.len());
-
-    // Build dynamics once before the loop; clone per propagation call.
-    // SpacecraftDynamics derives Clone (lightweight Arc ref-count bumps)
-    // vs full construction (frame lookups, harmonics, drag/SRP setup).
-    let dynamics_template = build_full_physics_dynamics(almanac)?;
-
-    for leg in &active_mission.legs {
-        // Apply dispersed departure Δv
-        let dep_dv = if let Some(disp) = maneuver_disp {
-            disperse_maneuver(&leg.departure_maneuver.dv_ric_km_s, disp, &mut rng)?
-        } else {
-            leg.departure_maneuver.dv_ric_km_s
-        };
-        deputy_state = apply_impulse(&deputy_state, &chief_state, &dep_dv)?;
-        total_dv += dep_dv.norm();
-
-        // Propagate chief + deputy through this leg
-        let chief_traj = nyx_propagate_segment(
-            &chief_state,
-            leg.tof_s,
-            traj_steps,
-            chief_config,
-            dynamics_template.clone(),
-            almanac,
-        )?;
-
-        let deputy_traj = nyx_propagate_segment(
-            &deputy_state,
-            leg.tof_s,
-            traj_steps,
-            &sample_deputy_config,
-            dynamics_template.clone(),
-            almanac,
-        )?;
-
-        // Extract final states before consuming trajectories into safety pairs.
-        chief_state = chief_traj
-            .last()
-            .map(|ts| ts.state.clone())
-            .ok_or(MonteCarloError::EmptyEnsemble)?;
-        deputy_state = deputy_traj
-            .last()
-            .map(|ts| ts.state.clone())
-            .ok_or(MonteCarloError::EmptyEnsemble)?;
-
-        // Skip t=0 sample from each leg's safety analysis: at the maneuver
-        // instant, positions haven't separated yet — distance is physically
-        // meaningless (consistent with validation.rs:225).
-        for (idx, (c_entry, d_entry)) in chief_traj.into_iter().zip(deputy_traj.into_iter()).enumerate() {
-            if idx > 0 {
-                all_safety_pairs.push(ChiefDeputySnapshot {
-                    elapsed_s: elapsed_total_s + c_entry.elapsed_s,
-                    chief: c_entry.state,
-                    deputy: d_entry.state,
-                });
-            }
-        }
-
-        // Apply dispersed arrival Δv
-        let arr_dv = if let Some(disp) = maneuver_disp {
-            disperse_maneuver(&leg.arrival_maneuver.dv_ric_km_s, disp, &mut rng)?
-        } else {
-            leg.arrival_maneuver.dv_ric_km_s
-        };
-        deputy_state = apply_impulse(&deputy_state, &chief_state, &arr_dv)?;
-        total_dv += arr_dv.norm();
-
-        // Compute miss distance at waypoint arrival
-        let ric_rel = eci_to_ric_relative(&chief_state, &deputy_state)?;
-        let miss = (ric_rel.position_ric_km - leg.to_position_ric_km).norm();
-        waypoint_miss_km.push(miss);
-
-        elapsed_total_s += leg.tof_s;
-    }
-
-    // Build safety states and compute safety metrics.
+    // Phase 5: Safety analysis + result packaging
     // Note: nyx provides osculating ECI states, so ROE (and e/i separation)
     // are computed from osculating elements. The passive safety metric
     // (D'Amico Eq. 2.22) is orbit-averaged and designed for mean elements;
     // osculating input adds short-period noise but does not affect operational
     // safety metrics (3D distance, R/C distance).
-    let safety_states = build_nyx_safety_states(&all_safety_pairs)?;
+    let safety_states = build_nyx_safety_states(&prop_result.safety_pairs)?;
     let safety = analyze_trajectory_safety(&safety_states).ok();
 
     Ok(SampleOutput {
         result: SampleResult {
             index,
-            total_dv_km_s: total_dv,
+            total_dv_km_s: prop_result.total_dv_km_s,
             safety,
-            waypoint_miss_km,
+            waypoint_miss_km: prop_result.waypoint_miss_km,
             converged,
         },
         trajectory: safety_states,
