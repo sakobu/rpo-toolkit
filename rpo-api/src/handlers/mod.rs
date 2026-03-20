@@ -4,7 +4,6 @@
 //! Inline handlers (classify, plan, `move_waypoint`, `update_config`) return immediately.
 //! Background handlers (drag, validate, mc) are designed to be spawned on a blocking thread.
 
-mod common;
 pub mod classify;
 pub mod drag;
 pub mod mc;

@@ -152,6 +152,27 @@ impl From<ConversionError> for ApiError {
     }
 }
 
+impl From<rpo_core::pipeline::PipelineError> for ApiError {
+    fn from(e: rpo_core::pipeline::PipelineError) -> Self {
+        use rpo_core::pipeline::PipelineError;
+        match e {
+            PipelineError::Mission(e) => Self::Mission(Box::new(e)),
+            PipelineError::Propagation(e) => Self::Propagation(e),
+            PipelineError::Lambert(e) => Self::Lambert(e),
+            PipelineError::Validation(e) => Self::Validation(e),
+            PipelineError::MonteCarlo(e) => Self::MonteCarlo(e),
+            PipelineError::NyxBridge(e) => Self::NyxBridge(e),
+            PipelineError::Covariance(e) => Self::Covariance(e),
+            PipelineError::MissingField { field, context } => {
+                Self::InvalidInput(InvalidInputError::MissingField { field, context })
+            }
+            PipelineError::EmptyTrajectory => {
+                Self::InvalidInput(InvalidInputError::EmptyTrajectory)
+            }
+        }
+    }
+}
+
 impl ApiError {
     /// Convert to a `ServerMessage::Error` with per-variant diagnostic fields.
     #[must_use]

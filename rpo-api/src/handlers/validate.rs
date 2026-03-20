@@ -10,6 +10,10 @@ use anise::prelude::Almanac;
 use tokio::sync::mpsc;
 
 use rpo_core::mission::{validate_mission_nyx, ValidationReport};
+use rpo_core::pipeline::{
+    compute_transfer, plan_waypoints_from_transfer, resolve_propagator, to_propagation_model,
+};
+use rpo_core::propagation::extract_dmf_rates;
 
 use crate::error::ApiError;
 use crate::protocol::MissionDefinition;
@@ -26,11 +30,7 @@ pub struct ProgressUpdate {
 
 /// Run per-leg nyx validation with progress streaming and cancellation.
 ///
-/// Plans the mission first (same as `handle_plan`), then validates each leg
-/// against nyx full-physics. Sends progress updates between legs.
-///
-/// For simplicity, falls back to `validate_mission_nyx()` (which includes
-/// eclipse validation). The per-leg API exists for future fine-grained progress.
+/// Plans the mission first, then validates each leg against nyx full-physics.
 ///
 /// # Errors
 /// Returns [`ApiError`] if planning, propagation, or validation fails,
@@ -52,15 +52,36 @@ pub fn handle_validate(
     let chief_config = def.chief_config.unwrap_or_default();
     let deputy_config = def.deputy_config.unwrap_or_default();
 
-    let prepared = super::common::plan_and_prepare(
-        def, almanac, cancel, auto_drag, &chief_config, &deputy_config,
-    )?;
+    // Phase 1: Compute transfer
+    let transfer = compute_transfer(def)?;
 
     if cancel.load(Ordering::Relaxed) {
         return Err(ApiError::Cancelled);
     }
 
-    // Validate via nyx (full mission — includes eclipse)
+    // Phase 2: Resolve propagator
+    let auto_drag_config = if auto_drag {
+        Some(extract_dmf_rates(
+            &transfer.perch_chief,
+            &transfer.perch_deputy,
+            &chief_config,
+            &deputy_config,
+            almanac,
+        )?)
+    } else {
+        None
+    };
+    let (propagator, _derived_drag) =
+        resolve_propagator(auto_drag_config, to_propagation_model(&def.propagator));
+
+    // Phase 3: Plan waypoints
+    let wp_mission = plan_waypoints_from_transfer(&transfer, def, &propagator)?;
+
+    if cancel.load(Ordering::Relaxed) {
+        return Err(ApiError::Cancelled);
+    }
+
+    // Phase 4: Validate via nyx
     let _ = progress_tx.blocking_send(ProgressUpdate {
         phase: "validate".into(),
         detail: Some("Running nyx validation...".into()),
@@ -68,9 +89,9 @@ pub fn handle_validate(
     });
 
     let report = validate_mission_nyx(
-        &prepared.wp_mission,
-        &prepared.perch_chief,
-        &prepared.perch_deputy,
+        &wp_mission,
+        &transfer.perch_chief,
+        &transfer.perch_deputy,
         samples_per_leg,
         &chief_config,
         &deputy_config,

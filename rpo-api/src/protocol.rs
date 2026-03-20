@@ -1,91 +1,26 @@
 //! Wire protocol types for client ↔ server WebSocket communication.
 //!
 //! All messages are JSON with a `type` tag and a `request_id` (u64, client-assigned).
-//! The `MissionDefinition` is the central wire type sent by the client with every
-//! request — the server is stateless and recomputes from the full definition each time.
+//! The `MissionDefinition` is the canonical `PipelineInput` type from rpo-core.
 
 use serde::{Deserialize, Serialize};
 
 use rpo_core::mission::{
-    MissionConfig, MissionPhase, MonteCarloConfig, MonteCarloReport, ValidationReport,
-    WaypointMission,
+    MissionPhase, MonteCarloReport, ValidationReport,
 };
-use rpo_core::propagation::{
-    DragConfig, LambertConfig, LambertTransfer, ManeuverUncertainty, MissionCovarianceReport,
-    NavigationAccuracy,
-};
-use rpo_core::types::{SpacecraftConfig, StateVector, TransferEclipseData};
-
-use crate::convert::WaypointInput;
-
-// ---------------------------------------------------------------------------
-// MissionDefinition wire type
-// ---------------------------------------------------------------------------
+use rpo_core::propagation::DragConfig;
 
 /// Central wire type sent by the client with every request.
 ///
-/// Closely mirrors the CLI's `MissionInput`. The server is a stateless compute
-/// engine — the client sends the full mission definition with every message.
-#[derive(Debug, Deserialize)]
-pub struct MissionDefinition {
-    /// Chief spacecraft ECI state.
-    pub chief: StateVector,
-    /// Deputy spacecraft ECI state.
-    pub deputy: StateVector,
-    /// Perch geometry for Lambert → proximity handoff (default: V-bar 5 km).
-    #[serde(default)]
-    pub perch: Option<rpo_core::mission::PerchGeometry>,
-    /// Lambert transfer time-of-flight override (default: 3600 s).
-    #[serde(default)]
-    pub lambert_tof_s: Option<f64>,
-    /// Lambert solver configuration (revolutions, direction).
-    #[serde(default)]
-    pub lambert_config: Option<LambertConfig>,
-    /// Waypoint targets in RIC frame.
-    pub waypoints: Vec<WaypointInput>,
-    /// Classification threshold configuration.
-    #[serde(default)]
-    pub proximity: Option<rpo_core::mission::ProximityConfig>,
-    /// Solver configuration (targeting, TOF optimization, safety).
-    #[serde(default)]
-    pub config: MissionConfig,
-    /// Propagator selection: J2 or J2+Drag.
-    #[serde(default)]
-    pub propagator: PropagatorChoice,
-    /// Chief spacecraft physical properties (required for validate/mc/drag).
-    #[serde(default)]
-    pub chief_config: Option<SpacecraftConfig>,
-    /// Deputy spacecraft physical properties (required for validate/mc/drag).
-    #[serde(default)]
-    pub deputy_config: Option<SpacecraftConfig>,
-    /// Navigation accuracy for covariance propagation.
-    #[serde(default)]
-    pub navigation_accuracy: Option<NavigationAccuracy>,
-    /// Maneuver execution uncertainty for covariance propagation.
-    #[serde(default)]
-    pub maneuver_uncertainty: Option<ManeuverUncertainty>,
-    /// Monte Carlo configuration (required for `RunMC` only).
-    #[serde(default)]
-    pub monte_carlo: Option<MonteCarloConfig>,
-}
+/// Type alias to the canonical pipeline input type in rpo-core.
+/// The server is a stateless compute engine — the client sends the
+/// full mission definition with every message.
+pub type MissionDefinition = rpo_core::pipeline::PipelineInput;
 
-/// Propagator selection on the wire.
+/// Payload for `MissionResult` responses.
 ///
-/// Wire format (`serde` externally tagged, default):
-/// - `"j2"` → `PropagatorChoice::J2`
-/// - `{ "j2_drag": { "drag": { ... } } }` → `PropagatorChoice::J2Drag { drag }`
-#[derive(Debug, Deserialize, Default)]
-#[serde(rename_all = "snake_case")]
-pub enum PropagatorChoice {
-    /// J2-perturbed analytical propagation (no drag).
-    #[default]
-    J2,
-    /// J2 + differential drag analytical propagation.
-    J2Drag {
-        /// Differential drag rates.
-        drag: DragConfig,
-    },
-}
+/// Type alias to the canonical pipeline output type in rpo-core.
+pub type MissionResultPayload = rpo_core::pipeline::PipelineOutput;
 
 // ---------------------------------------------------------------------------
 // Client → Server messages
@@ -233,29 +168,6 @@ pub enum ServerMessage {
         #[serde(skip_serializing_if = "Option::is_none")]
         detail: Option<serde_json::Value>,
     },
-}
-
-/// Payload for `MissionResult` responses.
-#[derive(Debug, Serialize)]
-pub struct MissionResultPayload {
-    /// Classification result.
-    pub phase: MissionPhase,
-    /// Lambert transfer (None if proximity).
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub transfer: Option<LambertTransfer>,
-    /// Eclipse data along Lambert transfer arc.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub transfer_eclipse: Option<TransferEclipseData>,
-    /// Waypoint mission result.
-    pub mission: WaypointMission,
-    /// Combined Lambert + waypoint Δv.
-    pub total_dv_km_s: f64,
-    /// Auto-derived drag config (if auto-drag was used).
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub auto_drag_config: Option<DragConfig>,
-    /// Covariance propagation report.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub covariance: Option<MissionCovarianceReport>,
 }
 
 /// Machine-readable error codes for the frontend.

@@ -12,7 +12,6 @@ use crate::protocol::MissionDefinition;
 /// # Errors
 /// Returns [`ApiError`] if the underlying classification fails.
 pub fn handle_classify(def: &MissionDefinition) -> Result<MissionPhase, ApiError> {
-    let proximity = def.proximity.unwrap_or_default();
-    let phase = classify_separation(&def.chief, &def.deputy, &proximity)?;
+    let phase = classify_separation(&def.chief, &def.deputy, &def.proximity)?;
     Ok(phase)
 }

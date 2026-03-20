@@ -14,17 +14,16 @@ use rpo_core::mission::{
     propagate_mission_covariance, run_monte_carlo, MonteCarloControl, MonteCarloInput,
     MonteCarloReport,
 };
-use rpo_core::propagation::ric_accuracy_to_roe_covariance;
+use rpo_core::pipeline::{
+    compute_transfer, plan_waypoints_from_transfer, resolve_propagator, to_propagation_model,
+};
+use rpo_core::propagation::{extract_dmf_rates, ric_accuracy_to_roe_covariance};
 
 use crate::error::{require_field, ApiError};
 use crate::handlers::validate::ProgressUpdate;
 use crate::protocol::MissionDefinition;
 
 /// Run full-physics Monte Carlo with progress polling and cancellation.
-///
-/// Plans the mission first, optionally runs covariance propagation,
-/// then executes the MC ensemble. Progress is reported via `MonteCarloControl`
-/// atomic counters, polled by the WebSocket handler on a timer.
 ///
 /// # Errors
 /// Returns [`ApiError`] if required configs are missing, planning fails,
@@ -36,7 +35,6 @@ pub fn handle_mc(
     cancel: &Arc<AtomicBool>,
     auto_drag: bool,
 ) -> Result<MonteCarloReport, ApiError> {
-    // Validate required inputs (mc-specific: configs are NOT optional)
     let chief_config = require_field(def.chief_config, "chief_config", "Monte Carlo")?;
     let deputy_config = require_field(def.deputy_config, "deputy_config", "Monte Carlo")?;
     let mc_config = require_field(def.monte_carlo.as_ref(), "monte_carlo", "Monte Carlo")?;
@@ -47,9 +45,30 @@ pub fn handle_mc(
         fraction: Some(0.0),
     });
 
-    let prepared = super::common::plan_and_prepare(
-        def, almanac, cancel, auto_drag, &chief_config, &deputy_config,
-    )?;
+    // Phase 1: Compute transfer
+    let transfer = compute_transfer(def)?;
+
+    if cancel.load(Ordering::Relaxed) {
+        return Err(ApiError::Cancelled);
+    }
+
+    // Phase 2: Resolve propagator
+    let auto_drag_config = if auto_drag {
+        Some(extract_dmf_rates(
+            &transfer.perch_chief,
+            &transfer.perch_deputy,
+            &chief_config,
+            &deputy_config,
+            almanac,
+        )?)
+    } else {
+        None
+    };
+    let (propagator, _derived_drag) =
+        resolve_propagator(auto_drag_config, to_propagation_model(&def.propagator));
+
+    // Phase 3: Plan waypoints
+    let wp_mission = plan_waypoints_from_transfer(&transfer, def, &propagator)?;
 
     if cancel.load(Ordering::Relaxed) {
         return Err(ApiError::Cancelled);
@@ -57,13 +76,13 @@ pub fn handle_mc(
 
     // Optional covariance propagation
     let covariance_report = if let Some(ref nav) = def.navigation_accuracy {
-        let initial_p = ric_accuracy_to_roe_covariance(nav, &prepared.plan.chief_at_arrival)?;
+        let initial_p = ric_accuracy_to_roe_covariance(nav, &transfer.plan.chief_at_arrival)?;
         let report = propagate_mission_covariance(
-            &prepared.wp_mission,
+            &wp_mission,
             &initial_p,
             nav,
             def.maneuver_uncertainty.as_ref(),
-            &prepared.propagator,
+            &propagator,
             DEFAULT_COVARIANCE_SAMPLES_PER_LEG,
         )?;
         Some(report)
@@ -71,7 +90,7 @@ pub fn handle_mc(
         None
     };
 
-    // Run Monte Carlo with control hooks
+    // Run Monte Carlo
     let _ = progress_tx.blocking_send(ProgressUpdate {
         phase: "mc".into(),
         detail: Some(format!("Running {} MC samples...", mc_config.num_samples)),
@@ -84,14 +103,14 @@ pub fn handle_mc(
     };
 
     let mc_input = MonteCarloInput {
-        nominal_mission: &prepared.wp_mission,
-        initial_chief: &prepared.perch_chief,
-        initial_deputy: &prepared.perch_deputy,
+        nominal_mission: &wp_mission,
+        initial_chief: &transfer.perch_chief,
+        initial_deputy: &transfer.perch_deputy,
         config: mc_config,
         mission_config: &def.config,
         chief_config: &chief_config,
         deputy_config: &deputy_config,
-        propagator: &prepared.propagator,
+        propagator: &propagator,
         almanac,
         covariance_report: covariance_report.as_ref(),
         control: Some(&mc_control),
