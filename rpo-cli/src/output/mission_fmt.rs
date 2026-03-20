@@ -97,16 +97,8 @@ pub fn print_mission_human(
             chief_elements, ..
         } => chief_elements.a_km,
     };
-    if let Some(ref transfer) = output.transfer {
-        // For far-field, use the arrival chief elements
-        let _ = transfer; // transfer is used for the perch ROE context below
-    }
     println!();
-    // Extract perch ROE from the mission — use the first leg's pre_arrival_roe if available
-    // For the display, use chief_a from phase classification
-    if let Some(first_leg) = output.mission.legs.first() {
-        print_roe("Perch ROE", &first_leg.post_departure_roe, chief_a);
-    }
+    print_roe("Perch ROE", &output.perch_roe, chief_a);
 
     // Phase 2: Waypoint Targeting
     println!(

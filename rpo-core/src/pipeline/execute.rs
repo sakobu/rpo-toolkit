@@ -6,9 +6,13 @@
 use crate::constants::DEFAULT_COVARIANCE_SAMPLES_PER_LEG;
 use crate::mission::planning::{compute_transfer_eclipse, plan_mission};
 use crate::mission::waypoints::{plan_waypoint_mission, replan_from_waypoint};
-use crate::propagation::covariance::ric_accuracy_to_roe_covariance;
+use crate::propagation::covariance::{
+    ric_accuracy_to_roe_covariance, CovarianceError, ManeuverUncertainty,
+    MissionCovarianceReport, NavigationAccuracy,
+};
 use crate::propagation::keplerian::propagate_keplerian;
 use crate::propagation::propagator::PropagationModel;
+use crate::types::elements::KeplerianElements;
 use crate::types::{DepartureState, StateVector};
 
 use super::convert::{to_propagation_model, to_waypoints};
@@ -42,10 +46,10 @@ pub fn compute_transfer(input: &PipelineInput) -> Result<TransferResult, Pipelin
     )?;
 
     let lambert_dv_km_s = plan.transfer.as_ref().map_or(0.0, |t| t.total_dv_km_s);
-    let arrival_epoch =
-        input.chief.epoch + hifitime::Duration::from_seconds(input.lambert_tof_s);
 
-    let (perch_chief, perch_deputy) = if let Some(ref transfer) = plan.transfer {
+    let (perch_chief, perch_deputy, arrival_epoch) = if let Some(ref transfer) = plan.transfer {
+        let arrival_epoch =
+            input.chief.epoch + hifitime::Duration::from_seconds(input.lambert_tof_s);
         let chief_traj = propagate_keplerian(&input.chief, input.lambert_tof_s, 1)?;
         let chief_at_arrival = chief_traj
             .last()
@@ -59,9 +63,9 @@ pub fn compute_transfer(input: &PipelineInput) -> Result<TransferResult, Pipelin
                 + transfer.arrival_dv_eci_km_s,
         };
 
-        (chief_at_arrival, deputy_at_perch)
+        (chief_at_arrival, deputy_at_perch, arrival_epoch)
     } else {
-        (input.chief.clone(), input.deputy.clone())
+        (input.chief.clone(), input.deputy.clone(), input.chief.epoch)
     };
 
     Ok(TransferResult {
@@ -107,15 +111,12 @@ pub fn build_output(
     let total_duration_s = lambert_tof_s + wp_mission.total_duration_s;
 
     let covariance = input.navigation_accuracy.as_ref().and_then(|nav| {
-        let initial_p =
-            ric_accuracy_to_roe_covariance(nav, &transfer.plan.chief_at_arrival).ok()?;
-        crate::mission::covariance::propagate_mission_covariance(
+        compute_mission_covariance(
             &wp_mission,
-            &initial_p,
+            &transfer.plan.chief_at_arrival,
             nav,
             input.maneuver_uncertainty.as_ref(),
             propagator,
-            DEFAULT_COVARIANCE_SAMPLES_PER_LEG,
         )
         .ok()
     });
@@ -124,6 +125,7 @@ pub fn build_output(
         phase: transfer.plan.phase.clone(),
         transfer: transfer.plan.transfer.clone(),
         transfer_eclipse,
+        perch_roe: transfer.plan.perch_roe,
         mission: wp_mission,
         total_dv_km_s,
         total_duration_s,
@@ -131,6 +133,34 @@ pub fn build_output(
         covariance,
         monte_carlo: None,
     }
+}
+
+/// Compute mission covariance from navigation accuracy and a planned mission.
+///
+/// Composes [`ric_accuracy_to_roe_covariance`] and
+/// [`propagate_mission_covariance`](crate::mission::covariance::propagate_mission_covariance)
+/// into a single call. Callers decide error policy: fatal callers use `?`,
+/// non-fatal callers use `.ok()`.
+///
+/// # Errors
+///
+/// Returns [`CovarianceError`] if initial covariance conversion or propagation fails.
+pub fn compute_mission_covariance(
+    mission: &crate::mission::types::WaypointMission,
+    chief_at_arrival: &KeplerianElements,
+    navigation_accuracy: &NavigationAccuracy,
+    maneuver_uncertainty: Option<&ManeuverUncertainty>,
+    propagator: &PropagationModel,
+) -> Result<MissionCovarianceReport, CovarianceError> {
+    let initial_p = ric_accuracy_to_roe_covariance(navigation_accuracy, chief_at_arrival)?;
+    crate::mission::covariance::propagate_mission_covariance(
+        mission,
+        &initial_p,
+        navigation_accuracy,
+        maneuver_uncertainty,
+        propagator,
+        DEFAULT_COVARIANCE_SAMPLES_PER_LEG,
+    )
 }
 
 /// Build the [`DepartureState`] from a transfer result's perch ROE and chief elements.
@@ -181,10 +211,12 @@ pub fn execute_mission(input: &PipelineInput) -> Result<PipelineOutput, Pipeline
     Ok(build_output(&transfer, wp_mission, input, &propagator, None))
 }
 
-/// Incremental replan pipeline: classify → Lambert → full plan → replan from index.
+/// Incremental replan pipeline: classify → Lambert → replan from index.
 ///
-/// Plans the full waypoint mission first (needed as base for replan),
-/// then calls `replan_from_waypoint()` from the modified index.
+/// When `cached_mission` is provided, reuses the kept legs (`0..modified_index`)
+/// without re-solving them. When `None`, plans the full mission first as a
+/// fallback (prior behavior).
+///
 /// Used by the API's `MoveWaypoint` handler.
 ///
 /// # Errors
@@ -193,20 +225,24 @@ pub fn execute_mission(input: &PipelineInput) -> Result<PipelineOutput, Pipeline
 pub fn replan_mission(
     input: &PipelineInput,
     modified_index: usize,
+    cached_mission: Option<&crate::mission::types::WaypointMission>,
 ) -> Result<PipelineOutput, PipelineError> {
     let transfer = compute_transfer(input)?;
     let propagator = to_propagation_model(&input.propagator);
     let waypoints = to_waypoints(&input.waypoints);
-
     let departure = departure_from_transfer(&transfer);
 
-    // First plan the full mission to get the existing legs
-    let full_mission =
-        plan_waypoint_mission(&departure, &waypoints, &input.config, &propagator)?;
+    let owned_mission;
+    let base_mission = if let Some(m) = cached_mission {
+        m
+    } else {
+        owned_mission =
+            plan_waypoint_mission(&departure, &waypoints, &input.config, &propagator)?;
+        &owned_mission
+    };
 
-    // Then replan from the modified index
     let wp_mission = replan_from_waypoint(
-        &full_mission,
+        base_mission,
         modified_index,
         &waypoints,
         &departure,
@@ -298,7 +334,21 @@ mod tests {
     #[test]
     fn test_replan_mission() {
         let input = far_field_input();
-        let output = replan_mission(&input, 0).expect("replan_mission should succeed");
+        let output = replan_mission(&input, 0, None).expect("replan_mission should succeed");
+
+        assert!(!output.mission.legs.is_empty());
+        assert!(output.total_dv_km_s > 0.0);
+    }
+
+    #[test]
+    fn test_replan_mission_with_cache() {
+        let input = far_field_input();
+        // First run a full mission to get a cached result
+        let full_output = execute_mission(&input).expect("execute_mission should succeed");
+
+        // Replan from waypoint 1 using the cached mission
+        let output = replan_mission(&input, 1, Some(&full_output.mission))
+            .expect("replan_mission with cache should succeed");
 
         assert!(!output.mission.legs.is_empty());
         assert!(output.total_dv_km_s > 0.0);
@@ -306,6 +356,63 @@ mod tests {
 
     /// Tolerance for pure data-copy fidelity tests (no arithmetic, exact IEEE 754 roundtrip).
     const COPY_FIDELITY_TOL: f64 = f64::EPSILON;
+
+    /// Build a proximity-regime `PipelineInput` (deputy 1 km higher than chief).
+    fn proximity_input() -> PipelineInput {
+        use crate::elements::keplerian_conversions::keplerian_to_state;
+        use crate::test_helpers::iss_like_elements;
+        use hifitime::Epoch;
+
+        let epoch = Epoch::from_gregorian_str("2024-01-01T00:00:00 UTC").unwrap();
+        let chief_ke = iss_like_elements();
+        let mut deputy_ke = chief_ke;
+        deputy_ke.a_km += 1.0; // 1 km higher → Proximity regime
+        deputy_ke.mean_anomaly_rad += 0.01;
+
+        let chief = keplerian_to_state(&chief_ke, epoch).unwrap();
+        let deputy = keplerian_to_state(&deputy_ke, epoch).unwrap();
+
+        PipelineInput {
+            chief,
+            deputy,
+            perch: crate::pipeline::types::default_perch(),
+            lambert_tof_s: 3600.0,
+            lambert_config: LambertConfig::default(),
+            waypoints: vec![crate::pipeline::types::WaypointInput {
+                position_ric_km: [0.5, 2.0, 0.5],
+                velocity_ric_km_s: None,
+                tof_s: Some(4200.0),
+                label: Some("WP1".into()),
+            }],
+            proximity: ProximityConfig::default(),
+            config: crate::mission::config::MissionConfig::default(),
+            propagator: crate::pipeline::types::PropagatorChoice::J2,
+            chief_config: None,
+            deputy_config: None,
+            navigation_accuracy: None,
+            maneuver_uncertainty: None,
+            monte_carlo: None,
+        }
+    }
+
+    #[test]
+    fn test_compute_transfer_proximity_arrival_epoch() {
+        let input = proximity_input();
+        let result = compute_transfer(&input).expect("compute_transfer should succeed");
+
+        // Proximity scenario: no Lambert transfer
+        assert!(result.plan.transfer.is_none());
+        assert!(
+            result.lambert_dv_km_s.abs() < f64::EPSILON,
+            "proximity should have zero Lambert delta-v"
+        );
+
+        // arrival_epoch must equal the chief epoch (no Lambert offset)
+        assert_eq!(
+            result.arrival_epoch, input.chief.epoch,
+            "proximity arrival_epoch should equal chief epoch, not chief + lambert_tof_s"
+        );
+    }
 
     #[test]
     fn test_pipeline_input_serde_roundtrip() {

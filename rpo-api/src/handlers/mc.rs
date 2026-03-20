@@ -9,19 +9,15 @@ use std::sync::Arc;
 use anise::prelude::Almanac;
 use tokio::sync::mpsc;
 
-use rpo_core::constants::DEFAULT_COVARIANCE_SAMPLES_PER_LEG;
-use rpo_core::mission::{
-    propagate_mission_covariance, run_monte_carlo, MonteCarloControl, MonteCarloInput,
-    MonteCarloReport,
-};
+use rpo_core::mission::{run_monte_carlo, MonteCarloControl, MonteCarloInput, MonteCarloReport};
 use rpo_core::pipeline::{
-    compute_transfer, plan_waypoints_from_transfer, resolve_propagator, to_propagation_model,
+    compute_mission_covariance, compute_transfer, plan_waypoints_from_transfer,
+    resolve_propagator, to_propagation_model,
 };
-use rpo_core::propagation::{extract_dmf_rates, ric_accuracy_to_roe_covariance};
+use rpo_core::propagation::extract_dmf_rates;
 
 use crate::error::{require_field, ApiError};
-use crate::handlers::validate::ProgressUpdate;
-use crate::protocol::MissionDefinition;
+use crate::protocol::{MissionDefinition, ProgressPhase, ProgressUpdate};
 
 /// Run full-physics Monte Carlo with progress polling and cancellation.
 ///
@@ -40,7 +36,7 @@ pub fn handle_mc(
     let mc_config = require_field(def.monte_carlo.as_ref(), "monte_carlo", "Monte Carlo")?;
 
     let _ = progress_tx.blocking_send(ProgressUpdate {
-        phase: "mc".into(),
+        phase: ProgressPhase::Mc,
         detail: Some("Planning mission...".into()),
         fraction: Some(0.0),
     });
@@ -76,23 +72,20 @@ pub fn handle_mc(
 
     // Optional covariance propagation
     let covariance_report = if let Some(ref nav) = def.navigation_accuracy {
-        let initial_p = ric_accuracy_to_roe_covariance(nav, &transfer.plan.chief_at_arrival)?;
-        let report = propagate_mission_covariance(
+        Some(compute_mission_covariance(
             &wp_mission,
-            &initial_p,
+            &transfer.plan.chief_at_arrival,
             nav,
             def.maneuver_uncertainty.as_ref(),
             &propagator,
-            DEFAULT_COVARIANCE_SAMPLES_PER_LEG,
-        )?;
-        Some(report)
+        )?)
     } else {
         None
     };
 
     // Run Monte Carlo
     let _ = progress_tx.blocking_send(ProgressUpdate {
-        phase: "mc".into(),
+        phase: ProgressPhase::Mc,
         detail: Some(format!("Running {} MC samples...", mc_config.num_samples)),
         fraction: Some(0.1),
     });
@@ -119,7 +112,7 @@ pub fn handle_mc(
     let report = run_monte_carlo(&mc_input)?;
 
     let _ = progress_tx.blocking_send(ProgressUpdate {
-        phase: "mc".into(),
+        phase: ProgressPhase::Mc,
         detail: Some("Monte Carlo complete".into()),
         fraction: Some(1.0),
     });

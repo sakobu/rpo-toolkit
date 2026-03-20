@@ -7,6 +7,7 @@ use std::sync::Arc;
 
 use anise::prelude::Almanac;
 
+use rpo_core::mission::types::WaypointMission;
 use rpo_core::pipeline::{execute_mission, replan_mission};
 
 use crate::error::ApiError;
@@ -29,16 +30,18 @@ pub fn handle_plan(
 
 /// Replan from a moved waypoint (keeps earlier legs).
 ///
-/// Pure function — runs in microseconds.
+/// When `cached_mission` is provided, legs before `modified_index` are reused
+/// without re-solving. When `None`, falls back to planning the full mission first.
 ///
 /// # Errors
 /// Returns [`ApiError`] if planning or replanning fails.
 pub fn handle_move_waypoint(
     def: &MissionDefinition,
     modified_index: usize,
+    cached_mission: Option<&WaypointMission>,
     _almanac: &Arc<Almanac>,
 ) -> Result<MissionResultPayload, ApiError> {
-    let output = replan_mission(def, modified_index)?;
+    let output = replan_mission(def, modified_index, cached_mission)?;
     Ok(output)
 }
 

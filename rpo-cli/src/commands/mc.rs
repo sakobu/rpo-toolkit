@@ -2,17 +2,12 @@
 
 use std::path::Path;
 
-use rpo_core::constants::DEFAULT_COVARIANCE_SAMPLES_PER_LEG;
-use rpo_core::mission::{
-    propagate_mission_covariance, run_monte_carlo, MonteCarloInput,
-};
+use rpo_core::mission::{run_monte_carlo, MonteCarloInput};
 use rpo_core::pipeline::{
-    compute_transfer, plan_waypoints_from_transfer, resolve_propagator, to_propagation_model,
-    PipelineInput,
+    compute_mission_covariance, compute_transfer, plan_waypoints_from_transfer,
+    resolve_propagator, to_propagation_model, PipelineInput,
 };
-use rpo_core::propagation::{
-    extract_dmf_rates, load_full_almanac, ric_accuracy_to_roe_covariance,
-};
+use rpo_core::propagation::{extract_dmf_rates, load_full_almanac};
 
 use crate::error::CliError;
 use crate::input::load_json;
@@ -68,17 +63,13 @@ pub fn run(input_path: &Path, json: bool, auto_drag: bool) -> Result<(), CliErro
     // Optional covariance propagation
     let covariance_report = if let Some(ref nav) = input.navigation_accuracy {
         eprintln!("Running covariance propagation...");
-        let initial_p =
-            ric_accuracy_to_roe_covariance(nav, &transfer.plan.chief_at_arrival)?;
-        let report = propagate_mission_covariance(
+        Some(compute_mission_covariance(
             &wp_mission,
-            &initial_p,
+            &transfer.plan.chief_at_arrival,
             nav,
             input.maneuver_uncertainty.as_ref(),
             &prop,
-            DEFAULT_COVARIANCE_SAMPLES_PER_LEG,
-        )?;
-        Some(report)
+        )?)
     } else {
         None
     };

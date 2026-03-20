@@ -10,6 +10,30 @@ use rpo_core::mission::{
 };
 use rpo_core::propagation::DragConfig;
 
+// ---------------------------------------------------------------------------
+// Internal progress types (handler → WebSocket loop)
+// ---------------------------------------------------------------------------
+
+/// Phase label for long-running background operations.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ProgressPhase {
+    /// Per-leg nyx validation.
+    Validate,
+    /// Full-physics Monte Carlo ensemble analysis.
+    Mc,
+}
+
+/// Progress update sent from background handlers to the WebSocket loop.
+pub struct ProgressUpdate {
+    /// Phase of the operation.
+    pub phase: ProgressPhase,
+    /// Human-readable detail.
+    pub detail: Option<String>,
+    /// Fraction complete (0.0 to 1.0).
+    pub fraction: Option<f64>,
+}
+
 /// Central wire type sent by the client with every request.
 ///
 /// Type alias to the canonical pipeline input type in rpo-core.
@@ -130,8 +154,8 @@ pub enum ServerMessage {
     Progress {
         /// Correlation ID of the operation in progress.
         request_id: u64,
-        /// Phase label (e.g., "validate", "mc").
-        phase: String,
+        /// Phase of the operation.
+        phase: ProgressPhase,
         /// Human-readable detail (e.g., "Validating leg 3/5").
         detail: Option<String>,
         /// Fraction complete (0.0 to 1.0).

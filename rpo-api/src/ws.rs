@@ -11,10 +11,11 @@ use axum::extract::ws::{Message, WebSocket};
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 
+use rpo_core::mission::types::WaypointMission;
+
 use crate::error::ApiError;
 use crate::handlers;
-use crate::handlers::validate::ProgressUpdate;
-use crate::protocol::{ClientMessage, ServerMessage};
+use crate::protocol::{ClientMessage, ProgressUpdate, ServerMessage};
 
 /// Active background job state.
 struct ActiveJob {
@@ -55,6 +56,7 @@ pub async fn handle_ws(mut ws: WebSocket, almanac: Arc<Almanac>) {
     let (progress_tx, mut progress_rx) = mpsc::channel::<ProgressUpdate>(64);
     let (result_tx, mut result_rx) = mpsc::channel::<JobResult>(4);
     let mut active_job: Option<ActiveJob> = None;
+    let mut last_mission: Option<WaypointMission> = None;
 
     loop {
         tokio::select! {
@@ -76,6 +78,7 @@ pub async fn handle_ws(mut ws: WebSocket, almanac: Arc<Almanac>) {
                             &mut ws,
                             &almanac,
                             &mut active_job,
+                            &mut last_mission,
                             &progress_tx,
                             &result_tx,
                         ).await;
@@ -151,6 +154,7 @@ async fn handle_text_message(
     ws: &mut WebSocket,
     almanac: &Arc<Almanac>,
     active_job: &mut Option<ActiveJob>,
+    last_mission: &mut Option<WaypointMission>,
     progress_tx: &mpsc::Sender<ProgressUpdate>,
     result_tx: &mpsc::Sender<JobResult>,
 ) {
@@ -183,8 +187,14 @@ async fn handle_text_message(
             mission,
         } => {
             let msg = match handlers::handle_plan(&mission, almanac) {
-                Ok(result) => ServerMessage::MissionResult { request_id, result: Box::new(result) },
-                Err(e) => e.to_server_message(Some(request_id)),
+                Ok(result) => {
+                    *last_mission = Some(result.mission.clone());
+                    ServerMessage::MissionResult { request_id, result: Box::new(result) }
+                }
+                Err(e) => {
+                    *last_mission = None;
+                    e.to_server_message(Some(request_id))
+                }
             };
             send_message(ws, &msg).await;
         }
@@ -194,8 +204,12 @@ async fn handle_text_message(
             modified_index,
             mission,
         } => {
-            let msg = match handlers::handle_move_waypoint(&mission, modified_index, almanac) {
-                Ok(result) => ServerMessage::MissionResult { request_id, result: Box::new(result) },
+            let cached = last_mission.as_ref();
+            let msg = match handlers::handle_move_waypoint(&mission, modified_index, cached, almanac) {
+                Ok(result) => {
+                    *last_mission = Some(result.mission.clone());
+                    ServerMessage::MissionResult { request_id, result: Box::new(result) }
+                }
                 Err(e) => e.to_server_message(Some(request_id)),
             };
             send_message(ws, &msg).await;
@@ -206,8 +220,14 @@ async fn handle_text_message(
             mission,
         } => {
             let msg = match handlers::handle_update_config(&mission, almanac) {
-                Ok(result) => ServerMessage::MissionResult { request_id, result: Box::new(result) },
-                Err(e) => e.to_server_message(Some(request_id)),
+                Ok(result) => {
+                    *last_mission = Some(result.mission.clone());
+                    ServerMessage::MissionResult { request_id, result: Box::new(result) }
+                }
+                Err(e) => {
+                    *last_mission = None;
+                    e.to_server_message(Some(request_id))
+                }
             };
             send_message(ws, &msg).await;
         }

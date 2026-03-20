@@ -9,6 +9,7 @@ use serde::{Deserialize, Serialize};
 use crate::mission::config::{MissionConfig, ProximityConfig};
 use crate::mission::monte_carlo::{MonteCarloConfig, MonteCarloReport};
 use crate::mission::types::{MissionPhase, MissionPlan, PerchGeometry, WaypointMission};
+use crate::types::QuasiNonsingularROE;
 use crate::propagation::covariance::types::{
     ManeuverUncertainty, MissionCovarianceReport, NavigationAccuracy,
 };
@@ -156,6 +157,9 @@ pub struct PipelineOutput {
     /// Eclipse data along Lambert transfer arc.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub transfer_eclipse: Option<TransferEclipseData>,
+    /// Perch orbit target ROE (idealized geometric definition from `perch_to_roe()`).
+    /// For V-bar: only δλ is nonzero. For R-bar: only δa is nonzero.
+    pub perch_roe: QuasiNonsingularROE,
     /// Waypoint mission result.
     pub mission: WaypointMission,
     /// Combined Lambert + waypoint Δv.

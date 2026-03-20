@@ -18,7 +18,8 @@ pub mod types;
 pub use convert::{resolve_propagator, to_propagation_model, to_waypoints};
 pub use errors::PipelineError;
 pub use execute::{
-    build_output, compute_transfer, execute_mission, plan_waypoints_from_transfer, replan_mission,
+    build_output, compute_mission_covariance, compute_transfer, execute_mission,
+    plan_waypoints_from_transfer, replan_mission,
 };
 pub use types::{
     PipelineInput, PipelineOutput, PropagatorChoice, TransferResult, WaypointInput,

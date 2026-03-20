@@ -16,17 +16,7 @@ use rpo_core::pipeline::{
 use rpo_core::propagation::extract_dmf_rates;
 
 use crate::error::ApiError;
-use crate::protocol::MissionDefinition;
-
-/// Progress update sent from the validation handler to the WebSocket loop.
-pub struct ProgressUpdate {
-    /// Phase label.
-    pub phase: String,
-    /// Human-readable detail.
-    pub detail: Option<String>,
-    /// Fraction complete (0.0 to 1.0).
-    pub fraction: Option<f64>,
-}
+use crate::protocol::{MissionDefinition, ProgressPhase, ProgressUpdate};
 
 /// Run per-leg nyx validation with progress streaming and cancellation.
 ///
@@ -44,7 +34,7 @@ pub fn handle_validate(
     auto_drag: bool,
 ) -> Result<ValidationReport, ApiError> {
     let _ = progress_tx.blocking_send(ProgressUpdate {
-        phase: "validate".into(),
+        phase: ProgressPhase::Validate,
         detail: Some("Planning mission...".into()),
         fraction: Some(0.0),
     });
@@ -83,7 +73,7 @@ pub fn handle_validate(
 
     // Phase 4: Validate via nyx
     let _ = progress_tx.blocking_send(ProgressUpdate {
-        phase: "validate".into(),
+        phase: ProgressPhase::Validate,
         detail: Some("Running nyx validation...".into()),
         fraction: Some(0.1),
     });
@@ -99,7 +89,7 @@ pub fn handle_validate(
     )?;
 
     let _ = progress_tx.blocking_send(ProgressUpdate {
-        phase: "validate".into(),
+        phase: ProgressPhase::Validate,
         detail: Some("Validation complete".into()),
         fraction: Some(1.0),
     });
