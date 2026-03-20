@@ -175,7 +175,7 @@ fn departure_from_transfer(transfer: &TransferResult) -> DepartureState {
 /// Plan waypoints from a transfer result.
 ///
 /// Builds the [`DepartureState`] from the transfer's perch ROE and chief elements,
-/// converts the pipeline waypoint inputs to core [`Waypoint`]s, and runs
+/// converts the pipeline waypoint inputs to core [`crate::mission::types::Waypoint`]s, and runs
 /// waypoint targeting. Consolidates boilerplate shared by CLI and API handlers.
 ///
 /// # Errors

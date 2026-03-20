@@ -112,8 +112,8 @@ pub struct SafetyAssessment {
 ///
 /// # R/C geometry classification
 ///
-/// When the R/C plane minimum is near zero (below [`RC_ALONG_TRACK_THRESHOLD_KM`])
-/// and the along-track component is at least [`RC_ALONG_TRACK_RATIO`] times
+/// When the R/C plane minimum is near zero (below `RC_ALONG_TRACK_THRESHOLD_KM`)
+/// and the along-track component is at least `RC_ALONG_TRACK_RATIO` times
 /// larger, the geometry is classified as [`RcContext::AlongTrackDominated`].
 /// This is a factual geometric observation — it does not depend on the
 /// perch type or mission design intent.
