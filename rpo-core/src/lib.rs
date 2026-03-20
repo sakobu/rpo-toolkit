@@ -24,12 +24,15 @@
 //! | [`elements`] | Static geometry: ECI/Keplerian/ROE/RIC conversions, frame transforms, eclipse |
 //! | [`propagation`] | Trajectory computation: J2 and J2+drag STMs, Lambert solver, covariance, nyx bridge |
 //! | [`mission`] | Mission orchestration: planning, targeting, safety, validation, Monte Carlo |
+//! | [`pipeline`] | Shared CLI/API pipeline: canonical input/output types, `execute_mission()` |
 //! | [`constants`] | Physical constants and named tolerances |
 //!
 //! ## Entry points
 //!
 //! Most workflows start with one of these functions:
 //!
+//! - [`pipeline::execute_mission`] — full pipeline: classify → Lambert → waypoints → covariance → eclipse
+//! - [`pipeline::compute_transfer`] — classify + Lambert + perch states (for validate/MC)
 //! - [`mission::plan_waypoint_mission`] — multi-waypoint proximity operations
 //! - [`mission::plan_mission`] — classify + Lambert transfer for far-field
 //! - [`mission::classify_separation`] — proximity vs. far-field classification
@@ -43,6 +46,7 @@
 pub mod constants;
 pub mod elements;
 pub mod mission;
+pub mod pipeline;
 pub mod prelude;
 pub mod propagation;
 pub mod types;

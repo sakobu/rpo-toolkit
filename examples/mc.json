@@ -29,26 +29,28 @@
   "waypoints": [
     {
       "label": "Approach to 2 km (+R/C corridor)",
-      "position": [0.5, 2.0, 0.5],
-      "velocity": [0.0, 0.0, 0.0],
+      "position_ric_km": [0.5, 2.0, 0.5],
+      "velocity_ric_km_s": [0.0, 0.0, 0.0],
       "tof_s": 4200.0
     },
     {
       "label": "Close to 0.5 km (+R/C corridor)",
-      "position": [0.5, 0.5, 0.5],
-      "velocity": [0.0, 0.001, 0.0],
+      "position_ric_km": [0.5, 0.5, 0.5],
+      "velocity_ric_km_s": [0.0, 0.001, 0.0],
       "tof_s": 4200.0
     },
     {
       "label": "Retreat to 5 km (+R/C corridor)",
-      "position": [0.5, 5.0, 0.5],
-      "velocity": [0.0, -0.001, 0.0],
+      "position_ric_km": [0.5, 5.0, 0.5],
+      "velocity_ric_km_s": [0.0, -0.001, 0.0],
       "tof_s": 4200.0
     }
   ],
-  "safety": {
-    "min_ei_separation_km": 0.1,
-    "min_distance_3d_km": 0.05
+  "config": {
+    "safety": {
+      "min_ei_separation_km": 0.1,
+      "min_distance_3d_km": 0.05
+    }
   },
   "propagator": "j2",
   "navigation_accuracy": {

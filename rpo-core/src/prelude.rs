@@ -22,3 +22,8 @@ pub use crate::mission::{
 
 // Propagation model selection
 pub use crate::propagation::PropagationModel;
+
+// Pipeline
+pub use crate::pipeline::{
+    execute_mission, replan_mission, PipelineInput, PipelineOutput, PropagatorChoice, WaypointInput,
+};

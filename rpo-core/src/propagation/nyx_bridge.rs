@@ -19,6 +19,8 @@ use nyx_space::io::gravity::HarmonicsMem;
 use nyx_space::md::prelude::{OrbitalDynamics, Propagator, SpacecraftDynamics};
 use nyx_space::propagators::PropagationError as NyxPropagationError;
 
+use serde::Serialize;
+
 use crate::constants::EARTH_J2000;
 use crate::elements::keplerian_conversions::{state_to_keplerian, ConversionError};
 use crate::elements::eci_ric_dcm::{eci_to_ric_relative, ric_to_eci_dv, DcmError};
@@ -422,8 +424,8 @@ pub(crate) struct TimedState {
 ///
 /// Used to pass time-tagged chief-deputy snapshots to safety analysis
 /// routines where both states share the same elapsed-time reference.
-#[derive(Debug, Clone)]
-pub(crate) struct ChiefDeputySnapshot {
+#[derive(Debug, Clone, Serialize)]
+pub struct ChiefDeputySnapshot {
     /// Elapsed time since mission/leg start (seconds).
     pub elapsed_s: f64,
     /// Chief ECI state at this time.

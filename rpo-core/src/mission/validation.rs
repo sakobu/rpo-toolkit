@@ -10,6 +10,7 @@ use anise::constants::frames::EARTH_J2000 as ANISE_EARTH_J2000;
 use anise::prelude::Almanac;
 use hifitime::Epoch;
 use nalgebra::Vector3;
+use serde::Serialize;
 
 use crate::constants::ECLIPSE_PERCENTAGE_AGREEMENT_TOL;
 use crate::elements::eci_ric_dcm::{eci_to_ric_relative, DcmError};
@@ -95,6 +96,96 @@ impl From<SafetyError> for ValidationError {
     fn from(e: SafetyError) -> Self {
         Self::Safety { source: e }
     }
+}
+
+/// Output from validating a single mission leg against nyx full-physics.
+///
+/// Contains per-sample analytical vs numerical comparison points and updated
+/// chief/deputy ECI states for threading into the next leg.
+///
+/// All `StateVector` fields use ECI J2000 frame (`position_eci_km`,
+/// `velocity_eci_km_s`). When serialized for the API wire format,
+/// coordinates remain in ECI.
+///
+/// Used by the API server for per-leg progress streaming during validation.
+#[derive(Debug, Clone, Serialize)]
+pub struct LegValidationOutput {
+    /// Per-sample analytical vs numerical RIC comparison points.
+    pub points: Vec<ValidationPoint>,
+    /// Chief/deputy ECI snapshot pairs for safety analysis.
+    pub safety_pairs: Vec<ChiefDeputySnapshot>,
+    /// Updated chief ECI state at end of this leg.
+    pub chief_state_after: StateVector,
+    /// Updated deputy ECI state at end of this leg (arrival delta-v applied).
+    pub deputy_state_after: StateVector,
+}
+
+/// Validate a single mission leg against nyx full-physics propagation.
+///
+/// Propagates chief and deputy through the leg using nyx full-physics dynamics,
+/// compares against the analytical trajectory, and returns comparison points plus
+/// updated ECI states for threading to the next leg.
+///
+/// This function does **not** collect eclipse samples; eclipse validation is only
+/// available through the mission-level [`validate_mission_nyx`] orchestrator.
+///
+/// # Invariants
+/// - `chief_state` and `deputy_state` must be valid bound ECI states
+/// - `almanac` must contain Earth frame data and planetary ephemerides
+///
+/// # Errors
+/// Returns [`ValidationError`] if propagation, impulse application, or frame conversion fails.
+#[allow(clippy::too_many_arguments)]
+pub fn validate_leg_nyx(
+    leg: &ManeuverLeg,
+    chief_state: &StateVector,
+    deputy_state: &StateVector,
+    samples_per_leg: u32,
+    chief_config: &SpacecraftConfig,
+    deputy_config: &SpacecraftConfig,
+    almanac: &Arc<Almanac>,
+    cumulative_time_s: f64,
+) -> Result<LegValidationOutput, ValidationError> {
+    let (chief_results, deputy_results) = propagate_leg_parallel(
+        chief_state,
+        deputy_state,
+        leg,
+        samples_per_leg,
+        chief_config,
+        deputy_config,
+        almanac,
+    )?;
+
+    // Build comparison points (no eclipse — that stays in validate_mission_nyx)
+    let leg_output = build_leg_comparison_points(
+        &chief_results,
+        &deputy_results,
+        &leg.trajectory,
+        cumulative_time_s,
+        None, // no eclipse frame for per-leg API
+        almanac,
+    )?;
+
+    // Advance states
+    let chief_after = chief_results
+        .last()
+        .ok_or(ValidationError::EmptyTrajectory)?
+        .state
+        .clone();
+    let deputy_coast_end = deputy_results
+        .last()
+        .ok_or(ValidationError::EmptyTrajectory)?
+        .state
+        .clone();
+    let deputy_after =
+        apply_impulse(&deputy_coast_end, &chief_after, &leg.arrival_maneuver.dv_ric_km_s)?;
+
+    Ok(LegValidationOutput {
+        points: leg_output.points,
+        safety_pairs: leg_output.safety_pairs,
+        chief_state_after: chief_after,
+        deputy_state_after: deputy_after,
+    })
 }
 
 /// Find the closest analytical RIC state by elapsed time (nearest-neighbor).
@@ -384,7 +475,7 @@ fn build_leg_comparison_points(
     chief_results: &[TimedState],
     deputy_results: &[TimedState],
     trajectory: &[PropagatedState],
-    cumulative_time: f64,
+    cumulative_time_s: f64,
     earth_frame: Option<anise::prelude::Frame>,
     almanac: &Arc<Almanac>,
 ) -> Result<LegComparisonOutput, ValidationError> {
@@ -396,7 +487,7 @@ fn build_leg_comparison_points(
         chief_results.iter().zip(deputy_results.iter()).enumerate()
     {
         let numerical_ric = eci_to_ric_relative(&chief_sample.state, &deputy_sample.state)?;
-        let elapsed = cumulative_time + chief_sample.elapsed_s;
+        let elapsed = cumulative_time_s + chief_sample.elapsed_s;
         let analytical_ric = find_closest_analytical_ric(trajectory, chief_sample.elapsed_s);
 
         let pos_err = (numerical_ric.position_ric_km - analytical_ric.position_ric_km).norm();

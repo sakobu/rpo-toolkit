@@ -22,7 +22,8 @@ pub use lambert::{
     LambertTransfer, TransferDirection,
 };
 pub use nyx_bridge::{
-    extract_dmf_rates, load_default_almanac, load_full_almanac, NyxBridgeError,
+    extract_dmf_rates, load_default_almanac, load_full_almanac, ChiefDeputySnapshot,
+    NyxBridgeError,
 };
 pub use propagator::{DragConfig, PropagatedState, PropagationError, PropagationModel};
 pub use stm::{compute_stm, compute_stm_with_params, propagate_roe_stm};

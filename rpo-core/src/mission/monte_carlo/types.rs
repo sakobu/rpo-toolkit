@@ -1,6 +1,7 @@
 //! Monte Carlo domain types: dispersions, configurations, and reports.
 
 use std::fmt;
+use std::sync::atomic::{AtomicBool, AtomicU32};
 use std::sync::Arc;
 
 use anise::prelude::Almanac;
@@ -166,6 +167,19 @@ pub struct MonteCarloConfig {
     pub trajectory_steps: u32,
 }
 
+/// Optional progress/cancel hooks for external callers (e.g., API server).
+///
+/// - `progress`: incremented per completed sample (poll for progress fraction)
+/// - `cancel`: set to `true` to request cooperative cancellation
+///
+/// Not `Serialize`/`Deserialize` — runtime-only coordination.
+pub struct MonteCarloControl {
+    /// Incremented per completed sample. Poll to compute fraction: `progress.load() / num_samples`.
+    pub progress: Arc<AtomicU32>,
+    /// Set to `true` to request cancellation. Checked before each sample's nyx propagation.
+    pub cancel: Arc<AtomicBool>,
+}
+
 /// Bundled inputs for Monte Carlo ensemble analysis.
 ///
 /// Groups all arguments needed by [`crate::mission::monte_carlo::run_monte_carlo`]
@@ -194,6 +208,8 @@ pub struct MonteCarloInput<'a> {
     pub almanac: &'a Arc<Almanac>,
     /// Optional covariance predictions for validation comparison.
     pub covariance_report: Option<&'a MissionCovarianceReport>,
+    /// Optional progress/cancel hooks (API server use). `None` for CLI/test callers.
+    pub control: Option<&'a MonteCarloControl>,
 }
 
 impl fmt::Debug for MonteCarloInput<'_> {
