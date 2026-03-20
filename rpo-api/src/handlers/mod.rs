@@ -1,9 +1,10 @@
 //! Request handlers for the WebSocket API.
 //!
 //! Each handler is a pure function, testable without WebSocket infrastructure.
-//! Inline handlers (classify, plan, move_waypoint, update_config) return immediately.
+//! Inline handlers (classify, plan, `move_waypoint`, `update_config`) return immediately.
 //! Background handlers (drag, validate, mc) are designed to be spawned on a blocking thread.
 
+mod common;
 pub mod classify;
 pub mod drag;
 pub mod mc;

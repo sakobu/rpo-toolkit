@@ -71,7 +71,7 @@ fn proximity_mission() -> Value {
         },
         "waypoints": [
             {
-                "position": [0.0, 2.0, 0.0],
+                "position_ric_km": [0.0, 2.0, 0.0],
                 "tof_s": 4200.0
             }
         ]

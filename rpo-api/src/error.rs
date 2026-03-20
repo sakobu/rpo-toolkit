@@ -32,10 +32,29 @@ pub enum ApiError {
     NyxBridge(Box<NyxBridgeError>),
     /// Covariance propagation error.
     Covariance(CovarianceError),
-    /// Invalid client message (malformed JSON, missing fields).
-    InvalidMessage(String),
+    /// Invalid client input.
+    InvalidInput(InvalidInputError),
     /// Operation was cancelled.
     Cancelled,
+}
+
+/// Structured error for invalid client input.
+#[derive(Debug)]
+pub enum InvalidInputError {
+    /// JSON deserialization failed.
+    MalformedJson {
+        /// `serde_json` error detail.
+        detail: String,
+    },
+    /// A required field is missing for the requested operation.
+    MissingField {
+        /// Name of the missing field.
+        field: &'static str,
+        /// Operation that requires this field.
+        context: &'static str,
+    },
+    /// Trajectory data is empty when a non-empty trajectory was expected.
+    EmptyTrajectory,
 }
 
 impl fmt::Display for ApiError {
@@ -48,13 +67,41 @@ impl fmt::Display for ApiError {
             Self::MonteCarlo(e) => write!(f, "{e}"),
             Self::NyxBridge(e) => write!(f, "{e}"),
             Self::Covariance(e) => write!(f, "{e}"),
-            Self::InvalidMessage(msg) => write!(f, "invalid message: {msg}"),
+            Self::InvalidInput(e) => write!(f, "invalid input: {e}"),
             Self::Cancelled => write!(f, "operation cancelled"),
         }
     }
 }
 
 impl std::error::Error for ApiError {}
+
+impl fmt::Display for InvalidInputError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::MalformedJson { detail } => write!(f, "malformed JSON: {detail}"),
+            Self::MissingField { field, context } => {
+                write!(f, "{field} required for {context}")
+            }
+            Self::EmptyTrajectory => write!(f, "empty chief trajectory"),
+        }
+    }
+}
+
+/// Require an `Option<T>` value, converting `None` to a `MissingField` error.
+///
+/// # Errors
+/// Returns [`ApiError::InvalidInput`] with [`InvalidInputError::MissingField`]
+/// when `value` is `None`.
+pub fn require_field<T>(
+    value: Option<T>,
+    field: &'static str,
+    context: &'static str,
+) -> Result<T, ApiError> {
+    value.ok_or(ApiError::InvalidInput(InvalidInputError::MissingField {
+        field,
+        context,
+    }))
+}
 
 // From impls for each rpo-core error type
 impl From<MissionError> for ApiError {
@@ -107,6 +154,7 @@ impl From<ConversionError> for ApiError {
 
 impl ApiError {
     /// Convert to a `ServerMessage::Error` with per-variant diagnostic fields.
+    #[must_use]
     pub fn to_server_message(&self, request_id: Option<u64>) -> ServerMessage {
         let (code, detail) = self.extract_code_and_detail();
         ServerMessage::Error {
@@ -174,7 +222,20 @@ impl ApiError {
             },
             Self::NyxBridge(_) => (ErrorCode::NyxBridgeError, None),
             Self::Covariance(_) => (ErrorCode::CovarianceError, None),
-            Self::InvalidMessage(_) => (ErrorCode::InvalidInput, None),
+            Self::InvalidInput(inner) => match inner {
+                InvalidInputError::MalformedJson { detail } => (
+                    ErrorCode::InvalidInput,
+                    Some(serde_json::json!({ "reason": "malformed_json", "detail": detail })),
+                ),
+                InvalidInputError::MissingField { field, context } => (
+                    ErrorCode::InvalidInput,
+                    Some(serde_json::json!({ "reason": "missing_field", "field": field, "context": context })),
+                ),
+                InvalidInputError::EmptyTrajectory => (
+                    ErrorCode::InvalidInput,
+                    Some(serde_json::json!({ "reason": "empty_trajectory" })),
+                ),
+            },
             Self::Cancelled => (ErrorCode::Cancelled, None),
         }
     }

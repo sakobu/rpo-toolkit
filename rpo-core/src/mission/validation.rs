@@ -100,9 +100,14 @@ impl From<SafetyError> for ValidationError {
 
 /// Output from validating a single mission leg against nyx full-physics.
 ///
-/// Contains per-sample comparison points and updated chief/deputy states
-/// for threading into the next leg. Used by the API server for per-leg
-/// progress streaming during validation.
+/// Contains per-sample analytical vs numerical comparison points and updated
+/// chief/deputy ECI states for threading into the next leg.
+///
+/// All `StateVector` fields use ECI J2000 frame (`position_eci_km`,
+/// `velocity_eci_km_s`). When serialized for the API wire format,
+/// coordinates remain in ECI.
+///
+/// Used by the API server for per-leg progress streaming during validation.
 #[derive(Debug, Clone, Serialize)]
 pub struct LegValidationOutput {
     /// Per-sample analytical vs numerical RIC comparison points.
@@ -139,7 +144,7 @@ pub fn validate_leg_nyx(
     chief_config: &SpacecraftConfig,
     deputy_config: &SpacecraftConfig,
     almanac: &Arc<Almanac>,
-    cumulative_time: f64,
+    cumulative_time_s: f64,
 ) -> Result<LegValidationOutput, ValidationError> {
     let (chief_results, deputy_results) = propagate_leg_parallel(
         chief_state,
@@ -156,7 +161,7 @@ pub fn validate_leg_nyx(
         &chief_results,
         &deputy_results,
         &leg.trajectory,
-        cumulative_time,
+        cumulative_time_s,
         None, // no eclipse frame for per-leg API
         almanac,
     )?;
@@ -470,7 +475,7 @@ fn build_leg_comparison_points(
     chief_results: &[TimedState],
     deputy_results: &[TimedState],
     trajectory: &[PropagatedState],
-    cumulative_time: f64,
+    cumulative_time_s: f64,
     earth_frame: Option<anise::prelude::Frame>,
     almanac: &Arc<Almanac>,
 ) -> Result<LegComparisonOutput, ValidationError> {
@@ -482,7 +487,7 @@ fn build_leg_comparison_points(
         chief_results.iter().zip(deputy_results.iter()).enumerate()
     {
         let numerical_ric = eci_to_ric_relative(&chief_sample.state, &deputy_sample.state)?;
-        let elapsed = cumulative_time + chief_sample.elapsed_s;
+        let elapsed = cumulative_time_s + chief_sample.elapsed_s;
         let analytical_ric = find_closest_analytical_ric(trajectory, chief_sample.elapsed_s);
 
         let pos_err = (numerical_ric.position_ric_km - analytical_ric.position_ric_km).norm();

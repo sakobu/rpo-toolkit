@@ -18,7 +18,7 @@ use crate::protocol::{ClientMessage, ServerMessage};
 
 /// Active background job state.
 struct ActiveJob {
-    /// The request_id this job is associated with.
+    /// The `request_id` this job is associated with.
     request_id: u64,
     /// Cancel flag — set to true to request cooperative cancellation.
     cancel: Arc<AtomicBool>,
@@ -145,6 +145,7 @@ pub async fn handle_ws(mut ws: WebSocket, almanac: Arc<Almanac>) {
 }
 
 /// Process a text WebSocket message.
+#[allow(clippy::too_many_lines)]
 async fn handle_text_message(
     text: &str,
     ws: &mut WebSocket,
@@ -156,7 +157,9 @@ async fn handle_text_message(
     let client_msg: ClientMessage = match serde_json::from_str(text) {
         Ok(msg) => msg,
         Err(e) => {
-            let err = ApiError::InvalidMessage(e.to_string());
+            let err = ApiError::InvalidInput(crate::error::InvalidInputError::MalformedJson {
+                detail: e.to_string(),
+            });
             send_message(ws, &err.to_server_message(None)).await;
             return;
         }
@@ -244,7 +247,7 @@ async fn handle_text_message(
             let samples = samples_per_leg.unwrap_or(50);
             let handle = tokio::task::spawn_blocking(move || {
                 let result = handlers::handle_validate(
-                    &mission, &alm, ptx, cancel_clone, samples, auto_drag,
+                    &mission, &alm, &ptx, &cancel_clone, samples, auto_drag,
                 );
                 let result = result.map(Box::new);
                 let _ = rtx.blocking_send(JobResult::Validation { request_id, result });
@@ -269,7 +272,7 @@ async fn handle_text_message(
             let cancel_clone = cancel.clone();
             let handle = tokio::task::spawn_blocking(move || {
                 let result =
-                    handlers::handle_mc(&mission, &alm, ptx, cancel_clone, auto_drag);
+                    handlers::handle_mc(&mission, &alm, &ptx, &cancel_clone, auto_drag);
                 let result = result.map(Box::new);
                 let _ = rtx.blocking_send(JobResult::MonteCarlo { request_id, result });
             });

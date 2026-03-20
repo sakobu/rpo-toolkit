@@ -16,16 +16,17 @@ use crate::protocol::PropagatorChoice;
 #[derive(Debug, Deserialize)]
 pub struct WaypointInput {
     /// RIC position target [R, I, C] in km.
-    pub position: [f64; 3],
+    pub position_ric_km: [f64; 3],
     /// RIC velocity target [R, I, C] in km/s (defaults to zero).
     #[serde(default)]
-    pub velocity: Option<[f64; 3]>,
+    pub velocity_ric_km_s: Option<[f64; 3]>,
     /// Time-of-flight hint (seconds). If None, solver optimizes TOF.
     #[serde(default)]
     pub tof_s: Option<f64>,
 }
 
 /// Convert a `PropagatorChoice` (wire) to `PropagationModel` (core).
+#[must_use]
 pub fn to_propagation_model(choice: &PropagatorChoice) -> PropagationModel {
     match choice {
         PropagatorChoice::J2 => PropagationModel::J2Stm,
@@ -34,13 +35,18 @@ pub fn to_propagation_model(choice: &PropagatorChoice) -> PropagationModel {
 }
 
 /// Convert wire `WaypointInput`s to core `Waypoint`s.
+#[must_use]
 pub fn to_waypoints(inputs: &[WaypointInput]) -> Vec<Waypoint> {
     inputs
         .iter()
         .map(|wp| {
-            let vel = wp.velocity.unwrap_or([0.0, 0.0, 0.0]);
+            let vel = wp.velocity_ric_km_s.unwrap_or([0.0, 0.0, 0.0]);
             Waypoint {
-                position_ric_km: Vector3::new(wp.position[0], wp.position[1], wp.position[2]),
+                position_ric_km: Vector3::new(
+                    wp.position_ric_km[0],
+                    wp.position_ric_km[1],
+                    wp.position_ric_km[2],
+                ),
                 velocity_ric_km_s: Vector3::new(vel[0], vel[1], vel[2]),
                 tof_s: wp.tof_s,
             }
@@ -52,6 +58,9 @@ pub fn to_waypoints(inputs: &[WaypointInput]) -> Vec<Waypoint> {
 ///
 /// When `auto_drag` is true, calls `extract_dmf_rates` and returns a
 /// `J2DragStm` propagator with the derived drag config.
+///
+/// # Errors
+/// Returns [`ApiError`](crate::error::ApiError) if DMF rate extraction fails.
 pub fn resolve_propagator(
     auto_drag: bool,
     perch_chief: &rpo_core::types::StateVector,

@@ -1,3 +1,6 @@
+#![warn(clippy::pedantic)]
+#![warn(missing_docs)]
+
 //! RPO API server library — WebSocket backend for the R3F mission planner.
 //!
 //! Exposes the WebSocket handler, protocol types, and conversion layers

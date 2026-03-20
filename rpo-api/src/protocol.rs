@@ -64,14 +64,14 @@ pub struct MissionDefinition {
     /// Maneuver execution uncertainty for covariance propagation.
     #[serde(default)]
     pub maneuver_uncertainty: Option<ManeuverUncertainty>,
-    /// Monte Carlo configuration (required for RunMC only).
+    /// Monte Carlo configuration (required for `RunMC` only).
     #[serde(default)]
     pub monte_carlo: Option<MonteCarloConfig>,
 }
 
 /// Propagator selection on the wire.
 ///
-/// Wire format (serde externally tagged, default):
+/// Wire format (`serde` externally tagged, default):
 /// - `"j2"` → `PropagatorChoice::J2`
 /// - `{ "j2_drag": { "drag": { ... } } }` → `PropagatorChoice::J2Drag { drag }`
 #[derive(Debug, Deserialize, Default)]
@@ -129,7 +129,7 @@ pub enum ClientMessage {
     ExtractDrag {
         /// Client-assigned correlation ID.
         request_id: u64,
-        /// Mission definition (needs chief_config + deputy_config).
+        /// Mission definition (needs `chief_config` + `deputy_config`).
         mission: MissionDefinition,
     },
     /// Per-leg nyx validation with progress streaming (seconds).
@@ -149,7 +149,7 @@ pub enum ClientMessage {
     RunMC {
         /// Client-assigned correlation ID.
         request_id: u64,
-        /// Mission definition (needs monte_carlo config).
+        /// Mission definition (needs `monte_carlo` config).
         mission: MissionDefinition,
         /// Auto-derive drag rates before MC.
         #[serde(default)]
@@ -174,7 +174,7 @@ pub enum ServerMessage {
     ClassifyResult {
         /// Correlation ID from the client request.
         request_id: u64,
-        /// Classification: Proximity or FarField with full state info.
+        /// Classification: Proximity or `FarField` with full state info.
         phase: MissionPhase,
     },
     /// Mission planning result.

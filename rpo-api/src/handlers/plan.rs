@@ -7,10 +7,12 @@ use std::sync::Arc;
 
 use anise::prelude::Almanac;
 
+use rpo_core::constants::DEFAULT_COVARIANCE_SAMPLES_PER_LEG;
 use rpo_core::mission::{
-    compute_transfer_eclipse, plan_mission, plan_waypoint_mission, replan_from_waypoint,
-    PerchGeometry,
+    compute_transfer_eclipse, plan_mission, plan_waypoint_mission, propagate_mission_covariance,
+    replan_from_waypoint,
 };
+use rpo_core::propagation::{ric_accuracy_to_roe_covariance, PropagationModel};
 use rpo_core::types::DepartureState;
 
 use crate::convert::{to_propagation_model, to_waypoints};
@@ -26,26 +28,20 @@ struct TransferResult {
 
 /// Classify separation, solve Lambert if far-field, compute perch handoff states.
 fn compute_transfer(def: &MissionDefinition) -> Result<TransferResult, ApiError> {
-    let perch = def
-        .perch
-        .clone()
-        .unwrap_or(PerchGeometry::VBar { along_track_km: 5.0 });
-    let proximity = def.proximity.unwrap_or_default();
-    let lambert_tof_s = def.lambert_tof_s.unwrap_or(3600.0);
-    let lambert_cfg = def.lambert_config.clone().unwrap_or_default();
+    let defaults = super::common::MissionDefaults::from_definition(def);
 
     let plan = plan_mission(
         &def.chief,
         &def.deputy,
-        &perch,
-        &proximity,
-        lambert_tof_s,
-        &lambert_cfg,
+        &defaults.perch,
+        &defaults.proximity,
+        defaults.lambert_tof_s,
+        &defaults.lambert_cfg,
     )?;
 
     let lambert_dv_km_s = plan.transfer.as_ref().map_or(0.0, |t| t.total_dv_km_s);
     let arrival_epoch =
-        def.chief.epoch + hifitime::Duration::from_seconds(lambert_tof_s);
+        def.chief.epoch + hifitime::Duration::from_seconds(defaults.lambert_tof_s);
 
     Ok(TransferResult {
         plan,
@@ -55,17 +51,36 @@ fn compute_transfer(def: &MissionDefinition) -> Result<TransferResult, ApiError>
 }
 
 /// Build a full `MissionResultPayload` from a planned mission.
+///
+/// If `navigation_accuracy` is provided in the mission definition, covariance
+/// propagation is run and included in the result. Covariance failures are
+/// non-fatal — the result is returned without covariance data.
 fn build_result(
     def: &MissionDefinition,
     transfer: &TransferResult,
     wp_mission: rpo_core::mission::WaypointMission,
     auto_drag_config: Option<rpo_core::propagation::DragConfig>,
+    propagator: &PropagationModel,
 ) -> MissionResultPayload {
     let transfer_eclipse = transfer.plan.transfer.as_ref().and_then(|t| {
         compute_transfer_eclipse(t, &def.chief, 200).ok()
     });
 
     let total_dv_km_s = transfer.lambert_dv_km_s + wp_mission.total_dv_km_s;
+
+    let covariance = def.navigation_accuracy.as_ref().and_then(|nav| {
+        let initial_p =
+            ric_accuracy_to_roe_covariance(nav, &transfer.plan.chief_at_arrival).ok()?;
+        propagate_mission_covariance(
+            &wp_mission,
+            &initial_p,
+            nav,
+            def.maneuver_uncertainty.as_ref(),
+            propagator,
+            DEFAULT_COVARIANCE_SAMPLES_PER_LEG,
+        )
+        .ok()
+    });
 
     MissionResultPayload {
         phase: transfer.plan.phase.clone(),
@@ -74,13 +89,17 @@ fn build_result(
         mission: wp_mission,
         total_dv_km_s,
         auto_drag_config,
-        covariance: None,
+        covariance,
     }
 }
 
 /// Plan a full mission: classify → Lambert → waypoints → safety → eclipse.
 ///
-/// Pure function — runs in microseconds to ~100ms.
+/// Pure function — runs in microseconds to ~100ms. Optional covariance
+/// propagation (when `navigation_accuracy` is provided) adds a few milliseconds.
+///
+/// # Errors
+/// Returns [`ApiError`] if classification, Lambert, or waypoint planning fails.
 pub fn handle_plan(
     def: &MissionDefinition,
     _almanac: &Arc<Almanac>,
@@ -98,12 +117,15 @@ pub fn handle_plan(
     let wp_mission =
         plan_waypoint_mission(&departure, &waypoints, &def.config, &propagator)?;
 
-    Ok(build_result(def, &transfer, wp_mission, None))
+    Ok(build_result(def, &transfer, wp_mission, None, &propagator))
 }
 
 /// Replan from a moved waypoint (keeps earlier legs).
 ///
 /// Pure function — runs in microseconds.
+///
+/// # Errors
+/// Returns [`ApiError`] if planning or replanning fails.
 pub fn handle_move_waypoint(
     def: &MissionDefinition,
     modified_index: usize,
@@ -133,13 +155,16 @@ pub fn handle_move_waypoint(
         &propagator,
     )?;
 
-    Ok(build_result(def, &transfer, wp_mission, None))
+    Ok(build_result(def, &transfer, wp_mission, None, &propagator))
 }
 
 /// Re-solve all waypoints with new config/propagator.
 ///
 /// Identical to `handle_plan` — the "update" semantic is a frontend optimization
 /// hint (the server always recomputes from scratch).
+///
+/// # Errors
+/// Returns [`ApiError`] if planning fails.
 pub fn handle_update_config(
     def: &MissionDefinition,
     almanac: &Arc<Almanac>,
