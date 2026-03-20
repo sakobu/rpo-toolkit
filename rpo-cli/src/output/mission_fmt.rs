@@ -1,5 +1,6 @@
 //! Mission phase + validation formatting.
 
+use owo_colors::{OwoColorize, Stream};
 use rpo_core::mission::{MissionPhase, ValidationReport};
 use rpo_core::pipeline::{PipelineInput, PipelineOutput};
 use rpo_core::propagation::{DragConfig, PropagationModel};
@@ -183,34 +184,34 @@ pub fn print_mission_verdict(
     if let Some(report) = validation {
         let num_assessment =
             rpo_core::mission::assess_safety(&report.numerical_safety, &sc);
-        let verdict = if num_assessment.overall_pass {
-            "FEASIBLE (safety metrics remain above threshold under nyx full-physics)"
+        if num_assessment.overall_pass {
+            println!("  Verdict:               {}", "FEASIBLE (safety metrics remain above threshold under nyx full-physics)".if_supports_color(Stream::Stdout, |v| v.green()));
         } else {
-            "CAUTION (numerical safety below threshold)"
-        };
-        println!("  Verdict:               {verdict}");
+            println!("  Verdict:               {}", "CAUTION (numerical safety below threshold)".if_supports_color(Stream::Stdout, |v| v.yellow()));
+        }
     } else if let Some(ref safety) = output.mission.safety {
         let ana_assessment = rpo_core::mission::assess_safety(safety, &sc);
-        let verdict = if ana_assessment.overall_pass {
-            "FEASIBLE (analytical safety above threshold)"
+        if ana_assessment.overall_pass {
+            println!("  Verdict:               {}", "FEASIBLE (analytical safety above threshold)".if_supports_color(Stream::Stdout, |v| v.green()));
         } else {
-            "CAUTION (analytical safety below threshold)"
-        };
-        println!("  Verdict:               {verdict}");
+            println!("  Verdict:               {}", "CAUTION (analytical safety below threshold)".if_supports_color(Stream::Stdout, |v| v.yellow()));
+        }
     }
 
     println!("\n  Δv Budget:");
     if total_dv_km_s > 0.0 {
         let lambert_pct = lambert_dv_km_s / total_dv_km_s * 100.0;
         let wp_pct = waypoint_dv_km_s / total_dv_km_s * 100.0;
-        let lambert_note = if lambert_pct > FAR_FIELD_DV_DRIVER_PCT {
-            " -- far-field driver"
+        if lambert_pct > FAR_FIELD_DV_DRIVER_PCT {
+            println!(
+                "    Lambert transfer:    {lambert_dv_km_s:.4} km/s  ({lambert_pct:.1}%{})",
+                " -- far-field driver".if_supports_color(Stream::Stdout, |v| v.red()),
+            );
         } else {
-            ""
-        };
-        println!(
-            "    Lambert transfer:    {lambert_dv_km_s:.4} km/s  ({lambert_pct:.1}%{lambert_note})",
-        );
+            println!(
+                "    Lambert transfer:    {lambert_dv_km_s:.4} km/s  ({lambert_pct:.1}%)",
+            );
+        }
         println!(
             "    Waypoint targeting:  {waypoint_dv_km_s:.4} km/s  ({wp_pct:.1}%)",
         );
@@ -218,7 +219,10 @@ pub fn print_mission_verdict(
         println!("    Lambert transfer:    {lambert_dv_km_s:.4} km/s");
         println!("    Waypoint targeting:  {waypoint_dv_km_s:.6} km/s");
     }
-    println!("    Total:               {total_dv_km_s:.4} km/s");
+    println!(
+        "    Total:               {}",
+        format!("{total_dv_km_s:.4} km/s").if_supports_color(Stream::Stdout, |v| v.green()),
+    );
 
     println!(
         "\n  Duration:              {:.1} min ({:.1} min transfer + {:.1} min proximity)",

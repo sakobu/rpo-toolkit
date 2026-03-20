@@ -10,11 +10,9 @@ use anise::prelude::Almanac;
 use tokio::sync::mpsc;
 
 use rpo_core::mission::{validate_mission_nyx, ValidationReport};
-use rpo_core::pipeline::{
-    compute_transfer, plan_waypoints_from_transfer, resolve_propagator, to_propagation_model,
-};
-use rpo_core::propagation::extract_dmf_rates;
+use rpo_core::pipeline::{compute_transfer, plan_waypoints_from_transfer};
 
+use super::common::resolve_drag_and_propagator;
 use crate::error::ApiError;
 use crate::protocol::{MissionDefinition, ProgressPhase, ProgressUpdate};
 
@@ -33,11 +31,13 @@ pub fn handle_validate(
     samples_per_leg: u32,
     auto_drag: bool,
 ) -> Result<ValidationReport, ApiError> {
-    let _ = progress_tx.blocking_send(ProgressUpdate {
+    if let Err(e) = progress_tx.try_send(ProgressUpdate {
         phase: ProgressPhase::Validate,
         detail: Some("Planning mission...".into()),
         fraction: Some(0.0),
-    });
+    }) {
+        tracing::debug!("Progress update dropped: {e}");
+    }
 
     let chief_config = def.chief_config.unwrap_or_default();
     let deputy_config = def.deputy_config.unwrap_or_default();
@@ -50,19 +50,8 @@ pub fn handle_validate(
     }
 
     // Phase 2: Resolve propagator
-    let auto_drag_config = if auto_drag {
-        Some(extract_dmf_rates(
-            &transfer.perch_chief,
-            &transfer.perch_deputy,
-            &chief_config,
-            &deputy_config,
-            almanac,
-        )?)
-    } else {
-        None
-    };
     let (propagator, _derived_drag) =
-        resolve_propagator(auto_drag_config, to_propagation_model(&def.propagator));
+        resolve_drag_and_propagator(auto_drag, &transfer, &chief_config, &deputy_config, almanac, def)?;
 
     // Phase 3: Plan waypoints
     let wp_mission = plan_waypoints_from_transfer(&transfer, def, &propagator)?;
@@ -72,11 +61,13 @@ pub fn handle_validate(
     }
 
     // Phase 4: Validate via nyx
-    let _ = progress_tx.blocking_send(ProgressUpdate {
+    if let Err(e) = progress_tx.try_send(ProgressUpdate {
         phase: ProgressPhase::Validate,
         detail: Some("Running nyx validation...".into()),
         fraction: Some(0.1),
-    });
+    }) {
+        tracing::debug!("Progress update dropped: {e}");
+    }
 
     let report = validate_mission_nyx(
         &wp_mission,
@@ -88,11 +79,13 @@ pub fn handle_validate(
         almanac,
     )?;
 
-    let _ = progress_tx.blocking_send(ProgressUpdate {
+    if let Err(e) = progress_tx.try_send(ProgressUpdate {
         phase: ProgressPhase::Validate,
         detail: Some("Validation complete".into()),
         fraction: Some(1.0),
-    });
+    }) {
+        tracing::debug!("Progress update dropped: {e}");
+    }
 
     Ok(report)
 }

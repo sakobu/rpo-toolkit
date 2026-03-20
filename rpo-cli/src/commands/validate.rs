@@ -3,15 +3,14 @@
 use std::path::Path;
 
 use rpo_core::mission::validate_mission_nyx;
-use rpo_core::pipeline::{
-    compute_transfer, plan_waypoints_from_transfer, resolve_propagator, to_propagation_model,
-    PipelineInput,
-};
-use rpo_core::propagation::{extract_dmf_rates, load_full_almanac};
+use rpo_core::pipeline::{compute_transfer, plan_waypoints_from_transfer, PipelineInput};
+use rpo_core::propagation::load_full_almanac;
 
 use crate::error::CliError;
 use crate::input::load_json;
-use crate::output::common::print_json;
+use crate::output::common::{
+    create_spinner, print_json, resolve_drag_and_propagator, status,
+};
 use crate::output::mission_fmt::{
     print_mission_human, print_mission_verdict, print_validation_details,
 };
@@ -28,38 +27,24 @@ pub fn run(
     let chief_config = input.chief_config.unwrap_or_default();
     let deputy_config = input.deputy_config.unwrap_or_default();
 
-    eprintln!("Loading almanac (may download on first run)...");
-    let almanac = load_full_almanac()?;
+    let spinner = create_spinner(json);
 
-    eprintln!("Phase 1: Classification + Lambert transfer...");
+    status!(spinner, "Phase 1: Classification + Lambert transfer...");
     let transfer = compute_transfer(&input)?;
 
-    // Resolve propagator (with optional auto-drag)
-    let auto_drag_config = if auto_drag {
-        eprintln!("Extracting differential drag rates via nyx...");
-        let drag = extract_dmf_rates(
-            &transfer.perch_chief,
-            &transfer.perch_deputy,
-            &chief_config,
-            &deputy_config,
-            &almanac,
-        )?;
-        eprintln!(
-            "  da_dot={:.6e}, dex_dot={:.6e}, dey_dot={:.6e}",
-            drag.da_dot, drag.dex_dot, drag.dey_dot
-        );
-        Some(drag)
-    } else {
-        None
-    };
-    let (prop, derived_drag) =
-        resolve_propagator(auto_drag_config, to_propagation_model(&input.propagator));
+    status!(spinner, "Loading almanac (may download on first run)...");
+    let almanac = load_full_almanac()?;
 
-    eprintln!("Phase 2: Waypoint targeting...");
+    let (prop, derived_drag) = resolve_drag_and_propagator(
+        auto_drag, &transfer, &chief_config, &deputy_config, &almanac, &input, spinner.as_ref(),
+    )?;
+
+    status!(spinner, "Phase 2: Waypoint targeting...");
     let wp_mission = plan_waypoints_from_transfer(&transfer, &input, &prop)?;
 
     // Phase 3: Nyx validation
-    eprintln!(
+    status!(
+        spinner,
         "Phase 3: Nyx validation ({samples_per_leg} samples/leg)..."
     );
     let report = validate_mission_nyx(
@@ -71,6 +56,10 @@ pub fn run(
         &deputy_config,
         &almanac,
     )?;
+
+    if let Some(s) = spinner {
+        s.finish_and_clear();
+    }
     eprintln!("Validation complete.");
 
     let output = rpo_core::pipeline::build_output(

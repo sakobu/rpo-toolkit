@@ -4,14 +4,15 @@ use std::path::Path;
 
 use rpo_core::mission::{run_monte_carlo, MonteCarloInput};
 use rpo_core::pipeline::{
-    compute_mission_covariance, compute_transfer, plan_waypoints_from_transfer,
-    resolve_propagator, to_propagation_model, PipelineInput,
+    compute_mission_covariance, compute_transfer, plan_waypoints_from_transfer, PipelineInput,
 };
-use rpo_core::propagation::{extract_dmf_rates, load_full_almanac};
+use rpo_core::propagation::load_full_almanac;
 
 use crate::error::CliError;
 use crate::input::load_json;
-use crate::output::common::{print_derived_drag, print_json};
+use crate::output::common::{
+    create_spinner, print_derived_drag, print_json, resolve_drag_and_propagator, status,
+};
 use crate::output::mc_fmt::print_mc_report;
 
 /// Run full-physics Monte Carlo pipeline.
@@ -30,39 +31,24 @@ pub fn run(input_path: &Path, json: bool, auto_drag: bool) -> Result<(), CliErro
         .as_ref()
         .ok_or(CliError::MissingField { field: "monte_carlo", context: "mc" })?;
 
-    eprintln!("Phase 1: Classification + Lambert transfer...");
+    let spinner = create_spinner(json);
+
+    status!(spinner, "Phase 1: Classification + Lambert transfer...");
     let transfer = compute_transfer(&input)?;
 
-    eprintln!("Loading almanac (may download on first run)...");
+    status!(spinner, "Loading almanac (may download on first run)...");
     let almanac = load_full_almanac()?;
 
-    // Resolve propagator (with optional auto-drag)
-    let auto_drag_config = if auto_drag {
-        eprintln!("Extracting differential drag rates via nyx...");
-        let drag = extract_dmf_rates(
-            &transfer.perch_chief,
-            &transfer.perch_deputy,
-            &chief_config,
-            &deputy_config,
-            &almanac,
-        )?;
-        eprintln!(
-            "  da_dot={:.6e}, dex_dot={:.6e}, dey_dot={:.6e}",
-            drag.da_dot, drag.dex_dot, drag.dey_dot
-        );
-        Some(drag)
-    } else {
-        None
-    };
-    let (prop, derived_drag) =
-        resolve_propagator(auto_drag_config, to_propagation_model(&input.propagator));
+    let (prop, derived_drag) = resolve_drag_and_propagator(
+        auto_drag, &transfer, &chief_config, &deputy_config, &almanac, &input, spinner.as_ref(),
+    )?;
 
-    eprintln!("Phase 2: Waypoint targeting...");
+    status!(spinner, "Phase 2: Waypoint targeting...");
     let wp_mission = plan_waypoints_from_transfer(&transfer, &input, &prop)?;
 
     // Optional covariance propagation
     let covariance_report = if let Some(ref nav) = input.navigation_accuracy {
-        eprintln!("Running covariance propagation...");
+        status!(spinner, "Running covariance propagation...");
         Some(compute_mission_covariance(
             &wp_mission,
             &transfer.plan.chief_at_arrival,
@@ -75,9 +61,10 @@ pub fn run(input_path: &Path, json: bool, auto_drag: bool) -> Result<(), CliErro
     };
 
     // Run Monte Carlo
-    eprintln!(
+    status!(
+        spinner,
         "Phase 4: Running Monte Carlo ({} samples, {:?} mode)...",
-        mc_config.num_samples, mc_config.mode,
+        mc_config.num_samples, mc_config.mode
     );
 
     let mc_input = MonteCarloInput {
@@ -95,6 +82,10 @@ pub fn run(input_path: &Path, json: bool, auto_drag: bool) -> Result<(), CliErro
     };
 
     let report = run_monte_carlo(&mc_input)?;
+
+    if let Some(s) = spinner {
+        s.finish_and_clear();
+    }
     eprintln!(
         "Monte Carlo complete ({:.1}s wall time).",
         report.elapsed_wall_s

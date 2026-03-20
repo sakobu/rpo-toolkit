@@ -2,7 +2,7 @@
 
 use std::path::PathBuf;
 
-use clap::{Parser, Subcommand};
+use clap::{ColorChoice, Parser, Subcommand};
 
 /// RPO mission planning tool.
 #[derive(Parser)]
@@ -13,6 +13,10 @@ use clap::{Parser, Subcommand};
                   Plumbing commands always produce JSON."
 )]
 pub struct Cli {
+    /// Color output mode.
+    #[arg(long, global = true, default_value_t = ColorChoice::Auto)]
+    pub color: ColorChoice,
+
     /// Subcommand to run.
     #[command(subcommand)]
     pub command: Option<Command>,
@@ -104,5 +108,13 @@ pub enum Command {
         /// Path to JSON input file.
         #[arg(short, long)]
         input: PathBuf,
+    },
+
+    // ---- Utilities ----
+    /// Generate shell completion scripts.
+    Completions {
+        /// Shell to generate completions for (bash, zsh, fish, elvish, powershell).
+        #[arg(value_enum)]
+        shell: clap_complete::Shell,
     },
 }

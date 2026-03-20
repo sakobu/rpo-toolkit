@@ -12,10 +12,9 @@ use tokio::sync::mpsc;
 use rpo_core::mission::{run_monte_carlo, MonteCarloControl, MonteCarloInput, MonteCarloReport};
 use rpo_core::pipeline::{
     compute_mission_covariance, compute_transfer, plan_waypoints_from_transfer,
-    resolve_propagator, to_propagation_model,
 };
-use rpo_core::propagation::extract_dmf_rates;
 
+use super::common::resolve_drag_and_propagator;
 use crate::error::{require_field, ApiError};
 use crate::protocol::{MissionDefinition, ProgressPhase, ProgressUpdate};
 
@@ -35,11 +34,13 @@ pub fn handle_mc(
     let deputy_config = require_field(def.deputy_config, "deputy_config", "Monte Carlo")?;
     let mc_config = require_field(def.monte_carlo.as_ref(), "monte_carlo", "Monte Carlo")?;
 
-    let _ = progress_tx.blocking_send(ProgressUpdate {
+    if let Err(e) = progress_tx.try_send(ProgressUpdate {
         phase: ProgressPhase::Mc,
         detail: Some("Planning mission...".into()),
         fraction: Some(0.0),
-    });
+    }) {
+        tracing::debug!("Progress update dropped: {e}");
+    }
 
     // Phase 1: Compute transfer
     let transfer = compute_transfer(def)?;
@@ -49,19 +50,8 @@ pub fn handle_mc(
     }
 
     // Phase 2: Resolve propagator
-    let auto_drag_config = if auto_drag {
-        Some(extract_dmf_rates(
-            &transfer.perch_chief,
-            &transfer.perch_deputy,
-            &chief_config,
-            &deputy_config,
-            almanac,
-        )?)
-    } else {
-        None
-    };
     let (propagator, _derived_drag) =
-        resolve_propagator(auto_drag_config, to_propagation_model(&def.propagator));
+        resolve_drag_and_propagator(auto_drag, &transfer, &chief_config, &deputy_config, almanac, def)?;
 
     // Phase 3: Plan waypoints
     let wp_mission = plan_waypoints_from_transfer(&transfer, def, &propagator)?;
@@ -84,11 +74,13 @@ pub fn handle_mc(
     };
 
     // Run Monte Carlo
-    let _ = progress_tx.blocking_send(ProgressUpdate {
+    if let Err(e) = progress_tx.try_send(ProgressUpdate {
         phase: ProgressPhase::Mc,
         detail: Some(format!("Running {} MC samples...", mc_config.num_samples)),
         fraction: Some(0.1),
-    });
+    }) {
+        tracing::debug!("Progress update dropped: {e}");
+    }
 
     let mc_control = MonteCarloControl {
         progress: Arc::new(AtomicU32::new(0)),
@@ -111,11 +103,13 @@ pub fn handle_mc(
 
     let report = run_monte_carlo(&mc_input)?;
 
-    let _ = progress_tx.blocking_send(ProgressUpdate {
+    if let Err(e) = progress_tx.try_send(ProgressUpdate {
         phase: ProgressPhase::Mc,
         detail: Some("Monte Carlo complete".into()),
         fraction: Some(1.0),
-    });
+    }) {
+        tracing::debug!("Progress update dropped: {e}");
+    }
 
     Ok(report)
 }

@@ -180,6 +180,11 @@ pub enum ServerMessage {
         /// Correlation ID of the cancelled operation.
         request_id: u64,
     },
+    /// Periodic heartbeat sent during long-running operations.
+    Heartbeat {
+        /// Monotonic counter (increments each heartbeat).
+        seq: u64,
+    },
     /// Error response.
     Error {
         /// Correlation ID (None if error is not tied to a specific request).

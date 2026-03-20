@@ -1,11 +1,93 @@
 //! Shared output helpers.
 
+use std::sync::Arc;
+use std::time::Duration;
+
+use anise::prelude::Almanac;
+use indicatif::{ProgressBar, ProgressStyle};
 use serde::Serialize;
 
 use rpo_core::mission::PercentileStats;
-use rpo_core::types::QuasiNonsingularROE;
+use rpo_core::pipeline::{resolve_propagator, to_propagation_model, PipelineInput, TransferResult};
+use rpo_core::propagation::{extract_dmf_rates, DragConfig, PropagationModel};
+use rpo_core::types::{QuasiNonsingularROE, SpacecraftConfig};
 
 use crate::error::CliError;
+
+/// Print a status message to the spinner if available, otherwise to stderr.
+macro_rules! status {
+    ($spinner:expr, $($arg:tt)*) => {
+        if let Some(s) = &$spinner {
+            s.set_message(format!($($arg)*));
+        } else {
+            eprintln!($($arg)*);
+        }
+    };
+}
+pub(crate) use status;
+
+/// Create an animated spinner for long-running CLI operations.
+///
+/// Returns `None` if `json` is true (machine-readable output suppresses spinners).
+#[must_use]
+pub fn create_spinner(json: bool) -> Option<ProgressBar> {
+    if json {
+        return None;
+    }
+    let s = ProgressBar::new_spinner();
+    s.set_style(
+        ProgressStyle::default_spinner()
+            .template("{spinner:.green} {msg}")
+            .expect("valid spinner template"),
+    );
+    s.enable_steady_tick(Duration::from_millis(120));
+    Some(s)
+}
+
+/// Resolve propagator with optional auto-drag extraction.
+///
+/// If `auto_drag` is true, extracts differential drag rates via nyx DMF
+/// and prints them to stderr. Returns the propagation model and optional
+/// derived drag config.
+///
+/// # Errors
+///
+/// Returns [`CliError`] if drag extraction or propagator resolution fails.
+pub fn resolve_drag_and_propagator(
+    auto_drag: bool,
+    transfer: &TransferResult,
+    chief_config: &SpacecraftConfig,
+    deputy_config: &SpacecraftConfig,
+    almanac: &Arc<Almanac>,
+    input: &PipelineInput,
+    spinner: Option<&ProgressBar>,
+) -> Result<(PropagationModel, Option<DragConfig>), CliError> {
+    let auto_drag_config = if auto_drag {
+        if let Some(s) = spinner {
+            s.set_message("Extracting differential drag rates via nyx...".to_string());
+        } else {
+            eprintln!("Extracting differential drag rates via nyx...");
+        }
+        let drag = extract_dmf_rates(
+            &transfer.perch_chief,
+            &transfer.perch_deputy,
+            chief_config,
+            deputy_config,
+            almanac,
+        )?;
+        eprintln!(
+            "  da_dot={:.6e}, dex_dot={:.6e}, dey_dot={:.6e}",
+            drag.da_dot, drag.dex_dot, drag.dey_dot
+        );
+        Some(drag)
+    } else {
+        None
+    };
+    Ok(resolve_propagator(
+        auto_drag_config,
+        to_propagation_model(&input.propagator),
+    ))
+}
 
 /// Pretty-print a value as JSON to stdout.
 ///

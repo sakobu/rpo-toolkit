@@ -1,5 +1,6 @@
 //! Safety analysis formatting.
 
+use owo_colors::{OwoColorize, Stream};
 use rpo_core::mission::{
     assess_safety, MissionConfig, RcContext, SafetyConfig, SafetyMetrics, ValidationReport,
 };
@@ -12,14 +13,12 @@ pub fn print_safety_analysis(safety: &SafetyMetrics, config: &SafetyConfig) {
     let assessment = assess_safety(safety, config);
 
     println!("\nOperational Safety (analytical, sampled every ~21 s):");
-    println!(
-        "  3D distance constraint:   {}",
-        if assessment.distance_3d_pass {
-            "PASS"
-        } else {
-            "FAIL"
-        }
-    );
+    print!("  3D distance constraint:   ");
+    if assessment.distance_3d_pass {
+        println!("{}", "PASS".if_supports_color(Stream::Stdout, |v| v.green()));
+    } else {
+        println!("{}", "FAIL".if_supports_color(Stream::Stdout, |v| v.red()));
+    }
     println!(
         "  Min 3D distance:          {:.4} km  (threshold: {:.2} km)",
         safety.operational.min_distance_3d_km, config.min_distance_3d_km
@@ -65,14 +64,12 @@ pub fn print_safety_analysis(safety: &SafetyMetrics, config: &SafetyConfig) {
     );
 
     println!("\nAbort Safety (free-drift e/i bound):");
-    println!(
-        "  e/i separation constraint: {}",
-        if assessment.ei_separation_pass {
-            "PASS"
-        } else {
-            "FAIL"
-        }
-    );
+    print!("  e/i separation constraint: ");
+    if assessment.ei_separation_pass {
+        println!("{}", "PASS".if_supports_color(Stream::Stdout, |v| v.green()));
+    } else {
+        println!("{}", "FAIL".if_supports_color(Stream::Stdout, |v| v.red()));
+    }
     println!(
         "  Min e/i separation:       {:.4} km  (threshold: {:.2} km)",
         safety.passive.min_ei_separation_km, config.min_ei_separation_km
@@ -88,14 +85,12 @@ pub fn print_safety_analysis(safety: &SafetyMetrics, config: &SafetyConfig) {
         safety.passive.ei_phase_angle_rad.to_degrees()
     );
 
-    println!(
-        "\n  Overall:                  {}",
-        if assessment.overall_pass {
-            "PASS"
-        } else {
-            "FAIL"
-        }
-    );
+    print!("\n  Overall:                  ");
+    if assessment.overall_pass {
+        println!("{}", "PASS".if_supports_color(Stream::Stdout, |v| v.green()));
+    } else {
+        println!("{}", "FAIL".if_supports_color(Stream::Stdout, |v| v.red()));
+    }
 }
 
 /// Print compact safety metrics with threshold context.

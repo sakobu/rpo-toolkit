@@ -24,6 +24,7 @@ use crate::types::{KeplerianElements, QuasiNonsingularROE};
 ///
 /// # Errors
 /// Returns `ConversionError::KeplerFailure` if `chief.a_km <= 0` or `chief.e` is outside [0, 1).
+#[allow(clippy::similar_names)] // dex/dey/dix are standard QNS ROE component names
 pub fn compute_roe(
     chief: &KeplerianElements,
     deputy: &KeplerianElements,

@@ -1,0 +1,608 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/sakobu/roe-rust/docs/schema/pipeline-input.schema.json",
+  "title": "PipelineInput",
+  "description": "Canonical mission input for the RPO planner. Used by both the CLI (as JSON file input) and the WebSocket API (as the `mission` field in every request). The server is stateless: send the full definition with every message.",
+  "type": "object",
+  "required": ["chief", "deputy", "waypoints"],
+  "properties": {
+    "chief": {
+      "$ref": "#/$defs/StateVector",
+      "description": "Chief spacecraft ECI state at the mission epoch."
+    },
+    "deputy": {
+      "$ref": "#/$defs/StateVector",
+      "description": "Deputy spacecraft ECI state at the mission epoch."
+    },
+    "perch": {
+      "$ref": "#/$defs/PerchGeometry",
+      "description": "Perch orbit geometry for Lambert-to-proximity handoff. Default: V-bar hold at 5 km.",
+      "default": { "VBar": { "along_track_km": 5.0 } }
+    },
+    "lambert_tof_s": {
+      "type": "number",
+      "description": "Lambert transfer time-of-flight in seconds.",
+      "default": 3600.0,
+      "exclusiveMinimum": 0
+    },
+    "lambert_config": {
+      "$ref": "#/$defs/LambertConfig",
+      "description": "Lambert solver configuration (direction and revolution count).",
+      "default": { "direction": "Auto", "revolutions": 0 }
+    },
+    "waypoints": {
+      "type": "array",
+      "description": "Waypoint targets in the RIC frame. At least one waypoint is required for mission planning.",
+      "items": {
+        "$ref": "#/$defs/WaypointInput"
+      }
+    },
+    "proximity": {
+      "$ref": "#/$defs/ProximityConfig",
+      "description": "Classification threshold for proximity vs. far-field.",
+      "default": { "roe_threshold": 0.005 }
+    },
+    "config": {
+      "$ref": "#/$defs/MissionConfig",
+      "description": "Solver configuration: targeting, TOF optimization, and safety."
+    },
+    "propagator": {
+      "$ref": "#/$defs/PropagatorChoice",
+      "description": "Propagator selection: J2 analytical or J2+drag analytical.",
+      "default": "j2"
+    },
+    "chief_config": {
+      "$ref": "#/$defs/SpacecraftConfig",
+      "description": "Chief spacecraft physical properties. Required for validate, mc, and drag extraction."
+    },
+    "deputy_config": {
+      "$ref": "#/$defs/SpacecraftConfig",
+      "description": "Deputy spacecraft physical properties. Required for validate, mc, and drag extraction."
+    },
+    "navigation_accuracy": {
+      "$ref": "#/$defs/NavigationAccuracy",
+      "description": "Navigation accuracy for covariance propagation. If omitted, covariance is not computed."
+    },
+    "maneuver_uncertainty": {
+      "$ref": "#/$defs/ManeuverUncertainty",
+      "description": "Maneuver execution uncertainty for covariance propagation."
+    },
+    "monte_carlo": {
+      "$ref": "#/$defs/MonteCarloConfig",
+      "description": "Monte Carlo configuration. Required for the RunMC command."
+    }
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "StateVector": {
+      "type": "object",
+      "description": "Spacecraft state in Earth-Centered Inertial (ECI) frame.",
+      "required": ["epoch", "position_eci_km", "velocity_eci_km_s"],
+      "properties": {
+        "epoch": {
+          "type": "string",
+          "description": "Epoch in ISO 8601 format (e.g., \"2024-01-01T00:00:00 UTC\"). Parsed by hifitime.",
+          "examples": ["2024-01-01T00:00:00 UTC"]
+        },
+        "position_eci_km": {
+          "type": "array",
+          "description": "ECI position vector [x, y, z] in kilometers.",
+          "items": { "type": "number" },
+          "minItems": 3,
+          "maxItems": 3
+        },
+        "velocity_eci_km_s": {
+          "type": "array",
+          "description": "ECI velocity vector [vx, vy, vz] in km/s.",
+          "items": { "type": "number" },
+          "minItems": 3,
+          "maxItems": 3
+        }
+      },
+      "additionalProperties": false
+    },
+    "WaypointInput": {
+      "type": "object",
+      "description": "A waypoint target in the RIC (Radial, In-track, Cross-track) frame relative to the chief.",
+      "required": ["position_ric_km"],
+      "properties": {
+        "position_ric_km": {
+          "type": "array",
+          "description": "RIC position target [R, I, C] in kilometers.",
+          "items": { "type": "number" },
+          "minItems": 3,
+          "maxItems": 3
+        },
+        "velocity_ric_km_s": {
+          "type": "array",
+          "description": "RIC velocity target [R, I, C] in km/s. Defaults to [0, 0, 0] if omitted.",
+          "items": { "type": "number" },
+          "minItems": 3,
+          "maxItems": 3
+        },
+        "tof_s": {
+          "type": "number",
+          "description": "Time-of-flight hint in seconds. If omitted, the solver optimizes TOF via golden-section search.",
+          "exclusiveMinimum": 0
+        },
+        "label": {
+          "type": "string",
+          "description": "Human-readable label for display (e.g., \"Approach to 2 km\")."
+        }
+      },
+      "additionalProperties": false
+    },
+    "PerchGeometry": {
+      "description": "Predefined perch orbit geometry relative to the chief. Exactly one variant must be specified.",
+      "oneOf": [
+        {
+          "type": "object",
+          "description": "V-bar hold: deputy ahead/behind chief along the velocity vector.",
+          "required": ["VBar"],
+          "properties": {
+            "VBar": {
+              "type": "object",
+              "required": ["along_track_km"],
+              "properties": {
+                "along_track_km": {
+                  "type": "number",
+                  "description": "Along-track offset in km. Positive = ahead of chief."
+                }
+              },
+              "additionalProperties": false
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "description": "R-bar hold: deputy above/below chief along the radial vector.",
+          "required": ["RBar"],
+          "properties": {
+            "RBar": {
+              "type": "object",
+              "required": ["radial_km"],
+              "properties": {
+                "radial_km": {
+                  "type": "number",
+                  "description": "Radial offset in km. Positive = above chief."
+                }
+              },
+              "additionalProperties": false
+            }
+          },
+          "additionalProperties": false
+        }
+      ]
+    },
+    "LambertConfig": {
+      "type": "object",
+      "description": "Configuration for the Lambert transfer solver.",
+      "properties": {
+        "direction": {
+          "type": "string",
+          "description": "Transfer direction selection.",
+          "enum": ["Auto", "ShortWay", "LongWay"],
+          "default": "Auto"
+        },
+        "revolutions": {
+          "type": "integer",
+          "description": "Number of complete revolutions (0 = direct transfer).",
+          "minimum": 0,
+          "maximum": 255,
+          "default": 0
+        }
+      },
+      "additionalProperties": false
+    },
+    "ProximityConfig": {
+      "type": "object",
+      "description": "Classification threshold configuration.",
+      "properties": {
+        "roe_threshold": {
+          "type": "number",
+          "description": "Max dimensionless relative separation (delta-r/r) for ROE linearization validity. Below this threshold, the pair is classified as Proximity; above, as FarField.",
+          "default": 0.005,
+          "exclusiveMinimum": 0
+        }
+      },
+      "additionalProperties": false
+    },
+    "MissionConfig": {
+      "type": "object",
+      "description": "Bundled mission configuration: targeting, TOF optimization, and safety.",
+      "properties": {
+        "targeting": {
+          "$ref": "#/$defs/TargetingConfig",
+          "description": "Newton-Raphson targeting solver settings."
+        },
+        "tof": {
+          "$ref": "#/$defs/TofOptConfig",
+          "description": "Time-of-flight optimization settings."
+        },
+        "safety": {
+          "$ref": "#/$defs/SafetyConfig",
+          "description": "Passive safety analysis settings. If omitted, safety analysis is skipped."
+        }
+      },
+      "additionalProperties": false
+    },
+    "TargetingConfig": {
+      "type": "object",
+      "description": "Newton-Raphson targeting solver configuration.",
+      "properties": {
+        "max_iterations": {
+          "type": "integer",
+          "description": "Maximum Newton-Raphson iterations.",
+          "default": 100,
+          "minimum": 1
+        },
+        "position_tol_km": {
+          "type": "number",
+          "description": "Position convergence tolerance in km.",
+          "default": 1e-6,
+          "exclusiveMinimum": 0
+        },
+        "initial_damping": {
+          "type": "number",
+          "description": "Initial damping factor for Newton steps.",
+          "default": 1.0,
+          "exclusiveMinimum": 0
+        },
+        "dv_cap_km_s": {
+          "type": "number",
+          "description": "Cap on any single delta-v component in km/s.",
+          "default": 1.0,
+          "exclusiveMinimum": 0
+        },
+        "trajectory_steps": {
+          "type": "integer",
+          "description": "Number of trajectory sample points per leg for output.",
+          "default": 200,
+          "minimum": 1
+        }
+      },
+      "additionalProperties": false
+    },
+    "TofOptConfig": {
+      "type": "object",
+      "description": "Time-of-flight optimization via golden-section search.",
+      "properties": {
+        "min_periods": {
+          "type": "number",
+          "description": "Minimum TOF as fraction of the chief orbital period.",
+          "default": 0.5,
+          "exclusiveMinimum": 0
+        },
+        "max_periods": {
+          "type": "number",
+          "description": "Maximum TOF as fraction of the chief orbital period.",
+          "default": 3.0,
+          "exclusiveMinimum": 0
+        },
+        "num_starts": {
+          "type": "integer",
+          "description": "Number of initial TOF samples for multi-start optimization.",
+          "default": 5,
+          "minimum": 1
+        },
+        "tol_s": {
+          "type": "number",
+          "description": "Golden-section convergence tolerance in seconds.",
+          "default": 1.0,
+          "exclusiveMinimum": 0
+        }
+      },
+      "additionalProperties": false
+    },
+    "SafetyConfig": {
+      "type": "object",
+      "description": "Safety analysis thresholds for operational and passive safety checks.",
+      "properties": {
+        "min_ei_separation_km": {
+          "type": "number",
+          "description": "Eccentricity/inclination vector separation threshold in km (passive/abort safety, D'Amico Eq. 2.22).",
+          "default": 0.2,
+          "exclusiveMinimum": 0
+        },
+        "min_distance_3d_km": {
+          "type": "number",
+          "description": "3D keep-out sphere threshold in km (operational safety).",
+          "default": 0.1,
+          "exclusiveMinimum": 0
+        }
+      },
+      "additionalProperties": false
+    },
+    "PropagatorChoice": {
+      "description": "Propagator selection. Either the string \"j2\" or an object with a \"j2_drag\" key containing a DragConfig.",
+      "oneOf": [
+        {
+          "const": "j2",
+          "description": "J2-perturbed analytical propagation (no drag)."
+        },
+        {
+          "type": "object",
+          "description": "J2 + differential drag analytical propagation.",
+          "required": ["j2_drag"],
+          "properties": {
+            "j2_drag": {
+              "type": "object",
+              "required": ["drag"],
+              "properties": {
+                "drag": {
+                  "$ref": "#/$defs/DragConfig"
+                }
+              },
+              "additionalProperties": false
+            }
+          },
+          "additionalProperties": false
+        }
+      ]
+    },
+    "DragConfig": {
+      "type": "object",
+      "description": "Density-model-free (DMF) differential drag configuration (Koenig Sec. VIII). Time derivatives of relative orbital elements due to differential drag.",
+      "required": ["da_dot", "dex_dot", "dey_dot"],
+      "properties": {
+        "da_dot": {
+          "type": "number",
+          "description": "Time derivative of relative SMA due to drag (1/s, normalized by chief SMA)."
+        },
+        "dex_dot": {
+          "type": "number",
+          "description": "Time derivative of relative eccentricity x-component due to drag (1/s)."
+        },
+        "dey_dot": {
+          "type": "number",
+          "description": "Time derivative of relative eccentricity y-component due to drag (1/s)."
+        }
+      },
+      "additionalProperties": false
+    },
+    "SpacecraftConfig": {
+      "type": "object",
+      "description": "Physical properties of a spacecraft for force modeling (nyx propagation, drag extraction).",
+      "required": ["dry_mass_kg", "drag_area_m2", "coeff_drag", "srp_area_m2", "coeff_reflectivity"],
+      "properties": {
+        "dry_mass_kg": {
+          "type": "number",
+          "description": "Spacecraft dry mass in kg.",
+          "exclusiveMinimum": 0
+        },
+        "drag_area_m2": {
+          "type": "number",
+          "description": "Drag reference area in square meters.",
+          "exclusiveMinimum": 0
+        },
+        "coeff_drag": {
+          "type": "number",
+          "description": "Coefficient of drag (dimensionless, typically 2.0-2.5).",
+          "exclusiveMinimum": 0
+        },
+        "srp_area_m2": {
+          "type": "number",
+          "description": "Solar radiation pressure reference area in square meters.",
+          "exclusiveMinimum": 0
+        },
+        "coeff_reflectivity": {
+          "type": "number",
+          "description": "Coefficient of reflectivity (dimensionless, typically 1.0-2.0).",
+          "exclusiveMinimum": 0
+        }
+      },
+      "additionalProperties": false
+    },
+    "NavigationAccuracy": {
+      "type": "object",
+      "description": "Navigation accuracy specification in the RIC frame for covariance propagation.",
+      "required": ["position_sigma_ric_km", "velocity_sigma_ric_km_s"],
+      "properties": {
+        "position_sigma_ric_km": {
+          "type": "array",
+          "description": "1-sigma position accuracy per RIC axis [radial, in-track, cross-track] in km.",
+          "items": { "type": "number", "exclusiveMinimum": 0 },
+          "minItems": 3,
+          "maxItems": 3
+        },
+        "velocity_sigma_ric_km_s": {
+          "type": "array",
+          "description": "1-sigma velocity accuracy per RIC axis [radial, in-track, cross-track] in km/s.",
+          "items": { "type": "number", "exclusiveMinimum": 0 },
+          "minItems": 3,
+          "maxItems": 3
+        }
+      },
+      "additionalProperties": false
+    },
+    "ManeuverUncertainty": {
+      "type": "object",
+      "description": "Maneuver execution uncertainty model for covariance propagation.",
+      "required": ["magnitude_sigma", "pointing_sigma_rad"],
+      "properties": {
+        "magnitude_sigma": {
+          "type": "number",
+          "description": "Proportional 1-sigma magnitude error (dimensionless, e.g., 0.01 = 1%).",
+          "minimum": 0
+        },
+        "pointing_sigma_rad": {
+          "type": "number",
+          "description": "1-sigma pointing error in radians, applied as isotropic rotation about the delta-v axis.",
+          "minimum": 0
+        }
+      },
+      "additionalProperties": false
+    },
+    "MonteCarloConfig": {
+      "type": "object",
+      "description": "Monte Carlo ensemble analysis configuration. All MC runs use nyx full-physics propagation.",
+      "required": ["num_samples", "dispersions", "mode", "trajectory_steps"],
+      "properties": {
+        "num_samples": {
+          "type": "integer",
+          "description": "Number of Monte Carlo samples to run.",
+          "minimum": 1
+        },
+        "dispersions": {
+          "$ref": "#/$defs/DispersionConfig",
+          "description": "Dispersion models for state, maneuver, and spacecraft properties."
+        },
+        "mode": {
+          "type": "string",
+          "description": "Execution mode: \"OpenLoop\" applies nominal delta-v plan with execution errors; \"ClosedLoop\" re-targets from each dispersed initial state.",
+          "enum": ["OpenLoop", "ClosedLoop"],
+          "default": "OpenLoop"
+        },
+        "seed": {
+          "type": "integer",
+          "description": "Master RNG seed for deterministic reproducibility. Defaults to 42 if omitted.",
+          "minimum": 0
+        },
+        "trajectory_steps": {
+          "type": "integer",
+          "description": "Number of trajectory sample points per leg for dispersion envelope.",
+          "minimum": 1
+        }
+      },
+      "additionalProperties": false
+    },
+    "DispersionConfig": {
+      "type": "object",
+      "description": "Composite dispersion configuration for Monte Carlo analysis.",
+      "properties": {
+        "state": {
+          "$ref": "#/$defs/StateDispersion",
+          "description": "Initial state uncertainty in the RIC frame (applied to deputy)."
+        },
+        "maneuver": {
+          "$ref": "#/$defs/ManeuverDispersion",
+          "description": "Maneuver execution uncertainty."
+        },
+        "spacecraft": {
+          "$ref": "#/$defs/SpacecraftDispersion",
+          "description": "Spacecraft property uncertainty (deputy only)."
+        }
+      },
+      "additionalProperties": false
+    },
+    "StateDispersion": {
+      "type": "object",
+      "description": "Initial state uncertainty model in the RIC frame, applied to the deputy.",
+      "required": [
+        "position_radial_km", "position_intrack_km", "position_crosstrack_km",
+        "velocity_radial_km_s", "velocity_intrack_km_s", "velocity_crosstrack_km_s"
+      ],
+      "properties": {
+        "position_radial_km": {
+          "$ref": "#/$defs/Distribution",
+          "description": "1-sigma radial position dispersion in km."
+        },
+        "position_intrack_km": {
+          "$ref": "#/$defs/Distribution",
+          "description": "1-sigma in-track position dispersion in km."
+        },
+        "position_crosstrack_km": {
+          "$ref": "#/$defs/Distribution",
+          "description": "1-sigma cross-track position dispersion in km."
+        },
+        "velocity_radial_km_s": {
+          "$ref": "#/$defs/Distribution",
+          "description": "1-sigma radial velocity dispersion in km/s."
+        },
+        "velocity_intrack_km_s": {
+          "$ref": "#/$defs/Distribution",
+          "description": "1-sigma in-track velocity dispersion in km/s."
+        },
+        "velocity_crosstrack_km_s": {
+          "$ref": "#/$defs/Distribution",
+          "description": "1-sigma cross-track velocity dispersion in km/s."
+        }
+      },
+      "additionalProperties": false
+    },
+    "ManeuverDispersion": {
+      "type": "object",
+      "description": "Maneuver execution error model for Monte Carlo sampling.",
+      "required": ["magnitude_sigma", "pointing_sigma_rad"],
+      "properties": {
+        "magnitude_sigma": {
+          "type": "number",
+          "description": "Proportional 1-sigma magnitude error (dimensionless, e.g., 0.01 = 1%).",
+          "minimum": 0
+        },
+        "pointing_sigma_rad": {
+          "type": "number",
+          "description": "1-sigma pointing error in radians.",
+          "minimum": 0
+        }
+      },
+      "additionalProperties": false
+    },
+    "SpacecraftDispersion": {
+      "type": "object",
+      "description": "Spacecraft property uncertainty for Monte Carlo (deputy only).",
+      "required": ["coeff_drag", "drag_area_m2", "dry_mass_kg"],
+      "properties": {
+        "coeff_drag": {
+          "$ref": "#/$defs/Distribution",
+          "description": "Drag coefficient dispersion."
+        },
+        "drag_area_m2": {
+          "$ref": "#/$defs/Distribution",
+          "description": "Drag cross-sectional area dispersion in square meters."
+        },
+        "dry_mass_kg": {
+          "$ref": "#/$defs/Distribution",
+          "description": "Dry mass dispersion in kg."
+        }
+      },
+      "additionalProperties": false
+    },
+    "Distribution": {
+      "description": "Distribution model for scalar uncertainty parameters. Exactly one variant.",
+      "oneOf": [
+        {
+          "type": "object",
+          "description": "Gaussian (normal) distribution.",
+          "required": ["Gaussian"],
+          "properties": {
+            "Gaussian": {
+              "type": "object",
+              "required": ["sigma"],
+              "properties": {
+                "sigma": {
+                  "type": "number",
+                  "description": "1-sigma standard deviation (must be non-negative).",
+                  "minimum": 0
+                }
+              },
+              "additionalProperties": false
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "description": "Uniform distribution centered on nominal.",
+          "required": ["Uniform"],
+          "properties": {
+            "Uniform": {
+              "type": "object",
+              "required": ["half_width"],
+              "properties": {
+                "half_width": {
+                  "type": "number",
+                  "description": "Half-width of the uniform range (must be non-negative).",
+                  "minimum": 0
+                }
+              },
+              "additionalProperties": false
+            }
+          },
+          "additionalProperties": false
+        }
+      ]
+    }
+  }
+}

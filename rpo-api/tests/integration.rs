@@ -1,6 +1,8 @@
 //! Integration tests for the rpo-api WebSocket server.
 //!
 //! Start server on random port, connect via WebSocket, verify message flow.
+//! Each test creates its own server because `#[tokio::test]` uses a per-test
+//! runtime — a shared server would be killed when the spawning test completes.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -376,4 +378,116 @@ async fn empty_waypoints_error_detail() {
         "detail: {}",
         resp["detail"]
     );
+}
+
+// ---------------------------------------------------------------------------
+// Binary frame rejection
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn binary_frame_returns_error() {
+    let url = start_test_server().await;
+    let (mut ws, _) = connect_async(&url).await.expect("connect");
+
+    ws.send(Message::Binary(vec![0x00, 0x01, 0x02].into()))
+        .await
+        .expect("send");
+
+    let response = timeout(Duration::from_secs(5), ws.next())
+        .await
+        .expect("timeout")
+        .expect("stream")
+        .expect("msg");
+    let text = response.into_text().expect("text");
+    let parsed: Value = serde_json::from_str(&text).expect("json");
+
+    assert_eq!(parsed["type"], "Error");
+    assert_eq!(parsed["code"], "invalid_input");
+    assert!(parsed["message"].as_str().unwrap().contains("text frame"));
+}
+
+// ---------------------------------------------------------------------------
+// Cancel without active job (connection survives)
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn cancel_without_active_job_no_crash() {
+    let url = start_test_server().await;
+    let (mut ws, _) = connect_async(&url).await.expect("connect");
+
+    // Send Cancel with no active job
+    ws.send(Message::Text(
+        json!({"type": "Cancel", "request_id": 99}).to_string().into(),
+    ))
+    .await
+    .expect("send");
+
+    // Small delay to let server process the cancel
+    tokio::time::sleep(Duration::from_millis(100)).await;
+
+    // Verify connection still alive by sending a classify
+    let resp = send_recv(
+        &mut ws,
+        json!({
+            "type": "Classify",
+            "request_id": 100,
+            "mission": proximity_mission()
+        }),
+    )
+    .await;
+    assert_eq!(resp["type"], "ClassifyResult");
+}
+
+// ---------------------------------------------------------------------------
+// ErrorCode serialization completeness
+// ---------------------------------------------------------------------------
+
+#[test]
+fn all_error_codes_serialize_to_snake_case() {
+    use rpo_api::protocol::ErrorCode;
+
+    let codes = [
+        (ErrorCode::TargetingConvergence, "targeting_convergence"),
+        (ErrorCode::LambertFailure, "lambert_failure"),
+        (ErrorCode::PropagationError, "propagation_error"),
+        (ErrorCode::ValidationError, "validation_error"),
+        (ErrorCode::MonteCarloError, "monte_carlo_error"),
+        (ErrorCode::NyxBridgeError, "nyx_bridge_error"),
+        (ErrorCode::CovarianceError, "covariance_error"),
+        (ErrorCode::InvalidInput, "invalid_input"),
+        (ErrorCode::MissionError, "mission_error"),
+        (ErrorCode::Cancelled, "cancelled"),
+    ];
+
+    for (code, expected) in &codes {
+        let json = serde_json::to_value(code).unwrap();
+        assert_eq!(json.as_str().unwrap(), *expected, "ErrorCode::{code:?}");
+    }
+}
+
+// ---------------------------------------------------------------------------
+// ApiError::to_server_message coverage
+// ---------------------------------------------------------------------------
+
+#[test]
+fn api_error_to_server_message_never_panics() {
+    use rpo_api::error::ApiError;
+    use rpo_core::mission::MissionError;
+
+    let errors: Vec<ApiError> = vec![
+        ApiError::from(MissionError::EmptyWaypoints),
+        ApiError::from(MissionError::TargetingConvergence {
+            final_error_km: 1.0,
+            iterations: 50,
+        }),
+        ApiError::Cancelled,
+    ];
+
+    for err in &errors {
+        let msg = err.to_server_message(Some(1));
+        let json = serde_json::to_value(&msg).unwrap();
+        assert_eq!(json["type"], "Error");
+        assert!(json["code"].is_string());
+        assert!(json["message"].is_string());
+    }
 }

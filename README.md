@@ -16,7 +16,7 @@ Astrodynamics toolkit for rendezvous and proximity operations (RPO) mission plan
 
 ```bash
 cargo build                     # build workspace
-cargo test                      # 312 tests across 3 crates (19 ignored: full-physics, require ANISE kernels)
+cargo test                      # 323 tests across 3 crates (19 ignored: full-physics, require ANISE kernels)
 ```
 
 Run an example mission (analytical):
@@ -204,9 +204,19 @@ The CLI provides batch execution and shell-composable plumbing for scripting and
 
 The `validate` and `mc` subcommands require spacecraft configs (`chief_config`, `deputy_config`) in the input JSON. See `examples/` for complete input file examples.
 
+### Shell Completions
+
+Generate shell completion scripts:
+
+```bash
+cargo run -p rpo-cli -- completions bash > /usr/local/etc/bash_completion.d/rpo-cli
+cargo run -p rpo-cli -- completions zsh > ~/.zfunc/_rpo-cli
+cargo run -p rpo-cli -- completions fish > ~/.config/fish/completions/rpo-cli.fish
+```
+
 ## Testing
 
-312 passing tests across 3 crates (301 rpo-core, 9 rpo-api, 2 doc), 19 ignored (full-physics tests requiring ANISE ephemeris kernels, ~50 MB cached download). Tests cover roundtrip transform invariants, STM identity at dt=0, energy/momentum conservation, regression against published data (Koenig Tables 2-3, D'Amico Sec. 2.1-2.2), Newton-Raphson convergence, deterministic Monte Carlo seeding, covariance symmetry preservation, and WebSocket handler integration.
+323 passing tests across 3 crates (303 rpo-core, 13 rpo-api, 5 rpo-cli, 2 doc), 19 ignored (full-physics tests requiring ANISE ephemeris kernels, ~50 MB cached download). Tests cover roundtrip transform invariants, STM identity at dt=0, energy/momentum conservation, regression against published data (Koenig Tables 2-3, D'Amico Sec. 2.1-2.2), Newton-Raphson convergence, deterministic Monte Carlo seeding, covariance symmetry preservation, WebSocket handler integration, error serialization, and CLI smoke tests.
 
 ```bash
 cargo test                  # full suite

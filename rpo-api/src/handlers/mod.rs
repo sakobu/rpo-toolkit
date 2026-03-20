@@ -5,6 +5,7 @@
 //! Background handlers (drag, validate, mc) are designed to be spawned on a blocking thread.
 
 pub mod classify;
+mod common;
 pub mod drag;
 pub mod mc;
 pub mod plan;

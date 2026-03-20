@@ -10,6 +10,7 @@ use anise::prelude::Almanac;
 use axum::extract::ws::{Message, WebSocket};
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
+use tokio::time::{interval, Duration};
 
 use rpo_core::mission::types::WaypointMission;
 
@@ -53,10 +54,13 @@ enum JobResult {
 /// 2. Progress updates from background tasks
 /// 3. Final results from background tasks
 pub async fn handle_ws(mut ws: WebSocket, almanac: Arc<Almanac>) {
-    let (progress_tx, mut progress_rx) = mpsc::channel::<ProgressUpdate>(64);
+    let (progress_tx, mut progress_rx) = mpsc::channel::<ProgressUpdate>(256);
     let (result_tx, mut result_rx) = mpsc::channel::<JobResult>(4);
     let mut active_job: Option<ActiveJob> = None;
     let mut last_mission: Option<WaypointMission> = None;
+    let mut heartbeat = interval(Duration::from_secs(30));
+    heartbeat.tick().await; // consume the immediate first tick
+    let mut heartbeat_seq: u64 = 0;
 
     loop {
         tokio::select! {
@@ -135,6 +139,14 @@ pub async fn handle_ws(mut ws: WebSocket, almanac: Arc<Almanac>) {
                 };
                 send_message(&mut ws, &msg).await;
                 active_job = None;
+                heartbeat_seq = 0;
+            }
+
+            // Heartbeat during long-running operations
+            _ = heartbeat.tick(), if active_job.is_some() => {
+                heartbeat_seq += 1;
+                let msg = ServerMessage::Heartbeat { seq: heartbeat_seq };
+                send_message(&mut ws, &msg).await;
             }
         }
     }

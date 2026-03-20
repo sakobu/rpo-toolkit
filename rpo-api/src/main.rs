@@ -31,7 +31,7 @@ async fn health() -> &'static str {
 }
 
 #[tokio::main]
-async fn main() {
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Initialize tracing
     tracing_subscriber::fmt::init();
 
@@ -45,7 +45,7 @@ async fn main() {
     // Load almanac
     tracing::info!("Loading almanac (may download on first run)...");
     let almanac = rpo_core::propagation::load_full_almanac()
-        .expect("failed to load almanac");
+        .map_err(|e| format!("failed to load almanac: {e}"))?;
     tracing::info!("Almanac loaded");
 
     let state = AppState { almanac };
@@ -62,12 +62,13 @@ async fn main() {
     tracing::info!("Listening on {addr}");
     let listener = tokio::net::TcpListener::bind(&addr)
         .await
-        .expect("failed to bind");
+        .map_err(|e| format!("failed to bind {addr}: {e}"))?;
 
     axum::serve(listener, app)
         .with_graceful_shutdown(shutdown_signal())
-        .await
-        .expect("server error");
+        .await?;
+
+    Ok(())
 }
 
 /// Wait for SIGINT or SIGTERM for graceful shutdown.
