@@ -55,6 +55,38 @@ pub enum PropagatorChoice {
     },
 }
 
+// ---- SpacecraftChoice ----
+
+/// User-facing spacecraft configuration selection.
+///
+/// Serializes as `"cubesat_6u"`, `"servicer_500kg"`, or
+/// `{ "custom": { "dry_mass_kg": ..., ... } }`.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, Default, PartialEq)]
+pub enum SpacecraftChoice {
+    /// Typical 6U cubesat: 12 kg, 0.06 m² cross-section.
+    #[serde(rename = "cubesat_6u")]
+    Cubesat6U,
+    /// Typical 500 kg servicer spacecraft.
+    #[default]
+    #[serde(rename = "servicer_500kg")]
+    Servicer500Kg,
+    /// Custom spacecraft physical properties.
+    #[serde(rename = "custom")]
+    Custom(SpacecraftConfig),
+}
+
+impl SpacecraftChoice {
+    /// Resolve to a concrete [`SpacecraftConfig`].
+    #[must_use]
+    pub fn resolve(self) -> SpacecraftConfig {
+        match self {
+            Self::Cubesat6U => SpacecraftConfig::CUBESAT_6U,
+            Self::Servicer500Kg => SpacecraftConfig::SERVICER_500KG,
+            Self::Custom(config) => config,
+        }
+    }
+}
+
 // ---- WaypointInput ----
 
 /// Waypoint target from user input (array-based for JSON ergonomics).
@@ -105,12 +137,12 @@ pub struct PipelineInput {
     /// Propagator selection: J2 or J2+Drag.
     #[serde(default)]
     pub propagator: PropagatorChoice,
-    /// Chief spacecraft physical properties (required for validate/mc/drag).
+    /// Chief spacecraft selection: preset or custom (required for validate/mc/drag).
     #[serde(default)]
-    pub chief_config: Option<SpacecraftConfig>,
-    /// Deputy spacecraft physical properties (required for validate/mc/drag).
+    pub chief_config: Option<SpacecraftChoice>,
+    /// Deputy spacecraft selection: preset or custom (required for validate/mc/drag).
     #[serde(default)]
-    pub deputy_config: Option<SpacecraftConfig>,
+    pub deputy_config: Option<SpacecraftChoice>,
     /// Navigation accuracy for covariance propagation.
     #[serde(default)]
     pub navigation_accuracy: Option<NavigationAccuracy>,

@@ -10,18 +10,22 @@
     "velocity_eci_km_s": [-3.993103, 2.970313, 5.76454]
   },
   "chief_config": {
-    "dry_mass_kg": 500.0,
-    "drag_area_m2": 1.0,
-    "coeff_drag": 2.2,
-    "srp_area_m2": 1.0,
-    "coeff_reflectivity": 1.8
+    "custom": {
+      "dry_mass_kg": 500.0,
+      "drag_area_m2": 1.0,
+      "coeff_drag": 2.2,
+      "srp_area_m2": 1.0,
+      "coeff_reflectivity": 1.8
+    }
   },
   "deputy_config": {
-    "dry_mass_kg": 12.0,
-    "drag_area_m2": 0.06,
-    "coeff_drag": 2.2,
-    "srp_area_m2": 0.06,
-    "coeff_reflectivity": 1.8
+    "custom": {
+      "dry_mass_kg": 12.0,
+      "drag_area_m2": 0.06,
+      "coeff_drag": 2.2,
+      "srp_area_m2": 0.06,
+      "coeff_reflectivity": 1.8
+    }
   },
   "proximity": { "roe_threshold": 0.005 },
   "perch": { "VBar": { "along_track_km": 5.0 } },

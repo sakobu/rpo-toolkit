@@ -416,7 +416,7 @@ fn verify_lambert_against_nyx(dep: &StateVector, arr: &StateVector) {
     let dynamics = SpacecraftDynamics::new(OrbitalDynamics::two_body());
     let results = nyx_bridge::nyx_propagate_segment(
         &transfer.departure_state, tof, 0,
-        &SpacecraftConfig::default(), dynamics, &almanac,
+        &SpacecraftConfig::SERVICER_500KG, dynamics, &almanac,
     ).expect("nyx propagation should succeed");
     let propagated = results.last().unwrap().state.clone();
 
@@ -707,14 +707,14 @@ fn j2_stm_vs_nyx_two_body() {
     let chief_dynamics = SpacecraftDynamics::new(OrbitalDynamics::two_body());
     let chief_results = nyx_bridge::nyx_propagate_segment(
         &chief_sv, duration, 0,
-        &SpacecraftConfig::default(), chief_dynamics, &almanac,
+        &SpacecraftConfig::SERVICER_500KG, chief_dynamics, &almanac,
     ).expect("chief nyx propagation failed");
     let chief_nyx = chief_results.last().unwrap().state.clone();
 
     let deputy_dynamics = SpacecraftDynamics::new(OrbitalDynamics::two_body());
     let deputy_results = nyx_bridge::nyx_propagate_segment(
         &deputy_sv, duration, 0,
-        &SpacecraftConfig::default(), deputy_dynamics, &almanac,
+        &SpacecraftConfig::SERVICER_500KG, deputy_dynamics, &almanac,
     ).expect("deputy nyx propagation failed");
     let deputy_nyx = deputy_results.last().unwrap().state.clone();
 
@@ -794,7 +794,7 @@ fn full_physics_propagate_one_orbit() {
         &sv,
         period,
         0,
-        &SpacecraftConfig::default(),
+        &SpacecraftConfig::SERVICER_500KG,
         dynamics,
         &almanac,
     )
@@ -843,11 +843,11 @@ fn extract_dmf_rates_nonzero() {
     let sv = keplerian_to_state(&chief_ke, epoch).unwrap();
 
     // Deputy on same orbit — differential drag comes from different B*
-    let chief_config = SpacecraftConfig::default();
+    let chief_config = SpacecraftConfig::SERVICER_500KG;
     let deputy_config = SpacecraftConfig {
         dry_mass_kg: 200.0,
         drag_area_m2: 2.0,
-        ..SpacecraftConfig::default()
+        ..SpacecraftConfig::SERVICER_500KG
     };
 
     let drag = nyx_bridge::extract_dmf_rates(
@@ -892,7 +892,7 @@ fn extract_dmf_rates_identical() {
     let chief_ke = iss_like_elements();
     let sv = keplerian_to_state(&chief_ke, epoch).unwrap();
 
-    let config = SpacecraftConfig::default();
+    let config = SpacecraftConfig::SERVICER_500KG;
     let drag = nyx_bridge::extract_dmf_rates(
         &sv, &sv, &config, &config, &almanac,
     )

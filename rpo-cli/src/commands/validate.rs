@@ -24,8 +24,8 @@ pub fn run(
 ) -> Result<(), CliError> {
     let input: PipelineInput = load_json(input_path)?;
 
-    let chief_config = input.chief_config.unwrap_or_default();
-    let deputy_config = input.deputy_config.unwrap_or_default();
+    let chief_config = input.chief_config.unwrap_or_default().resolve();
+    let deputy_config = input.deputy_config.unwrap_or_default().resolve();
 
     let spinner = create_spinner(json);
 

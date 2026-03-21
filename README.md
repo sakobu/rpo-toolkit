@@ -37,6 +37,8 @@ Run a Monte Carlo ensemble:
 cargo run -p rpo-cli -- mc --input examples/mc.json --auto-drag
 ```
 
+See [CLI Reference](docs/CLI.md) for all commands and flags.
+
 ## Mission Pipeline
 
 ```mermaid
@@ -82,8 +84,8 @@ Reproduce with:
 
 ## Reference Papers
 
-- **Koenig, Guffanti, D'Amico** -- "New State Transition Matrices for Spacecraft Relative Motion in Perturbed Orbits", _Journal of Guidance, Control, and Dynamics_, 2017. Source for J2 STM (Eq. A6), J2+drag 9x9 STM (Sec. VIII), perturbation parameters (Eqs. 13-16).
-- **D'Amico** -- "Autonomous Formation Flying in Low Earth Orbit", PhD thesis, TU Delft, 2010. Source for QNS ROE definition (Eq. 2.2), ROE-to-RIC mapping (Eq. 2.17), e/i vector separation for passive safety (Eq. 2.22).
+- **Koenig, Guffanti, D'Amico** -- "New State Transition Matrices for Spacecraft Relative Motion in Perturbed Orbits" ([PDF](docs/references/Koenig_Guffanti_Damico.pdf)), _Journal of Guidance, Control, and Dynamics_, 2017. Source for J2 STM (Eq. A6), J2+drag 9x9 STM (Sec. VIII), perturbation parameters (Eqs. 13-16).
+- **D'Amico** -- "Autonomous Formation Flying in Low Earth Orbit" ([PDF](docs/references/Damico_PhD.pdf)), PhD thesis, TU Delft, 2010. Source for QNS ROE definition (Eq. 2.2), ROE-to-RIC mapping (Eq. 2.17), e/i vector separation for passive safety (Eq. 2.22).
 
 Every module in the codebase traces to specific equations in these papers.
 
@@ -97,12 +99,12 @@ rpo-core/src/
   mission/      Planning, Newton-Raphson targeting, safety, validation, Monte Carlo
   pipeline/     Shared CLI/API orchestration: execute_mission(), canonical I/O types
 
-rpo-cli/src/
+rpo-cli/src/              → docs/CLI.md
   main.rs       CLI entry point, clap dispatch
   commands/     Porcelain (mission, validate, mc) + plumbing (classify, transfer, convert, propagate, roe, safety, eclipse)
   output/       Human-readable formatters for mission, MC, safety, eclipse output
 
-rpo-api/src/
+rpo-api/src/              → docs/API.md
   lib.rs        axum WebSocket API server
   protocol.rs   Wire types: ClientMessage / ServerMessage enums
   handlers/     classify, plan, move_waypoint, update_config, extract_drag, validate, mc
@@ -179,41 +181,13 @@ for (i, leg) in mission.legs.iter().enumerate() {
 }
 ```
 
-## CLI Reference
+## Documentation
 
-The CLI provides batch execution and shell-composable plumbing for scripting and CI pipelines. The WebSocket API (`rpo-api`) serves interactive sessions with progress streaming, cancellation, and incremental replanning.
+- [CLI Reference](docs/CLI.md) -- all commands, flags, input formats, shell completions
+- [API Reference](docs/API.md) -- WebSocket protocol, message types, error codes
+- [Input Schema](docs/schema/pipeline-input.schema.json) -- shared JSON schema for `PipelineInput`
 
-**Porcelain** commands produce human-readable output by default (use `--json` for machine output):
-
-| Command    | Purpose                       | Example                                                                       |
-| ---------- | ----------------------------- | ----------------------------------------------------------------------------- |
-| `mission`  | Analytical planning           | `cargo run -p rpo-cli -- mission --input examples/mission.json --json`        |
-| `validate` | + nyx full-physics validation | `cargo run -p rpo-cli -- validate --input examples/validate.json --auto-drag` |
-| `mc`       | + Monte Carlo ensemble        | `cargo run -p rpo-cli -- mc --input examples/mc.json --auto-drag`             |
-
-**Plumbing** commands always produce JSON (for scripting and pipeline composition):
-
-| Command     | Purpose                                | Example                                                                   |
-| ----------- | -------------------------------------- | ------------------------------------------------------------------------- |
-| `classify`  | Proximity vs. far-field classification | `cargo run -p rpo-cli -- classify -i examples/classify.json`              |
-| `transfer`  | Lambert transfer computation           | `cargo run -p rpo-cli -- transfer -i examples/transfer.json`              |
-| `convert`   | ECI → Keplerian conversion             | `cargo run -p rpo-cli -- convert -i examples/convert.json --to keplerian` |
-| `propagate` | ROE propagation (J2 or J2+drag)        | `cargo run -p rpo-cli -- propagate -i examples/propagate.json`            |
-| `roe`       | Compute quasi-nonsingular ROE          | `cargo run -p rpo-cli -- roe -i examples/roe.json`                        |
-| `safety`    | Passive safety analysis                | `cargo run -p rpo-cli -- safety -i examples/mission.json`                 |
-| `eclipse`   | Eclipse interval computation           | `cargo run -p rpo-cli -- eclipse -i examples/mission.json`                |
-
-The `validate` and `mc` subcommands require spacecraft configs (`chief_config`, `deputy_config`) in the input JSON. Each plumbing command has its own example input file; run `<command> --help` for the expected JSON schema. See `examples/` for all input file examples.
-
-### Shell Completions
-
-Generate shell completion scripts:
-
-```bash
-cargo run -p rpo-cli -- completions bash > /usr/local/etc/bash_completion.d/rpo-cli
-cargo run -p rpo-cli -- completions zsh > ~/.zfunc/_rpo-cli
-cargo run -p rpo-cli -- completions fish > ~/.config/fish/completions/rpo-cli.fish
-```
+The CLI (`rpo-cli`) provides batch execution and shell-composable plumbing for scripting. The WebSocket API (`rpo-api`) serves interactive sessions with progress streaming, cancellation, and incremental replanning. Both share the same `PipelineInput` type and `rpo-core` pipeline.
 
 ## Testing
 

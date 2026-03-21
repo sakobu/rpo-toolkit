@@ -22,10 +22,12 @@ pub fn run(input_path: &Path, json: bool, auto_drag: bool) -> Result<(), CliErro
 
     let chief_config = input
         .chief_config
-        .ok_or(CliError::MissingField { field: "chief_config", context: "mc" })?;
+        .ok_or(CliError::MissingField { field: "chief_config", context: "mc" })?
+        .resolve();
     let deputy_config = input
         .deputy_config
-        .ok_or(CliError::MissingField { field: "deputy_config", context: "mc" })?;
+        .ok_or(CliError::MissingField { field: "deputy_config", context: "mc" })?
+        .resolve();
     let mc_config = input
         .monte_carlo
         .as_ref()

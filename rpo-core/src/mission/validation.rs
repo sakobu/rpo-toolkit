@@ -1205,7 +1205,7 @@ mod tests {
         let deputy_config = SpacecraftConfig {
             dry_mass_kg: 200.0,
             drag_area_m2: 2.0,
-            ..SpacecraftConfig::default()
+            ..SpacecraftConfig::SERVICER_500KG
         };
 
         // Step 1: Extract DMF rates

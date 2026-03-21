@@ -7,7 +7,6 @@ use nalgebra::Vector3;
 
 use crate::mission::types::Waypoint;
 use crate::propagation::propagator::{DragConfig, PropagationModel};
-
 use super::types::PropagatorChoice;
 
 /// Convert a [`PropagatorChoice`] (user-facing) to [`PropagationModel`] (core).

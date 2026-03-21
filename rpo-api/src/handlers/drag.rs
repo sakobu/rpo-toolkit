@@ -23,8 +23,8 @@ pub fn handle_extract_drag(
     def: &MissionDefinition,
     almanac: &Arc<Almanac>,
 ) -> Result<DragConfig, ApiError> {
-    let chief_config = require_field(def.chief_config, "chief_config", "drag extraction")?;
-    let deputy_config = require_field(def.deputy_config, "deputy_config", "drag extraction")?;
+    let chief_config = require_field(def.chief_config, "chief_config", "drag extraction")?.resolve();
+    let deputy_config = require_field(def.deputy_config, "deputy_config", "drag extraction")?.resolve();
 
     let drag = extract_dmf_rates(
         &def.chief,

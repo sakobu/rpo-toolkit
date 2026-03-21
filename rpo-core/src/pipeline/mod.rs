@@ -22,5 +22,5 @@ pub use execute::{
     plan_waypoints_from_transfer, replan_mission,
 };
 pub use types::{
-    PipelineInput, PipelineOutput, PropagatorChoice, TransferResult, WaypointInput,
+    PipelineInput, PipelineOutput, PropagatorChoice, SpacecraftChoice, TransferResult, WaypointInput,
 };

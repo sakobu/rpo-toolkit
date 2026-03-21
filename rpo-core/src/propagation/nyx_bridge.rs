@@ -622,7 +622,7 @@ mod tests {
         let epoch = test_epoch();
         let chief_ke = iss_like_elements();
         let sv = keplerian_to_state(&chief_ke, epoch).unwrap();
-        let config = SpacecraftConfig::default();
+        let config = SpacecraftConfig::SERVICER_500KG;
 
         let sc = config_to_spacecraft(&sv, &config);
         let recovered = spacecraft_to_state(&sc);

@@ -39,8 +39,8 @@ pub fn handle_validate(
         tracing::debug!("Progress update dropped: {e}");
     }
 
-    let chief_config = def.chief_config.unwrap_or_default();
-    let deputy_config = def.deputy_config.unwrap_or_default();
+    let chief_config = def.chief_config.unwrap_or_default().resolve();
+    let deputy_config = def.deputy_config.unwrap_or_default().resolve();
 
     // Phase 1: Compute transfer
     let transfer = compute_transfer(def)?;

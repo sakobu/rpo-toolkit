@@ -52,12 +52,12 @@
       "default": "j2"
     },
     "chief_config": {
-      "$ref": "#/$defs/SpacecraftConfig",
-      "description": "Chief spacecraft physical properties. Required for validate, mc, and drag extraction."
+      "$ref": "#/$defs/SpacecraftChoice",
+      "description": "Chief spacecraft selection: named preset or custom properties. Required for validate, mc, and drag extraction."
     },
     "deputy_config": {
-      "$ref": "#/$defs/SpacecraftConfig",
-      "description": "Deputy spacecraft physical properties. Required for validate, mc, and drag extraction."
+      "$ref": "#/$defs/SpacecraftChoice",
+      "description": "Deputy spacecraft selection: named preset or custom properties. Required for validate, mc, and drag extraction."
     },
     "navigation_accuracy": {
       "$ref": "#/$defs/NavigationAccuracy",
@@ -172,8 +172,51 @@
             }
           },
           "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "description": "Custom ROE state for advanced perch geometries. Specifies an arbitrary quasi-nonsingular ROE vector directly.",
+          "required": ["Custom"],
+          "properties": {
+            "Custom": {
+              "$ref": "#/$defs/QuasiNonsingularROE"
+            }
+          },
+          "additionalProperties": false
         }
       ]
+    },
+    "QuasiNonsingularROE": {
+      "type": "object",
+      "description": "Quasi-nonsingular relative orbital elements (Koenig Eq. 2 / D'Amico Eq. 2.2). All elements are dimensionless, normalized by chief semi-major axis.",
+      "required": ["da", "dlambda", "dex", "dey", "dix", "diy"],
+      "properties": {
+        "da": {
+          "type": "number",
+          "description": "Relative semi-major axis: (a_d - a_c) / a_c."
+        },
+        "dlambda": {
+          "type": "number",
+          "description": "Relative mean longitude."
+        },
+        "dex": {
+          "type": "number",
+          "description": "Relative eccentricity vector x-component."
+        },
+        "dey": {
+          "type": "number",
+          "description": "Relative eccentricity vector y-component."
+        },
+        "dix": {
+          "type": "number",
+          "description": "Relative inclination vector x-component."
+        },
+        "diy": {
+          "type": "number",
+          "description": "Relative inclination vector y-component."
+        }
+      },
+      "additionalProperties": false
     },
     "LambertConfig": {
       "type": "object",
@@ -360,6 +403,30 @@
         }
       },
       "additionalProperties": false
+    },
+    "SpacecraftChoice": {
+      "description": "Spacecraft configuration: a named preset or custom properties.",
+      "oneOf": [
+        {
+          "const": "cubesat_6u",
+          "description": "Typical 6U cubesat: 12 kg, 0.06 m², Cd=2.2, Cr=1.5."
+        },
+        {
+          "const": "servicer_500kg",
+          "description": "Typical 500 kg servicer: 500 kg, 1.0 m², Cd=2.2, Cr=1.5."
+        },
+        {
+          "type": "object",
+          "description": "Custom spacecraft physical properties.",
+          "required": ["custom"],
+          "properties": {
+            "custom": {
+              "$ref": "#/$defs/SpacecraftConfig"
+            }
+          },
+          "additionalProperties": false
+        }
+      ]
     },
     "SpacecraftConfig": {
       "type": "object",

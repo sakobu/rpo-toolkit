@@ -30,8 +30,8 @@ pub fn handle_mc(
     cancel: &Arc<AtomicBool>,
     auto_drag: bool,
 ) -> Result<MonteCarloReport, ApiError> {
-    let chief_config = require_field(def.chief_config, "chief_config", "Monte Carlo")?;
-    let deputy_config = require_field(def.deputy_config, "deputy_config", "Monte Carlo")?;
+    let chief_config = require_field(def.chief_config, "chief_config", "Monte Carlo")?.resolve();
+    let deputy_config = require_field(def.deputy_config, "deputy_config", "Monte Carlo")?.resolve();
     let mc_config = require_field(def.monte_carlo.as_ref(), "monte_carlo", "Monte Carlo")?;
 
     if let Err(e) = progress_tx.try_send(ProgressUpdate {
