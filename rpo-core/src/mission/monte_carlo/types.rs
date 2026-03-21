@@ -25,6 +25,7 @@ use crate::types::{SpacecraftConfig, StateVector};
 
 /// Distribution model for scalar uncertainty parameters.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "snake_case")]
 pub enum Distribution {
     /// Gaussian (normal) distribution with given 1-sigma.
     Gaussian {
@@ -140,6 +141,7 @@ pub struct DispersionConfig {
 
 /// Monte Carlo execution mode.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
 pub enum MonteCarloMode {
     /// Apply nominal Δv plan with execution errors (no re-targeting).
     #[default]

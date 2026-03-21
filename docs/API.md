@@ -288,7 +288,7 @@ Response (far-field):
   "type": "ClassifyResult",
   "request_id": 1,
   "phase": {
-    "FarField": {
+    "far_field": {
       "chief_elements": {
         "a_km": 6886.6,
         "e": 0.001,
@@ -354,7 +354,7 @@ Response:
   "type": "MissionResult",
   "request_id": 2,
   "result": {
-    "phase": { "FarField": { "...": "..." } },
+    "phase": { "far_field": { "...": "..." } },
     "transfer": { "...": "..." },
     "perch_roe": { "da": 0.0, "dlambda": 0.000726, "...": "..." },
     "mission": {

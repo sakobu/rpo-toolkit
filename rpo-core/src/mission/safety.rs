@@ -71,6 +71,7 @@ impl std::error::Error for SafetyError {}
 /// from the RIC position vector at the minimum point — it does not
 /// require knowledge of the perch type or mission design.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "snake_case")]
 pub enum RcContext {
     /// R/C minimum is along-track dominated: radial and cross-track
     /// components are near zero while along-track separation is large.

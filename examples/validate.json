@@ -28,7 +28,7 @@
     }
   },
   "proximity": { "roe_threshold": 0.005 },
-  "perch": { "VBar": { "along_track_km": 5.0 } },
+  "perch": { "v_bar": { "along_track_km": 5.0 } },
   "lambert_tof_s": 3600.0,
   "waypoints": [
     {

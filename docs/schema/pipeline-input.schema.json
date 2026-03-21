@@ -17,7 +17,7 @@
     "perch": {
       "$ref": "#/$defs/PerchGeometry",
       "description": "Perch orbit geometry for Lambert-to-proximity handoff. Default: V-bar hold at 5 km.",
-      "default": { "VBar": { "along_track_km": 5.0 } }
+      "default": { "v_bar": { "along_track_km": 5.0 } }
     },
     "lambert_tof_s": {
       "type": "number",
@@ -138,9 +138,9 @@
         {
           "type": "object",
           "description": "V-bar hold: deputy ahead/behind chief along the velocity vector.",
-          "required": ["VBar"],
+          "required": ["v_bar"],
           "properties": {
-            "VBar": {
+            "v_bar": {
               "type": "object",
               "required": ["along_track_km"],
               "properties": {
@@ -157,9 +157,9 @@
         {
           "type": "object",
           "description": "R-bar hold: deputy above/below chief along the radial vector.",
-          "required": ["RBar"],
+          "required": ["r_bar"],
           "properties": {
-            "RBar": {
+            "r_bar": {
               "type": "object",
               "required": ["radial_km"],
               "properties": {
@@ -176,9 +176,9 @@
         {
           "type": "object",
           "description": "Custom ROE state for advanced perch geometries. Specifies an arbitrary quasi-nonsingular ROE vector directly.",
-          "required": ["Custom"],
+          "required": ["custom"],
           "properties": {
-            "Custom": {
+            "custom": {
               "$ref": "#/$defs/QuasiNonsingularROE"
             }
           },
@@ -225,8 +225,8 @@
         "direction": {
           "type": "string",
           "description": "Transfer direction selection.",
-          "enum": ["Auto", "ShortWay", "LongWay"],
-          "default": "Auto"
+          "enum": ["auto", "short_way", "long_way"],
+          "default": "auto"
         },
         "revolutions": {
           "type": "integer",
@@ -518,8 +518,8 @@
         "mode": {
           "type": "string",
           "description": "Execution mode: \"OpenLoop\" applies nominal delta-v plan with execution errors; \"ClosedLoop\" re-targets from each dispersed initial state.",
-          "enum": ["OpenLoop", "ClosedLoop"],
-          "default": "OpenLoop"
+          "enum": ["open_loop", "closed_loop"],
+          "default": "open_loop"
         },
         "seed": {
           "type": "integer",
@@ -632,9 +632,9 @@
         {
           "type": "object",
           "description": "Gaussian (normal) distribution.",
-          "required": ["Gaussian"],
+          "required": ["gaussian"],
           "properties": {
-            "Gaussian": {
+            "gaussian": {
               "type": "object",
               "required": ["sigma"],
               "properties": {
@@ -652,9 +652,9 @@
         {
           "type": "object",
           "description": "Uniform distribution centered on nominal.",
-          "required": ["Uniform"],
+          "required": ["uniform"],
           "properties": {
-            "Uniform": {
+            "uniform": {
               "type": "object",
               "required": ["half_width"],
               "properties": {

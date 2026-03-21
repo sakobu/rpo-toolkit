@@ -43,21 +43,25 @@ See [CLI Reference](docs/CLI.md) for all commands and flags.
 
 ```mermaid
 flowchart TD
-    A["Upload chief + deputy\nECI state vectors"] --> B{"Auto-classify\n(microseconds)"}
-    B -- "Far-field\n(δr/r ≥ 0.005)" --> C["Lambert transfer\n+ perch handoff\n(~100 ms)"]
-    B -- "Proximity\n(δr/r < 0.005)" --> D
-    C --> D["Drag estimation\n(optional, async)"]
-    D --> E["Waypoint planning\nsafety · covariance · eclipse\n(microseconds)"]
-    E -- "iterate" --> E
-    E --> F["Validate\nnyx full-physics\n(seconds)"]
-    F -- "adjust" --> E
-    F --> G["Monte Carlo\nensemble analysis\n(minutes)"]
+    A["Configure spacecraft\n(chief + deputy)"] --> B["Upload ECI\nstate vectors"]
+    B --> C{"Auto-classify\n(microseconds)"}
+    C -- "Far-field\n(δr/r ≥ 0.005)" --> D["Lambert transfer\n+ perch handoff\n(~100 ms)"]
+    C -- "Proximity\n(δr/r < 0.005)" --> E2["Drag estimation\nfrom current states\n(~3 s, async)"]
+    D --> E1["Drag estimation\nfrom perch states\n(~3 s, async)"]
+    E1 --> F["Waypoint planning\nsafety · covariance · eclipse\n(microseconds)"]
+    E2 --> F
+    F -- "iterate" --> F
+    F --> G["Validate\nnyx full-physics\n(seconds)"]
+    G -- "adjust" --> F
+    G --> H["Monte Carlo\nensemble analysis\n(minutes)"]
 ```
 
 | Step                     | Function                         | Engine            | Speed                 |
 | ------------------------ | -------------------------------- | ----------------- | --------------------- |
+| Configure spacecraft     | —                                | UI only           | —                     |
 | Classify separation      | `classify_separation()`          | Analytical        | microseconds          |
 | Lambert transfer         | `solve_lambert()`                | nyx-space         | ~100 ms               |
+| Drag estimation          | `extract_dmf_rates()`            | nyx-space         | ~3 s                  |
 | Waypoint targeting       | `plan_waypoint_mission()`        | Analytical        | microseconds          |
 | Safety analysis          | `assess_safety()`                | Analytical        | microseconds          |
 | Covariance + Mahalanobis | `propagate_mission_covariance()` | Analytical        | microseconds          |

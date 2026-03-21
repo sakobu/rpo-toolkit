@@ -146,8 +146,8 @@ async fn classify_returns_proximity() {
     assert_eq!(resp["request_id"], 1);
     // Nearby chief/deputy should classify as Proximity
     assert!(
-        resp["phase"]["Proximity"].is_object(),
-        "expected Proximity, got: {}",
+        resp["phase"]["proximity"].is_object(),
+        "expected proximity, got: {}",
         resp["phase"]
     );
 }
@@ -250,8 +250,8 @@ async fn far_field_classify_and_plan() {
     .await;
     assert_eq!(classify["type"], "ClassifyResult");
     assert!(
-        classify["phase"]["FarField"].is_object(),
-        "expected FarField, got: {}",
+        classify["phase"]["far_field"].is_object(),
+        "expected far_field, got: {}",
         classify["phase"]
     );
 

@@ -21,6 +21,7 @@ const LAMBERT_MIN_SEPARATION_KM: f64 = 1e-6;
 
 /// Transfer direction for Lambert solutions.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum TransferDirection {
     /// Automatically determine short or long way based on geometry.
     #[default]

@@ -8,6 +8,7 @@ use super::state::epoch_serde;
 
 /// Shadow state classification for a spacecraft.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum EclipseState {
     /// Spacecraft is fully illuminated by the Sun.
     Sunlit,

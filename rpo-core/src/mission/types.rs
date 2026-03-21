@@ -15,6 +15,7 @@ use crate::types::{KeplerianElements, MissionEclipseData, QuasiNonsingularROE, R
 /// Determines whether the spacecraft are close enough for linearized
 /// ROE operations or require a far-field transfer.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum MissionPhase {
     /// Separation within ROE-valid range — proceed with analytical ROE ops.
     Proximity {
@@ -48,6 +49,7 @@ pub enum MissionPhase {
 /// ROE-valid region, used as the handoff point between far-field
 /// Lambert transfers and near-field ROE proximity operations.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum PerchGeometry {
     /// V-bar hold: deputy ahead/behind chief along the velocity vector.
     VBar {
