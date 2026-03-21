@@ -198,6 +198,87 @@ pub fn print_per_leg_errors(leg_points: &[Vec<rpo_core::mission::ValidationPoint
     }
 }
 
+/// Format a duration in seconds as a human-readable string.
+///
+/// Returns `"Xh Ym"` for durations >= 1 hour, `"Xm Ys"` otherwise.
+#[must_use]
+pub fn fmt_duration(s: f64) -> String {
+    let s = s.max(0.0);
+    if s >= 3600.0 {
+        let h = (s / 3600.0).floor();
+        let m = ((s - h * 3600.0) / 60.0).round();
+        format!("{h:.0}h {m:.0}m")
+    } else {
+        let m = (s / 60.0).floor();
+        let sec = (s - m * 60.0).round();
+        format!("{m:.0}m {sec:.0}s")
+    }
+}
+
+/// Format a duration in seconds as mm:ss.
+#[must_use]
+pub fn fmt_mmss(s: f64) -> String {
+    let total_secs = s.round().max(0.0);
+    let m = (total_secs / 60.0).floor();
+    let sec = total_secs - m * 60.0;
+    format!("{m:.0}:{sec:02.0}")
+}
+
+/// Print a top-level section header with bold cyan text and `===` underline.
+pub fn print_header(title: &str) {
+    use owo_colors::{OwoColorize, Stream};
+    println!(
+        "\n{}",
+        title.if_supports_color(Stream::Stdout, |v| v.cyan())
+    );
+    println!("{}", "=".repeat(title.len()));
+}
+
+/// Print a sub-section header with `---` underline.
+pub fn print_subheader(title: &str) {
+    println!("\n{title}");
+    println!("{}", "-".repeat(title.len()));
+}
+
+/// Print a line colored by threshold comparison.
+///
+/// When `higher_is_better` is `true` (e.g., convergence rate):
+///   green if `value >= warn`, yellow if `value >= alert`, red otherwise.
+///
+/// When `higher_is_better` is `false` (e.g., shadow fraction):
+///   red if `value > alert`, yellow if `value > warn`, no color otherwise.
+pub fn print_colored(text: &str, value: f64, warn: f64, alert: f64, higher_is_better: bool) {
+    use owo_colors::{OwoColorize, Stream};
+    if higher_is_better && value >= warn {
+        println!(
+            "{}",
+            text.if_supports_color(Stream::Stdout, |v| v.green())
+        );
+    } else if higher_is_better && value >= alert {
+        println!(
+            "{}",
+            text.if_supports_color(Stream::Stdout, |v| v.yellow())
+        );
+    } else if higher_is_better {
+        println!(
+            "{}",
+            text.if_supports_color(Stream::Stdout, |v| v.red())
+        );
+    } else if value > alert {
+        println!(
+            "{}",
+            text.if_supports_color(Stream::Stdout, |v| v.red())
+        );
+    } else if value > warn {
+        println!(
+            "{}",
+            text.if_supports_color(Stream::Stdout, |v| v.yellow())
+        );
+    } else {
+        println!("{text}");
+    }
+}
+
 /// Print auto-derived differential drag rates.
 pub fn print_derived_drag(drag: &rpo_core::propagation::DragConfig) {
     println!("\nAuto-derived differential drag (nyx DMF):");

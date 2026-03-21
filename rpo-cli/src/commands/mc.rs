@@ -63,7 +63,7 @@ pub fn run(input_path: &Path, json: bool, auto_drag: bool) -> Result<(), CliErro
     // Run Monte Carlo
     status!(
         spinner,
-        "Phase 4: Running Monte Carlo ({} samples, {:?} mode)...",
+        "Phase 3: Running Monte Carlo ({} samples, {} mode)...",
         mc_config.num_samples, mc_config.mode
     );
 

@@ -148,6 +148,15 @@ pub enum MonteCarloMode {
     ClosedLoop,
 }
 
+impl std::fmt::Display for MonteCarloMode {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::OpenLoop => write!(f, "Open Loop"),
+            Self::ClosedLoop => write!(f, "Closed Loop"),
+        }
+    }
+}
+
 /// Monte Carlo configuration.
 ///
 /// All MC runs use nyx full-physics propagation.

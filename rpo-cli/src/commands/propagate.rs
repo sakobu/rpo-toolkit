@@ -8,7 +8,7 @@ use rpo_core::pipeline::{to_propagation_model, PropagatorChoice};
 use rpo_core::types::{DepartureState, KeplerianElements, QuasiNonsingularROE};
 
 use crate::error::CliError;
-use crate::input::load_json;
+use crate::input::load_json_with_hint;
 use crate::output::common::print_json;
 
 /// Epoch string that we parse manually since `epoch_serde` is `pub(crate)`.
@@ -24,7 +24,10 @@ struct PropagateInput {
 
 /// Propagate a ROE state and print JSON result.
 pub fn run(input_path: &Path) -> Result<(), CliError> {
-    let input: PropagateInput = load_json(input_path)?;
+    let input: PropagateInput = load_json_with_hint(
+        input_path,
+        "propagate expects { roe, chief_mean, epoch, dt_s, propagator? }; see examples/propagate.json",
+    )?;
     let epoch = hifitime::Epoch::from_gregorian_str(&input.epoch).map_err(|e| {
         CliError::EpochParse {
             input: input.epoch.clone(),

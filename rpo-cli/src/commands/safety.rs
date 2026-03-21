@@ -6,12 +6,15 @@ use rpo_core::mission::assess_safety;
 use rpo_core::pipeline::{execute_mission, PipelineInput};
 
 use crate::error::CliError;
-use crate::input::load_json;
+use crate::input::load_json_with_hint;
 use crate::output::common::print_json;
 
 /// Run safety analysis on a planned mission and print JSON.
 pub fn run(input_path: &Path) -> Result<(), CliError> {
-    let input: PipelineInput = load_json(input_path)?;
+    let input: PipelineInput = load_json_with_hint(
+        input_path,
+        "safety expects full PipelineInput (same as mission); see examples/mission.json",
+    )?;
     let output = execute_mission(&input)?;
 
     let safety_config = input.config.safety.unwrap_or_default();

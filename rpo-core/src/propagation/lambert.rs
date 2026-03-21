@@ -31,6 +31,16 @@ pub enum TransferDirection {
     LongWay,
 }
 
+impl std::fmt::Display for TransferDirection {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Auto => write!(f, "Auto"),
+            Self::ShortWay => write!(f, "Short-way (prograde)"),
+            Self::LongWay => write!(f, "Long-way (retrograde)"),
+        }
+    }
+}
+
 /// Configuration for Lambert solver behavior.
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
 pub struct LambertConfig {

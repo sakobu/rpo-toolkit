@@ -5,32 +5,49 @@ use rpo_core::mission::{
     assess_safety, MissionConfig, RcContext, SafetyConfig, SafetyMetrics, ValidationReport,
 };
 
+use super::common::fmt_duration;
+
 /// Ratio threshold for flagging non-conservative analytical predictions.
 const NONCONSERVATIVE_RATIO: f64 = 0.9;
 
 /// Print safety analysis results with pass/fail assessment.
-pub fn print_safety_analysis(safety: &SafetyMetrics, config: &SafetyConfig) {
+///
+/// `sample_interval_s` is the approximate time between trajectory samples
+/// (computed from `total_duration / legs / trajectory_steps`).
+pub fn print_safety_analysis(
+    safety: &SafetyMetrics,
+    config: &SafetyConfig,
+    sample_interval_s: f64,
+) {
     let assessment = assess_safety(safety, config);
 
-    println!("\nOperational Safety (analytical, sampled every ~21 s):");
-    print!("  3D distance constraint:   ");
-    if assessment.distance_3d_pass {
-        println!("{}", "PASS".if_supports_color(Stream::Stdout, |v| v.green()));
+    let interval_label = if sample_interval_s > 0.0 {
+        format!("analytical, sampled every ~{sample_interval_s:.0} s")
     } else {
-        println!("{}", "FAIL".if_supports_color(Stream::Stdout, |v| v.red()));
-    }
+        "analytical".to_string()
+    };
+
+    println!("\nSafety Analysis ({interval_label}):");
+
+    // --- Operational Safety ---
+    println!("  Operational:");
+    print!("    3D distance:          ");
+    print_pass_fail(assessment.distance_3d_pass);
     println!(
-        "  Min 3D distance:          {:.4} km  (threshold: {:.2} km)",
+        "    Min 3D distance:      {:.4} km  (threshold: {:.2} km)",
         safety.operational.min_distance_3d_km, config.min_distance_3d_km
     );
-    println!(
-        "    Leg: {}  Time: {:.1} s ({:.2} min, from WP start)",
-        safety.operational.min_3d_leg_index + 1,
-        safety.operational.min_3d_elapsed_s,
-        safety.operational.min_3d_elapsed_s / 60.0,
+    print_margin(
+        safety.operational.min_distance_3d_km,
+        config.min_distance_3d_km,
     );
     println!(
-        "    RIC: [{:.4}, {:.4}, {:.4}] km",
+        "      Leg: {}  Time: {} (from WP start)",
+        safety.operational.min_3d_leg_index + 1,
+        fmt_duration(safety.operational.min_3d_elapsed_s),
+    );
+    println!(
+        "      RIC: [{:.4}, {:.4}, {:.4}] km",
         safety.operational.min_3d_ric_position_km.x,
         safety.operational.min_3d_ric_position_km.y,
         safety.operational.min_3d_ric_position_km.z,
@@ -39,57 +56,76 @@ pub fn print_safety_analysis(safety: &SafetyMetrics, config: &SafetyConfig) {
     match assessment.rc_context {
         RcContext::AlongTrackDominated { along_track_km } => {
             println!(
-                "  Min R/C plane dist:       {:.4} km  (along-track dominated: {:.2} km along-track)",
+                "    Min R/C plane dist:   {:.4} km  (along-track dominated: {:.2} km along-track)",
                 safety.operational.min_rc_separation_km, along_track_km,
             );
         }
         RcContext::RadialCrossTrack => {
             println!(
-                "  Min R/C plane dist:       {:.4} km",
+                "    Min R/C plane dist:   {:.4} km",
                 safety.operational.min_rc_separation_km
             );
         }
     }
     println!(
-        "    Leg: {}  Time: {:.1} s ({:.2} min, from WP start)",
+        "      Leg: {}  Time: {} (from WP start)",
         safety.operational.min_rc_leg_index + 1,
-        safety.operational.min_rc_elapsed_s,
-        safety.operational.min_rc_elapsed_s / 60.0,
+        fmt_duration(safety.operational.min_rc_elapsed_s),
     );
     println!(
-        "    RIC: [{:.4}, {:.4}, {:.4}] km",
+        "      RIC: [{:.4}, {:.4}, {:.4}] km",
         safety.operational.min_rc_ric_position_km.x,
         safety.operational.min_rc_ric_position_km.y,
         safety.operational.min_rc_ric_position_km.z,
     );
 
-    println!("\nAbort Safety (free-drift e/i bound):");
-    print!("  e/i separation constraint: ");
-    if assessment.ei_separation_pass {
-        println!("{}", "PASS".if_supports_color(Stream::Stdout, |v| v.green()));
-    } else {
-        println!("{}", "FAIL".if_supports_color(Stream::Stdout, |v| v.red()));
-    }
+    // --- Abort Safety ---
+    println!("  Abort (free-drift e/i bound):");
+    print!("    e/i separation:       ");
+    print_pass_fail(assessment.ei_separation_pass);
     println!(
-        "  Min e/i separation:       {:.4} km  (threshold: {:.2} km)",
+        "    Min e/i separation:   {:.4} km  (threshold: {:.2} km)",
         safety.passive.min_ei_separation_km, config.min_ei_separation_km
     );
-    let margin = safety.passive.min_ei_separation_km - config.min_ei_separation_km;
-    if margin > 0.0 {
-        println!(
-            "  Margin:                   +{margin:.4} km above threshold"
-        );
-    }
+    print_margin(
+        safety.passive.min_ei_separation_km,
+        config.min_ei_separation_km,
+    );
     println!(
-        "  e/i phase angle:          {:.2}\u{00b0}",
+        "    e/i phase angle:      {:.2}\u{00b0}",
         safety.passive.ei_phase_angle_rad.to_degrees()
     );
 
-    print!("\n  Overall:                  ");
-    if assessment.overall_pass {
+    print!("\n  Overall:                ");
+    print_pass_fail(assessment.overall_pass);
+}
+
+/// Print PASS or FAIL with appropriate color.
+fn print_pass_fail(pass: bool) {
+    if pass {
         println!("{}", "PASS".if_supports_color(Stream::Stdout, |v| v.green()));
     } else {
         println!("{}", "FAIL".if_supports_color(Stream::Stdout, |v| v.red()));
+    }
+}
+
+/// Print margin above threshold with color: green if >2x, yellow if 1-2x.
+fn print_margin(value: f64, threshold: f64) {
+    let margin = value - threshold;
+    if margin > 0.0 {
+        let ratio = value / threshold;
+        let margin_str = format!("    Margin:               +{margin:.4} km above threshold");
+        if ratio > 2.0 {
+            println!(
+                "{}",
+                margin_str.if_supports_color(Stream::Stdout, |v| v.green())
+            );
+        } else {
+            println!(
+                "{}",
+                margin_str.if_supports_color(Stream::Stdout, |v| v.yellow())
+            );
+        }
     }
 }
 

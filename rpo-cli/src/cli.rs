@@ -65,47 +65,54 @@ pub enum Command {
 
     // ---- Plumbing ----
     /// Classify chief/deputy separation (JSON only).
+    #[command(after_help = "Input: { chief: StateVector, deputy: StateVector, proximity?: ProximityConfig }\nExample: examples/classify.json")]
     Classify {
-        /// Path to JSON input file.
+        /// Path to JSON input file (see examples/classify.json).
         #[arg(short, long)]
         input: PathBuf,
     },
     /// Solve Lambert transfer (JSON only).
+    #[command(after_help = "Input: { departure: StateVector, arrival: StateVector, config?: LambertConfig }\nTOF is derived from the epoch difference between departure and arrival.\nExample: examples/transfer.json")]
     Transfer {
-        /// Path to JSON input file.
+        /// Path to JSON input file (see examples/transfer.json).
         #[arg(short, long)]
         input: PathBuf,
     },
     /// Convert between state representations (JSON only).
+    #[command(after_help = "Input: a bare StateVector { epoch, position_eci_km, velocity_eci_km_s }\nExample: examples/convert.json")]
     Convert {
-        /// Path to JSON input file (ECI state).
+        /// Path to JSON input file (see examples/convert.json).
         #[arg(short, long)]
         input: PathBuf,
-        /// Target representation: keplerian, roe.
+        /// Target representation: keplerian.
         #[arg(long, value_name = "FORMAT")]
         to: String,
     },
     /// Propagate ROE state via STM (JSON only).
+    #[command(after_help = "Input: { roe: ROE, chief_mean: KeplerianElements, epoch: string, dt_s: number, propagator?: \"j2\" }\nExample: examples/propagate.json")]
     Propagate {
-        /// Path to JSON input file.
+        /// Path to JSON input file (see examples/propagate.json).
         #[arg(short, long)]
         input: PathBuf,
     },
     /// Compute ROE between chief and deputy states (JSON only).
+    #[command(after_help = "Input: { chief: StateVector, deputy: StateVector }\nExample: examples/roe.json")]
     Roe {
-        /// Path to JSON input file.
+        /// Path to JSON input file (see examples/roe.json).
         #[arg(short, long)]
         input: PathBuf,
     },
     /// Analyze safety metrics for a planned mission (JSON only).
+    #[command(after_help = "Input: full PipelineInput (same as mission command).\nExample: examples/mission.json")]
     Safety {
-        /// Path to JSON input file.
+        /// Path to JSON input file (see examples/mission.json).
         #[arg(short, long)]
         input: PathBuf,
     },
     /// Compute eclipse intervals for a planned mission (JSON only).
+    #[command(after_help = "Input: full PipelineInput (same as mission command).\nExample: examples/mission.json")]
     Eclipse {
-        /// Path to JSON input file.
+        /// Path to JSON input file (see examples/mission.json).
         #[arg(short, long)]
         input: PathBuf,
     },

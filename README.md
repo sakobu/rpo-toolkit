@@ -76,6 +76,7 @@ Validated against nyx-space full-physics propagation (US Std Atm 1976, SRP with 
 | Eclipse: entry/exit timing      | 90 s             | Shadow boundary interpolation          |
 
 Reproduce with:
+
 - `cargo run -p rpo-cli -- validate --input examples/validate.json`
 - `cargo run -p rpo-cli -- validate --input examples/validate.json --auto-drag`
 
@@ -192,17 +193,17 @@ The CLI provides batch execution and shell-composable plumbing for scripting and
 
 **Plumbing** commands always produce JSON (for scripting and pipeline composition):
 
-| Command     | Purpose                                |
-| ----------- | -------------------------------------- |
-| `classify`  | Proximity vs. far-field classification |
-| `transfer`  | Lambert transfer computation           |
-| `convert`   | ECI → Keplerian conversion             |
-| `propagate` | ROE propagation (J2 or J2+drag)        |
-| `roe`       | Compute quasi-nonsingular ROE          |
-| `safety`    | Passive safety analysis                |
-| `eclipse`   | Eclipse interval computation           |
+| Command     | Purpose                                | Example                                                                   |
+| ----------- | -------------------------------------- | ------------------------------------------------------------------------- |
+| `classify`  | Proximity vs. far-field classification | `cargo run -p rpo-cli -- classify -i examples/classify.json`              |
+| `transfer`  | Lambert transfer computation           | `cargo run -p rpo-cli -- transfer -i examples/transfer.json`              |
+| `convert`   | ECI → Keplerian conversion             | `cargo run -p rpo-cli -- convert -i examples/convert.json --to keplerian` |
+| `propagate` | ROE propagation (J2 or J2+drag)        | `cargo run -p rpo-cli -- propagate -i examples/propagate.json`            |
+| `roe`       | Compute quasi-nonsingular ROE          | `cargo run -p rpo-cli -- roe -i examples/roe.json`                        |
+| `safety`    | Passive safety analysis                | `cargo run -p rpo-cli -- safety -i examples/mission.json`                 |
+| `eclipse`   | Eclipse interval computation           | `cargo run -p rpo-cli -- eclipse -i examples/mission.json`                |
 
-The `validate` and `mc` subcommands require spacecraft configs (`chief_config`, `deputy_config`) in the input JSON. See `examples/` for complete input file examples.
+The `validate` and `mc` subcommands require spacecraft configs (`chief_config`, `deputy_config`) in the input JSON. Each plumbing command has its own example input file; run `<command> --help` for the expected JSON schema. See `examples/` for all input file examples.
 
 ### Shell Completions
 

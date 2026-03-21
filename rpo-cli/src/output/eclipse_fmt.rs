@@ -3,6 +3,14 @@
 use rpo_core::mission::EclipseValidation;
 use rpo_core::types::MissionEclipseData;
 
+use super::common::{fmt_mmss, print_colored};
+
+/// Shadow fraction threshold above which we color yellow.
+const SHADOW_FRACTION_WARN: f64 = 0.25;
+
+/// Shadow fraction threshold above which we color red.
+const SHADOW_FRACTION_ALERT: f64 = 0.50;
+
 /// Print eclipse summary (intervals, durations, shadow fraction).
 pub fn print_eclipse_summary(eclipse: &MissionEclipseData) {
     println!("\nEclipse Summary:");
@@ -10,15 +18,17 @@ pub fn print_eclipse_summary(eclipse: &MissionEclipseData) {
         "  Shadow intervals:   {}",
         eclipse.summary.intervals.len()
     );
-    println!(
-        "  Total shadow time:  {:.0} s ({:.1}% of waypoint phase)",
-        eclipse.summary.total_shadow_duration_s,
-        eclipse.summary.time_in_shadow_fraction * 100.0,
+    let frac = eclipse.summary.time_in_shadow_fraction;
+    let frac_str = format!(
+        "  Total shadow time:  {} ({:.1}% of waypoint phase)",
+        fmt_mmss(eclipse.summary.total_shadow_duration_s),
+        frac * 100.0,
     );
+    print_colored(&frac_str, frac, SHADOW_FRACTION_WARN, SHADOW_FRACTION_ALERT, false);
     if eclipse.summary.max_shadow_duration_s > 0.0 {
         println!(
-            "  Max single eclipse: {:.0} s ({:.1} min)",
-            eclipse.summary.max_shadow_duration_s,
+            "  Max single eclipse: {} ({:.1} min)",
+            fmt_mmss(eclipse.summary.max_shadow_duration_s),
             eclipse.summary.max_shadow_duration_s / 60.0,
         );
     }
