@@ -35,7 +35,7 @@ pub enum Command {
         #[arg(long)]
         json: bool,
     },
-    /// End-to-end mission with nyx high-fidelity validation (requires network on first run).
+    /// End-to-end mission with Nyx high-fidelity validation (requires network on first run).
     Validate {
         /// Path to JSON input file with chief/deputy states, perch, waypoints, and spacecraft configs.
         #[arg(short, long)]
@@ -46,7 +46,7 @@ pub enum Command {
         /// Number of sample points per leg for validation comparison.
         #[arg(long, default_value_t = 50)]
         samples_per_leg: u32,
-        /// Auto-derive differential drag config from spacecraft properties via nyx.
+        /// Auto-derive differential drag config from spacecraft properties via Nyx.
         #[arg(long)]
         auto_drag: bool,
     },
@@ -58,7 +58,7 @@ pub enum Command {
         /// Output as JSON instead of human-readable text.
         #[arg(long)]
         json: bool,
-        /// Auto-derive differential drag config from spacecraft properties via nyx.
+        /// Auto-derive differential drag config from spacecraft properties via Nyx.
         #[arg(long)]
         auto_drag: bool,
     },

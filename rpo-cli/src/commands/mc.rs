@@ -2,7 +2,7 @@
 
 use std::path::Path;
 
-use rpo_core::mission::{run_monte_carlo, MonteCarloInput};
+use rpo_core::mission::{run_monte_carlo, MissionPhase, MonteCarloInput};
 use rpo_core::pipeline::{
     compute_mission_covariance, compute_transfer, plan_waypoints_from_transfer, PipelineInput,
 };
@@ -10,10 +10,8 @@ use rpo_core::propagation::load_full_almanac;
 
 use crate::error::CliError;
 use crate::input::load_json;
-use crate::output::common::{
-    create_spinner, print_derived_drag, print_json, resolve_drag_and_propagator, status,
-};
-use crate::output::mc_fmt::print_mc_report;
+use crate::output::common::{create_spinner, print_json, resolve_drag_and_propagator, status};
+use crate::output::mc_fmt::{print_mc_baseline, print_mc_report, print_mc_summary};
 
 /// Run full-physics Monte Carlo pipeline.
 #[allow(clippy::too_many_lines)]
@@ -35,7 +33,7 @@ pub fn run(input_path: &Path, json: bool, auto_drag: bool) -> Result<(), CliErro
 
     let spinner = create_spinner(json);
 
-    status!(spinner, "Phase 1: Classification + Lambert transfer...");
+    status!(spinner, "Classification + Lambert transfer...");
     let transfer = compute_transfer(&input)?;
 
     status!(spinner, "Loading almanac (may download on first run)...");
@@ -45,7 +43,7 @@ pub fn run(input_path: &Path, json: bool, auto_drag: bool) -> Result<(), CliErro
         auto_drag, &transfer, &chief_config, &deputy_config, &almanac, &input, spinner.as_ref(),
     )?;
 
-    status!(spinner, "Phase 2: Waypoint targeting...");
+    status!(spinner, "Waypoint targeting...");
     let wp_mission = plan_waypoints_from_transfer(&transfer, &input, &prop)?;
 
     // Optional covariance propagation
@@ -65,7 +63,7 @@ pub fn run(input_path: &Path, json: bool, auto_drag: bool) -> Result<(), CliErro
     // Run Monte Carlo
     status!(
         spinner,
-        "Phase 3: Running Monte Carlo ({} samples, {} mode)...",
+        "Running Monte Carlo ({} samples, {} mode)...",
         mc_config.num_samples, mc_config.mode
     );
 
@@ -97,11 +95,23 @@ pub fn run(input_path: &Path, json: bool, auto_drag: bool) -> Result<(), CliErro
         return print_json(&report);
     }
 
-    print_mc_report(&report, transfer.lambert_dv_km_s);
+    // Print header and baseline mission context
+    crate::output::common::print_header("Mission + Monte Carlo");
+    let lambert_tof_s = transfer.plan.transfer.as_ref().map_or(0.0, |t| t.tof_s);
+    let is_far_field = matches!(transfer.plan.phase, MissionPhase::FarField { .. });
+    print_mc_baseline(
+        transfer.lambert_dv_km_s,
+        lambert_tof_s,
+        wp_mission.total_dv_km_s,
+        wp_mission.total_duration_s,
+        wp_mission.legs.len(),
+        is_far_field,
+    );
 
-    if let Some(ref drag) = derived_drag {
-        print_derived_drag(drag);
-    }
+    print_mc_report(&report, transfer.lambert_dv_km_s, derived_drag.as_ref());
+
+    let safety_config = input.config.safety.unwrap_or_default();
+    print_mc_summary(&report, transfer.lambert_dv_km_s, &safety_config);
 
     Ok(())
 }

@@ -5,44 +5,30 @@ use rpo_core::mission::{
     assess_safety, MissionConfig, RcContext, SafetyConfig, SafetyMetrics, ValidationReport,
 };
 
-use super::common::fmt_duration;
+use super::common::{fmt_duration, fmt_m};
 
 /// Ratio threshold for flagging non-conservative analytical predictions.
 const NONCONSERVATIVE_RATIO: f64 = 0.9;
 
 /// Print safety analysis results with pass/fail assessment.
-///
-/// `sample_interval_s` is the approximate time between trajectory samples
-/// (computed from `total_duration / legs / trajectory_steps`).
-pub fn print_safety_analysis(
-    safety: &SafetyMetrics,
-    config: &SafetyConfig,
-    sample_interval_s: f64,
-) {
+pub fn print_safety_analysis(safety: &SafetyMetrics, config: &SafetyConfig) {
     let assessment = assess_safety(safety, config);
-
-    let interval_label = if sample_interval_s > 0.0 {
-        format!("analytical, sampled every ~{sample_interval_s:.0} s")
-    } else {
-        "analytical".to_string()
-    };
-
-    println!("\nSafety Analysis ({interval_label}):");
 
     // --- Operational Safety ---
     println!("  Operational:");
     print!("    3D distance:          ");
     print_pass_fail(assessment.distance_3d_pass);
     println!(
-        "    Min 3D distance:      {:.4} km  (threshold: {:.2} km)",
-        safety.operational.min_distance_3d_km, config.min_distance_3d_km
+        "    Min 3D distance:      {}  (threshold: {})",
+        fmt_m(safety.operational.min_distance_3d_km, 1),
+        fmt_m(config.min_distance_3d_km, 0),
     );
     print_margin(
         safety.operational.min_distance_3d_km,
         config.min_distance_3d_km,
     );
     println!(
-        "      Leg: {}  Time: {} (from WP start)",
+        "      at leg {}, t = {}",
         safety.operational.min_3d_leg_index + 1,
         fmt_duration(safety.operational.min_3d_elapsed_s),
     );
@@ -56,19 +42,19 @@ pub fn print_safety_analysis(
     match assessment.rc_context {
         RcContext::AlongTrackDominated { along_track_km } => {
             println!(
-                "    Min R/C plane dist:   {:.4} km  (along-track dominated: {:.2} km along-track)",
-                safety.operational.min_rc_separation_km, along_track_km,
+                "    R/C-plane distance:   {}  (along-track dominated, V-bar at {along_track_km:.1} km)",
+                fmt_m(safety.operational.min_rc_separation_km, 1),
             );
         }
         RcContext::RadialCrossTrack => {
             println!(
-                "    Min R/C plane dist:   {:.4} km",
-                safety.operational.min_rc_separation_km
+                "    R/C-plane distance:   {}",
+                fmt_m(safety.operational.min_rc_separation_km, 1),
             );
         }
     }
     println!(
-        "      Leg: {}  Time: {} (from WP start)",
+        "      at leg {}, t = {}",
         safety.operational.min_rc_leg_index + 1,
         fmt_duration(safety.operational.min_rc_elapsed_s),
     );
@@ -79,13 +65,14 @@ pub fn print_safety_analysis(
         safety.operational.min_rc_ric_position_km.z,
     );
 
-    // --- Abort Safety ---
-    println!("  Abort (free-drift e/i bound):");
+    // --- Passive Safety ---
+    println!("  Passive Safety:");
     print!("    e/i separation:       ");
     print_pass_fail(assessment.ei_separation_pass);
     println!(
-        "    Min e/i separation:   {:.4} km  (threshold: {:.2} km)",
-        safety.passive.min_ei_separation_km, config.min_ei_separation_km
+        "    Min e/i separation:   {}  (threshold: {})",
+        fmt_m(safety.passive.min_ei_separation_km, 1),
+        fmt_m(config.min_ei_separation_km, 0),
     );
     print_margin(
         safety.passive.min_ei_separation_km,
@@ -110,11 +97,16 @@ fn print_pass_fail(pass: bool) {
 }
 
 /// Print margin above threshold with color: green if >2x, yellow if 1-2x.
-fn print_margin(value: f64, threshold: f64) {
-    let margin = value - threshold;
-    if margin > 0.0 {
-        let ratio = value / threshold;
-        let margin_str = format!("    Margin:               +{margin:.4} km above threshold");
+///
+/// Values are stored in km; displayed in meters.
+fn print_margin(value_km: f64, threshold_km: f64) {
+    let margin_km = value_km - threshold_km;
+    if margin_km > 0.0 {
+        let ratio = value_km / threshold_km;
+        let margin_str = format!(
+            "    Margin:               +{} margin",
+            fmt_m(margin_km, 1),
+        );
         if ratio > 2.0 {
             println!(
                 "{}",
@@ -129,16 +121,18 @@ fn print_margin(value: f64, threshold: f64) {
     }
 }
 
-/// Print compact safety metrics with threshold context.
+/// Print compact safety metrics with threshold context (meters, integer precision).
 pub fn print_safety_summary(label: &str, safety: &SafetyMetrics, config: &SafetyConfig) {
     println!("\n  Safety ({label}):");
     println!(
-        "    Min 3D distance:     {:.3} km  (threshold: {:.2} km)",
-        safety.operational.min_distance_3d_km, config.min_distance_3d_km,
+        "    Min 3D distance:     {}  (threshold: {})",
+        fmt_m(safety.operational.min_distance_3d_km, 0),
+        fmt_m(config.min_distance_3d_km, 0),
     );
     println!(
-        "    Abort safety (e/i):  {:.3} km  (threshold: {:.2} km)",
-        safety.passive.min_ei_separation_km, config.min_ei_separation_km,
+        "    Min e/i separation:  {}  (threshold: {})",
+        fmt_m(safety.passive.min_ei_separation_km, 0),
+        fmt_m(config.min_ei_separation_km, 0),
     );
 }
 
@@ -152,62 +146,67 @@ fn nonconservative_flag(analytical: f64, numerical: f64) -> &'static str {
 }
 
 /// Print safety comparison table (analytical vs numerical from validation report).
+///
+/// All values displayed in meters.
 pub fn print_safety_comparison(report: &ValidationReport, config: &MissionConfig) {
     let num = &report.numerical_safety;
     println!("\n  Safety Comparison (Analytical vs Numerical):");
     if let Some(ref ana) = report.analytical_safety {
         let sc = config.safety.unwrap_or_default();
+        // All values converted km → m for display
+        let ana_rc_m = ana.operational.min_rc_separation_km * 1000.0;
+        let num_rc_m = num.operational.min_rc_separation_km * 1000.0;
+        let ana_d3_m = ana.operational.min_distance_3d_km * 1000.0;
+        let num_d3_m = num.operational.min_distance_3d_km * 1000.0;
+        let thresh_d3_m = sc.min_distance_3d_km * 1000.0;
+        let ana_ei_m = ana.passive.min_ei_separation_km * 1000.0;
+        let num_ei_m = num.passive.min_ei_separation_km * 1000.0;
+        let thresh_ei_m = sc.min_ei_separation_km * 1000.0;
+
         println!(
-            "    {:>20}  {:>12}  {:>12}  {:>8}",
-            "", "Analytical", "Numerical", "Thresh."
+            "    {:>26}  {:>12}  {:>12}  {:>10}",
+            "", "Analytical", "Numerical", "Threshold"
         );
         println!(
-            "    {:>20}  {:>12.4}  {:>12.4}  {:>8}",
-            "R/C plane (km)",
-            ana.operational.min_rc_separation_km,
-            num.operational.min_rc_separation_km,
-            "N/A"
+            "    {:>26}  {:>12.1}  {:>12.1}  {:>10}",
+            "R/C-plane distance (m)", ana_rc_m, num_rc_m, "-"
         );
         let d3_flag = nonconservative_flag(
             ana.operational.min_distance_3d_km,
             num.operational.min_distance_3d_km,
         );
         println!(
-            "    {:>20}  {:>12.4}  {:>12.4}  {:>8.2}{}",
-            "3D dist (km)",
-            ana.operational.min_distance_3d_km,
-            num.operational.min_distance_3d_km,
-            sc.min_distance_3d_km,
-            d3_flag,
+            "    {:>26}  {:>12.1}  {:>12.1}  {:>10.0}{d3_flag}",
+            "3D distance (m)", ana_d3_m, num_d3_m, thresh_d3_m,
         );
         let ei_flag = nonconservative_flag(
             ana.passive.min_ei_separation_km,
             num.passive.min_ei_separation_km,
         );
         println!(
-            "    {:>20}  {:>12.4}  {:>12.4}  {:>8.2}{}",
-            "e/i sep (km)",
-            ana.passive.min_ei_separation_km,
-            num.passive.min_ei_separation_km,
-            sc.min_ei_separation_km,
-            ei_flag,
+            "    {:>26}  {:>12.1}  {:>12.1}  {:>10.0}{ei_flag}",
+            "e/i separation (m)", ana_ei_m, num_ei_m, thresh_ei_m,
         );
         if !d3_flag.is_empty() || !ei_flag.is_empty() {
-            println!("  * = numerical margin is >10% smaller than analytical");
+            println!("  * = numerical margin >10% smaller than analytical");
         }
     } else {
+        // All values converted km → m for display
+        let num_rc_m = num.operational.min_rc_separation_km * 1000.0;
+        let num_d3_m = num.operational.min_distance_3d_km * 1000.0;
+        let num_ei_m = num.passive.min_ei_separation_km * 1000.0;
         println!("    (no analytical safety available)");
         println!(
-            "    {:>20}  {:>12.4}",
-            "R/C plane (km)", num.operational.min_rc_separation_km
+            "    {:>26}  {:>12.1}",
+            "R/C-plane distance (m)", num_rc_m,
         );
         println!(
-            "    {:>20}  {:>12.4}",
-            "3D dist (km)", num.operational.min_distance_3d_km
+            "    {:>26}  {:>12.1}",
+            "3D distance (m)", num_d3_m,
         );
         println!(
-            "    {:>20}  {:>12.4}",
-            "e/i sep (km)", num.passive.min_ei_separation_km
+            "    {:>26}  {:>12.1}",
+            "e/i separation (m)", num_ei_m,
         );
     }
 }

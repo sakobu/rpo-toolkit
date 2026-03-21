@@ -26,7 +26,7 @@ fn mission_exits_zero() {
     );
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(
-        stdout.contains("End-to-End Mission"),
+        stdout.contains("Mission\n==="),
         "expected mission output header"
     );
 }

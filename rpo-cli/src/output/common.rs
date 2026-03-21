@@ -5,6 +5,7 @@ use std::time::Duration;
 
 use anise::prelude::Almanac;
 use indicatif::{ProgressBar, ProgressStyle};
+use owo_colors::{OwoColorize, Stream};
 use serde::Serialize;
 
 use rpo_core::mission::PercentileStats;
@@ -13,6 +14,8 @@ use rpo_core::propagation::{extract_dmf_rates, DragConfig, PropagationModel};
 use rpo_core::types::{QuasiNonsingularROE, SpacecraftConfig};
 
 use crate::error::CliError;
+
+// ── Status / spinner ────────────────────────────────────────────────────
 
 /// Print a status message to the spinner if available, otherwise to stderr.
 macro_rules! status {
@@ -44,9 +47,11 @@ pub fn create_spinner(json: bool) -> Option<ProgressBar> {
     Some(s)
 }
 
+// ── Drag / propagator resolution ────────────────────────────────────────
+
 /// Resolve propagator with optional auto-drag extraction.
 ///
-/// If `auto_drag` is true, extracts differential drag rates via nyx DMF
+/// If `auto_drag` is true, extracts differential drag rates via Nyx DMF
 /// and prints them to stderr. Returns the propagation model and optional
 /// derived drag config.
 ///
@@ -64,9 +69,9 @@ pub fn resolve_drag_and_propagator(
 ) -> Result<(PropagationModel, Option<DragConfig>), CliError> {
     let auto_drag_config = if auto_drag {
         if let Some(s) = spinner {
-            s.set_message("Extracting differential drag rates via nyx...".to_string());
+            s.set_message("Extracting differential drag rates via Nyx...".to_string());
         } else {
-            eprintln!("Extracting differential drag rates via nyx...");
+            eprintln!("Extracting differential drag rates via Nyx...");
         }
         let drag = extract_dmf_rates(
             &transfer.perch_chief,
@@ -89,6 +94,8 @@ pub fn resolve_drag_and_propagator(
     ))
 }
 
+// ── JSON output ─────────────────────────────────────────────────────────
+
 /// Pretty-print a value as JSON to stdout.
 ///
 /// # Errors
@@ -100,19 +107,72 @@ pub fn print_json<T: Serialize>(value: &T) -> Result<(), CliError> {
     Ok(())
 }
 
-/// Print all 6 ROE components with physical meaning.
-pub fn print_roe(label: &str, roe: &QuasiNonsingularROE, chief_a: f64) {
-    println!("  {label}:");
-    println!(
-        "    δa       = {:+.6e}  (relative SMA, ≈ {:.4} km)",
-        roe.da,
-        roe.da * chief_a
-    );
-    println!("    δλ       = {:+.6e}  (relative mean longitude)", roe.dlambda);
-    println!("    δex      = {:+.6e}  (relative e·cos ω)", roe.dex);
-    println!("    δey      = {:+.6e}  (relative e·sin ω)", roe.dey);
-    println!("    δix      = {:+.6e}  (relative inclination)", roe.dix);
-    println!("    δiy      = {:+.6e}  (relative RAAN·sin i)", roe.diy);
+// ── Unit formatting ─────────────────────────────────────────────────────
+
+/// ROE component below which the value is treated as effectively zero for display.
+const ROE_DISPLAY_ZERO_THRESHOLD: f64 = 1e-15;
+
+/// Format a value stored in km/s as m/s with given decimal places.
+///
+/// Example: `fmt_m_s(0.5432, 1)` returns `"543.2 m/s"`.
+#[must_use]
+pub fn fmt_m_s(value_km_s: f64, decimals: usize) -> String {
+    let m_s = value_km_s * 1000.0;
+    format!("{m_s:.decimals$} m/s")
+}
+
+/// Format a value stored in km as meters with given decimal places.
+///
+/// Example: `fmt_m(0.150, 1)` returns `"150.0 m"`.
+#[must_use]
+pub fn fmt_m(value_km: f64, decimals: usize) -> String {
+    let m = value_km * 1000.0;
+    format!("{m:.decimals$} m")
+}
+
+/// Format a ROE component: scientific notation for non-zero, padded zero for zero.
+///
+/// Avoids the ugly `+0.000000e0` output for zero values.
+#[must_use]
+pub fn fmt_roe_component(value: f64) -> String {
+    if value.abs() < ROE_DISPLAY_ZERO_THRESHOLD {
+        "0".to_string()
+    } else {
+        format!("{value:+.6e}")
+    }
+}
+
+// ── Duration formatting ─────────────────────────────────────────────────
+
+/// Format a duration in seconds as a human-readable string.
+///
+/// Returns `"Xd YYh"` for durations >= 1 day, `"Xh YYm"` for >= 1 hour,
+/// `"Xm YYs"` for >= 1 minute, `"Xs"` for >= 1 second, `"< 1s"` for
+/// sub-second, and `"0s"` for zero.
+#[must_use]
+pub fn fmt_duration(s: f64) -> String {
+    // Round to nearest second to avoid fractional artifacts, then format
+    // from the integer total. This prevents edge cases like "59m 60s".
+    let total_s = s.max(0.0).round();
+    if total_s >= 86400.0 {
+        let d = (total_s / 86400.0).floor();
+        let h = ((total_s - d * 86400.0) / 3600.0).floor();
+        format!("{d:.0}d {h:02.0}h")
+    } else if total_s >= 3600.0 {
+        let h = (total_s / 3600.0).floor();
+        let m = ((total_s - h * 3600.0) / 60.0).floor();
+        format!("{h:.0}h {m:02.0}m")
+    } else if total_s >= 60.0 {
+        let m = (total_s / 60.0).floor();
+        let sec = total_s - m * 60.0;
+        format!("{m:.0}m {sec:02.0}s")
+    } else if total_s >= 1.0 {
+        format!("{total_s:.0}s")
+    } else if s > 0.0 {
+        "< 1s".to_string()
+    } else {
+        "0s".to_string()
+    }
 }
 
 /// Format a float for display, showing "N/A" for NaN (no-data sentinel).
@@ -124,56 +184,191 @@ pub fn fmt_or_na(v: f64, precision: usize) -> String {
     }
 }
 
+// ── Section headers ─────────────────────────────────────────────────────
+
+/// Print a top-level section header with bold cyan text and `===` underline.
+pub fn print_header(title: &str) {
+    println!(
+        "\n{}",
+        title.if_supports_color(Stream::Stdout, |v| v.cyan())
+    );
+    println!("{}", "=".repeat(title.len()));
+}
+
+/// Print a sub-section header with `---` underline.
+pub fn print_subheader(title: &str) {
+    println!("\n{title}");
+    println!("{}", "-".repeat(title.len()));
+}
+
+// ── Color helpers ───────────────────────────────────────────────────────
+
+/// Direction of threshold comparison for colored output.
+#[derive(Clone, Copy)]
+pub enum ThresholdDirection {
+    /// Higher values are better (e.g., convergence rate).
+    /// Green if `value >= warn`, yellow if `value >= alert`, red otherwise.
+    HigherIsBetter,
+    /// Lower values are better (e.g., shadow fraction).
+    /// Red if `value > alert`, yellow if `value > warn`, no color otherwise.
+    LowerIsBetter,
+}
+
+/// Print a line colored by threshold comparison.
+pub fn print_colored(
+    text: &str,
+    value: f64,
+    warn: f64,
+    alert: f64,
+    direction: ThresholdDirection,
+) {
+    match direction {
+        ThresholdDirection::HigherIsBetter => {
+            if value >= warn {
+                println!(
+                    "{}",
+                    text.if_supports_color(Stream::Stdout, |v| v.green())
+                );
+            } else if value >= alert {
+                println!(
+                    "{}",
+                    text.if_supports_color(Stream::Stdout, |v| v.yellow())
+                );
+            } else {
+                println!(
+                    "{}",
+                    text.if_supports_color(Stream::Stdout, |v| v.red())
+                );
+            }
+        }
+        ThresholdDirection::LowerIsBetter => {
+            if value > alert {
+                println!(
+                    "{}",
+                    text.if_supports_color(Stream::Stdout, |v| v.red())
+                );
+            } else if value > warn {
+                println!(
+                    "{}",
+                    text.if_supports_color(Stream::Stdout, |v| v.yellow())
+                );
+            } else {
+                println!("{text}");
+            }
+        }
+    }
+}
+
+// ── ROE display ─────────────────────────────────────────────────────────
+
+/// Print all 6 ROE components with physical meaning.
+pub fn print_roe(label: &str, roe: &QuasiNonsingularROE, chief_a: f64) {
+    println!("  {label}:");
+    let da_s = fmt_roe_component(roe.da);
+    if roe.da.abs() < ROE_DISPLAY_ZERO_THRESHOLD {
+        println!("    \u{03b4}a       = {da_s:>13}  (relative SMA)");
+    } else {
+        println!(
+            "    \u{03b4}a       = {:>13}  (relative SMA, \u{2248} {:.1} km)",
+            da_s,
+            roe.da * chief_a
+        );
+    }
+    println!(
+        "    \u{03b4}\u{03bb}       = {:>13}  (relative mean longitude)",
+        fmt_roe_component(roe.dlambda)
+    );
+    println!(
+        "    \u{03b4}ex      = {:>13}  (relative e\u{00b7}cos \u{03c9})",
+        fmt_roe_component(roe.dex)
+    );
+    println!(
+        "    \u{03b4}ey      = {:>13}  (relative e\u{00b7}sin \u{03c9})",
+        fmt_roe_component(roe.dey)
+    );
+    println!(
+        "    \u{03b4}ix      = {:>13}  (relative inclination)",
+        fmt_roe_component(roe.dix)
+    );
+    println!(
+        "    \u{03b4}iy      = {:>13}  (relative RAAN\u{00b7}sin i)",
+        fmt_roe_component(roe.diy)
+    );
+}
+
+// ── Percentile stats ────────────────────────────────────────────────────
+
 /// Print full percentile statistics (mean, std, p05/p95, min/max).
-pub fn print_percentile_stats(indent: &str, stats: &PercentileStats) {
+///
+/// `scale` converts from stored unit to display unit (e.g., 1000.0 for km->m).
+pub fn print_percentile_stats(
+    indent: &str,
+    stats: &PercentileStats,
+    scale: f64,
+    decimals: usize,
+) {
+    let fmt = |v: f64| fmt_or_na(v * scale, decimals);
     println!(
-        "{indent}Mean:   {}    Std: {}",
-        fmt_or_na(stats.mean, 6),
-        fmt_or_na(stats.std_dev, 6),
+        "{indent}Mean: {}    Std: {}",
+        fmt(stats.mean),
+        fmt(stats.std_dev),
     );
     println!(
-        "{indent}p05:    {}    p95: {}",
-        fmt_or_na(stats.p05, 6),
-        fmt_or_na(stats.p95, 6),
+        "{indent}p05:  {}    p95: {}",
+        fmt(stats.p05),
+        fmt(stats.p95),
     );
     println!(
-        "{indent}Min:    {}    Max: {}",
-        fmt_or_na(stats.min, 6),
-        fmt_or_na(stats.max, 6),
+        "{indent}Min:  {}    Max: {}",
+        fmt(stats.min),
+        fmt(stats.max),
     );
 }
 
 /// Print compact percentile summary (p05/p50/p95 one-liner).
-pub fn print_percentile_summary(indent: &str, stats: &PercentileStats) {
+pub fn print_percentile_summary(
+    indent: &str,
+    stats: &PercentileStats,
+    scale: f64,
+    decimals: usize,
+) {
+    let fmt = |v: f64| fmt_or_na(v * scale, decimals);
     println!(
         "{indent}p05: {}    p50: {}    p95: {}",
-        fmt_or_na(stats.p05, 4),
-        fmt_or_na(stats.p50, 4),
-        fmt_or_na(stats.p95, 4),
+        fmt(stats.p05),
+        fmt(stats.p50),
+        fmt(stats.p95),
     );
 }
 
 /// Print compact percentile summary, or "N/A" if no data.
-pub fn print_optional_percentile_summary(indent: &str, stats: Option<&PercentileStats>) {
+pub fn print_optional_percentile_summary(
+    indent: &str,
+    stats: Option<&PercentileStats>,
+    scale: f64,
+    decimals: usize,
+) {
     if let Some(s) = stats {
-        print_percentile_summary(indent, s);
+        print_percentile_summary(indent, s, scale, decimals);
     } else {
         println!("{indent}N/A (no data)");
     }
 }
 
-/// Print per-leg position error breakdown.
+// ── Per-leg error table ─────────────────────────────────────────────────
+
+/// Print per-leg position error breakdown in meters.
 pub fn print_per_leg_errors(leg_points: &[Vec<rpo_core::mission::ValidationPoint>]) {
     if leg_points.is_empty() {
         return;
     }
-    println!("\n  Per-leg position error (km):");
+    println!("\n  Per-leg position error (m):");
     println!(
-        "    {:>4}  {:>10}  {:>10}  {:>10}",
+        "    {:>4}  {:>8}  {:>8}  {:>8}",
         "Leg", "Max", "Mean", "RMS"
     );
     println!(
-        "    {:->4}  {:->10}  {:->10}  {:->10}",
+        "    {:->4}  {:->8}  {:->8}  {:->8}",
         "", "", "", ""
     );
     for (i, points) in leg_points.iter().enumerate() {
@@ -188,101 +383,81 @@ pub fn print_per_leg_errors(leg_points: &[Vec<rpo_core::mission::ValidationPoint
         let n = f64::from(u32::try_from(points.len()).unwrap_or(u32::MAX));
         let mean = sum / n;
         let rms = (sum_sq / n).sqrt();
+        let max_m = max * 1000.0; // km → m
+        let mean_m = mean * 1000.0; // km → m
+        let rms_m = rms * 1000.0; // km → m
         println!(
-            "    {:>4}  {:>10.4}  {:>10.4}  {:>10.4}",
-            i + 1,
-            max,
-            mean,
-            rms
+            "    {:>4}  {:>8.1}  {:>8.1}  {:>8.1}",
+            i + 1, max_m, mean_m, rms_m,
         );
     }
 }
 
-/// Format a duration in seconds as a human-readable string.
+// ── Auto-derived drag ───────────────────────────────────────────────────
+
+/// Print auto-derived differential drag rates at the given indent level.
+pub fn print_derived_drag(drag: &DragConfig, indent: &str) {
+    println!("{indent}Auto-derived drag:");
+    println!("{indent}  da_dot:  {:+.6e}", drag.da_dot);
+    println!("{indent}  dex_dot: {:+.6e}", drag.dex_dot);
+    println!("{indent}  dey_dot: {:+.6e}", drag.dey_dot);
+}
+
+// ── Rate metric ─────────────────────────────────────────────────────────
+
+/// Whether to display a rate as a decimal probability or a percentage.
+#[derive(Clone, Copy)]
+pub enum RateFormat {
+    /// Display as `0` for zero, `0.0000` for non-zero (e.g., collision probability).
+    Probability,
+    /// Display as `0.0%` (e.g., violation rate).
+    Percentage,
+}
+
+/// Print a rate metric (probability or violation rate) with color.
 ///
-/// Returns `"Xh Ym"` for durations >= 1 hour, `"Xm Ys"` otherwise.
-#[must_use]
-pub fn fmt_duration(s: f64) -> String {
-    let s = s.max(0.0);
-    if s >= 3600.0 {
-        let h = (s / 3600.0).floor();
-        let m = ((s - h * 3600.0) / 60.0).round();
-        format!("{h:.0}h {m:.0}m")
-    } else {
-        let m = (s / 60.0).floor();
-        let sec = (s - m * 60.0).round();
-        format!("{m:.0}m {sec:.0}s")
-    }
-}
+/// Green if rate is 0.0, yellow if rate > 0 but below `alert_threshold`,
+/// red if rate >= `alert_threshold`. If `alert_threshold` is 0.0, any non-zero
+/// rate is red.
+pub fn print_rate_metric(
+    label: &str,
+    rate: f64,
+    n: f64,
+    total: u32,
+    format: RateFormat,
+    alert_threshold: f64,
+) {
+    let line = match format {
+        RateFormat::Probability => {
+            if rate <= 0.0 {
+                format!("{label}: 0 (0/{total})")
+            } else {
+                format!("{label}: {rate:.4} ({:.0}/{total})", (rate * n).round())
+            }
+        }
+        RateFormat::Percentage => {
+            format!(
+                "{label}: {:.1}% ({:.0}/{total})",
+                rate * 100.0,
+                (rate * n).round()
+            )
+        }
+    };
 
-/// Format a duration in seconds as mm:ss.
-#[must_use]
-pub fn fmt_mmss(s: f64) -> String {
-    let total_secs = s.round().max(0.0);
-    let m = (total_secs / 60.0).floor();
-    let sec = total_secs - m * 60.0;
-    format!("{m:.0}:{sec:02.0}")
-}
-
-/// Print a top-level section header with bold cyan text and `===` underline.
-pub fn print_header(title: &str) {
-    use owo_colors::{OwoColorize, Stream};
-    println!(
-        "\n{}",
-        title.if_supports_color(Stream::Stdout, |v| v.cyan())
-    );
-    println!("{}", "=".repeat(title.len()));
-}
-
-/// Print a sub-section header with `---` underline.
-pub fn print_subheader(title: &str) {
-    println!("\n{title}");
-    println!("{}", "-".repeat(title.len()));
-}
-
-/// Print a line colored by threshold comparison.
-///
-/// When `higher_is_better` is `true` (e.g., convergence rate):
-///   green if `value >= warn`, yellow if `value >= alert`, red otherwise.
-///
-/// When `higher_is_better` is `false` (e.g., shadow fraction):
-///   red if `value > alert`, yellow if `value > warn`, no color otherwise.
-pub fn print_colored(text: &str, value: f64, warn: f64, alert: f64, higher_is_better: bool) {
-    use owo_colors::{OwoColorize, Stream};
-    if higher_is_better && value >= warn {
+    if rate <= 0.0 {
         println!(
             "{}",
-            text.if_supports_color(Stream::Stdout, |v| v.green())
+            line.if_supports_color(Stream::Stdout, |v| v.green())
         );
-    } else if higher_is_better && value >= alert {
+    } else if alert_threshold > 0.0 && rate < alert_threshold {
         println!(
             "{}",
-            text.if_supports_color(Stream::Stdout, |v| v.yellow())
-        );
-    } else if higher_is_better {
-        println!(
-            "{}",
-            text.if_supports_color(Stream::Stdout, |v| v.red())
-        );
-    } else if value > alert {
-        println!(
-            "{}",
-            text.if_supports_color(Stream::Stdout, |v| v.red())
-        );
-    } else if value > warn {
-        println!(
-            "{}",
-            text.if_supports_color(Stream::Stdout, |v| v.yellow())
+            line.if_supports_color(Stream::Stdout, |v| v.yellow())
         );
     } else {
-        println!("{text}");
+        println!(
+            "{}",
+            line.if_supports_color(Stream::Stdout, |v| v.red())
+        );
     }
-}
-
-/// Print auto-derived differential drag rates.
-pub fn print_derived_drag(drag: &rpo_core::propagation::DragConfig) {
-    println!("\nAuto-derived differential drag (nyx DMF):");
-    println!("  da_dot:  {:+.6e}", drag.da_dot);
-    println!("  dex_dot: {:+.6e}", drag.dex_dot);
-    println!("  dey_dot: {:+.6e}", drag.dey_dot);
 }

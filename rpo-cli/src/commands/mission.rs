@@ -19,7 +19,7 @@ pub fn run(input_path: &Path, json: bool) -> Result<(), CliError> {
     }
 
     let propagator = to_propagation_model(&input.propagator);
-    print_mission_human(&output, &input, &propagator, false);
+    print_mission_human(&output, &input, &propagator, false, "Mission");
     print_mission_verdict(&output, &input, None);
     Ok(())
 }

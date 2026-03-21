@@ -6,7 +6,7 @@ use rpo_core::pipeline::{PipelineInput, PipelineOutput};
 use rpo_core::propagation::{DragConfig, PropagationModel};
 use rpo_core::types::TransferEclipseData;
 
-use super::common::{fmt_duration, fmt_mmss, print_header, print_roe, print_subheader};
+use super::common::{fmt_duration, fmt_m, fmt_m_s, print_header, print_roe, print_subheader};
 use super::eclipse_fmt::{print_eclipse_summary, print_eclipse_validation};
 use super::safety_fmt::{print_safety_analysis, print_safety_comparison, print_safety_summary};
 
@@ -21,18 +21,19 @@ const FIDELITY_SAFETY_SCREENING_KM: f64 = 0.2;
 /// Δv percentage threshold above which Lambert transfer is the dominant cost.
 const FAR_FIELD_DV_DRIVER_PCT: f64 = 90.0;
 
-/// Print the common Phase 1 + Phase 2 output shared by mission/validate handlers.
+/// Print the common Transfer + Waypoint Targeting output shared by mission/validate.
 #[allow(clippy::too_many_lines)]
 pub fn print_mission_human(
     output: &PipelineOutput,
     input: &PipelineInput,
     propagator: &PropagationModel,
     auto_drag: bool,
+    title: &str,
 ) {
-    print_header("End-to-End Mission");
+    print_header(title);
 
-    // Phase 1: Classification & Transfer
-    print_subheader("Phase 1: Classification & Transfer");
+    // ── Transfer ──────────────────────────────────────────────
+    print_subheader("Transfer");
     match &output.phase {
         MissionPhase::Proximity {
             separation_km,
@@ -43,8 +44,8 @@ pub fn print_mission_human(
                 "  Classification: {}",
                 "PROXIMITY".if_supports_color(Stream::Stdout, |v| v.green())
             );
-            println!("  ECI separation:  {separation_km:.4} km");
-            println!("  δr/r:            {delta_r_over_r:.6e}");
+            println!("  ECI separation:  {separation_km:.1} km");
+            println!("  \u{03b4}r/r:            {delta_r_over_r:.3e}");
         }
         MissionPhase::FarField {
             separation_km,
@@ -55,25 +56,24 @@ pub fn print_mission_human(
                 "  Classification: {} (Lambert transfer required)",
                 "FAR-FIELD".if_supports_color(Stream::Stdout, |v| v.yellow())
             );
-            println!("  ECI separation:  {separation_km:.4} km");
-            println!("  δr/r:            {delta_r_over_r:.6e}");
+            println!("  ECI separation:  {separation_km:.1} km");
+            println!("  \u{03b4}r/r:            {delta_r_over_r:.3e}");
         }
     }
 
     if let Some(ref lambert) = output.transfer {
-        println!("\n  Lambert Transfer:");
-        println!("    Total Δv:     {:.4} km/s", lambert.total_dv_km_s);
+        println!("\n  Lambert:");
+        println!("    Total \u{0394}v:     {}", fmt_m_s(lambert.total_dv_km_s, 1));
         println!(
-            "    Departure Δv: {:.4} km/s",
-            lambert.departure_dv_eci_km_s.norm()
+            "    Departure:    {}",
+            fmt_m_s(lambert.departure_dv_eci_km_s.norm(), 1)
         );
         println!(
-            "    Arrival Δv:   {:.4} km/s",
-            lambert.arrival_dv_eci_km_s.norm()
+            "    Arrival:      {}",
+            fmt_m_s(lambert.arrival_dv_eci_km_s.norm(), 1)
         );
         println!(
-            "    TOF:          {:.1} s ({})",
-            lambert.tof_s,
+            "    TOF:          {}",
             fmt_duration(lambert.tof_s)
         );
         println!(
@@ -87,7 +87,7 @@ pub fn print_mission_human(
             / lambert.departure_state.position_eci_km.norm())
         .sqrt();
         println!(
-            "    Δv/v_circ:    {:.1}%",
+            "    \u{0394}v/v_circ:    {:.1}%",
             lambert.total_dv_km_s / v_circ * 100.0
         );
     }
@@ -108,12 +108,12 @@ pub fn print_mission_human(
     println!();
     print_roe("Perch ROE", &output.perch_roe, chief_a);
 
-    // Phase 2: Waypoint Targeting
-    let phase2_title = format!(
-        "Phase 2: Waypoint Targeting ({} legs)",
+    // ── Waypoint Targeting ────────────────────────────────────
+    let wp_title = format!(
+        "Waypoint Targeting ({} legs)",
         output.mission.legs.len()
     );
-    print_subheader(&phase2_title);
+    print_subheader(&wp_title);
     let prop_label = match propagator {
         PropagationModel::J2Stm => "J2 STM",
         PropagationModel::J2DragStm { .. } if auto_drag => "J2+Drag STM (auto-derived)",
@@ -121,11 +121,11 @@ pub fn print_mission_human(
     };
     println!("  Propagator: {prop_label}");
     println!(
-        "  {:>4}  {:>10}  {:>12}  {:>12}  {:>12}  Profile",
-        "Leg", "TOF", "Δv1 (km/s)", "Δv2 (km/s)", "Total (km/s)"
+        "  {:>4}  {:>10}  {:>10}  {:>10}  {:>11}  Label",
+        "Leg", "TOF", "\u{0394}v1 (m/s)", "\u{0394}v2 (m/s)", "Total (m/s)"
     );
     println!(
-        "  {:-<4}  {:-<10}  {:-<12}  {:-<12}  {:-<12}  {:-<30}",
+        "  {:-<4}  {:-<10}  {:-<10}  {:-<10}  {:-<11}  {:-<30}",
         "", "", "", "", "", ""
     );
     let mut total_dv = 0.0;
@@ -139,42 +139,38 @@ pub fn print_mission_human(
             .and_then(|wp| wp.label.as_deref())
             .unwrap_or("-");
         println!(
-            "  {:>4}  {:>10}  {:>12.6}  {:>12.6}  {:>12.6}  {}",
+            "  {:>4}  {:>10}  {:>10.2}  {:>10.2}  {:>11.2}  {}",
             i + 1,
             fmt_duration(leg.tof_s),
-            dv1,
-            dv2,
-            leg.total_dv_km_s,
+            dv1 * 1000.0,
+            dv2 * 1000.0,
+            leg.total_dv_km_s * 1000.0,
             label,
         );
     }
     println!(
-        "  {:-<4}  {:-<10}  {:-<12}  {:-<12}  {:-<12}",
+        "  {:-<4}  {:-<10}  {:-<10}  {:-<10}  {:-<11}",
         "", "", "", "", ""
     );
     println!(
-        "  {:>4}  {:>10}  {:>12}  {:>12}  {:>12.6}",
-        "",
+        "  {:>4}  {:>10}  {:>10}  {:>10}  {:>11.2}",
+        "Total",
         fmt_duration(output.mission.total_duration_s),
         "",
         "",
-        total_dv,
+        total_dv * 1000.0,
     );
 
-    // Safety
+    // ── Safety ────────────────────────────────────────────────
     if let Some(ref safety) = output.mission.safety {
         let sc = input.config.safety.unwrap_or_default();
-        let num_legs = u32::try_from(output.mission.legs.len()).unwrap_or(u32::MAX);
-        let steps = u32::try_from(input.config.targeting.trajectory_steps).unwrap_or(u32::MAX);
-        let sample_interval_s = if num_legs > 0 && steps > 0 {
-            output.mission.total_duration_s / f64::from(num_legs) / f64::from(steps)
-        } else {
-            0.0
-        };
-        print_safety_analysis(safety, &sc, sample_interval_s);
+        print_subheader("Safety");
+        print_safety_analysis(safety, &sc);
     }
 
+    // ── Eclipse ───────────────────────────────────────────────
     if let Some(ref eclipse) = output.mission.eclipse {
+        print_subheader("Eclipse");
         print_eclipse_summary(eclipse);
 
         // Combined mission eclipse: transfer + waypoint phases
@@ -186,7 +182,7 @@ pub fn print_mission_human(
             if total_duration > 0.0 {
                 println!(
                     "  Combined (transfer + waypoint): {} ({:.1}% of full mission)",
-                    fmt_mmss(total_shadow),
+                    fmt_duration(total_shadow),
                     total_shadow / total_duration * 100.0,
                 );
             }
@@ -209,81 +205,92 @@ pub fn print_mission_verdict(
     let lambert_tof_s = output.transfer.as_ref().map_or(0.0, |t| t.tof_s);
     let total_duration_s = output.total_duration_s;
 
-    print_header("Mission Summary");
+    print_header("Summary");
 
     let sc = input.config.safety.unwrap_or_default();
     if let Some(report) = validation {
         let num_assessment =
             rpo_core::mission::assess_safety(&report.numerical_safety, &sc);
         if num_assessment.overall_pass {
-            println!("  Verdict:               {}", "FEASIBLE (safety metrics remain above threshold under nyx full-physics)".if_supports_color(Stream::Stdout, |v| v.green()));
+            println!("  Verdict:         {}", "FEASIBLE (safety margins satisfied, Nyx full-physics)".if_supports_color(Stream::Stdout, |v| v.green()));
         } else {
-            println!("  Verdict:               {}", "CAUTION (numerical safety below threshold)".if_supports_color(Stream::Stdout, |v| v.yellow()));
+            println!("  Verdict:         {}", "CAUTION (safety margins violated, Nyx full-physics)".if_supports_color(Stream::Stdout, |v| v.yellow()));
         }
     } else if let Some(ref safety) = output.mission.safety {
         let ana_assessment = rpo_core::mission::assess_safety(safety, &sc);
         if ana_assessment.overall_pass {
-            println!("  Verdict:               {}", "FEASIBLE (analytical safety above threshold)".if_supports_color(Stream::Stdout, |v| v.green()));
+            println!("  Verdict:         {}", "FEASIBLE (analytical safety margins satisfied)".if_supports_color(Stream::Stdout, |v| v.green()));
         } else {
-            println!("  Verdict:               {}", "CAUTION (analytical safety below threshold)".if_supports_color(Stream::Stdout, |v| v.yellow()));
+            println!("  Verdict:         {}", "CAUTION (analytical safety margins violated)".if_supports_color(Stream::Stdout, |v| v.yellow()));
         }
     }
 
-    println!("\n  Δv Budget:");
+    println!("\n  \u{0394}v Budget:");
     if total_dv_km_s > 0.0 {
         let lambert_pct = lambert_dv_km_s / total_dv_km_s * 100.0;
         let wp_pct = waypoint_dv_km_s / total_dv_km_s * 100.0;
         if lambert_pct > FAR_FIELD_DV_DRIVER_PCT {
             println!(
-                "    Lambert transfer:    {lambert_dv_km_s:.4} km/s  ({lambert_pct:.1}%{})",
+                "    Transfer:        {}  ({lambert_pct:.1}%{})",
+                fmt_m_s(lambert_dv_km_s, 1),
                 " -- far-field driver".if_supports_color(Stream::Stdout, |v| v.red()),
             );
         } else {
             println!(
-                "    Lambert transfer:    {lambert_dv_km_s:.4} km/s  ({lambert_pct:.1}%)",
+                "    Transfer:        {}  ({lambert_pct:.1}%)",
+                fmt_m_s(lambert_dv_km_s, 1),
             );
         }
         println!(
-            "    Waypoint targeting:  {waypoint_dv_km_s:.4} km/s  ({wp_pct:.1}%)",
+            "    Targeting:       {}  ({wp_pct:.1}%)",
+            fmt_m_s(waypoint_dv_km_s, 1),
         );
     } else {
-        println!("    Lambert transfer:    {lambert_dv_km_s:.4} km/s");
-        println!("    Waypoint targeting:  {waypoint_dv_km_s:.6} km/s");
+        println!("    Transfer:        {}", fmt_m_s(lambert_dv_km_s, 1));
+        println!("    Targeting:       {}", fmt_m_s(waypoint_dv_km_s, 1));
     }
     println!(
-        "    Total:               {}",
-        format!("{total_dv_km_s:.4} km/s").if_supports_color(Stream::Stdout, |v| v.green()),
+        "    Total:           {}",
+        fmt_m_s(total_dv_km_s, 1)
+            .if_supports_color(Stream::Stdout, |v| v.green()),
     );
 
     println!(
-        "\n  Duration:              {} ({} transfer + {} proximity)",
+        "\n  Duration:          {} ({} transfer + {} proximity)",
         fmt_duration(total_duration_s),
         fmt_duration(lambert_tof_s),
         fmt_duration(output.mission.total_duration_s),
     );
 
     if let Some(report) = validation {
-        print_safety_summary("nyx", &report.numerical_safety, &sc);
+        print_safety_summary("Nyx", &report.numerical_safety, &sc);
     } else if let Some(ref safety) = output.mission.safety {
         print_safety_summary("analytical", safety, &sc);
     }
 
     if let Some(report) = validation {
-        println!("\n  Model Fidelity:");
+        println!("\n  Fidelity:");
         println!(
-            "    Position error: max {:.3} km, mean {:.3} km",
-            report.max_position_error_km, report.mean_position_error_km,
+            "    Position error: max {}, mean {}",
+            fmt_m(report.max_position_error_km, 0),
+            fmt_m(report.mean_position_error_km, 0),
         );
         if report.max_position_error_km < FIDELITY_CLOSE_PROXIMITY_KM {
-            println!("    Suitable for:  interactive planning, preliminary safety screening, close proximity");
+            println!("    Suitable for:   mission planning, safety screening, close-proximity operations");
         } else if report.max_position_error_km < FIDELITY_SAFETY_SCREENING_KM {
             println!(
-                "    Suitable for:  interactive planning, preliminary safety screening"
+                "    Suitable for:   mission planning, safety screening"
             );
         } else {
-            println!("    Suitable for:  preliminary mission planning only");
+            println!("    Suitable for:   preliminary mission planning");
         }
-        println!("    Not for:       high-confidence operational truth analysis");
+        println!("    Not suitable for: operational truth analysis");
+    } else {
+        let prop_label = match &input.propagator {
+            rpo_core::pipeline::PropagatorChoice::J2Drag { .. } => "J2+Drag STM",
+            rpo_core::pipeline::PropagatorChoice::J2 => "J2 STM",
+        };
+        println!("\n  Fidelity:          analytical only ({prop_label})");
     }
 }
 
@@ -295,28 +302,28 @@ pub fn print_validation_details(
     samples_per_leg: u32,
     derived_drag: Option<&DragConfig>,
 ) {
-    let phase3_title = format!("Phase 3: Nyx Validation ({samples_per_leg} samples/leg)");
-    print_subheader(&phase3_title);
-    println!("  Position error (analytical vs nyx full-physics):");
-    println!("    Max:  {:.6} km", report.max_position_error_km);
-    println!("    Mean: {:.6} km", report.mean_position_error_km);
-    println!("    RMS:  {:.6} km", report.rms_position_error_km);
+    let val_title = format!("Nyx Validation ({samples_per_leg} samples/leg)");
+    print_subheader(&val_title);
+    println!("  Position error (analytical vs Nyx full-physics):");
+    println!("    Max:  {}", fmt_m(report.max_position_error_km, 1));
+    println!("    Mean: {}", fmt_m(report.mean_position_error_km, 1));
+    println!("    RMS:  {}", fmt_m(report.rms_position_error_km, 1));
     println!(
-        "    Max velocity error: {:.6e} km/s",
-        report.max_velocity_error_km_s
+        "    Max velocity error: {}",
+        fmt_m_s(report.max_velocity_error_km_s, 3),
     );
 
     print_per_leg_errors(&report.leg_points);
 
-    println!("\n  Spacecraft configs:");
+    println!("\n  Spacecraft:");
     println!(
-        "    Chief:  {:.0} kg, drag area {:.2} m², Cd {:.1}",
+        "    Chief:  {:.0} kg, drag area {:.2} m\u{00b2}, Cd {:.1}",
         report.chief_config.dry_mass_kg,
         report.chief_config.drag_area_m2,
         report.chief_config.coeff_drag,
     );
     println!(
-        "    Deputy: {:.0} kg, drag area {:.2} m², Cd {:.1}",
+        "    Deputy: {:.0} kg, drag area {:.2} m\u{00b2}, Cd {:.1}",
         report.deputy_config.dry_mass_kg,
         report.deputy_config.drag_area_m2,
         report.deputy_config.coeff_drag,
@@ -324,7 +331,7 @@ pub fn print_validation_details(
 
     print_safety_comparison(report, &input.config);
     println!(
-        "  (analytical: {} steps/leg; numerical: {} nyx samples/leg)",
+        "  (analytical: {} steps/leg; numerical: {} Nyx samples/leg)",
         input.config.targeting.trajectory_steps, samples_per_leg,
     );
 
@@ -338,7 +345,7 @@ pub fn print_validation_details(
     }
 
     if let Some(drag) = derived_drag {
-        print_derived_drag(drag);
+        print_derived_drag(drag, "\n  ");
     }
 }
 
@@ -346,13 +353,13 @@ pub fn print_validation_details(
 fn print_transfer_eclipse(te: &TransferEclipseData) {
     println!("\n  Transfer Eclipse:");
     println!(
-        "    Deputy shadow intervals: {}",
+        "    Shadow intervals: {}",
         te.summary.intervals.len()
     );
     if te.summary.total_shadow_duration_s > 0.0 {
         println!(
-            "    Deputy shadow time: {} ({:.1}% of transfer)",
-            fmt_mmss(te.summary.total_shadow_duration_s),
+            "    Shadow time:      {} ({:.1}% of transfer)",
+            fmt_duration(te.summary.total_shadow_duration_s),
             te.summary.time_in_shadow_fraction * 100.0,
         );
     } else {

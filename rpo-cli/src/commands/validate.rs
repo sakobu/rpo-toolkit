@@ -1,4 +1,4 @@
-//! Porcelain: mission + nyx high-fidelity validation.
+//! Porcelain: mission + Nyx high-fidelity validation.
 
 use std::path::Path;
 
@@ -29,7 +29,7 @@ pub fn run(
 
     let spinner = create_spinner(json);
 
-    status!(spinner, "Phase 1: Classification + Lambert transfer...");
+    status!(spinner, "Classification + Lambert transfer...");
     let transfer = compute_transfer(&input)?;
 
     status!(spinner, "Loading almanac (may download on first run)...");
@@ -39,13 +39,12 @@ pub fn run(
         auto_drag, &transfer, &chief_config, &deputy_config, &almanac, &input, spinner.as_ref(),
     )?;
 
-    status!(spinner, "Phase 2: Waypoint targeting...");
+    status!(spinner, "Waypoint targeting...");
     let wp_mission = plan_waypoints_from_transfer(&transfer, &input, &prop)?;
 
-    // Phase 3: Nyx validation
     status!(
         spinner,
-        "Phase 3: Nyx validation ({samples_per_leg} samples/leg)..."
+        "Nyx validation ({samples_per_leg} samples/leg)..."
     );
     let report = validate_mission_nyx(
         &wp_mission,
@@ -78,7 +77,7 @@ pub fn run(
         return print_json(&combined);
     }
 
-    print_mission_human(&output, &input, &prop, auto_drag);
+    print_mission_human(&output, &input, &prop, auto_drag, "Mission + Validation");
     print_validation_details(&output, &input, &report, samples_per_leg, derived_drag.as_ref());
     print_mission_verdict(&output, &input, Some(&report));
     Ok(())

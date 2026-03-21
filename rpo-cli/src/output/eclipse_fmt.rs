@@ -3,7 +3,7 @@
 use rpo_core::mission::EclipseValidation;
 use rpo_core::types::MissionEclipseData;
 
-use super::common::{fmt_mmss, print_colored};
+use super::common::{fmt_duration, print_colored, ThresholdDirection};
 
 /// Shadow fraction threshold above which we color yellow.
 const SHADOW_FRACTION_WARN: f64 = 0.25;
@@ -11,9 +11,10 @@ const SHADOW_FRACTION_WARN: f64 = 0.25;
 /// Shadow fraction threshold above which we color red.
 const SHADOW_FRACTION_ALERT: f64 = 0.50;
 
-/// Print eclipse summary (intervals, durations, shadow fraction).
+/// Print eclipse summary content (intervals, durations, shadow fraction).
+///
+/// The caller is responsible for printing the section header.
 pub fn print_eclipse_summary(eclipse: &MissionEclipseData) {
-    println!("\nEclipse Summary:");
     println!(
         "  Shadow intervals:   {}",
         eclipse.summary.intervals.len()
@@ -21,15 +22,14 @@ pub fn print_eclipse_summary(eclipse: &MissionEclipseData) {
     let frac = eclipse.summary.time_in_shadow_fraction;
     let frac_str = format!(
         "  Total shadow time:  {} ({:.1}% of waypoint phase)",
-        fmt_mmss(eclipse.summary.total_shadow_duration_s),
+        fmt_duration(eclipse.summary.total_shadow_duration_s),
         frac * 100.0,
     );
-    print_colored(&frac_str, frac, SHADOW_FRACTION_WARN, SHADOW_FRACTION_ALERT, false);
+    print_colored(&frac_str, frac, SHADOW_FRACTION_WARN, SHADOW_FRACTION_ALERT, ThresholdDirection::LowerIsBetter);
     if eclipse.summary.max_shadow_duration_s > 0.0 {
         println!(
-            "  Max single eclipse: {} ({:.1} min)",
-            fmt_mmss(eclipse.summary.max_shadow_duration_s),
-            eclipse.summary.max_shadow_duration_s / 60.0,
+            "  Max single eclipse: {}",
+            fmt_duration(eclipse.summary.max_shadow_duration_s),
         );
     }
 }
@@ -54,7 +54,7 @@ pub fn print_eclipse_validation(ev: &EclipseValidation, max_eclipse_duration_s: 
         if max_eclipse_duration_s > 0.0 {
             let pct = ev.max_timing_error_s / max_eclipse_duration_s * 100.0;
             println!(
-                "      ({pct:.1}% of max eclipse; adequate for planning, not power-critical analysis)",
+                "      ({pct:.1}% of max eclipse; acceptable for mission planning)",
             );
         }
     }
