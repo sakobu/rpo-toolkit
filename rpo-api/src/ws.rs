@@ -194,6 +194,20 @@ async fn handle_text_message(
             send_message(ws, &msg).await;
         }
 
+        ClientMessage::ComputeTransfer {
+            request_id,
+            mission,
+        } => {
+            let msg = match handlers::handle_compute_transfer(&mission) {
+                Ok(result) => ServerMessage::TransferResult {
+                    request_id,
+                    result: Box::new(result),
+                },
+                Err(e) => e.to_server_message(Some(request_id)),
+            };
+            send_message(ws, &msg).await;
+        }
+
         ClientMessage::PlanMission {
             request_id,
             mission,

@@ -46,19 +46,32 @@ pub type MissionDefinition = rpo_core::pipeline::PipelineInput;
 /// Type alias to the canonical pipeline output type in rpo-core.
 pub type MissionResultPayload = rpo_core::pipeline::PipelineOutput;
 
+/// Payload for transfer result responses.
+///
+/// Type alias to the intermediate transfer result type in rpo-core.
+pub type TransferResultPayload = rpo_core::pipeline::TransferResult;
+
 // ---------------------------------------------------------------------------
 // Client → Server messages
 // ---------------------------------------------------------------------------
 
 /// Messages sent from the client to the server.
 #[derive(Debug, Deserialize)]
-#[serde(tag = "type")]
+#[serde(tag = "type", rename_all = "snake_case")]
 pub enum ClientMessage {
     /// Classify chief/deputy separation (microseconds).
     Classify {
         /// Client-assigned correlation ID.
         request_id: u64,
         /// Mission definition (only chief + deputy + proximity used).
+        mission: MissionDefinition,
+    },
+    /// Compute Lambert transfer only (no waypoint targeting).
+    /// Returns classification, Lambert transfer, and perch handoff states.
+    ComputeTransfer {
+        /// Client-assigned correlation ID.
+        request_id: u64,
+        /// Mission definition (uses chief, deputy, perch, lambert fields).
         mission: MissionDefinition,
     },
     /// Full mission plan: classify → Lambert → waypoints → safety → covariance → eclipse.
@@ -127,7 +140,7 @@ pub enum ClientMessage {
 
 /// Messages sent from the server to the client.
 #[derive(Debug, Serialize)]
-#[serde(tag = "type")]
+#[serde(tag = "type", rename_all = "snake_case")]
 pub enum ServerMessage {
     /// Classification result.
     ClassifyResult {
@@ -135,6 +148,13 @@ pub enum ServerMessage {
         request_id: u64,
         /// Classification: Proximity or `FarField` with full state info.
         phase: MissionPhase,
+    },
+    /// Lambert transfer result (no waypoint targeting).
+    TransferResult {
+        /// Correlation ID from the client request.
+        request_id: u64,
+        /// Transfer result payload (boxed to reduce enum size).
+        result: Box<TransferResultPayload>,
     },
     /// Mission planning result.
     MissionResult {

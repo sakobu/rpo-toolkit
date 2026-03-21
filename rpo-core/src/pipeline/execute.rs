@@ -429,6 +429,22 @@ mod tests {
     }
 
     #[test]
+    fn test_transfer_result_serde_roundtrip() {
+        let input = far_field_input();
+        let result = compute_transfer(&input).expect("compute_transfer should succeed");
+        let json = serde_json::to_string(&result).expect("serialize TransferResult");
+        let roundtrip: TransferResult =
+            serde_json::from_str(&json).expect("deserialize TransferResult");
+
+        assert_eq!(result.arrival_epoch, roundtrip.arrival_epoch);
+        assert!(
+            (result.lambert_dv_km_s - roundtrip.lambert_dv_km_s).abs() < COPY_FIDELITY_TOL,
+            "lambert_dv_km_s serde roundtrip mismatch"
+        );
+        assert!(result.plan.transfer.is_some() == roundtrip.plan.transfer.is_some());
+    }
+
+    #[test]
     fn test_to_waypoints_conversion() {
         let inputs = vec![
             crate::pipeline::types::WaypointInput {

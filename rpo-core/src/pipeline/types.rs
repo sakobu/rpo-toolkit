@@ -160,7 +160,7 @@ pub struct PipelineInput {
 ///
 /// Computed before waypoint targeting so that callers can optionally
 /// extract differential drag rates from the perch states.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TransferResult {
     /// Mission plan (phase classification, Lambert transfer, perch ROE).
     pub plan: MissionPlan,
@@ -169,6 +169,7 @@ pub struct TransferResult {
     /// Deputy ECI state at perch (or original if proximity).
     pub perch_deputy: StateVector,
     /// Epoch at Lambert arrival.
+    #[serde(with = "crate::types::state::epoch_serde")]
     pub arrival_epoch: hifitime::Epoch,
     /// Lambert Δv magnitude (0.0 if proximity).
     pub lambert_dv_km_s: f64,

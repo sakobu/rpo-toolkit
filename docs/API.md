@@ -20,188 +20,208 @@ This is a single-user desktop tool. One WebSocket connection at a time, one back
 
 ## Protocol
 
-All messages are JSON text frames with a `"type"` discriminator tag (serde internally-tagged enum).
+All messages are JSON text frames with a `"type"` discriminator tag (serde internally-tagged enum, snake_case).
 
-- Non-text WebSocket frames receive an `Error` response with `code: "invalid_input"`.
+- Non-text WebSocket frames receive an `error` response with `code: "invalid_input"`.
 - The server is stateless: the client sends the full `MissionDefinition` (alias for `PipelineInput`) with every request.
 - Client-assigned `request_id` (u64) correlates requests with responses.
 
 ## Client Messages
 
-### Classify
+### classify
 
-Classify chief/deputy separation as `Proximity` or `FarField`. Returns immediately.
+Classify chief/deputy separation as `proximity` or `far_field`. Returns immediately.
 
 | Field        | Type                | Required | Description                              |
 | ------------ | ------------------- | -------- | ---------------------------------------- |
-| `type`       | `"Classify"`        | yes      | Message discriminator                    |
+| `type`       | `"classify"`        | yes      | Message discriminator                    |
 | `request_id` | `u64`               | yes      | Client-assigned correlation ID           |
 | `mission`    | `MissionDefinition` | yes      | Only `chief`, `deputy`, `proximity` used |
 
-Response: `ClassifyResult`
+Response: `classify_result`
 
-### PlanMission
+### compute_transfer
+
+Compute Lambert transfer and perch handoff states without waypoint targeting. For iterating on Lambert design in ECI view. Returns immediately.
+
+| Field        | Type                   | Required | Description                                                                |
+| ------------ | ---------------------- | -------- | -------------------------------------------------------------------------- |
+| `type`       | `"compute_transfer"`   | yes      | Message discriminator                                                      |
+| `request_id` | `u64`                  | yes      | Client-assigned correlation ID                                             |
+| `mission`    | `MissionDefinition`    | yes      | Uses `chief`, `deputy`, `perch`, `lambert_tof_s`, `lambert_config` fields  |
+
+Response: `transfer_result`
+
+### plan_mission
 
 Full mission plan: classify, Lambert transfer, perch, waypoint targeting, safety, covariance, eclipse. Returns immediately.
 
 | Field        | Type                | Required | Description                    |
 | ------------ | ------------------- | -------- | ------------------------------ |
-| `type`       | `"PlanMission"`     | yes      | Message discriminator          |
+| `type`       | `"plan_mission"`    | yes      | Message discriminator          |
 | `request_id` | `u64`               | yes      | Client-assigned correlation ID |
 | `mission`    | `MissionDefinition` | yes      | Full mission definition        |
 
-Response: `MissionResult`
+Response: `mission_result`
 
-### MoveWaypoint
+### move_waypoint
 
 Replan from a moved waypoint, keeping earlier legs cached. Returns immediately.
 
 | Field            | Type                | Required | Description                                   |
 | ---------------- | ------------------- | -------- | --------------------------------------------- |
-| `type`           | `"MoveWaypoint"`    | yes      | Message discriminator                         |
+| `type`           | `"move_waypoint"`   | yes      | Message discriminator                         |
 | `request_id`     | `u64`               | yes      | Client-assigned correlation ID                |
 | `modified_index` | `usize`             | yes      | Index of the waypoint that changed            |
 | `mission`        | `MissionDefinition` | yes      | Full mission definition with updated waypoint |
 
-Response: `MissionResult`
+Response: `mission_result`
 
-### UpdateConfig
+### update_config
 
 Re-solve all waypoints with new config or propagator settings. Returns immediately.
 
 | Field        | Type                | Required | Description                                 |
 | ------------ | ------------------- | -------- | ------------------------------------------- |
-| `type`       | `"UpdateConfig"`    | yes      | Message discriminator                       |
+| `type`       | `"update_config"`   | yes      | Message discriminator                       |
 | `request_id` | `u64`               | yes      | Client-assigned correlation ID              |
 | `mission`    | `MissionDefinition` | yes      | Full mission definition with updated config |
 
-Response: `MissionResult`
+Response: `mission_result`
 
-### ExtractDrag
+### extract_drag
 
 Extract differential drag rates via nyx full-physics propagation. Runs in background (~3 seconds). Requires `chief_config` and `deputy_config` in the mission definition.
 
 | Field        | Type                | Required | Description                            |
 | ------------ | ------------------- | -------- | -------------------------------------- |
-| `type`       | `"ExtractDrag"`     | yes      | Message discriminator                  |
+| `type`       | `"extract_drag"`    | yes      | Message discriminator                  |
 | `request_id` | `u64`               | yes      | Client-assigned correlation ID         |
 | `mission`    | `MissionDefinition` | yes      | Needs `chief_config` + `deputy_config` |
 
-Response: `DragResult`
+Response: `drag_result`
 
-### Validate
+### validate
 
 Per-leg nyx high-fidelity validation with progress streaming. Runs in background (seconds to minutes depending on leg count).
 
 | Field             | Type                | Required | Default | Description                              |
 | ----------------- | ------------------- | -------- | ------- | ---------------------------------------- |
-| `type`            | `"Validate"`        | yes      |         | Message discriminator                    |
+| `type`            | `"validate"`        | yes      |         | Message discriminator                    |
 | `request_id`      | `u64`               | yes      |         | Client-assigned correlation ID           |
 | `mission`         | `MissionDefinition` | yes      |         | Full mission definition                  |
 | `samples_per_leg` | `u32` or `null`     | no       | `50`    | Number of comparison points per leg      |
 | `auto_drag`       | `bool`              | no       | `false` | Auto-derive drag rates before validation |
 
-Response: `Progress` (0 or more), then `ValidationResult`
+Response: `progress` (0 or more), then `validation_result`
 
-### RunMC
+### run_mc
 
 Full-physics Monte Carlo ensemble analysis. Runs in background (minutes). Requires `monte_carlo` config in the mission definition.
 
 | Field        | Type                | Required | Default | Description                      |
 | ------------ | ------------------- | -------- | ------- | -------------------------------- |
-| `type`       | `"RunMC"`           | yes      |         | Message discriminator            |
+| `type`       | `"run_mc"`          | yes      |         | Message discriminator            |
 | `request_id` | `u64`               | yes      |         | Client-assigned correlation ID   |
 | `mission`    | `MissionDefinition` | yes      |         | Full mission definition          |
 | `auto_drag`  | `bool`              | no       | `false` | Auto-derive drag rates before MC |
 
-Response: `Progress` (0 or more), then `MonteCarloResult`
+Response: `progress` (0 or more), then `monte_carlo_result`
 
-### Cancel
+### cancel
 
 Cancel a running background operation. If no background job is active, no response is sent.
 
 | Field        | Type            | Required | Description                                       |
 | ------------ | --------------- | -------- | ------------------------------------------------- |
-| `type`       | `"Cancel"`      | yes      | Message discriminator                             |
+| `type`       | `"cancel"`      | yes      | Message discriminator                             |
 | `request_id` | `u64` or `null` | no       | ID to cancel; cancels current job if null/omitted |
 
-Response: `Cancelled` (if a job was active)
+Response: `cancelled` (if a job was active)
 
 ## Server Messages
 
-### ClassifyResult
+### classify_result
 
-| Field        | Type               | Description                                                    |
-| ------------ | ------------------ | -------------------------------------------------------------- |
-| `type`       | `"ClassifyResult"` | Message discriminator                                          |
-| `request_id` | `u64`              | Correlation ID from the client request                         |
-| `phase`      | `MissionPhase`     | `Proximity { roe, chief_elements, ... }` or `FarField { ... }` |
+| Field        | Type                | Description                                                      |
+| ------------ | ------------------- | ---------------------------------------------------------------- |
+| `type`       | `"classify_result"` | Message discriminator                                            |
+| `request_id` | `u64`               | Correlation ID from the client request                           |
+| `phase`      | `MissionPhase`      | `proximity { roe, chief_elements, ... }` or `far_field { ... }` |
 
-### MissionResult
+### transfer_result
 
-| Field        | Type              | Description                            |
-| ------------ | ----------------- | -------------------------------------- |
-| `type`       | `"MissionResult"` | Message discriminator                  |
-| `request_id` | `u64`             | Correlation ID from the client request |
-| `result`     | `PipelineOutput`  | Full mission result payload            |
+| Field        | Type                | Description                                                   |
+| ------------ | ------------------- | ------------------------------------------------------------- |
+| `type`       | `"transfer_result"` | Message discriminator                                         |
+| `request_id` | `u64`               | Correlation ID from the client request                        |
+| `result`     | `TransferResult`    | Classification, Lambert transfer, perch states, arrival epoch |
 
-### DragResult
+### mission_result
 
-| Field        | Type           | Description                            |
-| ------------ | -------------- | -------------------------------------- |
-| `type`       | `"DragResult"` | Message discriminator                  |
-| `request_id` | `u64`          | Correlation ID from the client request |
-| `drag`       | `DragConfig`   | Extracted differential drag rates      |
+| Field        | Type               | Description                            |
+| ------------ | ------------------ | -------------------------------------- |
+| `type`       | `"mission_result"` | Message discriminator                  |
+| `request_id` | `u64`              | Correlation ID from the client request |
+| `result`     | `PipelineOutput`   | Full mission result payload            |
 
-### Progress
+### drag_result
 
-Sent zero or more times during `Validate` and `RunMC` operations.
+| Field        | Type            | Description                            |
+| ------------ | --------------- | -------------------------------------- |
+| `type`       | `"drag_result"` | Message discriminator                  |
+| `request_id` | `u64`           | Correlation ID from the client request |
+| `drag`       | `DragConfig`    | Extracted differential drag rates      |
+
+### progress
+
+Sent zero or more times during `validate` and `run_mc` operations.
 
 | Field        | Type               | Description                                          |
 | ------------ | ------------------ | ---------------------------------------------------- |
-| `type`       | `"Progress"`       | Message discriminator                                |
+| `type`       | `"progress"`       | Message discriminator                                |
 | `request_id` | `u64`              | Correlation ID of the operation in progress          |
 | `phase`      | `string`           | `"validate"` or `"mc"`                               |
 | `detail`     | `string` or `null` | Human-readable detail (e.g., `"Validating leg 3/5"`) |
 | `fraction`   | `number` or `null` | Completion fraction, 0.0 to 1.0                      |
 
-### ValidationResult
+### validation_result
 
-| Field        | Type                 | Description                            |
-| ------------ | -------------------- | -------------------------------------- |
-| `type`       | `"ValidationResult"` | Message discriminator                  |
-| `request_id` | `u64`                | Correlation ID from the client request |
-| `report`     | `ValidationReport`   | Full per-leg validation report         |
+| Field        | Type                  | Description                            |
+| ------------ | --------------------- | -------------------------------------- |
+| `type`       | `"validation_result"` | Message discriminator                  |
+| `request_id` | `u64`                 | Correlation ID from the client request |
+| `report`     | `ValidationReport`    | Full per-leg validation report         |
 
-### MonteCarloResult
+### monte_carlo_result
 
-| Field        | Type                 | Description                            |
-| ------------ | -------------------- | -------------------------------------- |
-| `type`       | `"MonteCarloResult"` | Message discriminator                  |
-| `request_id` | `u64`                | Correlation ID from the client request |
-| `report`     | `MonteCarloReport`   | Full Monte Carlo ensemble report       |
+| Field        | Type                   | Description                            |
+| ------------ | ---------------------- | -------------------------------------- |
+| `type`       | `"monte_carlo_result"` | Message discriminator                  |
+| `request_id` | `u64`                  | Correlation ID from the client request |
+| `report`     | `MonteCarloReport`     | Full Monte Carlo ensemble report       |
 
-### Cancelled
+### cancelled
 
 | Field        | Type          | Description                               |
 | ------------ | ------------- | ----------------------------------------- |
-| `type`       | `"Cancelled"` | Message discriminator                     |
+| `type`       | `"cancelled"` | Message discriminator                     |
 | `request_id` | `u64`         | Correlation ID of the cancelled operation |
 
-### Heartbeat
+### heartbeat
 
 Sent every 30 seconds while a background job is running. The counter resets to 0 when the job completes.
 
 | Field  | Type          | Description                                   |
 | ------ | ------------- | --------------------------------------------- |
-| `type` | `"Heartbeat"` | Message discriminator                         |
+| `type` | `"heartbeat"` | Message discriminator                         |
 | `seq`  | `u64`         | Monotonic counter (increments each heartbeat) |
 
-### Error
+### error
 
 | Field        | Type                | Description                                       |
 | ------------ | ------------------- | ------------------------------------------------- |
-| `type`       | `"Error"`           | Message discriminator                             |
+| `type`       | `"error"`           | Message discriminator                             |
 | `request_id` | `u64` or `null`     | Correlation ID (null if not tied to a request)    |
 | `code`       | `string`            | Machine-readable error code (see below)           |
 | `message`    | `string`            | Human-readable error message                      |
@@ -245,10 +265,10 @@ An `invalid_input` error for a missing field includes:
 
 ## Background Job Behavior
 
-- Only one background job runs at a time (`ExtractDrag`, `Validate`, `RunMC`).
+- Only one background job runs at a time (`extract_drag`, `validate`, `run_mc`).
 - Sending a new background request automatically cancels the active job.
 - Cancellation is cooperative: the server checks the cancel flag between phases (legs, MC samples).
-- `Heartbeat` messages are sent every 30 seconds during background jobs to keep the connection alive.
+- `heartbeat` messages are sent every 30 seconds during background jobs to keep the connection alive.
 - When the connection closes, any active background job is cancelled.
 
 ## MissionDefinition
@@ -257,13 +277,13 @@ An `invalid_input` error for a missing field includes:
 
 ## Examples
 
-### Classify
+### classify
 
 Request:
 
 ```json
 {
-  "type": "Classify",
+  "type": "classify",
   "request_id": 1,
   "mission": {
     "chief": {
@@ -285,7 +305,7 @@ Response (far-field):
 
 ```json
 {
-  "type": "ClassifyResult",
+  "type": "classify_result",
   "request_id": 1,
   "phase": {
     "far_field": {
@@ -305,14 +325,61 @@ Response (far-field):
 }
 ```
 
-### PlanMission
+### compute_transfer
 
 Request:
 
 ```json
 {
-  "type": "PlanMission",
+  "type": "compute_transfer",
   "request_id": 2,
+  "mission": {
+    "chief": {
+      "epoch": "2024-01-01T00:00:00 UTC",
+      "position_eci_km": [5876.261, 3392.661, 0.0],
+      "velocity_eci_km_s": [-2.380512, 4.123167, 6.006917]
+    },
+    "deputy": {
+      "epoch": "2024-01-01T00:00:00 UTC",
+      "position_eci_km": [5199.839421, 4281.648523, 1398.070066],
+      "velocity_eci_km_s": [-3.993103, 2.970313, 5.76454]
+    },
+    "waypoints": [],
+    "lambert_tof_s": 3600.0,
+    "perch": { "v_bar": { "along_track_km": 5.0 } }
+  }
+}
+```
+
+Response:
+
+```json
+{
+  "type": "transfer_result",
+  "request_id": 2,
+  "result": {
+    "plan": {
+      "phase": { "far_field": { "...": "..." } },
+      "transfer": { "...": "..." },
+      "perch_roe": { "da": 0.0, "dlambda": 0.000726, "...": "..." },
+      "chief_at_arrival": { "...": "..." }
+    },
+    "perch_chief": { "...": "..." },
+    "perch_deputy": { "...": "..." },
+    "arrival_epoch": "2024-01-01T01:00:00 UTC",
+    "lambert_dv_km_s": 1.234
+  }
+}
+```
+
+### plan_mission
+
+Request:
+
+```json
+{
+  "type": "plan_mission",
+  "request_id": 3,
   "mission": {
     "chief": {
       "epoch": "2024-01-01T00:00:00 UTC",
@@ -351,8 +418,8 @@ Response:
 
 ```json
 {
-  "type": "MissionResult",
-  "request_id": 2,
+  "type": "mission_result",
+  "request_id": 3,
   "result": {
     "phase": { "far_field": { "...": "..." } },
     "transfer": { "...": "..." },
@@ -368,13 +435,13 @@ Response:
 }
 ```
 
-### Cancel
+### cancel
 
 Request:
 
 ```json
 {
-  "type": "Cancel",
+  "type": "cancel",
   "request_id": null
 }
 ```
@@ -383,16 +450,16 @@ Response (if a job was active):
 
 ```json
 {
-  "type": "Cancelled",
+  "type": "cancelled",
   "request_id": 3
 }
 ```
 
-### Error
+### error
 
 ```json
 {
-  "type": "Error",
+  "type": "error",
   "request_id": 2,
   "code": "targeting_convergence",
   "message": "targeting did not converge after 100 iterations (error: 0.0015 km)",
@@ -403,13 +470,13 @@ Response (if a job was active):
 }
 ```
 
-### Progress + Heartbeat
+### progress + heartbeat
 
-During a validation run, the client may see interleaved Progress and Heartbeat messages:
+During a validation run, the client may see interleaved progress and heartbeat messages:
 
 ```json
-{"type": "Progress", "request_id": 3, "phase": "validate", "detail": "Validating leg 1/5", "fraction": 0.2}
-{"type": "Progress", "request_id": 3, "phase": "validate", "detail": "Validating leg 2/5", "fraction": 0.4}
-{"type": "Heartbeat", "seq": 1}
-{"type": "Progress", "request_id": 3, "phase": "validate", "detail": "Validating leg 3/5", "fraction": 0.6}
+{"type": "progress", "request_id": 3, "phase": "validate", "detail": "Validating leg 1/5", "fraction": 0.2}
+{"type": "progress", "request_id": 3, "phase": "validate", "detail": "Validating leg 2/5", "fraction": 0.4}
+{"type": "heartbeat", "seq": 1}
+{"type": "progress", "request_id": 3, "phase": "validate", "detail": "Validating leg 3/5", "fraction": 0.6}
 ```

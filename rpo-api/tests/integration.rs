@@ -135,14 +135,14 @@ async fn classify_returns_proximity() {
     let resp = send_recv(
         &mut ws,
         json!({
-            "type": "Classify",
+            "type": "classify",
             "request_id": 1,
             "mission": proximity_mission()
         }),
     )
     .await;
 
-    assert_eq!(resp["type"], "ClassifyResult");
+    assert_eq!(resp["type"], "classify_result");
     assert_eq!(resp["request_id"], 1);
     // Nearby chief/deputy should classify as Proximity
     assert!(
@@ -160,14 +160,14 @@ async fn plan_mission_returns_legs() {
     let resp = send_recv(
         &mut ws,
         json!({
-            "type": "PlanMission",
+            "type": "plan_mission",
             "request_id": 2,
             "mission": proximity_mission()
         }),
     )
     .await;
 
-    assert_eq!(resp["type"], "MissionResult");
+    assert_eq!(resp["type"], "mission_result");
     assert_eq!(resp["request_id"], 2);
     assert!(resp["result"]["mission"]["legs"].is_array());
     assert!(resp["result"]["total_dv_km_s"].is_number());
@@ -185,7 +185,7 @@ async fn move_waypoint_returns_result() {
     let resp = send_recv(
         &mut ws,
         json!({
-            "type": "MoveWaypoint",
+            "type": "move_waypoint",
             "request_id": 3,
             "modified_index": 0,
             "mission": proximity_mission()
@@ -193,7 +193,7 @@ async fn move_waypoint_returns_result() {
     )
     .await;
 
-    assert_eq!(resp["type"], "MissionResult");
+    assert_eq!(resp["type"], "mission_result");
     assert_eq!(resp["request_id"], 3);
 }
 
@@ -206,26 +206,26 @@ async fn multiple_requests_on_same_connection() {
     let resp1 = send_recv(
         &mut ws,
         json!({
-            "type": "Classify",
+            "type": "classify",
             "request_id": 10,
             "mission": proximity_mission()
         }),
     )
     .await;
-    assert_eq!(resp1["type"], "ClassifyResult");
+    assert_eq!(resp1["type"], "classify_result");
     assert_eq!(resp1["request_id"], 10);
 
     // Second request on same connection
     let resp2 = send_recv(
         &mut ws,
         json!({
-            "type": "PlanMission",
+            "type": "plan_mission",
             "request_id": 11,
             "mission": proximity_mission()
         }),
     )
     .await;
-    assert_eq!(resp2["type"], "MissionResult");
+    assert_eq!(resp2["type"], "mission_result");
     assert_eq!(resp2["request_id"], 11);
 }
 
@@ -242,13 +242,13 @@ async fn far_field_classify_and_plan() {
     let classify = send_recv(
         &mut ws,
         json!({
-            "type": "Classify",
+            "type": "classify",
             "request_id": 20,
             "mission": far_field_mission()
         }),
     )
     .await;
-    assert_eq!(classify["type"], "ClassifyResult");
+    assert_eq!(classify["type"], "classify_result");
     assert!(
         classify["phase"]["far_field"].is_object(),
         "expected far_field, got: {}",
@@ -259,13 +259,13 @@ async fn far_field_classify_and_plan() {
     let plan = send_recv(
         &mut ws,
         json!({
-            "type": "PlanMission",
+            "type": "plan_mission",
             "request_id": 21,
             "mission": far_field_mission()
         }),
     )
     .await;
-    assert_eq!(plan["type"], "MissionResult");
+    assert_eq!(plan["type"], "mission_result");
     assert!(
         plan["result"]["transfer"].is_object(),
         "far-field plan should include Lambert transfer"
@@ -285,6 +285,113 @@ async fn far_field_classify_and_plan() {
 
     let legs = plan["result"]["mission"]["legs"].as_array().unwrap();
     assert_eq!(legs.len(), 1, "expected 1 leg for 1 waypoint");
+}
+
+// ---------------------------------------------------------------------------
+// ComputeTransfer (Lambert only, no waypoints)
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn compute_transfer_far_field() {
+    let url = start_test_server().await;
+    let (mut ws, _) = connect_async(&url).await.expect("connect");
+
+    let resp = send_recv(
+        &mut ws,
+        json!({
+            "type": "compute_transfer",
+            "request_id": 30,
+            "mission": far_field_mission()
+        }),
+    )
+    .await;
+
+    assert_eq!(resp["type"], "transfer_result");
+    assert_eq!(resp["request_id"], 30);
+
+    let result = &resp["result"];
+    // Far-field should include a Lambert transfer in the plan
+    assert!(
+        result["plan"]["transfer"].is_object(),
+        "far-field transfer should include Lambert data"
+    );
+    // Lambert Dv should be positive
+    let dv = result["lambert_dv_km_s"]
+        .as_f64()
+        .expect("lambert_dv_km_s");
+    assert!(dv > 0.0, "Lambert Dv should be positive for far-field");
+    // Arrival epoch should be a string (ISO 8601)
+    assert!(
+        result["arrival_epoch"].is_string(),
+        "arrival_epoch should be ISO 8601 string"
+    );
+    // Perch states should be present
+    assert!(result["perch_chief"]["position_eci_km"].is_array());
+    assert!(result["perch_deputy"]["position_eci_km"].is_array());
+}
+
+#[tokio::test]
+async fn compute_transfer_proximity() {
+    let url = start_test_server().await;
+    let (mut ws, _) = connect_async(&url).await.expect("connect");
+
+    let resp = send_recv(
+        &mut ws,
+        json!({
+            "type": "compute_transfer",
+            "request_id": 31,
+            "mission": proximity_mission()
+        }),
+    )
+    .await;
+
+    assert_eq!(resp["type"], "transfer_result");
+    assert_eq!(resp["request_id"], 31);
+
+    let result = &resp["result"];
+    // Proximity should have no Lambert transfer
+    assert!(
+        result["plan"]["transfer"].is_null(),
+        "proximity should have no Lambert transfer"
+    );
+    // Lambert Dv should be zero
+    let dv = result["lambert_dv_km_s"]
+        .as_f64()
+        .expect("lambert_dv_km_s");
+    assert!(dv.abs() < f64::EPSILON, "proximity should have zero Lambert Dv");
+}
+
+#[tokio::test]
+async fn compute_transfer_invalid_returns_error() {
+    let url = start_test_server().await;
+    let (mut ws, _) = connect_async(&url).await.expect("connect");
+
+    // Zero-position deputy should cause a conversion error
+    let resp = send_recv(
+        &mut ws,
+        json!({
+            "type": "compute_transfer",
+            "request_id": 32,
+            "mission": {
+                "chief": {
+                    "epoch": "2024-01-01T00:00:00 UTC",
+                    "position_eci_km": [5876.261, 3392.661, 0.0],
+                    "velocity_eci_km_s": [-2.380512, 4.123167, 6.006917]
+                },
+                "deputy": {
+                    "epoch": "2024-01-01T00:00:00 UTC",
+                    "position_eci_km": [0.0, 0.0, 0.0],
+                    "velocity_eci_km_s": [0.0, 0.0, 0.0]
+                },
+                "waypoints": []
+            }
+        }),
+    )
+    .await;
+
+    assert_eq!(resp["type"], "error");
+    assert_eq!(resp["request_id"], 32);
+    assert!(resp["code"].is_string());
 }
 
 // ---------------------------------------------------------------------------
@@ -364,14 +471,14 @@ async fn empty_waypoints_error_detail() {
     let resp = send_recv(
         &mut ws,
         json!({
-            "type": "PlanMission",
+            "type": "plan_mission",
             "request_id": 30,
             "mission": mission
         }),
     )
     .await;
 
-    assert_eq!(resp["type"], "Error");
+    assert_eq!(resp["type"], "error");
     assert_eq!(resp["code"], "invalid_input");
     assert_eq!(
         resp["detail"]["reason"], "no waypoints provided",
@@ -401,7 +508,7 @@ async fn binary_frame_returns_error() {
     let text = response.into_text().expect("text");
     let parsed: Value = serde_json::from_str(&text).expect("json");
 
-    assert_eq!(parsed["type"], "Error");
+    assert_eq!(parsed["type"], "error");
     assert_eq!(parsed["code"], "invalid_input");
     assert!(parsed["message"].as_str().unwrap().contains("text frame"));
 }
@@ -417,7 +524,7 @@ async fn cancel_without_active_job_no_crash() {
 
     // Send Cancel with no active job
     ws.send(Message::Text(
-        json!({"type": "Cancel", "request_id": 99}).to_string().into(),
+        json!({"type": "cancel", "request_id": 99}).to_string().into(),
     ))
     .await
     .expect("send");
@@ -429,13 +536,13 @@ async fn cancel_without_active_job_no_crash() {
     let resp = send_recv(
         &mut ws,
         json!({
-            "type": "Classify",
+            "type": "classify",
             "request_id": 100,
             "mission": proximity_mission()
         }),
     )
     .await;
-    assert_eq!(resp["type"], "ClassifyResult");
+    assert_eq!(resp["type"], "classify_result");
 }
 
 // ---------------------------------------------------------------------------
@@ -486,7 +593,7 @@ fn api_error_to_server_message_never_panics() {
     for err in &errors {
         let msg = err.to_server_message(Some(1));
         let json = serde_json::to_value(&msg).unwrap();
-        assert_eq!(json["type"], "Error");
+        assert_eq!(json["type"], "error");
         assert!(json["code"].is_string());
         assert!(json["message"].is_string());
     }
