@@ -14,7 +14,7 @@ use std::process::ExitCode;
 use clap::{CommandFactory, Parser};
 use owo_colors::set_override;
 
-use cli::{Cli, Command};
+use cli::{Cli, Command, OutputMode};
 
 fn main() -> ExitCode {
     let cli = Cli::parse();
@@ -30,18 +30,29 @@ fn main() -> ExitCode {
             Cli::parse_from(["rpo-cli", "--help"]);
             Ok(())
         }
-        Some(Command::Mission { ref input, json }) => commands::mission::run(input, json),
+        Some(Command::Mission {
+            ref input,
+            json,
+            markdown,
+        }) => commands::mission::run(input, OutputMode::from_flags(json, markdown)),
         Some(Command::Validate {
             ref input,
             json,
+            markdown,
             samples_per_leg,
             auto_drag,
-        }) => commands::validate::run(input, json, samples_per_leg, auto_drag),
+        }) => commands::validate::run(
+            input,
+            OutputMode::from_flags(json, markdown),
+            samples_per_leg,
+            auto_drag,
+        ),
         Some(Command::Mc {
             ref input,
             json,
+            markdown,
             auto_drag,
-        }) => commands::mc::run(input, json, auto_drag),
+        }) => commands::mc::run(input, OutputMode::from_flags(json, markdown), auto_drag),
         Some(Command::Classify { ref input }) => commands::classify::run(input),
         Some(Command::Transfer { ref input }) => commands::transfer::run(input),
         Some(Command::Convert { ref input, ref to }) => commands::convert::run(input, to),

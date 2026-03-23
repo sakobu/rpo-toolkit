@@ -793,9 +793,31 @@ pub fn validate_mission_nyx(
         cumulative_time += leg.tof_s;
     }
 
-    // Compute safety from nyx trajectory
+    // Compute safety from nyx trajectory.
+    // analyze_trajectory_safety processes a flat trajectory and always leaves
+    // leg indices at 0. Derive the correct leg indices from elapsed time.
     let nyx_safety_states = build_nyx_safety_states(&safety_pairs)?;
-    let numerical_safety = analyze_trajectory_safety(&nyx_safety_states)?;
+    let numerical_safety = {
+        let mut s = analyze_trajectory_safety(&nyx_safety_states)?;
+        let mut found_3d = false;
+        let mut found_rc = false;
+        let mut cumulative = 0.0_f64;
+        for (i, leg) in mission.legs.iter().enumerate() {
+            cumulative += leg.tof_s;
+            if !found_3d && s.operational.min_3d_elapsed_s <= cumulative {
+                s.operational.min_3d_leg_index = i;
+                found_3d = true;
+            }
+            if !found_rc && s.operational.min_rc_elapsed_s <= cumulative {
+                s.operational.min_rc_leg_index = i;
+                found_rc = true;
+            }
+            if found_3d && found_rc {
+                break;
+            }
+        }
+        s
+    };
 
     // Compute eclipse validation if eclipse data is present
     let eclipse_validation = mission.eclipse.as_ref().and_then(|eclipse_data| {

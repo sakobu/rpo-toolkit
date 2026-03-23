@@ -6,11 +6,14 @@ use rpo_core::mission::validate_mission_nyx;
 use rpo_core::pipeline::{compute_transfer, plan_waypoints_from_transfer, PipelineInput};
 use rpo_core::propagation::load_full_almanac;
 
+use crate::cli::OutputMode;
 use crate::error::CliError;
 use crate::input::load_json;
 use crate::output::common::{
-    create_spinner, print_json, resolve_drag_and_propagator, status,
+    create_spinner, print_insights, print_json, resolve_drag_and_propagator, status, write_report,
+    SafetyTier,
 };
+use crate::output::markdown_fmt::{self, ValidationContext};
 use crate::output::mission_fmt::{
     print_mission_human, print_mission_verdict, print_validation_details,
 };
@@ -18,7 +21,7 @@ use crate::output::mission_fmt::{
 /// Run mission + nyx validation pipeline.
 pub fn run(
     input_path: &Path,
-    json: bool,
+    mode: OutputMode,
     samples_per_leg: u32,
     auto_drag: bool,
 ) -> Result<(), CliError> {
@@ -27,7 +30,7 @@ pub fn run(
     let chief_config = input.chief_config.unwrap_or_default().resolve();
     let deputy_config = input.deputy_config.unwrap_or_default().resolve();
 
-    let spinner = create_spinner(json);
+    let spinner = create_spinner(mode.suppress_interactive());
 
     status!(spinner, "Classification + Lambert transfer...");
     let transfer = compute_transfer(&input)?;
@@ -69,16 +72,46 @@ pub fn run(
         derived_drag,
     );
 
-    if json {
-        let combined = serde_json::json!({
-            "mission": output,
-            "validation": report,
-        });
-        return print_json(&combined);
-    }
+    match mode {
+        OutputMode::Json => {
+            let combined = serde_json::json!({
+                "mission": output,
+                "validation": report,
+            });
+            print_json(&combined)
+        }
+        OutputMode::Markdown => {
+            let ctx = ValidationContext {
+                propagator: &prop,
+                auto_drag,
+                samples_per_leg,
+                derived_drag: derived_drag.as_ref(),
+            };
+            let md = markdown_fmt::validation_to_markdown(
+                &output,
+                &input,
+                &report,
+                &ctx,
+            );
+            write_report("validate", &md)
+        }
+        OutputMode::Human => {
+            print_mission_human(&output, &input, &prop, auto_drag, "Mission + Validation", SafetyTier::NyxValidated);
+            print_validation_details(
+                &output,
+                &input,
+                &report,
+                samples_per_leg,
+                derived_drag.as_ref(),
+            );
 
-    print_mission_human(&output, &input, &prop, auto_drag, "Mission + Validation");
-    print_validation_details(&output, &input, &report, samples_per_leg, derived_drag.as_ref());
-    print_mission_verdict(&output, &input, Some(&report));
-    Ok(())
+            let sc = input.config.safety.unwrap_or_default();
+            let insight_lines =
+                crate::output::insights::validation_insights(&report, &sc);
+            print_insights(&insight_lines);
+
+            print_mission_verdict(&output, &input, Some(&report));
+            Ok(())
+        }
+    }
 }

@@ -1,5 +1,6 @@
 //! Shared output helpers.
 
+use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -8,12 +9,53 @@ use indicatif::{ProgressBar, ProgressStyle};
 use owo_colors::{OwoColorize, Stream};
 use serde::Serialize;
 
-use rpo_core::mission::PercentileStats;
-use rpo_core::pipeline::{resolve_propagator, to_propagation_model, PipelineInput, TransferResult};
+use rpo_core::mission::{
+    assess_safety, MonteCarloReport, PercentileStats, SafetyConfig, ValidationReport,
+};
+use rpo_core::pipeline::{
+    resolve_propagator, to_propagation_model, PipelineInput, PipelineOutput, TransferResult,
+};
 use rpo_core::propagation::{extract_dmf_rates, DragConfig, PropagationModel};
 use rpo_core::types::{QuasiNonsingularROE, SpacecraftConfig};
 
 use crate::error::CliError;
+
+use super::thresholds::mc as mc_thresh;
+
+/// Whether safety metrics come from analytical propagation or Nyx full-physics validation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SafetyTier {
+    /// Analytical (J2/drag STM) safety analysis.
+    Analytical,
+    /// Full-physics Nyx validation — analytical safety is shown as a baseline.
+    NyxValidated,
+}
+
+/// Mission feasibility verdict.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Verdict {
+    /// All safety margins satisfied.
+    Feasible,
+    /// Safety margins violated or insufficient data.
+    Caution,
+}
+
+impl std::fmt::Display for Verdict {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Feasible => write!(f, "FEASIBLE"),
+            Self::Caution => write!(f, "CAUTION"),
+        }
+    }
+}
+
+/// Verdict with contextual reason string.
+pub struct VerdictResult {
+    /// The verdict category.
+    pub verdict: Verdict,
+    /// Human-readable reason for the verdict.
+    pub reason: &'static str,
+}
 
 // ── Status / spinner ────────────────────────────────────────────────────
 
@@ -31,10 +73,10 @@ pub(crate) use status;
 
 /// Create an animated spinner for long-running CLI operations.
 ///
-/// Returns `None` if `json` is true (machine-readable output suppresses spinners).
+/// Returns `None` if `suppress` is true (JSON and markdown modes suppress spinners).
 #[must_use]
-pub fn create_spinner(json: bool) -> Option<ProgressBar> {
-    if json {
+pub fn create_spinner(suppress: bool) -> Option<ProgressBar> {
+    if suppress {
         return None;
     }
     let s = ProgressBar::new_spinner();
@@ -104,6 +146,30 @@ pub fn resolve_drag_and_propagator(
 pub fn print_json<T: Serialize>(value: &T) -> Result<(), CliError> {
     let json = serde_json::to_string_pretty(value).map_err(CliError::Serialize)?;
     println!("{json}");
+    Ok(())
+}
+
+// ── Markdown report output ─────────────────────────────────────────────
+
+/// Write a markdown report to `reports/{name}.md`, creating the directory if needed.
+///
+/// Prints the output path to stderr so the user knows where the file was written.
+///
+/// # Errors
+///
+/// Returns [`CliError::Io`] if directory creation or file write fails.
+pub fn write_report(name: &str, content: &str) -> Result<(), CliError> {
+    let dir = Path::new("reports");
+    std::fs::create_dir_all(dir).map_err(|e| CliError::Io {
+        path: dir.to_path_buf(),
+        source: e,
+    })?;
+    let path = dir.join(format!("{name}.md"));
+    std::fs::write(&path, content).map_err(|e| CliError::Io {
+        path: path.clone(),
+        source: e,
+    })?;
+    eprintln!("Report written to {}", path.display());
     Ok(())
 }
 
@@ -357,6 +423,45 @@ pub fn print_optional_percentile_summary(
 
 // ── Per-leg error table ─────────────────────────────────────────────────
 
+/// Per-leg position error statistics (km).
+// All fields carry the `_km` unit suffix per our naming rules.
+// Clippy's `struct_field_names` lint fires on the shared suffix, but
+// removing it would violate the project's unit-suffix convention.
+#[allow(clippy::struct_field_names)]
+pub struct LegErrorStats {
+    /// Maximum position error (km).
+    pub max_km: f64,
+    /// Mean position error (km).
+    pub mean_km: f64,
+    /// RMS position error (km).
+    pub rms_km: f64,
+}
+
+/// Compute max/mean/RMS position errors for a single leg in a single pass.
+///
+/// Returns `None` if `points` is empty.
+#[must_use]
+pub fn compute_leg_error_stats(
+    points: &[rpo_core::mission::ValidationPoint],
+) -> Option<LegErrorStats> {
+    if points.is_empty() {
+        return None;
+    }
+    let n = f64::from(u32::try_from(points.len()).unwrap_or(u32::MAX));
+    let (max, sum, sum_sq) = points.iter().fold(
+        (0.0_f64, 0.0_f64, 0.0_f64),
+        |(mx, s, sq), p| {
+            let e = p.position_error_km;
+            (mx.max(e), s + e, sq + e * e)
+        },
+    );
+    Some(LegErrorStats {
+        max_km: max,
+        mean_km: sum / n,
+        rms_km: (sum_sq / n).sqrt(),
+    })
+}
+
 /// Print per-leg position error breakdown in meters.
 pub fn print_per_leg_errors(leg_points: &[Vec<rpo_core::mission::ValidationPoint>]) {
     if leg_points.is_empty() {
@@ -372,24 +477,15 @@ pub fn print_per_leg_errors(leg_points: &[Vec<rpo_core::mission::ValidationPoint
         "", "", "", ""
     );
     for (i, points) in leg_points.iter().enumerate() {
-        if points.is_empty() {
-            continue;
+        if let Some(stats) = compute_leg_error_stats(points) {
+            println!(
+                "    {:>4}  {:>8.1}  {:>8.1}  {:>8.1}",
+                i + 1,
+                stats.max_km * 1000.0,
+                stats.mean_km * 1000.0,
+                stats.rms_km * 1000.0,
+            );
         }
-        let max = points
-            .iter()
-            .fold(0.0_f64, |acc, p| acc.max(p.position_error_km));
-        let sum: f64 = points.iter().map(|p| p.position_error_km).sum();
-        let sum_sq: f64 = points.iter().map(|p| p.position_error_km.powi(2)).sum();
-        let n = f64::from(u32::try_from(points.len()).unwrap_or(u32::MAX));
-        let mean = sum / n;
-        let rms = (sum_sq / n).sqrt();
-        let max_m = max * 1000.0; // km → m
-        let mean_m = mean * 1000.0; // km → m
-        let rms_m = rms * 1000.0; // km → m
-        println!(
-            "    {:>4}  {:>8.1}  {:>8.1}  {:>8.1}",
-            i + 1, max_m, mean_m, rms_m,
-        );
     }
 }
 
@@ -459,5 +555,132 @@ pub fn print_rate_metric(
             "{}",
             line.if_supports_color(Stream::Stdout, |v| v.red())
         );
+    }
+}
+
+// ── Insight printing ────────────────────────────────────────────────────
+
+use super::insights::{Insight, Severity};
+
+/// Print cross-tier insights with severity-appropriate coloring.
+///
+/// - **Critical:** red `CRITICAL:` prefix
+/// - **Warning:** yellow `WARNING:` prefix
+/// - **Info:** cyan arrow prefix
+pub fn print_insights(insights: &[Insight]) {
+    for insight in insights {
+        match insight.severity {
+            Severity::Critical => {
+                println!(
+                    "{}",
+                    format!("  CRITICAL: {}", insight.message)
+                        .if_supports_color(Stream::Stdout, |v| v.red())
+                );
+            }
+            Severity::Warning => {
+                println!(
+                    "{}",
+                    format!("  WARNING: {}", insight.message)
+                        .if_supports_color(Stream::Stdout, |v| v.yellow())
+                );
+            }
+            Severity::Info => {
+                println!(
+                    "{}",
+                    format!("  \u{25b6} {}", insight.message)
+                        .if_supports_color(Stream::Stdout, |v| v.cyan())
+                );
+            }
+        }
+    }
+}
+
+// ── MC baseline ─────────────────────────────────────────────────────────
+
+/// Baseline mission parameters passed to MC formatters.
+pub struct McBaseline {
+    /// Lambert transfer Dv (km/s).
+    pub lambert_dv_km_s: f64,
+    /// Lambert transfer time of flight (s).
+    pub lambert_tof_s: f64,
+    /// Waypoint targeting Dv (km/s).
+    pub waypoint_dv_km_s: f64,
+    /// Waypoint phase duration (s).
+    pub waypoint_duration_s: f64,
+    /// Number of waypoint legs.
+    pub num_legs: usize,
+    /// Whether the mission is far-field (Lambert transfer required).
+    pub is_far_field: bool,
+}
+
+impl McBaseline {
+    /// Total Dv: Lambert transfer + waypoint targeting.
+    #[must_use]
+    pub fn total_dv_km_s(&self) -> f64 {
+        self.lambert_dv_km_s + self.waypoint_dv_km_s
+    }
+}
+
+// ── Verdict determination ───────────────────────────────────────────────
+
+/// Determine the mission verdict from safety assessment.
+///
+/// Returns a [`VerdictResult`] with verdict category and human-readable reason.
+/// If validation data is provided, uses numerical safety; otherwise uses analytical.
+#[must_use]
+pub fn determine_verdict(
+    output: &PipelineOutput,
+    config: &SafetyConfig,
+    validation: Option<&ValidationReport>,
+) -> VerdictResult {
+    if let Some(report) = validation {
+        let assessment = assess_safety(&report.numerical_safety, config);
+        if assessment.overall_pass {
+            VerdictResult { verdict: Verdict::Feasible, reason: "safety margins satisfied, Nyx full-physics" }
+        } else {
+            VerdictResult { verdict: Verdict::Caution, reason: "safety margins violated, Nyx full-physics" }
+        }
+    } else if let Some(ref safety) = output.mission.safety {
+        let assessment = assess_safety(safety, config);
+        if assessment.overall_pass {
+            VerdictResult { verdict: Verdict::Feasible, reason: "analytical safety margins satisfied" }
+        } else {
+            VerdictResult { verdict: Verdict::Caution, reason: "analytical safety margins violated" }
+        }
+    } else {
+        VerdictResult { verdict: Verdict::Feasible, reason: "no safety configured" }
+    }
+}
+
+/// Determine the MC verdict from ensemble statistics.
+///
+/// Three-tier logic:
+/// - **FEASIBLE (100%):** all converged, no collisions, no keep-out violations.
+/// - **FEASIBLE (acceptable):** convergence >= 95%, no collisions.
+/// - **CAUTION:** otherwise.
+///
+/// Returns a [`VerdictResult`] with verdict category and reason.
+#[must_use]
+pub fn determine_mc_verdict(report: &MonteCarloReport) -> VerdictResult {
+    let stats = &report.statistics;
+    let all_converged = (stats.convergence_rate - 1.0).abs() < mc_thresh::CONVERGENCE_EXACT_TOL;
+    let no_collisions = stats.collision_probability <= 0.0;
+    let no_keepout = stats.keepout_violation_rate <= 0.0;
+
+    if all_converged && no_collisions && no_keepout {
+        VerdictResult {
+            verdict: Verdict::Feasible,
+            reason: "100% convergence, no collisions, operational safety holds",
+        }
+    } else if stats.convergence_rate >= mc_thresh::CONVERGENCE_ALERT && no_collisions {
+        VerdictResult {
+            verdict: Verdict::Feasible,
+            reason: "convergence acceptable, no collisions",
+        }
+    } else {
+        VerdictResult {
+            verdict: Verdict::Caution,
+            reason: "review safety and convergence above",
+        }
     }
 }

@@ -4,6 +4,37 @@ use std::path::PathBuf;
 
 use clap::{ColorChoice, Parser, Subcommand};
 
+/// Output mode for porcelain commands.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OutputMode {
+    /// Colored human-readable terminal output (default).
+    Human,
+    /// Machine-readable JSON.
+    Json,
+    /// Self-contained markdown report.
+    Markdown,
+}
+
+impl OutputMode {
+    /// Resolve from the `--json` and `--markdown` flags.
+    #[must_use]
+    pub fn from_flags(json: bool, markdown: bool) -> Self {
+        if json {
+            Self::Json
+        } else if markdown {
+            Self::Markdown
+        } else {
+            Self::Human
+        }
+    }
+
+    /// Whether output is machine-readable (suppress spinner, status messages).
+    #[must_use]
+    pub fn suppress_interactive(self) -> bool {
+        matches!(self, Self::Json | Self::Markdown)
+    }
+}
+
 /// RPO mission planning tool.
 #[derive(Parser)]
 #[command(
@@ -34,6 +65,9 @@ pub enum Command {
         /// Output as JSON instead of human-readable text.
         #[arg(long)]
         json: bool,
+        /// Output as self-contained markdown report.
+        #[arg(long, conflicts_with = "json")]
+        markdown: bool,
     },
     /// End-to-end mission with Nyx high-fidelity validation (requires network on first run).
     Validate {
@@ -43,6 +77,9 @@ pub enum Command {
         /// Output as JSON instead of human-readable text.
         #[arg(long)]
         json: bool,
+        /// Output as self-contained markdown report.
+        #[arg(long, conflicts_with = "json")]
+        markdown: bool,
         /// Number of sample points per leg for validation comparison.
         #[arg(long, default_value_t = 50)]
         samples_per_leg: u32,
@@ -58,6 +95,9 @@ pub enum Command {
         /// Output as JSON instead of human-readable text.
         #[arg(long)]
         json: bool,
+        /// Output as self-contained markdown report.
+        #[arg(long, conflicts_with = "json")]
+        markdown: bool,
         /// Auto-derive differential drag config from spacecraft properties via Nyx.
         #[arg(long)]
         auto_drag: bool,

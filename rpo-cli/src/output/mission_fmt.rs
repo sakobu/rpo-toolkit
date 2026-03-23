@@ -6,33 +6,75 @@ use rpo_core::pipeline::{PipelineInput, PipelineOutput};
 use rpo_core::propagation::{DragConfig, PropagationModel};
 use rpo_core::types::TransferEclipseData;
 
-use super::common::{fmt_duration, fmt_m, fmt_m_s, print_header, print_roe, print_subheader};
+use super::common::{
+    determine_verdict, fmt_duration, fmt_m, fmt_m_s, print_derived_drag, print_header,
+    print_per_leg_errors, print_roe, print_subheader, SafetyTier, Verdict,
+};
+use super::thresholds::fidelity;
 use super::eclipse_fmt::{print_eclipse_summary, print_eclipse_validation};
 use super::safety_fmt::{print_safety_analysis, print_safety_comparison, print_safety_summary};
 
-use crate::output::common::{print_derived_drag, print_per_leg_errors};
-
-/// Position error threshold (km) below which model is suitable for close-proximity.
-const FIDELITY_CLOSE_PROXIMITY_KM: f64 = 0.05;
-
-/// Position error threshold (km) below which model is suitable for safety screening.
-const FIDELITY_SAFETY_SCREENING_KM: f64 = 0.2;
-
-/// Δv percentage threshold above which Lambert transfer is the dominant cost.
-const FAR_FIELD_DV_DRIVER_PCT: f64 = 90.0;
-
 /// Print the common Transfer + Waypoint Targeting output shared by mission/validate.
-#[allow(clippy::too_many_lines)]
 pub fn print_mission_human(
     output: &PipelineOutput,
     input: &PipelineInput,
     propagator: &PropagationModel,
     auto_drag: bool,
     title: &str,
+    tier: SafetyTier,
 ) {
     print_header(title);
 
-    // ── Transfer ──────────────────────────────────────────────
+    print_transfer_human(output, input);
+
+    // Perch ROE
+    let chief_a = match &output.phase {
+        MissionPhase::Proximity {
+            chief_elements, ..
+        }
+        | MissionPhase::FarField {
+            chief_elements, ..
+        } => chief_elements.a_km,
+    };
+    println!();
+    print_roe("Perch ROE", &output.perch_roe, chief_a);
+
+    print_waypoint_table(output, input, propagator, auto_drag);
+
+    // ── Safety ────────────────────────────────────────────────
+    if let Some(ref safety) = output.mission.safety {
+        let sc = input.config.safety.unwrap_or_default();
+        match tier {
+            SafetyTier::NyxValidated => print_subheader("Analytical Safety"),
+            SafetyTier::Analytical => print_subheader("Safety"),
+        }
+        print_safety_analysis(safety, &sc);
+    }
+
+    // ── Eclipse ───────────────────────────────────────────────
+    if let Some(ref eclipse) = output.mission.eclipse {
+        print_subheader("Eclipse");
+        print_eclipse_summary(eclipse);
+
+        // Combined mission eclipse: transfer + waypoint phases
+        if let Some(ref te) = output.transfer_eclipse {
+            let total_shadow =
+                te.summary.total_shadow_duration_s + eclipse.summary.total_shadow_duration_s;
+            let lambert_tof_s = output.transfer.as_ref().map_or(0.0, |t| t.tof_s);
+            let total_duration = lambert_tof_s + output.mission.total_duration_s;
+            if total_duration > 0.0 {
+                println!(
+                    "  Combined (transfer + waypoint): {} ({:.1}% of full mission)",
+                    fmt_duration(total_shadow),
+                    total_shadow / total_duration * 100.0,
+                );
+            }
+        }
+    }
+}
+
+/// Print the Transfer section: classification, Lambert details, transfer eclipse.
+fn print_transfer_human(output: &PipelineOutput, input: &PipelineInput) {
     print_subheader("Transfer");
     match &output.phase {
         MissionPhase::Proximity {
@@ -95,20 +137,15 @@ pub fn print_mission_human(
     if let Some(ref te) = output.transfer_eclipse {
         print_transfer_eclipse(te);
     }
+}
 
-    // Perch ROE
-    let chief_a = match &output.phase {
-        MissionPhase::Proximity {
-            chief_elements, ..
-        }
-        | MissionPhase::FarField {
-            chief_elements, ..
-        } => chief_elements.a_km,
-    };
-    println!();
-    print_roe("Perch ROE", &output.perch_roe, chief_a);
-
-    // ── Waypoint Targeting ────────────────────────────────────
+/// Print the Waypoint Targeting table.
+fn print_waypoint_table(
+    output: &PipelineOutput,
+    input: &PipelineInput,
+    propagator: &PropagationModel,
+    auto_drag: bool,
+) {
     let wp_title = format!(
         "Waypoint Targeting ({} legs)",
         output.mission.legs.len()
@@ -160,34 +197,6 @@ pub fn print_mission_human(
         "",
         total_dv * 1000.0,
     );
-
-    // ── Safety ────────────────────────────────────────────────
-    if let Some(ref safety) = output.mission.safety {
-        let sc = input.config.safety.unwrap_or_default();
-        print_subheader("Safety");
-        print_safety_analysis(safety, &sc);
-    }
-
-    // ── Eclipse ───────────────────────────────────────────────
-    if let Some(ref eclipse) = output.mission.eclipse {
-        print_subheader("Eclipse");
-        print_eclipse_summary(eclipse);
-
-        // Combined mission eclipse: transfer + waypoint phases
-        if let Some(ref te) = output.transfer_eclipse {
-            let total_shadow =
-                te.summary.total_shadow_duration_s + eclipse.summary.total_shadow_duration_s;
-            let lambert_tof_s = output.transfer.as_ref().map_or(0.0, |t| t.tof_s);
-            let total_duration = lambert_tof_s + output.mission.total_duration_s;
-            if total_duration > 0.0 {
-                println!(
-                    "  Combined (transfer + waypoint): {} ({:.1}% of full mission)",
-                    fmt_duration(total_shadow),
-                    total_shadow / total_duration * 100.0,
-                );
-            }
-        }
-    }
 }
 
 /// Print the mission verdict with Δv breakdown, safety summary, and model confidence.
@@ -208,28 +217,25 @@ pub fn print_mission_verdict(
     print_header("Summary");
 
     let sc = input.config.safety.unwrap_or_default();
-    if let Some(report) = validation {
-        let num_assessment =
-            rpo_core::mission::assess_safety(&report.numerical_safety, &sc);
-        if num_assessment.overall_pass {
-            println!("  Verdict:         {}", "FEASIBLE (safety margins satisfied, Nyx full-physics)".if_supports_color(Stream::Stdout, |v| v.green()));
-        } else {
-            println!("  Verdict:         {}", "CAUTION (safety margins violated, Nyx full-physics)".if_supports_color(Stream::Stdout, |v| v.yellow()));
-        }
-    } else if let Some(ref safety) = output.mission.safety {
-        let ana_assessment = rpo_core::mission::assess_safety(safety, &sc);
-        if ana_assessment.overall_pass {
-            println!("  Verdict:         {}", "FEASIBLE (analytical safety margins satisfied)".if_supports_color(Stream::Stdout, |v| v.green()));
-        } else {
-            println!("  Verdict:         {}", "CAUTION (analytical safety margins violated)".if_supports_color(Stream::Stdout, |v| v.yellow()));
-        }
+    let vr = determine_verdict(output, &sc, validation);
+    let verdict_line = format!("{} ({})", vr.verdict, vr.reason);
+    if vr.verdict == Verdict::Feasible {
+        println!(
+            "  Verdict:         {}",
+            verdict_line.if_supports_color(Stream::Stdout, |v| v.green())
+        );
+    } else {
+        println!(
+            "  Verdict:         {}",
+            verdict_line.if_supports_color(Stream::Stdout, |v| v.yellow())
+        );
     }
 
     println!("\n  \u{0394}v Budget:");
     if total_dv_km_s > 0.0 {
         let lambert_pct = lambert_dv_km_s / total_dv_km_s * 100.0;
         let wp_pct = waypoint_dv_km_s / total_dv_km_s * 100.0;
-        if lambert_pct > FAR_FIELD_DV_DRIVER_PCT {
+        if lambert_pct > fidelity::FAR_FIELD_DV_DRIVER_PCT {
             println!(
                 "    Transfer:        {}  ({lambert_pct:.1}%{})",
                 fmt_m_s(lambert_dv_km_s, 1),
@@ -254,6 +260,9 @@ pub fn print_mission_verdict(
         fmt_m_s(total_dv_km_s, 1)
             .if_supports_color(Stream::Stdout, |v| v.green()),
     );
+    if output.auto_drag_config.is_some() {
+        println!("    (drag-aware targeting; Δv differs slightly from analytical-only)");
+    }
 
     println!(
         "\n  Duration:          {} ({} transfer + {} proximity)",
@@ -268,6 +277,24 @@ pub fn print_mission_verdict(
         print_safety_summary("analytical", safety, &sc);
     }
 
+    // Closest approach quick-scan line
+    let safety_source = validation
+        .map(|r| &r.numerical_safety)
+        .or(output.mission.safety.as_ref());
+    if let Some(safety) = safety_source {
+        let source = if validation.is_some() { "Nyx" } else { "analytical" };
+        println!(
+            "  Closest approach:  leg {} at {} ({source})",
+            safety.operational.min_3d_leg_index + 1,
+            fmt_duration(safety.operational.min_3d_elapsed_s),
+        );
+    }
+
+    print_fidelity(input, validation);
+}
+
+/// Print fidelity assessment based on validation data or propagator choice.
+fn print_fidelity(input: &PipelineInput, validation: Option<&ValidationReport>) {
     if let Some(report) = validation {
         println!("\n  Fidelity:");
         println!(
@@ -275,9 +302,9 @@ pub fn print_mission_verdict(
             fmt_m(report.max_position_error_km, 0),
             fmt_m(report.mean_position_error_km, 0),
         );
-        if report.max_position_error_km < FIDELITY_CLOSE_PROXIMITY_KM {
+        if report.max_position_error_km < fidelity::CLOSE_PROXIMITY_KM {
             println!("    Suitable for:   mission planning, safety screening, close-proximity operations");
-        } else if report.max_position_error_km < FIDELITY_SAFETY_SCREENING_KM {
+        } else if report.max_position_error_km < fidelity::SAFETY_SCREENING_KM {
             println!(
                 "    Suitable for:   mission planning, safety screening"
             );
@@ -304,6 +331,8 @@ pub fn print_validation_details(
 ) {
     let val_title = format!("Nyx Validation ({samples_per_leg} samples/leg)");
     print_subheader(&val_title);
+
+    // 1. Position error summary
     println!("  Position error (analytical vs Nyx full-physics):");
     println!("    Max:  {}", fmt_m(report.max_position_error_km, 1));
     println!("    Mean: {}", fmt_m(report.mean_position_error_km, 1));
@@ -313,8 +342,32 @@ pub fn print_validation_details(
         fmt_m_s(report.max_velocity_error_km_s, 3),
     );
 
+    // 2. Numerical Safety (Nyx) with PASS/FAIL
+    let sc = input.config.safety.unwrap_or_default();
+    println!("\n  Numerical Safety (Nyx):");
+    print_safety_analysis(&report.numerical_safety, &sc);
+
+    // 3. Safety Comparison (Analytical vs Numerical)
+    print_safety_comparison(report, &input.config);
+    println!(
+        "  (analytical: {} steps/leg; numerical: {} Nyx samples/leg)",
+        input.config.targeting.trajectory_steps, samples_per_leg,
+    );
+
+    // 4. Eclipse Validation
+    if let Some(ref ev) = report.eclipse_validation {
+        let max_eclipse_s = output
+            .mission
+            .eclipse
+            .as_ref()
+            .map_or(0.0, |e| e.summary.max_shadow_duration_s);
+        print_eclipse_validation(ev, max_eclipse_s);
+    }
+
+    // 5. Per-leg position error
     print_per_leg_errors(&report.leg_points);
 
+    // 6. Spacecraft
     println!("\n  Spacecraft:");
     println!(
         "    Chief:  {:.0} kg, drag area {:.2} m\u{00b2}, Cd {:.1}",
@@ -329,23 +382,10 @@ pub fn print_validation_details(
         report.deputy_config.coeff_drag,
     );
 
-    print_safety_comparison(report, &input.config);
-    println!(
-        "  (analytical: {} steps/leg; numerical: {} Nyx samples/leg)",
-        input.config.targeting.trajectory_steps, samples_per_leg,
-    );
-
-    if let Some(ref ev) = report.eclipse_validation {
-        let max_eclipse_s = output
-            .mission
-            .eclipse
-            .as_ref()
-            .map_or(0.0, |e| e.summary.max_shadow_duration_s);
-        print_eclipse_validation(ev, max_eclipse_s);
-    }
-
+    // 7. Auto-derived drag
     if let Some(drag) = derived_drag {
-        print_derived_drag(drag, "\n  ");
+        println!();
+        print_derived_drag(drag, "  ");
     }
 }
 

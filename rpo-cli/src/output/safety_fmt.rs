@@ -6,9 +6,7 @@ use rpo_core::mission::{
 };
 
 use super::common::{fmt_duration, fmt_m};
-
-/// Ratio threshold for flagging non-conservative analytical predictions.
-const NONCONSERVATIVE_RATIO: f64 = 0.9;
+use super::thresholds::fidelity;
 
 /// Print safety analysis results with pass/fail assessment.
 pub fn print_safety_analysis(safety: &SafetyMetrics, config: &SafetyConfig) {
@@ -42,13 +40,13 @@ pub fn print_safety_analysis(safety: &SafetyMetrics, config: &SafetyConfig) {
     match assessment.rc_context {
         RcContext::AlongTrackDominated { along_track_km } => {
             println!(
-                "    R/C-plane distance:   {}  (along-track dominated, V-bar at {along_track_km:.1} km)",
+                "    Min R/C-plane distance: {}  (along-track dominated, V-bar at {along_track_km:.1} km)",
                 fmt_m(safety.operational.min_rc_separation_km, 1),
             );
         }
         RcContext::RadialCrossTrack => {
             println!(
-                "    R/C-plane distance:   {}",
+                "    Min R/C-plane distance: {}",
                 fmt_m(safety.operational.min_rc_separation_km, 1),
             );
         }
@@ -138,7 +136,7 @@ pub fn print_safety_summary(label: &str, safety: &SafetyMetrics, config: &Safety
 
 /// Format a non-conservative direction flag for safety comparison.
 fn nonconservative_flag(analytical: f64, numerical: f64) -> &'static str {
-    if numerical < analytical * NONCONSERVATIVE_RATIO {
+    if numerical < analytical * fidelity::NONCONSERVATIVE_RATIO {
         "  *"
     } else {
         ""
@@ -164,19 +162,19 @@ pub fn print_safety_comparison(report: &ValidationReport, config: &MissionConfig
         let thresh_ei_m = sc.min_ei_separation_km * 1000.0;
 
         println!(
-            "    {:>26}  {:>12}  {:>12}  {:>10}",
+            "    {:>30}  {:>12}  {:>12}  {:>10}",
             "", "Analytical", "Numerical", "Threshold"
         );
         println!(
-            "    {:>26}  {:>12.1}  {:>12.1}  {:>10}",
-            "R/C-plane distance (m)", ana_rc_m, num_rc_m, "-"
+            "    {:>30}  {:>12.1}  {:>12.1}  {:>10}",
+            "Min R/C-plane distance (m)", ana_rc_m, num_rc_m, "-"
         );
         let d3_flag = nonconservative_flag(
             ana.operational.min_distance_3d_km,
             num.operational.min_distance_3d_km,
         );
         println!(
-            "    {:>26}  {:>12.1}  {:>12.1}  {:>10.0}{d3_flag}",
+            "    {:>30}  {:>12.1}  {:>12.1}  {:>10.0}{d3_flag}",
             "3D distance (m)", ana_d3_m, num_d3_m, thresh_d3_m,
         );
         let ei_flag = nonconservative_flag(
@@ -184,7 +182,7 @@ pub fn print_safety_comparison(report: &ValidationReport, config: &MissionConfig
             num.passive.min_ei_separation_km,
         );
         println!(
-            "    {:>26}  {:>12.1}  {:>12.1}  {:>10.0}{ei_flag}",
+            "    {:>30}  {:>12.1}  {:>12.1}  {:>10.0}{ei_flag}",
             "e/i separation (m)", ana_ei_m, num_ei_m, thresh_ei_m,
         );
         if !d3_flag.is_empty() || !ei_flag.is_empty() {
@@ -197,15 +195,15 @@ pub fn print_safety_comparison(report: &ValidationReport, config: &MissionConfig
         let num_ei_m = num.passive.min_ei_separation_km * 1000.0;
         println!("    (no analytical safety available)");
         println!(
-            "    {:>26}  {:>12.1}",
-            "R/C-plane distance (m)", num_rc_m,
+            "    {:>30}  {:>12.1}",
+            "Min R/C-plane distance (m)", num_rc_m,
         );
         println!(
-            "    {:>26}  {:>12.1}",
+            "    {:>30}  {:>12.1}",
             "3D distance (m)", num_d3_m,
         );
         println!(
-            "    {:>26}  {:>12.1}",
+            "    {:>30}  {:>12.1}",
             "e/i separation (m)", num_ei_m,
         );
     }

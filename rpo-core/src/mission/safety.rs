@@ -262,17 +262,23 @@ pub fn analyze_trajectory_safety(
         return Err(SafetyError::EmptyTrajectory);
     }
 
-    let first = &trajectory[0];
-    let mut worst = analyze_safety(&first.roe, &first.chief_mean, &first.ric.position_ric_km);
-    worst.operational.min_rc_elapsed_s = first.elapsed_s;
-    worst.operational.min_3d_elapsed_s = first.elapsed_s;
+    // Skip the t=0 initial state for min-tracking: it is the commanded
+    // waypoint position, not a propagated state. Safety analysis should
+    // measure trajectory behavior after the maneuver. For single-point
+    // trajectories, fall back to the only available state.
+    let start = usize::from(trajectory.len() > 1);
+    let seed = &trajectory[start];
+    let mut worst = analyze_safety(&seed.roe, &seed.chief_mean, &seed.ric.position_ric_km);
+    worst.operational.min_rc_elapsed_s = seed.elapsed_s;
+    worst.operational.min_3d_elapsed_s = seed.elapsed_s;
+    worst.operational.min_rc_ric_position_km = seed.ric.position_ric_km;
     let mut min_rc = worst.operational.min_rc_separation_km;
     let mut min_ei = worst.passive.min_ei_separation_km;
     let mut min_3d = worst.operational.min_distance_3d_km;
-    let mut min_3d_elapsed_s = first.elapsed_s;
-    let mut min_3d_ric_position_km = first.ric.position_ric_km;
+    let mut min_3d_elapsed_s = seed.elapsed_s;
+    let mut min_3d_ric_position_km = seed.ric.position_ric_km;
 
-    for state in &trajectory[1..] {
+    for state in &trajectory[start + 1..] {
         let metrics = analyze_safety(&state.roe, &state.chief_mean, &state.ric.position_ric_km);
         if metrics.operational.min_rc_separation_km < min_rc {
             min_rc = metrics.operational.min_rc_separation_km;

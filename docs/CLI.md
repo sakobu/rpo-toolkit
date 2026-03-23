@@ -12,46 +12,52 @@ The `rpo-cli` crate provides batch execution and shell-composable commands for m
 
 End-to-end analytical mission: classification, Lambert transfer, perch handoff, waypoint targeting, safety, covariance, eclipse.
 
-| Flag | Type | Default | Description |
-| ---- | ---- | ------- | ----------- |
-| `-i, --input` | path | required | JSON input file (PipelineInput) |
-| `--json` | bool | false | Output as JSON instead of human-readable text |
+| Flag          | Type | Default  | Description                                                             |
+| ------------- | ---- | -------- | ----------------------------------------------------------------------- |
+| `-i, --input` | path | required | JSON input file (PipelineInput)                                         |
+| `--json`      | bool | false    | Output as JSON instead of human-readable text                           |
+| `--markdown`  | bool | false    | Write markdown report to `reports/mission.md` (conflicts with `--json`) |
 
 ```bash
 cargo run -p rpo-cli -- mission --input examples/mission.json
 cargo run -p rpo-cli -- mission --input examples/mission.json --json
+cargo run -p rpo-cli -- mission --input examples/mission.json --markdown
 ```
 
 #### validate
 
 Mission planning + nyx high-fidelity validation. Compares analytical trajectories against full-physics propagation (J2, drag, SRP with eclipses, Sun/Moon third-body). Requires network on first run to download ANISE ephemeris kernels (~50 MB, cached).
 
-| Flag | Type | Default | Description |
-| ---- | ---- | ------- | ----------- |
-| `-i, --input` | path | required | JSON input file (PipelineInput with spacecraft configs) |
-| `--json` | bool | false | Output as JSON |
-| `--samples-per-leg` | u32 | 50 | Comparison points per leg |
-| `--auto-drag` | bool | false | Auto-derive differential drag rates from spacecraft properties via nyx |
+| Flag                | Type | Default  | Description                                                              |
+| ------------------- | ---- | -------- | ------------------------------------------------------------------------ |
+| `-i, --input`       | path | required | JSON input file (PipelineInput with spacecraft configs)                  |
+| `--json`            | bool | false    | Output as JSON                                                           |
+| `--markdown`        | bool | false    | Write markdown report to `reports/validate.md` (conflicts with `--json`) |
+| `--samples-per-leg` | u32  | 50       | Comparison points per leg                                                |
+| `--auto-drag`       | bool | false    | Auto-derive differential drag rates from spacecraft properties via nyx   |
 
 ```bash
 cargo run -p rpo-cli -- validate --input examples/validate.json
 cargo run -p rpo-cli -- validate --input examples/validate.json --auto-drag
 cargo run -p rpo-cli -- validate --input examples/validate.json --json
+cargo run -p rpo-cli -- validate --input examples/validate.json --auto-drag --markdown
 ```
 
 #### mc
 
 Full-physics Monte Carlo ensemble analysis. Requires `monte_carlo` config in the input JSON. Uses rayon for parallel sample execution.
 
-| Flag | Type | Default | Description |
-| ---- | ---- | ------- | ----------- |
-| `-i, --input` | path | required | JSON input file (PipelineInput with spacecraft + MC configs) |
-| `--json` | bool | false | Output as JSON |
-| `--auto-drag` | bool | false | Auto-derive differential drag rates before MC |
+| Flag          | Type | Default  | Description                                                        |
+| ------------- | ---- | -------- | ------------------------------------------------------------------ |
+| `-i, --input` | path | required | JSON input file (PipelineInput with spacecraft + MC configs)       |
+| `--json`      | bool | false    | Output as JSON                                                     |
+| `--markdown`  | bool | false    | Write markdown report to `reports/mc.md` (conflicts with `--json`) |
+| `--auto-drag` | bool | false    | Auto-derive differential drag rates before MC                      |
 
 ```bash
 cargo run -p rpo-cli -- mc --input examples/mc.json --auto-drag
 cargo run -p rpo-cli -- mc --input examples/mc.json --json
+cargo run -p rpo-cli -- mc --input examples/mc.json --auto-drag --markdown
 ```
 
 ### Plumbing
@@ -134,16 +140,16 @@ All porcelain commands accept a `PipelineInput` JSON file. This is the same type
 
 Example files in `examples/`:
 
-| File | Used by |
-| ---- | ------- |
-| `mission.json` | `mission`, `safety`, `eclipse` |
-| `validate.json` | `validate` |
-| `mc.json` | `mc` |
-| `classify.json` | `classify` |
-| `transfer.json` | `transfer` |
-| `convert.json` | `convert` |
-| `propagate.json` | `propagate` |
-| `roe.json` | `roe` |
+| File             | Used by                        |
+| ---------------- | ------------------------------ |
+| `mission.json`   | `mission`, `safety`, `eclipse` |
+| `validate.json`  | `validate`                     |
+| `mc.json`        | `mc`                           |
+| `classify.json`  | `classify`                     |
+| `transfer.json`  | `transfer`                     |
+| `convert.json`   | `convert`                      |
+| `propagate.json` | `propagate`                    |
+| `roe.json`       | `roe`                          |
 
 ### Spacecraft Presets
 
@@ -169,10 +175,10 @@ The `chief_config` and `deputy_config` fields accept a named preset or custom pr
 }
 ```
 
-| Preset | Mass | Drag Area | Cd | SRP Area | Cr |
-| ------ | ---- | --------- | -- | -------- | -- |
-| `cubesat_6u` | 12 kg | 0.06 m2 | 2.2 | 0.06 m2 | 1.5 |
-| `servicer_500kg` | 500 kg | 1.0 m2 | 2.2 | 1.0 m2 | 1.5 |
+| Preset           | Mass   | Drag Area | Cd  | SRP Area | Cr  |
+| ---------------- | ------ | --------- | --- | -------- | --- |
+| `cubesat_6u`     | 12 kg  | 0.06 m2   | 2.2 | 0.06 m2  | 1.5 |
+| `servicer_500kg` | 500 kg | 1.0 m2    | 2.2 | 1.0 m2   | 1.5 |
 
 These configs are required for `validate`, `mc`, and `--auto-drag`. If omitted, `validate` defaults to `servicer_500kg`; `mc` and drag extraction return an error.
 
@@ -186,6 +192,6 @@ cargo run -p rpo-cli -- completions fish > ~/.config/fish/completions/rpo-cli.fi
 
 ## Global Options
 
-| Flag | Values | Default | Description |
-| ---- | ------ | ------- | ----------- |
-| `--color` | `auto`, `always`, `never` | `auto` | Color output mode |
+| Flag      | Values                    | Default | Description       |
+| --------- | ------------------------- | ------- | ----------------- |
+| `--color` | `auto`, `always`, `never` | `auto`  | Color output mode |

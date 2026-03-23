@@ -2,20 +2,24 @@
 
 use std::path::Path;
 
-use rpo_core::mission::{run_monte_carlo, MissionPhase, MonteCarloInput};
+use rpo_core::mission::{run_monte_carlo, MissionPhase, MonteCarloInput, MonteCarloReport};
 use rpo_core::pipeline::{
     compute_mission_covariance, compute_transfer, plan_waypoints_from_transfer, PipelineInput,
 };
-use rpo_core::propagation::load_full_almanac;
+use rpo_core::propagation::{load_full_almanac, DragConfig};
 
+use crate::cli::OutputMode;
 use crate::error::CliError;
 use crate::input::load_json;
-use crate::output::common::{create_spinner, print_json, resolve_drag_and_propagator, status};
+use crate::output::common::{
+    create_spinner, print_insights, print_json, resolve_drag_and_propagator, status, write_report,
+    McBaseline,
+};
+use crate::output::markdown_fmt;
 use crate::output::mc_fmt::{print_mc_baseline, print_mc_report, print_mc_summary};
 
 /// Run full-physics Monte Carlo pipeline.
-#[allow(clippy::too_many_lines)]
-pub fn run(input_path: &Path, json: bool, auto_drag: bool) -> Result<(), CliError> {
+pub fn run(input_path: &Path, mode: OutputMode, auto_drag: bool) -> Result<(), CliError> {
     let input: PipelineInput = load_json(input_path)?;
 
     let chief_config = input
@@ -31,7 +35,7 @@ pub fn run(input_path: &Path, json: bool, auto_drag: bool) -> Result<(), CliErro
         .as_ref()
         .ok_or(CliError::MissingField { field: "monte_carlo", context: "mc" })?;
 
-    let spinner = create_spinner(json);
+    let spinner = create_spinner(mode.suppress_interactive());
 
     status!(spinner, "Classification + Lambert transfer...");
     let transfer = compute_transfer(&input)?;
@@ -45,6 +49,16 @@ pub fn run(input_path: &Path, json: bool, auto_drag: bool) -> Result<(), CliErro
 
     status!(spinner, "Waypoint targeting...");
     let wp_mission = plan_waypoints_from_transfer(&transfer, &input, &prop)?;
+
+    // Capture values before borrowing wp_mission into MonteCarloInput
+    let baseline = McBaseline {
+        lambert_dv_km_s: transfer.lambert_dv_km_s,
+        lambert_tof_s: transfer.plan.transfer.as_ref().map_or(0.0, |t| t.tof_s),
+        waypoint_dv_km_s: wp_mission.total_dv_km_s,
+        waypoint_duration_s: wp_mission.total_duration_s,
+        num_legs: wp_mission.legs.len(),
+        is_far_field: matches!(transfer.plan.phase, MissionPhase::FarField { .. }),
+    };
 
     // Optional covariance propagation
     let covariance_report = if let Some(ref nav) = input.navigation_accuracy {
@@ -91,27 +105,37 @@ pub fn run(input_path: &Path, json: bool, auto_drag: bool) -> Result<(), CliErro
         report.elapsed_wall_s
     );
 
-    if json {
-        return print_json(&report);
+    print_mc_output(mode, &report, &input, &baseline, derived_drag.as_ref())
+}
+
+/// Format and print MC results in the requested output mode.
+fn print_mc_output(
+    mode: OutputMode,
+    report: &MonteCarloReport,
+    input: &PipelineInput,
+    baseline: &McBaseline,
+    derived_drag: Option<&DragConfig>,
+) -> Result<(), CliError> {
+    match mode {
+        OutputMode::Json => print_json(report),
+        OutputMode::Markdown => {
+            let md = markdown_fmt::mc_to_markdown(report, input, baseline, derived_drag);
+            write_report("mc", &md)
+        }
+        OutputMode::Human => {
+            crate::output::common::print_header("Mission + Monte Carlo");
+            print_mc_baseline(baseline);
+
+            print_mc_report(report, baseline.lambert_dv_km_s, derived_drag);
+
+            let safety_config = input.config.safety.unwrap_or_default();
+            let insight_lines =
+                crate::output::insights::mc_insights(report, &safety_config);
+            print_insights(&insight_lines);
+
+            print_mc_summary(report, baseline.lambert_dv_km_s, &safety_config, derived_drag.is_some());
+
+            Ok(())
+        }
     }
-
-    // Print header and baseline mission context
-    crate::output::common::print_header("Mission + Monte Carlo");
-    let lambert_tof_s = transfer.plan.transfer.as_ref().map_or(0.0, |t| t.tof_s);
-    let is_far_field = matches!(transfer.plan.phase, MissionPhase::FarField { .. });
-    print_mc_baseline(
-        transfer.lambert_dv_km_s,
-        lambert_tof_s,
-        wp_mission.total_dv_km_s,
-        wp_mission.total_duration_s,
-        wp_mission.legs.len(),
-        is_far_field,
-    );
-
-    print_mc_report(&report, transfer.lambert_dv_km_s, derived_drag.as_ref());
-
-    let safety_config = input.config.safety.unwrap_or_default();
-    print_mc_summary(&report, transfer.lambert_dv_km_s, &safety_config);
-
-    Ok(())
 }
