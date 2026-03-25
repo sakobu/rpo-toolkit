@@ -409,7 +409,7 @@ pub(crate) fn query_anise_eclipse(
 
 /// An ECI state vector at a specific elapsed time from propagation start.
 ///
-/// Replaces bare `(f64, StateVector)` tuples to satisfy the CLAUDE.md naming
+/// Replaces bare `(f64, StateVector)` tuples to satisfy the naming
 /// rule: public/crate-visible quantities with physical units must carry unit
 /// suffixes in their field names.
 #[derive(Debug, Clone)]

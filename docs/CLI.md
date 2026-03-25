@@ -12,11 +12,11 @@ The `rpo-cli` crate provides batch execution and shell-composable commands for m
 
 End-to-end analytical mission: classification, Lambert transfer, perch handoff, waypoint targeting, safety, covariance, eclipse.
 
-| Flag          | Type | Default  | Description                                                             |
-| ------------- | ---- | -------- | ----------------------------------------------------------------------- |
-| `-i, --input` | path | required | JSON input file (PipelineInput)                                         |
-| `--json`      | bool | false    | Output as JSON instead of human-readable text                           |
-| `--markdown`  | bool | false    | Write markdown report to `reports/mission.md` (conflicts with `--json`) |
+| Flag          | Type | Default  | Description                                                                      |
+| ------------- | ---- | -------- | -------------------------------------------------------------------------------- |
+| `-i, --input` | path | required | JSON input file (PipelineInput)                                                  |
+| `--json`      | bool | false    | Write JSON report to `reports/json/mission.json` (conflicts with `--markdown`)   |
+| `--markdown`  | bool | false    | Write markdown report to `reports/markdown/mission.md` (conflicts with `--json`) |
 
 ```bash
 cargo run -p rpo-cli -- mission --input examples/mission.json
@@ -28,13 +28,13 @@ cargo run -p rpo-cli -- mission --input examples/mission.json --markdown
 
 Mission planning + nyx high-fidelity validation. Compares analytical trajectories against full-physics propagation (J2, drag, SRP with eclipses, Sun/Moon third-body). Requires network on first run to download ANISE ephemeris kernels (~50 MB, cached).
 
-| Flag                | Type | Default  | Description                                                              |
-| ------------------- | ---- | -------- | ------------------------------------------------------------------------ |
-| `-i, --input`       | path | required | JSON input file (PipelineInput with spacecraft configs)                  |
-| `--json`            | bool | false    | Output as JSON                                                           |
-| `--markdown`        | bool | false    | Write markdown report to `reports/validate.md` (conflicts with `--json`) |
-| `--samples-per-leg` | u32  | 50       | Comparison points per leg                                                |
-| `--auto-drag`       | bool | false    | Auto-derive differential drag rates from spacecraft properties via nyx   |
+| Flag                | Type | Default  | Description                                                                       |
+| ------------------- | ---- | -------- | --------------------------------------------------------------------------------- |
+| `-i, --input`       | path | required | JSON input file (PipelineInput with spacecraft configs)                           |
+| `--json`            | bool | false    | Write JSON report to `reports/json/validate.json` (conflicts with `--markdown`)   |
+| `--markdown`        | bool | false    | Write markdown report to `reports/markdown/validate.md` (conflicts with `--json`) |
+| `--samples-per-leg` | u32  | 50       | Comparison points per leg                                                         |
+| `--auto-drag`       | bool | false    | Auto-derive differential drag rates from spacecraft properties via nyx            |
 
 ```bash
 cargo run -p rpo-cli -- validate --input examples/validate.json
@@ -47,12 +47,12 @@ cargo run -p rpo-cli -- validate --input examples/validate.json --auto-drag --ma
 
 Full-physics Monte Carlo ensemble analysis. Requires `monte_carlo` config in the input JSON. Uses rayon for parallel sample execution.
 
-| Flag          | Type | Default  | Description                                                        |
-| ------------- | ---- | -------- | ------------------------------------------------------------------ |
-| `-i, --input` | path | required | JSON input file (PipelineInput with spacecraft + MC configs)       |
-| `--json`      | bool | false    | Output as JSON                                                     |
-| `--markdown`  | bool | false    | Write markdown report to `reports/mc.md` (conflicts with `--json`) |
-| `--auto-drag` | bool | false    | Auto-derive differential drag rates before MC                      |
+| Flag          | Type | Default  | Description                                                                 |
+| ------------- | ---- | -------- | --------------------------------------------------------------------------- |
+| `-i, --input` | path | required | JSON input file (PipelineInput with spacecraft + MC configs)                |
+| `--json`      | bool | false    | Write JSON report to `reports/json/mc.json` (conflicts with `--markdown`)   |
+| `--markdown`  | bool | false    | Write markdown report to `reports/markdown/mc.md` (conflicts with `--json`) |
+| `--auto-drag` | bool | false    | Auto-derive differential drag rates before MC                               |
 
 ```bash
 cargo run -p rpo-cli -- mc --input examples/mc.json --auto-drag

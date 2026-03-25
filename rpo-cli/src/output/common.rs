@@ -149,9 +149,27 @@ pub fn print_json<T: Serialize>(value: &T) -> Result<(), CliError> {
     Ok(())
 }
 
-// ── Markdown report output ─────────────────────────────────────────────
+// ── Report file output ─────────────────────────────────────────────────
 
-/// Write a markdown report to `reports/{name}.md`, creating the directory if needed.
+/// Write a file to `reports/{subdir}/{name}.{extension}`, creating directories if needed.
+///
+/// Prints the output path to stderr so the user knows where the file was written.
+fn write_file_report(subdir: &str, name: &str, extension: &str, content: &str) -> Result<(), CliError> {
+    let dir = Path::new("reports").join(subdir);
+    std::fs::create_dir_all(&dir).map_err(|e| CliError::Io {
+        path: dir.clone(),
+        source: e,
+    })?;
+    let path = dir.join(format!("{name}.{extension}"));
+    std::fs::write(&path, content).map_err(|e| CliError::Io {
+        path: path.clone(),
+        source: e,
+    })?;
+    eprintln!("Report written to {}", path.display());
+    Ok(())
+}
+
+/// Write a markdown report to `reports/markdown/{name}.md`, creating directories if needed.
 ///
 /// Prints the output path to stderr so the user knows where the file was written.
 ///
@@ -159,18 +177,21 @@ pub fn print_json<T: Serialize>(value: &T) -> Result<(), CliError> {
 ///
 /// Returns [`CliError::Io`] if directory creation or file write fails.
 pub fn write_report(name: &str, content: &str) -> Result<(), CliError> {
-    let dir = Path::new("reports");
-    std::fs::create_dir_all(dir).map_err(|e| CliError::Io {
-        path: dir.to_path_buf(),
-        source: e,
-    })?;
-    let path = dir.join(format!("{name}.md"));
-    std::fs::write(&path, content).map_err(|e| CliError::Io {
-        path: path.clone(),
-        source: e,
-    })?;
-    eprintln!("Report written to {}", path.display());
-    Ok(())
+    write_file_report("markdown", name, "md", content)
+}
+
+/// Write a JSON report to `reports/json/{name}.json`, creating directories if needed.
+///
+/// Serializes the value as pretty-printed JSON and writes to file.
+/// Prints the output path to stderr.
+///
+/// # Errors
+///
+/// Returns [`CliError::Serialize`] if serialization fails, or [`CliError::Io`]
+/// if directory creation or file write fails.
+pub fn write_json_report<T: Serialize>(name: &str, value: &T) -> Result<(), CliError> {
+    let json = serde_json::to_string_pretty(value).map_err(CliError::Serialize)?;
+    write_file_report("json", name, "json", &json)
 }
 
 // ── Unit formatting ─────────────────────────────────────────────────────

@@ -59,7 +59,7 @@ impl fmt::Display for CliError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Io { path, source } => {
-                write!(f, "failed to read {}: {source}", path.display())
+                write!(f, "I/O error: {}: {source}", path.display())
             }
             Self::Json { path, source } => {
                 write!(f, "failed to parse {}: {source}", path.display())

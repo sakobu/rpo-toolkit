@@ -196,7 +196,7 @@ The CLI (`rpo-cli`) provides batch execution and shell-composable plumbing for s
 
 ## Testing
 
-354 passing tests across 3 crates (325 rpo-core, 9 rpo-api, 20 rpo-cli), 19 ignored (full-physics tests requiring ANISE ephemeris kernels, ~50 MB cached download). Tests cover roundtrip transform invariants, STM identity at dt=0, energy/momentum conservation, regression against published data (Koenig Tables 2-3, D'Amico Sec. 2.1-2.2), Newton-Raphson convergence, deterministic Monte Carlo seeding, covariance symmetry preservation, WebSocket handler integration, error serialization, and CLI smoke tests.
+354 passing tests across 3 crates (325 rpo-core, 16 rpo-api, 13 rpo-cli), 19 ignored (full-physics tests requiring ANISE ephemeris kernels, ~50 MB cached download). Tests cover roundtrip transform invariants, STM identity at dt=0, energy/momentum conservation, regression against published data (Koenig Tables 2-3, D'Amico Sec. 2.1-2.2), Newton-Raphson convergence, deterministic Monte Carlo seeding, covariance symmetry preservation, WebSocket handler integration, error serialization, and CLI smoke tests.
 
 ```bash
 cargo test                  # full suite

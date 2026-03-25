@@ -7,7 +7,7 @@ use rpo_core::pipeline::{execute_mission, to_propagation_model, PipelineInput};
 use crate::cli::OutputMode;
 use crate::error::CliError;
 use crate::input::load_json;
-use crate::output::common::{print_json, write_report, SafetyTier};
+use crate::output::common::{write_json_report, write_report, SafetyTier};
 use crate::output::markdown_fmt;
 use crate::output::mission_fmt::{print_mission_human, print_mission_verdict};
 
@@ -17,7 +17,7 @@ pub fn run(input_path: &Path, mode: OutputMode) -> Result<(), CliError> {
     let output = execute_mission(&input)?;
 
     match mode {
-        OutputMode::Json => print_json(&output),
+        OutputMode::Json => write_json_report("mission", &output),
         OutputMode::Markdown => {
             let propagator = to_propagation_model(&input.propagator);
             let md = markdown_fmt::mission_to_markdown(&output, &input, &propagator, false);

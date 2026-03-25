@@ -32,17 +32,31 @@ fn mission_exits_zero() {
 }
 
 #[test]
-fn mission_json_flag_produces_valid_json() {
+fn mission_json_flag_produces_json_file() {
+    let tmp = std::env::temp_dir().join(format!("rpo-cli-json-test-{}", std::process::id()));
+    std::fs::create_dir_all(&tmp).expect("failed to create temp dir");
     let output = cli_cmd()
+        .current_dir(&tmp)
         .args(["mission", "--input"])
         .arg(examples_dir().join("mission.json"))
         .args(["--json"])
         .output()
         .expect("failed to execute");
-    assert!(output.status.success());
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    // JSON now writes to file, not stdout
     let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.trim().is_empty(), "expected no stdout output with --json");
+    let report_path = tmp.join("reports/json/mission.json");
+    assert!(report_path.exists(), "expected reports/json/mission.json to be created");
+    let content = std::fs::read_to_string(&report_path).expect("failed to read report");
     let _: serde_json::Value =
-        serde_json::from_str(&stdout).expect("--json should produce valid JSON");
+        serde_json::from_str(&content).expect("report should contain valid JSON");
+    // Clean up
+    let _ = std::fs::remove_dir_all(&tmp);
 }
 
 #[test]
@@ -89,8 +103,8 @@ fn mission_markdown_flag_produces_markdown() {
         "stderr: {}",
         String::from_utf8_lossy(&output.stderr)
     );
-    let report_path = tmp.join("reports/mission.md");
-    assert!(report_path.exists(), "expected reports/mission.md to be created");
+    let report_path = tmp.join("reports/markdown/mission.md");
+    assert!(report_path.exists(), "expected reports/markdown/mission.md to be created");
     let content = std::fs::read_to_string(&report_path).expect("failed to read report");
     assert!(
         content.contains("# Mission Summary"),

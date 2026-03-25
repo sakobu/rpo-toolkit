@@ -2,21 +2,30 @@
 
 use std::path::Path;
 
-use rpo_core::mission::validate_mission_nyx;
-use rpo_core::pipeline::{compute_transfer, plan_waypoints_from_transfer, PipelineInput};
+use rpo_core::mission::{validate_mission_nyx, ValidationReport};
+use rpo_core::pipeline::{compute_transfer, plan_waypoints_from_transfer, PipelineInput, PipelineOutput};
 use rpo_core::propagation::load_full_almanac;
 
 use crate::cli::OutputMode;
 use crate::error::CliError;
 use crate::input::load_json;
 use crate::output::common::{
-    create_spinner, print_insights, print_json, resolve_drag_and_propagator, status, write_report,
-    SafetyTier,
+    create_spinner, print_insights, resolve_drag_and_propagator, status, write_json_report,
+    write_report, SafetyTier,
 };
 use crate::output::markdown_fmt::{self, ValidationContext};
 use crate::output::mission_fmt::{
     print_mission_human, print_mission_verdict, print_validation_details,
 };
+
+/// Combined mission + validation output for JSON serialization.
+///
+/// Borrows both structs to avoid the deep clone that `serde_json::json!` would perform.
+#[derive(serde::Serialize)]
+struct ValidateReport<'a> {
+    mission: &'a PipelineOutput,
+    validation: &'a ValidationReport,
+}
 
 /// Run mission + nyx validation pipeline.
 pub fn run(
@@ -74,11 +83,11 @@ pub fn run(
 
     match mode {
         OutputMode::Json => {
-            let combined = serde_json::json!({
-                "mission": output,
-                "validation": report,
-            });
-            print_json(&combined)
+            let combined = ValidateReport {
+                mission: &output,
+                validation: &report,
+            };
+            write_json_report("validate", &combined)
         }
         OutputMode::Markdown => {
             let ctx = ValidationContext {

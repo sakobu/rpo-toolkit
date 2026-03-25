@@ -12,8 +12,8 @@ use crate::cli::OutputMode;
 use crate::error::CliError;
 use crate::input::load_json;
 use crate::output::common::{
-    create_spinner, print_insights, print_json, resolve_drag_and_propagator, status, write_report,
-    McBaseline,
+    create_spinner, print_insights, resolve_drag_and_propagator, status, write_json_report,
+    write_report, McBaseline,
 };
 use crate::output::markdown_fmt;
 use crate::output::mc_fmt::{print_mc_baseline, print_mc_report, print_mc_summary};
@@ -117,7 +117,7 @@ fn print_mc_output(
     derived_drag: Option<&DragConfig>,
 ) -> Result<(), CliError> {
     match mode {
-        OutputMode::Json => print_json(report),
+        OutputMode::Json => write_json_report("mc", report),
         OutputMode::Markdown => {
             let md = markdown_fmt::mc_to_markdown(report, input, baseline, derived_drag);
             write_report("mc", &md)
