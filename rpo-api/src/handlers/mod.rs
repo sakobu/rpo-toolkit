@@ -1,11 +1,12 @@
 //! Request handlers for the WebSocket API.
 //!
-//! Each handler is a pure function, testable without WebSocket infrastructure.
-//! Inline handlers (classify, transfer, plan, `move_waypoint`, `update_config`) return immediately.
-//! Background handlers (drag, validate, mc) are designed to be spawned on a blocking thread.
+//! Each handler is a function that operates on session state, testable without
+//! WebSocket infrastructure. Inline handlers (classify, transfer, plan, config)
+//! return immediately. Background handlers (drag, validate, mc) are designed to
+//! be spawned on a blocking thread.
 
 pub mod classify;
-mod common;
+pub mod common;
 pub mod drag;
 pub mod mc;
 pub mod plan;
@@ -13,8 +14,12 @@ pub mod transfer;
 pub mod validate;
 
 pub use classify::handle_classify;
+pub use common::resolve_propagator_toggle;
 pub use drag::handle_extract_drag;
-pub use mc::handle_mc;
-pub use plan::{handle_move_waypoint, handle_plan, handle_update_config};
+pub use mc::{handle_mc, McRequest};
+pub use plan::{
+    handle_get_covariance, handle_get_eclipse, handle_get_trajectory, handle_set_waypoints,
+    handle_update_config, ConfigUpdate, EclipseResponse,
+};
 pub use transfer::handle_compute_transfer;
-pub use validate::handle_validate;
+pub use validate::{handle_validate, ValidateRequest};

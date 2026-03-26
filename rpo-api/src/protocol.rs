@@ -1,14 +1,27 @@
 //! Wire protocol types for client ↔ server WebSocket communication.
 //!
 //! All messages are JSON with a `type` tag and a `request_id` (u64, client-assigned).
-//! The `MissionDefinition` is the canonical `PipelineInput` type from rpo-core.
+//! The server holds a [`Session`](crate::session::Session) per connection;
+//! clients mutate it incrementally via state-setting messages and query
+//! computed results via action messages.
 
 use serde::{Deserialize, Serialize};
 
-use rpo_core::mission::{
-    MissionPhase, MonteCarloReport, ValidationReport,
+use rpo_core::mission::config::MissionConfig;
+use rpo_core::mission::monte_carlo::MonteCarloConfig;
+use rpo_core::mission::types::PerchGeometry;
+use rpo_core::mission::{MissionPhase, MonteCarloReport, ProximityConfig, ValidationReport};
+use rpo_core::pipeline::{
+    LeanPlanResult, LegTrajectory, SpacecraftChoice, TransferResult as CoreTransferResult,
+    WaypointInput,
 };
+use rpo_core::propagation::covariance::{ManeuverUncertainty, MissionCovarianceReport, NavigationAccuracy};
+use rpo_core::propagation::lambert::LambertConfig;
 use rpo_core::propagation::DragConfig;
+use rpo_core::types::eclipse::{MissionEclipseData, TransferEclipseData};
+use rpo_core::types::StateVector;
+
+use crate::session::SessionSummary;
 
 // ---------------------------------------------------------------------------
 // Internal progress types (handler → WebSocket loop)
@@ -34,22 +47,28 @@ pub struct ProgressUpdate {
     pub fraction: Option<f64>,
 }
 
-/// Central wire type sent by the client with every request.
-///
-/// Type alias to the canonical pipeline input type in rpo-core.
-/// The server is a stateless compute engine — the client sends the
-/// full mission definition with every message.
-pub type MissionDefinition = rpo_core::pipeline::PipelineInput;
-
-/// Payload for `MissionResult` responses.
-///
-/// Type alias to the canonical pipeline output type in rpo-core.
-pub type MissionResultPayload = rpo_core::pipeline::PipelineOutput;
-
 /// Payload for transfer result responses.
 ///
 /// Type alias to the intermediate transfer result type in rpo-core.
-pub type TransferResultPayload = rpo_core::pipeline::TransferResult;
+pub type TransferResultPayload = CoreTransferResult;
+
+// ---------------------------------------------------------------------------
+// PropagatorToggle
+// ---------------------------------------------------------------------------
+
+/// User-facing propagator selection for the `update_config` message.
+///
+/// Unlike [`PropagatorChoice`](rpo_core::pipeline::PropagatorChoice), this does
+/// not carry a `DragConfig` — the session's stored drag config is used when
+/// `J2Drag` is selected.
+#[derive(Debug, Clone, Copy, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PropagatorToggle {
+    /// J2-only analytical propagation.
+    J2,
+    /// J2 + differential drag (requires prior `extract_drag`).
+    J2Drag,
+}
 
 // ---------------------------------------------------------------------------
 // Client → Server messages
@@ -59,57 +78,93 @@ pub type TransferResultPayload = rpo_core::pipeline::TransferResult;
 #[derive(Debug, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ClientMessage {
+    /// Set chief and deputy ECI states. Invalidates transfer, drag, mission.
+    SetStates {
+        /// Client-assigned correlation ID.
+        request_id: u64,
+        /// Chief spacecraft ECI state.
+        chief: StateVector,
+        /// Deputy spacecraft ECI state.
+        deputy: StateVector,
+    },
+    /// Set spacecraft preset or custom configuration. Invalidates drag.
+    SetSpacecraft {
+        /// Client-assigned correlation ID.
+        request_id: u64,
+        /// Chief spacecraft choice (None = keep current).
+        chief_config: Option<SpacecraftChoice>,
+        /// Deputy spacecraft choice (None = keep current).
+        deputy_config: Option<SpacecraftChoice>,
+    },
     /// Classify chief/deputy separation (microseconds).
     Classify {
         /// Client-assigned correlation ID.
         request_id: u64,
-        /// Mission definition (only chief + deputy + proximity used).
-        mission: MissionDefinition,
     },
-    /// Compute Lambert transfer only (no waypoint targeting).
-    /// Returns classification, Lambert transfer, and perch handoff states.
+    /// Compute Lambert transfer and store result in session.
     ComputeTransfer {
         /// Client-assigned correlation ID.
         request_id: u64,
-        /// Mission definition (uses chief, deputy, perch, lambert fields).
-        mission: MissionDefinition,
-    },
-    /// Full mission plan: classify → Lambert → waypoints → safety → covariance → eclipse.
-    PlanMission {
-        /// Client-assigned correlation ID.
-        request_id: u64,
-        /// Full mission definition.
-        mission: MissionDefinition,
-    },
-    /// Replan from a moved waypoint (keeps earlier legs).
-    MoveWaypoint {
-        /// Client-assigned correlation ID.
-        request_id: u64,
-        /// Index of the modified waypoint.
-        modified_index: usize,
-        /// Full mission definition with updated waypoint.
-        mission: MissionDefinition,
-    },
-    /// Re-solve all waypoints with new config/propagator.
-    UpdateConfig {
-        /// Client-assigned correlation ID.
-        request_id: u64,
-        /// Full mission definition with updated config.
-        mission: MissionDefinition,
+        /// Override perch geometry (None = keep session default).
+        perch: Option<PerchGeometry>,
+        /// Override Lambert TOF (None = keep session default).
+        lambert_tof_s: Option<f64>,
+        /// Override Lambert config (None = keep session default).
+        lambert_config: Option<LambertConfig>,
     },
     /// Extract differential drag rates via nyx (~3 seconds).
     ExtractDrag {
         /// Client-assigned correlation ID.
         request_id: u64,
-        /// Mission definition (needs `chief_config` + `deputy_config`).
-        mission: MissionDefinition,
     },
-    /// Per-leg nyx validation with progress streaming (seconds).
+    /// Set waypoints and plan/replan the mission.
+    SetWaypoints {
+        /// Client-assigned correlation ID.
+        request_id: u64,
+        /// Waypoint targets in RIC frame.
+        waypoints: Vec<WaypointInput>,
+        /// Index of the modified waypoint for incremental replan (None = full plan).
+        #[serde(default)]
+        changed_from: Option<usize>,
+    },
+    /// Update solver configuration and/or overlay parameters.
+    UpdateConfig {
+        /// Client-assigned correlation ID.
+        request_id: u64,
+        /// Solver configuration (None = keep current).
+        config: Option<MissionConfig>,
+        /// Propagator toggle (None = keep current).
+        propagator: Option<PropagatorToggle>,
+        /// Proximity classification thresholds (None = keep current).
+        proximity: Option<ProximityConfig>,
+        /// Navigation accuracy for covariance (None = keep current).
+        navigation_accuracy: Option<NavigationAccuracy>,
+        /// Maneuver uncertainty for covariance (None = keep current).
+        maneuver_uncertainty: Option<ManeuverUncertainty>,
+    },
+    /// Fetch trajectory data for visualization (on-demand).
+    GetTrajectory {
+        /// Client-assigned correlation ID.
+        request_id: u64,
+        /// Leg indices to include (None = all legs).
+        legs: Option<Vec<usize>>,
+        /// Maximum points per leg (None = full resolution).
+        max_points: Option<u32>,
+    },
+    /// Fetch covariance propagation report.
+    GetCovariance {
+        /// Client-assigned correlation ID.
+        request_id: u64,
+    },
+    /// Fetch eclipse data.
+    GetEclipse {
+        /// Client-assigned correlation ID.
+        request_id: u64,
+    },
+    /// Per-leg nyx validation with progress streaming.
     Validate {
         /// Client-assigned correlation ID.
         request_id: u64,
-        /// Mission definition.
-        mission: MissionDefinition,
         /// Number of sample points per leg (default: 50).
         #[serde(default)]
         samples_per_leg: Option<u32>,
@@ -117,15 +172,26 @@ pub enum ClientMessage {
         #[serde(default)]
         auto_drag: bool,
     },
-    /// Full-physics Monte Carlo ensemble analysis (minutes).
-    RunMC {
+    /// Full-physics Monte Carlo ensemble analysis.
+    RunMc {
         /// Client-assigned correlation ID.
         request_id: u64,
-        /// Mission definition (needs `monte_carlo` config).
-        mission: MissionDefinition,
+        /// Monte Carlo config override (None = use session's).
+        #[serde(default)]
+        monte_carlo: Option<MonteCarloConfig>,
         /// Auto-derive drag rates before MC.
         #[serde(default)]
         auto_drag: bool,
+    },
+    /// Get a snapshot of current session state.
+    GetSession {
+        /// Client-assigned correlation ID.
+        request_id: u64,
+    },
+    /// Reset all session state to defaults.
+    Reset {
+        /// Client-assigned correlation ID.
+        request_id: u64,
     },
     /// Cancel a running background operation.
     Cancel {
@@ -142,6 +208,15 @@ pub enum ClientMessage {
 #[derive(Debug, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ServerMessage {
+    /// Acknowledgement of a state-setting message with invalidation info.
+    StateUpdated {
+        /// Correlation ID from the client request.
+        request_id: u64,
+        /// Fields that were set.
+        updated: Vec<String>,
+        /// Fields that were invalidated (cleared).
+        invalidated: Vec<String>,
+    },
     /// Classification result.
     ClassifyResult {
         /// Correlation ID from the client request.
@@ -149,19 +224,19 @@ pub enum ServerMessage {
         /// Classification: Proximity or `FarField` with full state info.
         phase: MissionPhase,
     },
-    /// Lambert transfer result (no waypoint targeting).
+    /// Lambert transfer result.
     TransferResult {
         /// Correlation ID from the client request.
         request_id: u64,
         /// Transfer result payload (boxed to reduce enum size).
         result: Box<TransferResultPayload>,
     },
-    /// Mission planning result.
-    MissionResult {
+    /// Mission plan result (lean projection).
+    PlanResult {
         /// Correlation ID from the client request.
         request_id: u64,
-        /// Full mission result payload (boxed to reduce enum size).
-        result: Box<MissionResultPayload>,
+        /// Lean plan result (boxed to reduce enum size).
+        result: Box<LeanPlanResult>,
     },
     /// Extracted differential drag rates.
     DragResult {
@@ -169,6 +244,38 @@ pub enum ServerMessage {
         request_id: u64,
         /// Extracted drag configuration.
         drag: DragConfig,
+    },
+    /// Trajectory data for visualization.
+    TrajectoryData {
+        /// Correlation ID from the client request.
+        request_id: u64,
+        /// Per-leg trajectory points.
+        legs: Vec<LegTrajectory>,
+    },
+    /// Covariance propagation report.
+    CovarianceData {
+        /// Correlation ID from the client request.
+        request_id: u64,
+        /// Full covariance report (boxed to reduce enum size).
+        report: Box<MissionCovarianceReport>,
+    },
+    /// Eclipse data for transfer and/or mission.
+    EclipseData {
+        /// Correlation ID from the client request.
+        request_id: u64,
+        /// Transfer-phase eclipse data (None if proximity).
+        #[serde(skip_serializing_if = "Option::is_none")]
+        transfer: Option<TransferEclipseData>,
+        /// Mission-phase eclipse data (None if no mission planned).
+        #[serde(skip_serializing_if = "Option::is_none")]
+        mission: Option<MissionEclipseData>,
+    },
+    /// Current session state snapshot.
+    SessionState {
+        /// Correlation ID from the client request.
+        request_id: u64,
+        /// Session summary.
+        summary: SessionSummary,
     },
     /// Progress update for long-running operations.
     Progress {
@@ -243,4 +350,6 @@ pub enum ErrorCode {
     MissionError,
     /// Operation was cancelled.
     Cancelled,
+    /// Required session state not available (call `set_states`, `compute_transfer`, etc. first).
+    MissingSessionState,
 }

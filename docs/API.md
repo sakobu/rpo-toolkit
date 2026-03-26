@@ -1,6 +1,36 @@
 # RPO WebSocket API
 
-The `rpo-api` crate provides a WebSocket server for the RPO mission planner. It wraps the same `rpo-core` pipeline used by `rpo-cli` behind a stateless, request/response WebSocket protocol.
+The `rpo-api` crate provides a WebSocket server for the RPO mission planner. It wraps the same `rpo-core` pipeline used by `rpo-cli` behind a **stateful, session-based** WebSocket protocol.
+
+## Session Model
+
+Each WebSocket connection has a server-side session. The client sets state incrementally (chief, deputy, waypoints, config) and the server computes results from the stored session. No need to resend the full mission definition with every request.
+
+### 5-Tier State
+
+```
+Tier 0 - Base inputs:     chief, deputy
+Tier 1 - Spacecraft:      chief_config, deputy_config (default: cubesat_6u)
+Tier 2 - Transfer design: transfer, perch, lambert_tof_s, lambert_config, proximity, drag_config
+Tier 3 - Mission plan:    waypoints, config, propagator, mission (WaypointMission)
+Tier 4 - Overlays:        navigation_accuracy, maneuver_uncertainty, monte_carlo_config
+```
+
+### Invalidation Rules
+
+Changing an upstream tier clears downstream computed results so that stale data is never served.
+
+| Setter                                        | Clears                                           |
+| --------------------------------------------- | ------------------------------------------------ |
+| `set_states(chief, deputy)`                   | transfer, drag_config, mission                   |
+| `set_spacecraft(chief_config, deputy_config)` | drag_config only                                 |
+| `compute_transfer(perch, tof, config)`        | mission (via store_transfer)                     |
+| `store_drag(drag)`                            | nothing (propagator toggle is explicit)          |
+| `set_waypoints(waypoints)`                    | mission                                          |
+| `update_config(config)`                       | mission (if config/propagator/proximity changed) |
+| `reset()`                                     | everything                                       |
+
+Tier 4 overlays (`navigation_accuracy`, `maneuver_uncertainty`, `monte_carlo_config`) never trigger invalidation or replan.
 
 ## Connection
 
@@ -23,110 +53,204 @@ This is a single-user desktop tool. One WebSocket connection at a time, one back
 All messages are JSON text frames with a `"type"` discriminator tag (serde internally-tagged enum, snake_case).
 
 - Non-text WebSocket frames receive an `error` response with `code: "invalid_input"`.
-- The server is stateless: the client sends the full `MissionDefinition` (alias for `PipelineInput`) with every request.
+- The server is **stateful**: the client mutates session state incrementally via setter messages and queries computed results via action messages.
 - Client-assigned `request_id` (u64) correlates requests with responses.
 
 ## Client Messages
 
+### set_states
+
+Upload chief and deputy ECI states. Always the first message in a session. Invalidates transfer, drag_config, and mission.
+
+| Field        | Type           | Required | Description                    |
+| ------------ | -------------- | -------- | ------------------------------ |
+| `type`       | `"set_states"` | yes      | Message discriminator          |
+| `request_id` | `u64`          | yes      | Client-assigned correlation ID |
+| `chief`      | `StateVector`  | yes      | Chief spacecraft ECI state     |
+| `deputy`     | `StateVector`  | yes      | Deputy spacecraft ECI state    |
+
+Response: `state_updated`
+
+### set_spacecraft
+
+Set spacecraft preset or custom configuration for drag extraction, validation, and MC. Invalidates drag_config only. Defaults to `cubesat_6u` if never called.
+
+| Field           | Type               | Required | Description                             |
+| --------------- | ------------------ | -------- | --------------------------------------- |
+| `type`          | `"set_spacecraft"` | yes      | Message discriminator                   |
+| `request_id`    | `u64`              | yes      | Client-assigned correlation ID          |
+| `chief_config`  | `SpacecraftChoice` | no       | Chief spacecraft (None = keep current)  |
+| `deputy_config` | `SpacecraftChoice` | no       | Deputy spacecraft (None = keep current) |
+
+`SpacecraftChoice` is either a preset string (`"cubesat_6u"`, `"servicer_500kg"`) or a custom object `{ "custom": { "dry_mass_kg": ..., "drag_area_m2": ..., "coeff_drag": ..., "srp_area_m2": ..., "coeff_reflectivity": ... } }`.
+
+Response: `state_updated`
+
 ### classify
 
-Classify chief/deputy separation as `proximity` or `far_field`. Returns immediately.
+Classify chief/deputy separation as `proximity` or `far_field`. Reads states from the session. Returns immediately.
 
-| Field        | Type                | Required | Description                              |
-| ------------ | ------------------- | -------- | ---------------------------------------- |
-| `type`       | `"classify"`        | yes      | Message discriminator                    |
-| `request_id` | `u64`               | yes      | Client-assigned correlation ID           |
-| `mission`    | `MissionDefinition` | yes      | Only `chief`, `deputy`, `proximity` used |
+| Field        | Type         | Required | Description                    |
+| ------------ | ------------ | -------- | ------------------------------ |
+| `type`       | `"classify"` | yes      | Message discriminator          |
+| `request_id` | `u64`        | yes      | Client-assigned correlation ID |
+
+Requires: `set_states` must have been called.
 
 Response: `classify_result`
 
 ### compute_transfer
 
-Compute Lambert transfer and perch handoff states without waypoint targeting. For iterating on Lambert design in ECI view. Returns immediately.
+Compute Lambert transfer and store result in session. Optional fields override session defaults (perch, TOF, Lambert config). Far-field only. Returns immediately.
 
-| Field        | Type                   | Required | Description                                                                |
-| ------------ | ---------------------- | -------- | -------------------------------------------------------------------------- |
-| `type`       | `"compute_transfer"`   | yes      | Message discriminator                                                      |
-| `request_id` | `u64`                  | yes      | Client-assigned correlation ID                                             |
-| `mission`    | `MissionDefinition`    | yes      | Uses `chief`, `deputy`, `perch`, `lambert_tof_s`, `lambert_config` fields  |
+| Field            | Type                 | Required | Description                                   |
+| ---------------- | -------------------- | -------- | --------------------------------------------- |
+| `type`           | `"compute_transfer"` | yes      | Message discriminator                         |
+| `request_id`     | `u64`                | yes      | Client-assigned correlation ID                |
+| `perch`          | `PerchGeometry`      | no       | Override perch geometry (None = keep session) |
+| `lambert_tof_s`  | `f64`                | no       | Override Lambert TOF (None = keep session)    |
+| `lambert_config` | `LambertConfig`      | no       | Override Lambert config (None = keep session) |
+
+Requires: `set_states` must have been called.
 
 Response: `transfer_result`
 
-### plan_mission
-
-Full mission plan: classify, Lambert transfer, perch, waypoint targeting, safety, covariance, eclipse. Returns immediately.
-
-| Field        | Type                | Required | Description                    |
-| ------------ | ------------------- | -------- | ------------------------------ |
-| `type`       | `"plan_mission"`    | yes      | Message discriminator          |
-| `request_id` | `u64`               | yes      | Client-assigned correlation ID |
-| `mission`    | `MissionDefinition` | yes      | Full mission definition        |
-
-Response: `mission_result`
-
-### move_waypoint
-
-Replan from a moved waypoint, keeping earlier legs cached. Returns immediately.
-
-| Field            | Type                | Required | Description                                   |
-| ---------------- | ------------------- | -------- | --------------------------------------------- |
-| `type`           | `"move_waypoint"`   | yes      | Message discriminator                         |
-| `request_id`     | `u64`               | yes      | Client-assigned correlation ID                |
-| `modified_index` | `usize`             | yes      | Index of the waypoint that changed            |
-| `mission`        | `MissionDefinition` | yes      | Full mission definition with updated waypoint |
-
-Response: `mission_result`
-
-### update_config
-
-Re-solve all waypoints with new config or propagator settings. Returns immediately.
-
-| Field        | Type                | Required | Description                                 |
-| ------------ | ------------------- | -------- | ------------------------------------------- |
-| `type`       | `"update_config"`   | yes      | Message discriminator                       |
-| `request_id` | `u64`               | yes      | Client-assigned correlation ID              |
-| `mission`    | `MissionDefinition` | yes      | Full mission definition with updated config |
-
-Response: `mission_result`
-
 ### extract_drag
 
-Extract differential drag rates via nyx full-physics propagation. Runs in background (~3 seconds). Requires `chief_config` and `deputy_config` in the mission definition.
+Extract differential drag rates via nyx full-physics propagation. Background job (~3 seconds). Uses perch states if a transfer exists, otherwise original states. Short-circuits with zero-rate if spacecraft configs are identical.
 
-| Field        | Type                | Required | Description                            |
-| ------------ | ------------------- | -------- | -------------------------------------- |
-| `type`       | `"extract_drag"`    | yes      | Message discriminator                  |
-| `request_id` | `u64`               | yes      | Client-assigned correlation ID         |
-| `mission`    | `MissionDefinition` | yes      | Needs `chief_config` + `deputy_config` |
+| Field        | Type             | Required | Description                    |
+| ------------ | ---------------- | -------- | ------------------------------ |
+| `type`       | `"extract_drag"` | yes      | Message discriminator          |
+| `request_id` | `u64`            | yes      | Client-assigned correlation ID |
+
+Requires: `set_states` must have been called.
 
 Response: `drag_result`
 
+### set_waypoints
+
+Set waypoints and plan/replan the mission. For far-field, requires a stored transfer result. For proximity, auto-computes the transfer internally. Returns immediately.
+
+| Field          | Type              | Required | Default | Description                                             |
+| -------------- | ----------------- | -------- | ------- | ------------------------------------------------------- |
+| `type`         | `"set_waypoints"` | yes      |         | Message discriminator                                   |
+| `request_id`   | `u64`             | yes      |         | Client-assigned correlation ID                          |
+| `waypoints`    | `WaypointInput[]` | yes      |         | Waypoint targets in RIC frame                           |
+| `changed_from` | `usize` or `null` | no       | `null`  | Index of first modified waypoint for incremental replan |
+
+Response: `plan_result`
+
+### update_config
+
+Update solver configuration, propagator, proximity thresholds, and/or analysis overlays. Replans the mission if config, propagator, or proximity changed and a mission exists.
+
+| Field                  | Type                  | Required | Description                                |
+| ---------------------- | --------------------- | -------- | ------------------------------------------ |
+| `type`                 | `"update_config"`     | yes      | Message discriminator                      |
+| `request_id`           | `u64`                 | yes      | Client-assigned correlation ID             |
+| `config`               | `MissionConfig`       | no       | Solver config (None = keep current)        |
+| `propagator`           | `PropagatorToggle`    | no       | Propagator selection (None = keep current) |
+| `proximity`            | `ProximityConfig`     | no       | Classification thresholds (None = keep)    |
+| `navigation_accuracy`  | `NavigationAccuracy`  | no       | For covariance (None = keep)               |
+| `maneuver_uncertainty` | `ManeuverUncertainty` | no       | For covariance (None = keep)               |
+
+Response: `state_updated` (if only overlays changed) or `plan_result` (if replanned)
+
+### get_trajectory
+
+Fetch trajectory data for 3D visualization. On-demand, reads from stored mission.
+
+| Field        | Type               | Required | Default | Description                                 |
+| ------------ | ------------------ | -------- | ------- | ------------------------------------------- |
+| `type`       | `"get_trajectory"` | yes      |         | Message discriminator                       |
+| `request_id` | `u64`              | yes      |         | Client-assigned correlation ID              |
+| `legs`       | `usize[]`          | no       | all     | Leg indices to include (None = all legs)    |
+| `max_points` | `u32`              | no       | full    | Max points per leg (None = full resolution) |
+
+Requires: `set_waypoints` must have been called (mission must exist).
+
+Response: `trajectory_data`
+
+### get_covariance
+
+Fetch covariance propagation report. On-demand computation.
+
+| Field        | Type               | Required | Description                    |
+| ------------ | ------------------ | -------- | ------------------------------ |
+| `type`       | `"get_covariance"` | yes      | Message discriminator          |
+| `request_id` | `u64`              | yes      | Client-assigned correlation ID |
+
+Requires: mission must exist and `navigation_accuracy` must be set.
+
+Response: `covariance_data`
+
+### get_eclipse
+
+Fetch eclipse data for transfer and/or mission phases. On-demand.
+
+| Field        | Type            | Required | Description                    |
+| ------------ | --------------- | -------- | ------------------------------ |
+| `type`       | `"get_eclipse"` | yes      | Message discriminator          |
+| `request_id` | `u64`           | yes      | Client-assigned correlation ID |
+
+Requires: `set_states` must have been called (transfer and/or mission should exist for meaningful data).
+
+Response: `eclipse_data`
+
 ### validate
 
-Per-leg nyx high-fidelity validation with progress streaming. Runs in background (seconds to minutes depending on leg count).
+Per-leg nyx high-fidelity validation with progress streaming. Background job (seconds to minutes depending on leg count).
 
-| Field             | Type                | Required | Default | Description                              |
-| ----------------- | ------------------- | -------- | ------- | ---------------------------------------- |
-| `type`            | `"validate"`        | yes      |         | Message discriminator                    |
-| `request_id`      | `u64`               | yes      |         | Client-assigned correlation ID           |
-| `mission`         | `MissionDefinition` | yes      |         | Full mission definition                  |
-| `samples_per_leg` | `u32` or `null`     | no       | `50`    | Number of comparison points per leg      |
-| `auto_drag`       | `bool`              | no       | `false` | Auto-derive drag rates before validation |
+| Field             | Type            | Required | Default | Description                              |
+| ----------------- | --------------- | -------- | ------- | ---------------------------------------- |
+| `type`            | `"validate"`    | yes      |         | Message discriminator                    |
+| `request_id`      | `u64`           | yes      |         | Client-assigned correlation ID           |
+| `samples_per_leg` | `u32` or `null` | no       | `50`    | Number of comparison points per leg      |
+| `auto_drag`       | `bool`          | no       | `false` | Auto-derive drag rates before validation |
+
+`auto_drag` is ephemeral: it extracts drag and replans temporarily without modifying session state.
+
+Requires: mission must exist.
 
 Response: `progress` (0 or more), then `validation_result`
 
 ### run_mc
 
-Full-physics Monte Carlo ensemble analysis. Runs in background (minutes). Requires `monte_carlo` config in the mission definition.
+Full-physics Monte Carlo ensemble analysis. Background job (minutes).
 
-| Field        | Type                | Required | Default | Description                      |
-| ------------ | ------------------- | -------- | ------- | -------------------------------- |
-| `type`       | `"run_mc"`          | yes      |         | Message discriminator            |
-| `request_id` | `u64`               | yes      |         | Client-assigned correlation ID   |
-| `mission`    | `MissionDefinition` | yes      |         | Full mission definition          |
-| `auto_drag`  | `bool`              | no       | `false` | Auto-derive drag rates before MC |
+| Field         | Type               | Required | Default | Description                               |
+| ------------- | ------------------ | -------- | ------- | ----------------------------------------- |
+| `type`        | `"run_mc"`         | yes      |         | Message discriminator                     |
+| `request_id`  | `u64`              | yes      |         | Client-assigned correlation ID            |
+| `monte_carlo` | `MonteCarloConfig` | no       | `null`  | MC config override (None = use session's) |
+| `auto_drag`   | `bool`             | no       | `false` | Auto-derive drag rates before MC          |
+
+Requires: mission must exist and `monte_carlo` config must be provided (inline or via session).
 
 Response: `progress` (0 or more), then `monte_carlo_result`
+
+### get_session
+
+Get a snapshot of the current session state for diagnostics.
+
+| Field        | Type            | Required | Description                    |
+| ------------ | --------------- | -------- | ------------------------------ |
+| `type`       | `"get_session"` | yes      | Message discriminator          |
+| `request_id` | `u64`           | yes      | Client-assigned correlation ID |
+
+Response: `session_state`
+
+### reset
+
+Reset all session state to defaults.
+
+| Field        | Type      | Required | Description                    |
+| ------------ | --------- | -------- | ------------------------------ |
+| `type`       | `"reset"` | yes      | Message discriminator          |
+| `request_id` | `u64`     | yes      | Client-assigned correlation ID |
+
+Response: `state_updated`
 
 ### cancel
 
@@ -141,12 +265,23 @@ Response: `cancelled` (if a job was active)
 
 ## Server Messages
 
+### state_updated
+
+Acknowledgement of a state-setting message. Reports what was set and what was invalidated.
+
+| Field         | Type              | Description                            |
+| ------------- | ----------------- | -------------------------------------- |
+| `type`        | `"state_updated"` | Message discriminator                  |
+| `request_id`  | `u64`             | Correlation ID from the client request |
+| `updated`     | `string[]`        | Fields that were set                   |
+| `invalidated` | `string[]`        | Fields that were invalidated (cleared) |
+
 ### classify_result
 
-| Field        | Type                | Description                                                      |
-| ------------ | ------------------- | ---------------------------------------------------------------- |
-| `type`       | `"classify_result"` | Message discriminator                                            |
-| `request_id` | `u64`               | Correlation ID from the client request                           |
+| Field        | Type                | Description                                                     |
+| ------------ | ------------------- | --------------------------------------------------------------- |
+| `type`       | `"classify_result"` | Message discriminator                                           |
+| `request_id` | `u64`               | Correlation ID from the client request                          |
 | `phase`      | `MissionPhase`      | `proximity { roe, chief_elements, ... }` or `far_field { ... }` |
 
 ### transfer_result
@@ -157,13 +292,27 @@ Response: `cancelled` (if a job was active)
 | `request_id` | `u64`               | Correlation ID from the client request                        |
 | `result`     | `TransferResult`    | Classification, Lambert transfer, perch states, arrival epoch |
 
-### mission_result
+### plan_result
 
-| Field        | Type               | Description                            |
-| ------------ | ------------------ | -------------------------------------- |
-| `type`       | `"mission_result"` | Message discriminator                  |
-| `request_id` | `u64`              | Correlation ID from the client request |
-| `result`     | `PipelineOutput`   | Full mission result payload            |
+Lean mission plan result (~10-30 KB instead of 350-500 KB). Contains per-leg summaries without trajectory arrays.
+
+| Field        | Type             | Description                            |
+| ------------ | ---------------- | -------------------------------------- |
+| `type`       | `"plan_result"`  | Message discriminator                  |
+| `request_id` | `u64`            | Correlation ID from the client request |
+| `result`     | `LeanPlanResult` | Lean plan: phase, legs, safety, totals |
+
+`LeanPlanResult` fields:
+
+| Field              | Type                  | Description                             |
+| ------------------ | --------------------- | --------------------------------------- |
+| `phase`            | `MissionPhase`        | Classification (proximity or far_field) |
+| `transfer_summary` | `TransferSummary?`    | Lambert summary (None if proximity)     |
+| `perch_roe`        | `QuasiNonsingularROE` | Idealized perch ROE target              |
+| `legs`             | `LegSummary[]`        | Per-leg maneuver summaries              |
+| `total_dv_km_s`    | `f64`                 | Total delta-v: Lambert + waypoint legs  |
+| `total_duration_s` | `f64`                 | Total duration: Lambert + waypoint legs |
+| `safety`           | `SafetyMetrics?`      | Safety metrics (if computed)            |
 
 ### drag_result
 
@@ -172,6 +321,67 @@ Response: `cancelled` (if a job was active)
 | `type`       | `"drag_result"` | Message discriminator                  |
 | `request_id` | `u64`           | Correlation ID from the client request |
 | `drag`       | `DragConfig`    | Extracted differential drag rates      |
+
+### trajectory_data
+
+On-demand trajectory points for 3D visualization.
+
+| Field        | Type                | Description                            |
+| ------------ | ------------------- | -------------------------------------- |
+| `type`       | `"trajectory_data"` | Message discriminator                  |
+| `request_id` | `u64`               | Correlation ID from the client request |
+| `legs`       | `LegTrajectory[]`   | Per-leg trajectory points              |
+
+Each `LegTrajectory` contains a `leg_index` and `points` array of `TrajectoryPoint` objects: `{ elapsed_s, position_ric_km: [R, I, C], velocity_ric_km_s: [R, I, C] }`.
+
+### covariance_data
+
+On-demand covariance propagation report.
+
+| Field        | Type                      | Description                            |
+| ------------ | ------------------------- | -------------------------------------- |
+| `type`       | `"covariance_data"`       | Message discriminator                  |
+| `request_id` | `u64`                     | Correlation ID from the client request |
+| `report`     | `MissionCovarianceReport` | Full covariance report                 |
+
+### eclipse_data
+
+Eclipse data for transfer and/or mission phases.
+
+| Field        | Type                   | Description                                     |
+| ------------ | ---------------------- | ----------------------------------------------- |
+| `type`       | `"eclipse_data"`       | Message discriminator                           |
+| `request_id` | `u64`                  | Correlation ID from the client request          |
+| `transfer`   | `TransferEclipseData?` | Transfer-phase eclipse data (None if proximity) |
+| `mission`    | `MissionEclipseData?`  | Mission-phase eclipse data (None if no mission) |
+
+### session_state
+
+Diagnostic snapshot of the current session.
+
+| Field        | Type              | Description                            |
+| ------------ | ----------------- | -------------------------------------- |
+| `type`       | `"session_state"` | Message discriminator                  |
+| `request_id` | `u64`             | Correlation ID from the client request |
+| `summary`    | `SessionSummary`  | Session state flags and config values  |
+
+`SessionSummary` fields:
+
+| Field                      | Type               | Description                         |
+| -------------------------- | ------------------ | ----------------------------------- |
+| `has_chief`                | `bool`             | Whether chief state is set          |
+| `has_deputy`               | `bool`             | Whether deputy state is set         |
+| `has_transfer`             | `bool`             | Whether transfer is computed        |
+| `has_mission`              | `bool`             | Whether mission is planned          |
+| `has_drag_config`          | `bool`             | Whether drag config is available    |
+| `has_navigation_accuracy`  | `bool`             | Whether nav accuracy is configured  |
+| `has_maneuver_uncertainty` | `bool`             | Whether maneuver uncertainty is set |
+| `has_monte_carlo_config`   | `bool`             | Whether MC config is set            |
+| `waypoint_count`           | `usize`            | Number of waypoints defined         |
+| `chief_config`             | `SpacecraftChoice` | Current chief spacecraft            |
+| `deputy_config`            | `SpacecraftChoice` | Current deputy spacecraft           |
+| `propagator`               | `PropagatorChoice` | Current propagator                  |
+| `lambert_tof_s`            | `f64`              | Current Lambert TOF (seconds)       |
 
 ### progress
 
@@ -227,24 +437,38 @@ Sent every 30 seconds while a background job is running. The counter resets to 0
 | `message`    | `string`            | Human-readable error message                      |
 | `detail`     | `object` or omitted | Per-variant diagnostic fields (omitted when null) |
 
+## PropagatorToggle
+
+The `propagator` field in `update_config` uses a simplified toggle enum:
+
+| Value       | Description                                            |
+| ----------- | ------------------------------------------------------ |
+| `"j2"`      | J2-only analytical propagation                         |
+| `"j2_drag"` | J2 + differential drag (requires prior `extract_drag`) |
+
+`"j2_drag"` resolves against the session's stored `DragConfig`. It does not carry embedded drag values. The server returns an error if no drag has been extracted.
+
 ## Error Codes
 
 All error codes are lowercase snake_case strings.
 
-| Code                    | Description                                       |
-| ----------------------- | ------------------------------------------------- |
-| `targeting_convergence` | Newton-Raphson targeting solver did not converge  |
-| `lambert_failure`       | Lambert solver failure                            |
-| `propagation_error`     | Propagation error                                 |
-| `validation_error`      | Nyx validation error                              |
-| `monte_carlo_error`     | Monte Carlo error                                 |
-| `nyx_bridge_error`      | Nyx bridge error (almanac, dynamics, propagation) |
-| `covariance_error`      | Covariance propagation error                      |
-| `invalid_input`         | Malformed JSON, missing fields, bad values        |
-| `mission_error`         | General mission planning error                    |
-| `cancelled`             | Operation was cancelled                           |
+| Code                    | Description                                              |
+| ----------------------- | -------------------------------------------------------- |
+| `missing_session_state` | Required session state not available (call setter first) |
+| `targeting_convergence` | Newton-Raphson targeting solver did not converge         |
+| `lambert_failure`       | Lambert solver failure                                   |
+| `propagation_error`     | Propagation error                                        |
+| `validation_error`      | Nyx validation error                                     |
+| `monte_carlo_error`     | Monte Carlo error                                        |
+| `nyx_bridge_error`      | Nyx bridge error (almanac, dynamics, propagation)        |
+| `covariance_error`      | Covariance propagation error                             |
+| `invalid_input`         | Malformed JSON, missing fields, bad values               |
+| `mission_error`         | General mission planning error                           |
+| `cancelled`             | Operation was cancelled                                  |
 
-The `detail` field carries per-error diagnostic data. For example, a `targeting_convergence` error includes:
+The `detail` field carries per-error diagnostic data. Examples:
+
+`targeting_convergence`:
 
 ```json
 {
@@ -253,7 +477,16 @@ The `detail` field carries per-error diagnostic data. For example, a `targeting_
 }
 ```
 
-An `invalid_input` error for a missing field includes:
+`missing_session_state`:
+
+```json
+{
+  "missing": "chief",
+  "context": "set chief/deputy states via set_states before this operation"
+}
+```
+
+`invalid_input` (missing field):
 
 ```json
 {
@@ -270,10 +503,45 @@ An `invalid_input` error for a missing field includes:
 - Cancellation is cooperative: the server checks the cancel flag between phases (legs, MC samples).
 - `heartbeat` messages are sent every 30 seconds during background jobs to keep the connection alive.
 - When the connection closes, any active background job is cancelled.
+- `auto_drag` on `validate` and `run_mc` is ephemeral: it extracts drag and replans temporarily without modifying session state.
 
-## MissionDefinition
+## Session Flows
 
-`MissionDefinition` is a type alias for `PipelineInput` from `rpo-core`. See `docs/schema/pipeline-input.schema.json` for the full JSON Schema.
+### Far-Field
+
+```
+set_states -> state_updated
+set_spacecraft -> state_updated                          (optional; defaults to cubesat_6u)
+classify -> classify_result (far_field)
+compute_transfer -> transfer_result
+extract_drag -> drag_result (~3s async)                  (skip if spacecraft configs identical)
+set_waypoints -> plan_result (~10-30KB)
+|- get_trajectory -> trajectory_data (~20KB, on-demand)  |
+|- get_eclipse -> eclipse_data (on-demand)               | parallel on-demand fetches
+|- get_covariance -> covariance_data (~70KB, on-demand)  |
+update_config(j2_drag) -> plan_result                    (when drag_result arrives)
+validate -> progress* + validation_result
+run_mc -> progress* + monte_carlo_result
+```
+
+### Proximity
+
+```
+set_states -> state_updated
+|- classify -> classify_result (proximity)               |
+|- extract_drag -> drag_result (~3s async)               | parallel (both read session states)
+set_waypoints -> plan_result (auto-computes transfer)
+|- get_trajectory -> trajectory_data                     |
+|- get_eclipse -> eclipse_data                           | parallel on-demand fetches
+|- get_covariance -> covariance_data                     |
+validate -> validation_result
+```
+
+### Parallelism Notes
+
+- **classify + extract_drag (proximity):** Both only read `chief`/`deputy` from the session. No mutation conflict. Fire both after `set_states` to overlap the ~3s drag simulation with the instant classify.
+- **On-demand getters (get_trajectory, get_covariance, get_eclipse):** All read from the stored mission/transfer. No mutation. Fire whichever are needed in parallel after planning.
+- **extract_drag (far-field):** Must wait for `compute_transfer` because it uses perch states (post-Lambert geometry).
 
 ## Examples
 
@@ -284,20 +552,7 @@ Request:
 ```json
 {
   "type": "classify",
-  "request_id": 1,
-  "mission": {
-    "chief": {
-      "epoch": "2024-01-01T00:00:00 UTC",
-      "position_eci_km": [5876.261, 3392.661, 0.0],
-      "velocity_eci_km_s": [-2.380512, 4.123167, 6.006917]
-    },
-    "deputy": {
-      "epoch": "2024-01-01T00:00:00 UTC",
-      "position_eci_km": [5199.839421, 4281.648523, 1398.070066],
-      "velocity_eci_km_s": [-3.993103, 2.970313, 5.76454]
-    },
-    "waypoints": []
-  }
+  "request_id": 1
 }
 ```
 
@@ -325,92 +580,27 @@ Response (far-field):
 }
 ```
 
-### compute_transfer
+### set_waypoints
 
 Request:
 
 ```json
 {
-  "type": "compute_transfer",
-  "request_id": 2,
-  "mission": {
-    "chief": {
-      "epoch": "2024-01-01T00:00:00 UTC",
-      "position_eci_km": [5876.261, 3392.661, 0.0],
-      "velocity_eci_km_s": [-2.380512, 4.123167, 6.006917]
-    },
-    "deputy": {
-      "epoch": "2024-01-01T00:00:00 UTC",
-      "position_eci_km": [5199.839421, 4281.648523, 1398.070066],
-      "velocity_eci_km_s": [-3.993103, 2.970313, 5.76454]
-    },
-    "waypoints": [],
-    "lambert_tof_s": 3600.0,
-    "perch": { "v_bar": { "along_track_km": 5.0 } }
-  }
-}
-```
-
-Response:
-
-```json
-{
-  "type": "transfer_result",
-  "request_id": 2,
-  "result": {
-    "plan": {
-      "phase": { "far_field": { "...": "..." } },
-      "transfer": { "...": "..." },
-      "perch_roe": { "da": 0.0, "dlambda": 0.000726, "...": "..." },
-      "chief_at_arrival": { "...": "..." }
-    },
-    "perch_chief": { "...": "..." },
-    "perch_deputy": { "...": "..." },
-    "arrival_epoch": "2024-01-01T01:00:00 UTC",
-    "lambert_dv_km_s": 1.234
-  }
-}
-```
-
-### plan_mission
-
-Request:
-
-```json
-{
-  "type": "plan_mission",
+  "type": "set_waypoints",
   "request_id": 3,
-  "mission": {
-    "chief": {
-      "epoch": "2024-01-01T00:00:00 UTC",
-      "position_eci_km": [5876.261, 3392.661, 0.0],
-      "velocity_eci_km_s": [-2.380512, 4.123167, 6.006917]
+  "waypoints": [
+    {
+      "label": "Approach to 2 km",
+      "position_ric_km": [0.5, 2.0, 0.5],
+      "velocity_ric_km_s": [0.0, 0.0, 0.0],
+      "tof_s": 4200.0
     },
-    "deputy": {
-      "epoch": "2024-01-01T00:00:00 UTC",
-      "position_eci_km": [5199.839421, 4281.648523, 1398.070066],
-      "velocity_eci_km_s": [-3.993103, 2.970313, 5.76454]
-    },
-    "waypoints": [
-      {
-        "label": "Approach to 2 km",
-        "position_ric_km": [0.5, 2.0, 0.5],
-        "velocity_ric_km_s": [0.0, 0.0, 0.0],
-        "tof_s": 4200.0
-      },
-      {
-        "label": "Close to 0.5 km",
-        "position_ric_km": [0.5, 0.5, 0.5],
-        "tof_s": 4200.0
-      }
-    ],
-    "config": {
-      "safety": {
-        "min_ei_separation_km": 0.1,
-        "min_distance_3d_km": 0.05
-      }
+    {
+      "label": "Close to 0.5 km",
+      "position_ric_km": [0.5, 0.5, 0.5],
+      "tof_s": 4200.0
     }
-  }
+  ]
 }
 ```
 
@@ -418,18 +608,19 @@ Response:
 
 ```json
 {
-  "type": "mission_result",
+  "type": "plan_result",
   "request_id": 3,
   "result": {
     "phase": { "far_field": { "...": "..." } },
-    "transfer": { "...": "..." },
-    "perch_roe": { "da": 0.0, "dlambda": 0.000726, "...": "..." },
-    "mission": {
-      "legs": ["..."],
-      "total_dv_km_s": 0.0034,
-      "total_duration_s": 8400.0
+    "transfer_summary": {
+      "total_dv_km_s": 1.234,
+      "tof_s": 3600.0,
+      "direction": "short_way",
+      "arrival_epoch": "..."
     },
-    "total_dv_km_s": 1.234,
+    "perch_roe": { "da": 0.0, "dlambda": 0.000726, "...": "..." },
+    "legs": ["..."],
+    "total_dv_km_s": 1.237,
     "total_duration_s": 12000.0
   }
 }

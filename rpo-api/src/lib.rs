@@ -9,4 +9,5 @@
 pub mod error;
 pub mod handlers;
 pub mod protocol;
+pub mod session;
 pub mod ws;

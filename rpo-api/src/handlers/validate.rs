@@ -9,83 +9,105 @@ use std::sync::Arc;
 use anise::prelude::Almanac;
 use tokio::sync::mpsc;
 
+use rpo_core::mission::config::MissionConfig;
+use rpo_core::mission::types::WaypointMission;
 use rpo_core::mission::{validate_mission_nyx, ValidationReport};
-use rpo_core::pipeline::{compute_transfer, plan_waypoints_from_transfer};
+use rpo_core::pipeline::{TransferResult, WaypointInput};
+use rpo_core::propagation::PropagationModel;
+use rpo_core::types::{SpacecraftConfig, StateVector};
 
-use super::common::resolve_drag_and_propagator;
+use super::common::{replan_if_drag_changed, resolve_drag_and_propagator, send_progress};
 use crate::error::ApiError;
-use crate::protocol::{MissionDefinition, ProgressPhase, ProgressUpdate};
+use crate::protocol::{ProgressPhase, ProgressUpdate};
+
+/// Request payload for validation, cloned from session state.
+///
+/// Contains all data needed to run validation independently of the session,
+/// since validation runs on a blocking thread.
+pub struct ValidateRequest {
+    /// The planned waypoint mission to validate.
+    pub mission: WaypointMission,
+    /// Chief ECI state at perch (mission start).
+    pub perch_chief: StateVector,
+    /// Deputy ECI state at perch (mission start).
+    pub perch_deputy: StateVector,
+    /// Chief spacecraft physical properties.
+    pub chief_config: SpacecraftConfig,
+    /// Deputy spacecraft physical properties.
+    pub deputy_config: SpacecraftConfig,
+    /// Number of nyx sample points per leg.
+    pub samples_per_leg: u32,
+    /// Auto-derive drag rates before validation.
+    pub auto_drag: bool,
+    /// Waypoint inputs (needed for drag-based replan).
+    pub waypoints: Vec<WaypointInput>,
+    /// Mission solver configuration (needed for drag-based replan).
+    pub config: MissionConfig,
+    /// Propagation model (needed for drag-based replan).
+    pub propagator: PropagationModel,
+    /// Transfer result (needed for departure state in replan).
+    pub transfer: TransferResult,
+}
 
 /// Run per-leg nyx validation with progress streaming and cancellation.
 ///
-/// Plans the mission first, then validates each leg against nyx full-physics.
+/// Uses the pre-planned mission from the request. When `auto_drag` is true,
+/// extracts drag rates and replans with a drag propagator before validating.
 ///
 /// # Errors
 /// Returns [`ApiError`] if planning, propagation, or validation fails,
 /// or if the operation is cancelled.
 pub fn handle_validate(
-    def: &MissionDefinition,
+    request: ValidateRequest,
     almanac: &Arc<Almanac>,
     progress_tx: &mpsc::Sender<ProgressUpdate>,
     cancel: &Arc<AtomicBool>,
-    samples_per_leg: u32,
-    auto_drag: bool,
 ) -> Result<ValidationReport, ApiError> {
-    if let Err(e) = progress_tx.try_send(ProgressUpdate {
-        phase: ProgressPhase::Validate,
-        detail: Some("Planning mission...".into()),
-        fraction: Some(0.0),
-    }) {
-        tracing::debug!("Progress update dropped: {e}");
-    }
-
-    let chief_config = def.chief_config.unwrap_or_default().resolve();
-    let deputy_config = def.deputy_config.unwrap_or_default().resolve();
-
-    // Phase 1: Compute transfer
-    let transfer = compute_transfer(def)?;
+    send_progress(progress_tx, ProgressPhase::Validate, "Planning mission...", 0.0);
 
     if cancel.load(Ordering::Relaxed) {
         return Err(ApiError::Cancelled);
     }
 
-    // Phase 2: Resolve propagator
-    let (propagator, _derived_drag) =
-        resolve_drag_and_propagator(auto_drag, &transfer, &chief_config, &deputy_config, almanac, def)?;
+    // Resolve propagator (with optional auto-drag)
+    let (propagator, derived_drag) = resolve_drag_and_propagator(
+        request.auto_drag,
+        &request.transfer,
+        &request.chief_config,
+        &request.deputy_config,
+        almanac,
+        &request.propagator,
+    )?;
 
-    // Phase 3: Plan waypoints
-    let wp_mission = plan_waypoints_from_transfer(&transfer, def, &propagator)?;
+    // If auto_drag changed the propagator, replan the mission
+    let mission = replan_if_drag_changed(
+        request.auto_drag,
+        derived_drag.as_ref(),
+        request.mission,
+        &request.transfer,
+        &request.waypoints,
+        &request.config,
+        &propagator,
+    )?;
 
     if cancel.load(Ordering::Relaxed) {
         return Err(ApiError::Cancelled);
     }
 
-    // Phase 4: Validate via nyx
-    if let Err(e) = progress_tx.try_send(ProgressUpdate {
-        phase: ProgressPhase::Validate,
-        detail: Some("Running nyx validation...".into()),
-        fraction: Some(0.1),
-    }) {
-        tracing::debug!("Progress update dropped: {e}");
-    }
+    send_progress(progress_tx, ProgressPhase::Validate, "Running nyx validation...", 0.1);
 
     let report = validate_mission_nyx(
-        &wp_mission,
-        &transfer.perch_chief,
-        &transfer.perch_deputy,
-        samples_per_leg,
-        &chief_config,
-        &deputy_config,
+        &mission,
+        &request.perch_chief,
+        &request.perch_deputy,
+        request.samples_per_leg,
+        &request.chief_config,
+        &request.deputy_config,
         almanac,
     )?;
 
-    if let Err(e) = progress_tx.try_send(ProgressUpdate {
-        phase: ProgressPhase::Validate,
-        detail: Some("Validation complete".into()),
-        fraction: Some(1.0),
-    }) {
-        tracing::debug!("Progress update dropped: {e}");
-    }
+    send_progress(progress_tx, ProgressPhase::Validate, "Validation complete", 1.0);
 
     Ok(report)
 }
+

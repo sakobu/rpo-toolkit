@@ -55,6 +55,13 @@ pub enum InvalidInputError {
     },
     /// Trajectory data is empty when a non-empty trajectory was expected.
     EmptyTrajectory,
+    /// A required session state is not available.
+    MissingSessionState {
+        /// Name of the missing state (e.g., "chief", "transfer").
+        missing: &'static str,
+        /// Operation that requires this state.
+        context: &'static str,
+    },
 }
 
 impl fmt::Display for ApiError {
@@ -83,6 +90,9 @@ impl fmt::Display for InvalidInputError {
                 write!(f, "{field} required for {context}")
             }
             Self::EmptyTrajectory => write!(f, "empty chief trajectory"),
+            Self::MissingSessionState { missing, context } => {
+                write!(f, "required session state not available: {missing} needed for {context}")
+            }
         }
     }
 }
@@ -255,6 +265,10 @@ impl ApiError {
                 InvalidInputError::EmptyTrajectory => (
                     ErrorCode::InvalidInput,
                     Some(serde_json::json!({ "reason": "empty_trajectory" })),
+                ),
+                InvalidInputError::MissingSessionState { missing, context } => (
+                    ErrorCode::MissingSessionState,
+                    Some(serde_json::json!({ "missing": missing, "context": context })),
                 ),
             },
             Self::Cancelled => (ErrorCode::Cancelled, None),

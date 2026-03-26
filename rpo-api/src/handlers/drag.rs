@@ -8,30 +8,32 @@ use std::sync::Arc;
 use anise::prelude::Almanac;
 
 use rpo_core::propagation::{extract_dmf_rates, DragConfig};
+use rpo_core::types::{SpacecraftConfig, StateVector};
 
-use crate::error::{require_field, ApiError};
-use crate::protocol::MissionDefinition;
+use crate::error::ApiError;
 
 /// Extract differential drag rates from spacecraft properties via nyx DMF estimation.
 ///
-/// Requires `chief_config` and `deputy_config` in the mission definition.
-/// Takes ~3 seconds (nyx short simulation).
+/// When chief and deputy spacecraft configs are identical (by `PartialEq`),
+/// returns `DragConfig::zero()` without running nyx — there is no differential
+/// drag between identical spacecraft.
+///
+/// Takes ~3 seconds (nyx short simulation) when configs differ.
 ///
 /// # Errors
-/// Returns [`ApiError`] if spacecraft configs are missing or DMF extraction fails.
+/// Returns [`ApiError`] if DMF extraction fails.
 pub fn handle_extract_drag(
-    def: &MissionDefinition,
+    chief: &StateVector,
+    deputy: &StateVector,
+    chief_config: &SpacecraftConfig,
+    deputy_config: &SpacecraftConfig,
     almanac: &Arc<Almanac>,
 ) -> Result<DragConfig, ApiError> {
-    let chief_config = require_field(def.chief_config, "chief_config", "drag extraction")?.resolve();
-    let deputy_config = require_field(def.deputy_config, "deputy_config", "drag extraction")?.resolve();
+    // Identical configs produce zero differential drag — skip nyx.
+    if chief_config == deputy_config {
+        return Ok(DragConfig::zero());
+    }
 
-    let drag = extract_dmf_rates(
-        &def.chief,
-        &def.deputy,
-        &chief_config,
-        &deputy_config,
-        almanac,
-    )?;
+    let drag = extract_dmf_rates(chief, deputy, chief_config, deputy_config, almanac)?;
     Ok(drag)
 }
