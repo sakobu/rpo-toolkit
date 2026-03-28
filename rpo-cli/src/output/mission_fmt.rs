@@ -12,7 +12,7 @@ use super::common::{
 };
 use super::thresholds::fidelity;
 use super::eclipse_fmt::{print_eclipse_summary, print_eclipse_validation};
-use super::safety_fmt::{print_safety_analysis, print_safety_comparison, print_safety_summary};
+use super::safety_fmt::{print_free_drift_analysis, print_safety_analysis, print_safety_comparison, print_safety_summary};
 
 /// Print the common Transfer + Waypoint Targeting output shared by mission/validate.
 pub fn print_mission_human(
@@ -49,6 +49,12 @@ pub fn print_mission_human(
             SafetyTier::Analytical => print_subheader("Safety"),
         }
         print_safety_analysis(safety, &sc);
+    }
+
+    // ── Free-Drift ──────────────────────────────────────────
+    if let Some(ref analyses) = output.free_drift {
+        let sc = input.config.safety.unwrap_or_default();
+        print_free_drift_analysis(analyses, &sc);
     }
 
     // ── Eclipse ───────────────────────────────────────────────

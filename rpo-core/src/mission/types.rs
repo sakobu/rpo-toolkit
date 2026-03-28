@@ -113,6 +113,9 @@ pub struct ManeuverLeg {
     pub tof_s: f64,
     /// Total Δv for this leg (km/s)
     pub total_dv_km_s: f64,
+    /// ROE state before the departure burn (pre-maneuver).
+    /// Used for free-drift / abort-case analysis.
+    pub pre_departure_roe: QuasiNonsingularROE,
     /// ROE state after departure burn
     pub post_departure_roe: QuasiNonsingularROE,
     /// Chief mean Keplerian elements at departure epoch

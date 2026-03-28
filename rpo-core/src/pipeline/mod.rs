@@ -19,11 +19,12 @@ pub mod types;
 pub use convert::{resolve_propagator, to_propagation_model, to_waypoints};
 pub use errors::PipelineError;
 pub use execute::{
-    build_output, compute_mission_covariance, compute_transfer, execute_mission,
-    plan_waypoints_from_transfer, replan_mission,
+    build_output, compute_free_drift_analysis, compute_mission_covariance, compute_transfer,
+    execute_mission, plan_waypoints_from_transfer, replan_mission,
 };
 pub use projections::{
     LeanPlanResult, LegSummary, LegTrajectory, TrajectoryPoint, TransferSummary,
+    propagated_to_point, resample_propagated,
 };
 pub use types::{
     PipelineInput, PipelineOutput, PropagatorChoice, SpacecraftChoice, TransferResult, WaypointInput,

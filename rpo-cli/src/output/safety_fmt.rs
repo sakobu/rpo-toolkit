@@ -2,10 +2,11 @@
 
 use owo_colors::{OwoColorize, Stream};
 use rpo_core::mission::{
-    assess_safety, MissionConfig, RcContext, SafetyConfig, SafetyMetrics, ValidationReport,
+    assess_safety, FreeDriftAnalysis, MissionConfig, RcContext, SafetyConfig, SafetyMetrics,
+    ValidationReport,
 };
 
-use super::common::{fmt_duration, fmt_m};
+use super::common::{fmt_bounded_motion_residual, fmt_duration, fmt_m, print_subheader};
 use super::thresholds::fidelity;
 
 /// Print safety analysis results with pass/fail assessment.
@@ -206,5 +207,55 @@ pub fn print_safety_comparison(report: &ValidationReport, config: &MissionConfig
             "    {:>30}  {:>12.1}",
             "e/i separation (m)", num_ei_m,
         );
+    }
+}
+
+/// Print free-drift (abort-case) analysis per leg.
+///
+/// Shows operational (3D distance, R/C) and passive (e/i separation) safety
+/// as separate pass/fail checks, matching the nominal safety display style.
+/// Includes a bounded-motion diagnostic per leg.
+pub fn print_free_drift_analysis(analyses: &[FreeDriftAnalysis], config: &SafetyConfig) {
+    print_subheader("Free-Drift Safety (abort case)");
+    for (i, analysis) in analyses.iter().enumerate() {
+        let s = &analysis.safety;
+        let assessment = assess_safety(s, config);
+        println!("  Leg {}:", i + 1);
+
+        print!("    Operational:          ");
+        print_pass_fail(assessment.distance_3d_pass);
+        println!(
+            "      Min 3D distance:    {}  (threshold: {})",
+            fmt_m(s.operational.min_distance_3d_km, 1),
+            fmt_m(config.min_distance_3d_km, 0),
+        );
+        match assessment.rc_context {
+            RcContext::AlongTrackDominated { along_track_km } => {
+                println!(
+                    "      Min R/C distance:   {}  (along-track dominated, V-bar at {along_track_km:.1} km)",
+                    fmt_m(s.operational.min_rc_separation_km, 1),
+                );
+            }
+            RcContext::RadialCrossTrack => {
+                println!(
+                    "      Min R/C distance:   {}",
+                    fmt_m(s.operational.min_rc_separation_km, 1),
+                );
+            }
+        }
+
+        print!("    Passive:              ");
+        print_pass_fail(assessment.ei_separation_pass);
+        println!(
+            "      e/i separation:     {}  (threshold: {})",
+            fmt_m(s.passive.min_ei_separation_km, 1),
+            fmt_m(config.min_ei_separation_km, 0),
+        );
+        println!(
+            "      Phase angle:        {:.2}\u{00b0}",
+            s.passive.ei_phase_angle_rad.to_degrees(),
+        );
+
+        println!("    Bounded-motion:       {}", fmt_bounded_motion_residual(analysis.bounded_motion_residual));
     }
 }

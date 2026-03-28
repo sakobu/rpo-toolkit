@@ -386,6 +386,29 @@ async fn handle_text_message(
             }
         }
 
+        ClientMessage::GetFreeDriftTrajectory {
+            request_id,
+            legs,
+            max_points,
+        } => {
+            match handlers::handle_get_free_drift(session, legs.as_deref(), max_points) {
+                Ok(response) => {
+                    send_message(
+                        ws,
+                        &ServerMessage::FreeDriftData {
+                            request_id,
+                            legs: response.legs,
+                            analyses: response.analyses,
+                        },
+                    )
+                    .await;
+                }
+                Err(e) => {
+                    send_message(ws, &e.to_server_message(Some(request_id))).await;
+                }
+            }
+        }
+
         ClientMessage::GetCovariance { request_id } => {
             match handlers::handle_get_covariance(session) {
                 Ok(report) => {

@@ -3,6 +3,7 @@
 pub mod config;
 pub mod covariance;
 pub mod errors;
+pub mod free_drift;
 pub mod monte_carlo;
 pub mod planning;
 pub mod safety;
@@ -16,6 +17,7 @@ mod regression_tests;
 
 pub use config::{MissionConfig, ProximityConfig, SafetyConfig, TargetingConfig, TofOptConfig};
 pub use errors::{EclipseComputeError, MissionError};
+pub use free_drift::{bounded_motion_residual, compute_free_drift, FreeDriftAnalysis, FreeDriftError};
 pub use planning::{
     classify_separation, compute_transfer_eclipse, dimensionless_separation, eci_separation_km,
     plan_mission,

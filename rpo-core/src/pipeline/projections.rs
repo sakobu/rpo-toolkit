@@ -138,7 +138,8 @@ impl ManeuverLeg {
 }
 
 /// Convert a single `PropagatedState` to a `TrajectoryPoint`.
-fn propagated_to_point(state: &PropagatedState) -> TrajectoryPoint {
+#[must_use]
+pub fn propagated_to_point(state: &PropagatedState) -> TrajectoryPoint {
     TrajectoryPoint {
         elapsed_s: state.elapsed_s,
         position_ric_km: [
@@ -161,7 +162,7 @@ const INTERPOLATION_SPAN_TOL_S: f64 = 1.0e-12;
 /// Resample a propagated trajectory to at most `max_points` lean points.
 ///
 /// Uniform time spacing, first/last always preserved, linear interpolation.
-fn resample_propagated(trajectory: &[PropagatedState], max_points: u32) -> Vec<TrajectoryPoint> {
+pub fn resample_propagated(trajectory: &[PropagatedState], max_points: u32) -> Vec<TrajectoryPoint> {
     let max_pts = max_points as usize; // u32 → usize: always safe (usize ≥ 32 bits)
 
     if trajectory.is_empty() || max_points == 0 {
@@ -289,6 +290,7 @@ mod tests {
             },
             tof_s: 1000.0,
             total_dv_km_s: 0.05,
+            pre_departure_roe: roe,
             post_departure_roe: roe,
             departure_chief_mean: chief.clone(),
             pre_arrival_roe: roe,

@@ -14,15 +14,15 @@
 use std::fmt::Write;
 
 use rpo_core::mission::{
-    assess_safety, EnsembleStatistics, MissionPhase, MonteCarloReport, SafetyAssessment,
-    SafetyConfig, SafetyMetrics, ValidationReport,
+    assess_safety, EnsembleStatistics, FreeDriftAnalysis, MissionPhase, MonteCarloReport,
+    RcContext, SafetyAssessment, SafetyConfig, SafetyMetrics, ValidationReport,
 };
 use rpo_core::pipeline::{PipelineInput, PipelineOutput};
 use rpo_core::propagation::{DragConfig, PropagationModel};
 
 use super::common::{
-    compute_leg_error_stats, determine_mc_verdict, determine_verdict, fmt_duration, fmt_m, fmt_m_s,
-    fmt_roe_component, McBaseline, SafetyTier, VerdictResult,
+    compute_leg_error_stats, determine_mc_verdict, determine_verdict, fmt_bounded_motion_residual,
+    fmt_duration, fmt_m, fmt_m_s, fmt_roe_component, McBaseline, SafetyTier, VerdictResult,
 };
 use super::insights;
 
@@ -47,6 +47,10 @@ pub fn mission_to_markdown(
 
     if let Some(ref safety) = output.mission.safety {
         write_safety_section(&mut out, safety, &sc, SafetyTier::Analytical);
+    }
+
+    if let Some(ref fd) = output.free_drift {
+        write_free_drift_section(&mut out, fd, &sc);
     }
 
     write_eclipse_section(&mut out, output);
@@ -86,6 +90,10 @@ pub fn validation_to_markdown(
 
     if let Some(ref safety) = output.mission.safety {
         write_safety_section(&mut out, safety, &sc, SafetyTier::NyxValidated);
+    }
+
+    if let Some(ref fd) = output.free_drift {
+        write_free_drift_section(&mut out, fd, &sc);
     }
 
     write_eclipse_section(&mut out, output);
@@ -761,20 +769,22 @@ fn write_safety_section(
     // R/C plane
     let rc_km = safety.operational.min_rc_separation_km;
     let rc_ric = safety.operational.min_rc_ric_position_km;
-    let along_track_dominant = rc_ric[1].abs() > 10.0 * (rc_ric[0].powi(2) + rc_ric[2].powi(2)).sqrt();
-    let rc_context = if along_track_dominant {
-        format!(
-            "along-track dominated, V-bar at {:.1} km",
-            rc_ric[1].abs(),
-        )
-    } else {
-        "radial/cross-track dominated".to_owned()
-    };
-    let _ = writeln!(
-        out,
-        "| Min R/C-plane distance | {} ({rc_context}) |",
-        fmt_m(rc_km, 1),
-    );
+    match assessment.rc_context {
+        RcContext::AlongTrackDominated { along_track_km } => {
+            let _ = writeln!(
+                out,
+                "| Min R/C-plane distance | {} (along-track dominated, V-bar at {along_track_km:.1} km) |",
+                fmt_m(rc_km, 1),
+            );
+        }
+        RcContext::RadialCrossTrack => {
+            let _ = writeln!(
+                out,
+                "| Min R/C-plane distance | {} (radial/cross-track dominated) |",
+                fmt_m(rc_km, 1),
+            );
+        }
+    }
     let _ = writeln!(
         out,
         "| \u{2014} at | leg {}, t = {} |",
@@ -828,6 +838,79 @@ fn write_passive_safety_md(
         "**FAIL**"
     };
     let _ = writeln!(out, "### Overall: {overall}\n");
+}
+
+fn write_free_drift_section(
+    out: &mut String,
+    analyses: &[FreeDriftAnalysis],
+    config: &SafetyConfig,
+) {
+    let _ = writeln!(out, "## Free-Drift Safety (abort case)\n");
+    let _ = writeln!(
+        out,
+        "Per-leg analysis: what happens if the departure burn is skipped.\n",
+    );
+
+    for (i, analysis) in analyses.iter().enumerate() {
+        let s = &analysis.safety;
+        let assessment = assess_safety(s, config);
+
+        let _ = writeln!(out, "### Leg {}\n", i + 1);
+        let _ = writeln!(out, "| Check | Result |");
+        let _ = writeln!(out, "| --- | --- |");
+
+        let d3d_pass = if assessment.distance_3d_pass {
+            "**PASS**"
+        } else {
+            "**FAIL**"
+        };
+        let _ = writeln!(out, "| Operational (3D distance) | {d3d_pass} |");
+        let _ = writeln!(
+            out,
+            "| Min 3D distance | {} (threshold: {}) |",
+            fmt_m(s.operational.min_distance_3d_km, 1),
+            fmt_m(config.min_distance_3d_km, 0),
+        );
+
+        let rc_km = s.operational.min_rc_separation_km;
+        match assessment.rc_context {
+            RcContext::AlongTrackDominated { along_track_km } => {
+                let _ = writeln!(
+                    out,
+                    "| Min R/C distance | {} (along-track dominated, V-bar at {along_track_km:.1} km) |",
+                    fmt_m(rc_km, 1),
+                );
+            }
+            RcContext::RadialCrossTrack => {
+                let _ = writeln!(
+                    out,
+                    "| Min R/C distance | {} |",
+                    fmt_m(rc_km, 1),
+                );
+            }
+        }
+
+        let ei_pass = if assessment.ei_separation_pass {
+            "**PASS**"
+        } else {
+            "**FAIL**"
+        };
+        let _ = writeln!(out, "| Passive (e/i separation) | {ei_pass} |");
+        let _ = writeln!(
+            out,
+            "| Min e/i separation | {} (threshold: {}) |",
+            fmt_m(s.passive.min_ei_separation_km, 1),
+            fmt_m(config.min_ei_separation_km, 0),
+        );
+        let _ = writeln!(
+            out,
+            "| e/i phase angle | {:.2}\u{00b0} |",
+            s.passive.ei_phase_angle_rad.to_degrees(),
+        );
+
+        let _ = writeln!(out, "| Bounded-motion | {} |", fmt_bounded_motion_residual(analysis.bounded_motion_residual));
+        let _ = writeln!(out);
+    }
 }
 
 fn write_eclipse_section(out: &mut String, output: &PipelineOutput) {

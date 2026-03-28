@@ -8,6 +8,7 @@
 pub mod classify;
 pub mod common;
 pub mod drag;
+pub mod free_drift;
 pub mod mc;
 pub mod plan;
 pub mod transfer;
@@ -16,6 +17,7 @@ pub mod validate;
 pub use classify::handle_classify;
 pub use common::resolve_propagator_toggle;
 pub use drag::handle_extract_drag;
+pub use free_drift::handle_get_free_drift;
 pub use mc::{handle_mc, McRequest};
 pub use plan::{
     handle_get_covariance, handle_get_eclipse, handle_get_trajectory, handle_set_waypoints,

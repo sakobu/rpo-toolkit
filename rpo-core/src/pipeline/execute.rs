@@ -4,6 +4,7 @@
 //! targeting, covariance, eclipse) into a complete mission pipeline.
 
 use crate::constants::DEFAULT_COVARIANCE_SAMPLES_PER_LEG;
+use crate::mission::free_drift::{compute_free_drift, FreeDriftAnalysis};
 use crate::mission::planning::{compute_transfer_eclipse, plan_mission};
 use crate::mission::waypoints::{plan_waypoint_mission, replan_from_waypoint};
 use crate::propagation::covariance::{
@@ -77,6 +78,34 @@ pub fn compute_transfer(input: &PipelineInput) -> Result<TransferResult, Pipelin
     })
 }
 
+/// Compute free-drift analysis for each leg of a waypoint mission.
+///
+/// For each leg, propagates from the pre-departure ROE (burn skipped) for
+/// the same TOF and runs safety analysis on the resulting trajectory.
+///
+/// Returns `None` if any leg fails (non-fatal).
+#[must_use]
+pub fn compute_free_drift_analysis(
+    mission: &crate::mission::types::WaypointMission,
+    propagator: &PropagationModel,
+) -> Option<Vec<FreeDriftAnalysis>> {
+    let mut results = Vec::with_capacity(mission.legs.len());
+    for leg in &mission.legs {
+        match compute_free_drift(
+            &leg.pre_departure_roe,
+            &leg.departure_chief_mean,
+            leg.departure_maneuver.epoch,
+            leg.tof_s,
+            propagator,
+            leg.trajectory.len().saturating_sub(1).max(2),
+        ) {
+            Ok(fd) => results.push(fd),
+            Err(_) => return None,
+        }
+    }
+    Some(results)
+}
+
 /// Assemble a [`PipelineOutput`] from pipeline components.
 ///
 /// Runs covariance propagation (if `navigation_accuracy` is present)
@@ -121,6 +150,10 @@ pub fn build_output(
         .ok()
     });
 
+    let free_drift = input.config.safety.as_ref().and_then(|_| {
+        compute_free_drift_analysis(&wp_mission, propagator)
+    });
+
     PipelineOutput {
         phase: transfer.plan.phase.clone(),
         transfer: transfer.plan.transfer.clone(),
@@ -132,6 +165,7 @@ pub fn build_output(
         auto_drag_config: auto_drag,
         covariance,
         monte_carlo: None,
+        free_drift,
     }
 }
 

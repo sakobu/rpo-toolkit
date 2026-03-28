@@ -11,6 +11,7 @@ use rpo_core::mission::config::MissionConfig;
 use rpo_core::mission::monte_carlo::MonteCarloConfig;
 use rpo_core::mission::types::PerchGeometry;
 use rpo_core::mission::{MissionPhase, MonteCarloReport, ProximityConfig, ValidationReport};
+use rpo_core::mission::free_drift::FreeDriftAnalysis;
 use rpo_core::pipeline::{
     LeanPlanResult, LegTrajectory, SpacecraftChoice, TransferResult as CoreTransferResult,
     WaypointInput,
@@ -161,6 +162,17 @@ pub enum ClientMessage {
         /// Client-assigned correlation ID.
         request_id: u64,
     },
+    /// Fetch free-drift (abort-case) trajectory and safety data.
+    GetFreeDriftTrajectory {
+        /// Client-assigned correlation ID.
+        request_id: u64,
+        /// Leg indices to include (None = all legs).
+        #[serde(default)]
+        legs: Option<Vec<usize>>,
+        /// Maximum trajectory points per leg (None = full resolution).
+        #[serde(default)]
+        max_points: Option<u32>,
+    },
     /// Per-leg nyx validation with progress streaming.
     Validate {
         /// Client-assigned correlation ID.
@@ -259,6 +271,15 @@ pub enum ServerMessage {
         /// Full covariance report (boxed to reduce enum size).
         report: Box<MissionCovarianceReport>,
     },
+    /// Free-drift trajectory and safety data.
+    FreeDriftData {
+        /// Correlation ID from the client request.
+        request_id: u64,
+        /// Per-leg free-drift trajectory points.
+        legs: Vec<LegTrajectory>,
+        /// Per-leg free-drift safety analysis.
+        analyses: Vec<FreeDriftSummary>,
+    },
     /// Eclipse data for transfer and/or mission.
     EclipseData {
         /// Correlation ID from the client request.
@@ -324,6 +345,35 @@ pub enum ServerMessage {
         #[serde(skip_serializing_if = "Option::is_none")]
         detail: Option<serde_json::Value>,
     },
+}
+
+/// Lean free-drift summary for API responses (no full trajectory).
+#[derive(Debug, Clone, Serialize)]
+pub struct FreeDriftSummary {
+    /// Leg index.
+    pub leg_index: usize,
+    /// Min 3D distance on free-drift arc (km).
+    pub min_distance_3d_km: f64,
+    /// Min R/C distance on free-drift arc (km).
+    pub min_rc_separation_km: f64,
+    /// Min e/i separation on free-drift arc (km).
+    pub min_ei_separation_km: f64,
+    /// Bounded-motion residual (D'Amico Eq. 2.33). Dimensionless.
+    pub bounded_motion_residual: f64,
+}
+
+impl FreeDriftSummary {
+    /// Project a [`FreeDriftAnalysis`] to a lean summary.
+    #[must_use]
+    pub fn from_analysis(analysis: &FreeDriftAnalysis, leg_index: usize) -> Self {
+        Self {
+            leg_index,
+            min_distance_3d_km: analysis.safety.operational.min_distance_3d_km,
+            min_rc_separation_km: analysis.safety.operational.min_rc_separation_km,
+            min_ei_separation_km: analysis.safety.passive.min_ei_separation_km,
+            bounded_motion_residual: analysis.bounded_motion_residual,
+        }
+    }
 }
 
 /// Machine-readable error codes for the frontend.

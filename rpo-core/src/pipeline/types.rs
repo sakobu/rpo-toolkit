@@ -7,6 +7,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::mission::config::{MissionConfig, ProximityConfig};
+use crate::mission::free_drift::FreeDriftAnalysis;
 use crate::mission::monte_carlo::{MonteCarloConfig, MonteCarloReport};
 use crate::mission::types::{MissionPhase, MissionPlan, PerchGeometry, WaypointMission};
 use crate::types::QuasiNonsingularROE;
@@ -208,4 +209,7 @@ pub struct PipelineOutput {
     /// Monte Carlo report (included only when MC is run through pipeline).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub monte_carlo: Option<MonteCarloReport>,
+    /// Free-drift (abort-case) analysis per leg.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub free_drift: Option<Vec<FreeDriftAnalysis>>,
 }

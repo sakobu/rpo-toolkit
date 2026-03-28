@@ -18,6 +18,8 @@ End-to-end analytical mission: classification, Lambert transfer, perch handoff, 
 | `--json`      | bool | false    | Write JSON report to `reports/json/mission.json` (conflicts with `--markdown`)   |
 | `--markdown`  | bool | false    | Write markdown report to `reports/markdown/mission.md` (conflicts with `--json`) |
 
+Free-drift (abort-case) analysis is included automatically when `config.safety` is present in the input.
+
 ```bash
 cargo run -p rpo-cli -- mission --input examples/mission.json
 cargo run -p rpo-cli -- mission --input examples/mission.json --json

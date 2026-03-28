@@ -10,7 +10,7 @@
 use std::fmt;
 
 use rpo_core::elements::keplerian_conversions::ConversionError;
-use rpo_core::mission::{MissionError, MonteCarloError, ValidationError};
+use rpo_core::mission::{FreeDriftError, MissionError, MonteCarloError, ValidationError};
 use rpo_core::propagation::{CovarianceError, LambertError, NyxBridgeError, PropagationError};
 
 use crate::protocol::{ErrorCode, ServerMessage};
@@ -159,6 +159,17 @@ impl From<CovarianceError> for ApiError {
 impl From<ConversionError> for ApiError {
     fn from(e: ConversionError) -> Self {
         Self::Mission(Box::new(MissionError::Conversion(e)))
+    }
+}
+
+impl From<FreeDriftError> for ApiError {
+    fn from(e: FreeDriftError) -> Self {
+        match e {
+            FreeDriftError::Propagation(pe) => Self::Propagation(pe),
+            FreeDriftError::Safety(_) => {
+                Self::InvalidInput(InvalidInputError::EmptyTrajectory)
+            }
+        }
     }
 }
 

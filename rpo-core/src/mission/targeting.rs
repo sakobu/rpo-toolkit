@@ -318,6 +318,7 @@ fn build_leg(
         },
         tof_s,
         total_dv_km_s,
+        pre_departure_roe: departure.roe,
         post_departure_roe: solution.post_dep_roe,
         departure_chief_mean: departure.chief,
         pre_arrival_roe: solution.arrival.roe,

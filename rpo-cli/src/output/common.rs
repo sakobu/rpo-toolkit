@@ -229,6 +229,22 @@ pub fn fmt_roe_component(value: f64) -> String {
     }
 }
 
+// ── Bounded-motion formatting ────────────────────────────────────────────
+
+/// Bounded-motion residual below which the orbit is considered effectively bounded.
+/// Residuals below this are display-formatted as "bounded (residual ~ 0)".
+pub const BOUNDED_MOTION_DISPLAY_THRESHOLD: f64 = 1e-10;
+
+/// Format a bounded-motion residual for human display.
+#[must_use]
+pub fn fmt_bounded_motion_residual(residual: f64) -> String {
+    if residual.abs() < BOUNDED_MOTION_DISPLAY_THRESHOLD {
+        "bounded (residual ~ 0)".to_string()
+    } else {
+        format!("drifting (residual = {residual:.3e})")
+    }
+}
+
 // ── Duration formatting ─────────────────────────────────────────────────
 
 /// Format a duration in seconds as a human-readable string.
