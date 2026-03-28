@@ -6,39 +6,10 @@ use rpo_core::propagation::DragConfig;
 
 use super::common::{
     determine_mc_verdict, fmt_duration, fmt_m_s, print_colored, print_derived_drag, print_header,
-    McBaseline, print_optional_percentile_summary, print_percentile_stats, print_rate_metric,
+    print_optional_percentile_summary, print_percentile_stats, print_rate_metric,
     print_subheader, RateFormat, ThresholdDirection, Verdict,
 };
 use super::thresholds::mc as mc_thresh;
-
-/// Print the compact baseline mission context for MC output.
-pub fn print_mc_baseline(baseline: &McBaseline) {
-    print_subheader("Baseline");
-    let class = if baseline.is_far_field {
-        "FAR-FIELD"
-    } else {
-        "PROXIMITY"
-    };
-    println!("  Classification:  {class}");
-    if baseline.lambert_dv_km_s > 0.0 {
-        println!(
-            "  Transfer \u{0394}v:     {}  ({})",
-            fmt_m_s(baseline.lambert_dv_km_s, 1),
-            fmt_duration(baseline.lambert_tof_s),
-        );
-    }
-    println!("  Waypoint legs:   {}", baseline.num_legs);
-    println!(
-        "  Targeting \u{0394}v:    {}  ({})",
-        fmt_m_s(baseline.waypoint_dv_km_s, 1),
-        fmt_duration(baseline.waypoint_duration_s),
-    );
-    let total = baseline.total_dv_km_s();
-    println!(
-        "  Total \u{0394}v:        {}",
-        fmt_m_s(total, 1).if_supports_color(Stream::Stdout, |v| v.green()),
-    );
-}
 
 /// Print human-readable Monte Carlo ensemble report.
 pub fn print_mc_report(

@@ -36,10 +36,10 @@ use super::types::{OperationalSafety, PassiveSafety, SafetyMetrics};
 /// the e/i separation formula is undefined (division by zero).
 const ROE_MAG_EPSILON: f64 = 1e-15;
 
-/// R/C distance below which along-track dominance is checked (km).
-/// When the R/C plane minimum is below this value, the along-track
-/// component is examined to determine if the geometry is V-bar-like.
-const RC_ALONG_TRACK_THRESHOLD_KM: f64 = 0.01;
+/// Minimum along-track distance (km) to qualify as along-track dominated.
+/// Prevents degenerate classification when both R/C and along-track are
+/// near zero.
+const RC_ALONG_TRACK_MIN_KM: f64 = 0.1;
 
 /// Along-track must exceed R/C by this factor to classify as along-track
 /// dominated. A ratio of 10 means the along-track separation is at least
@@ -113,9 +113,9 @@ pub struct SafetyAssessment {
 ///
 /// # R/C geometry classification
 ///
-/// When the R/C plane minimum is near zero (below `RC_ALONG_TRACK_THRESHOLD_KM`)
-/// and the along-track component is at least `RC_ALONG_TRACK_RATIO` times
-/// larger, the geometry is classified as [`RcContext::AlongTrackDominated`].
+/// When the along-track component is at least `RC_ALONG_TRACK_RATIO` times
+/// larger than R/C and exceeds `RC_ALONG_TRACK_MIN_KM`, the geometry is
+/// classified as [`RcContext::AlongTrackDominated`].
 /// This is a factual geometric observation — it does not depend on the
 /// perch type or mission design intent.
 ///
@@ -132,8 +132,8 @@ pub fn assess_safety(metrics: &SafetyMetrics, config: &SafetyConfig) -> SafetyAs
 
     let along_track = metrics.operational.min_rc_ric_position_km.y.abs();
     let rc = metrics.operational.min_rc_separation_km;
-    let rc_context = if rc < RC_ALONG_TRACK_THRESHOLD_KM
-        && along_track > RC_ALONG_TRACK_RATIO * rc
+    let rc_context = if along_track > RC_ALONG_TRACK_RATIO * rc
+        && along_track > RC_ALONG_TRACK_MIN_KM
     {
         RcContext::AlongTrackDominated {
             along_track_km: along_track,
@@ -751,7 +751,7 @@ mod tests {
         let assessment = assess_safety(&metrics, &config);
 
         assert!(
-            matches!(assessment.rc_context, RcContext::AlongTrackDominated { along_track_km } if (along_track_km - 5.0).abs() < 1e-10),
+            matches!(assessment.rc_context, RcContext::AlongTrackDominated { along_track_km } if (along_track_km - 5.0).abs() < SAFETY_METRIC_TOL),
             "V-bar [0, 5, 0] should be AlongTrackDominated: {:?}",
             assessment.rc_context
         );
@@ -789,6 +789,24 @@ mod tests {
             assessment.rc_context,
             RcContext::RadialCrossTrack,
             "Diagonal [0.5, 5, 0.5] has R/C > threshold → RadialCrossTrack"
+        );
+    }
+
+    /// Near V-bar geometry: R/C = 12.3 m, along-track = 5 km (ratio ~407:1)
+    /// → AlongTrackDominated. Previously misclassified by absolute threshold.
+    #[test]
+    fn assess_near_vbar_along_track_dominated() {
+        let chief = iss_like_elements();
+        let roe = QuasiNonsingularROE::default();
+        let ric_pos = Vector3::new(-0.0035, 5.0, -0.0118);
+        let metrics = analyze_safety(&roe, &chief, &ric_pos);
+        let config = SafetyConfig::default();
+        let assessment = assess_safety(&metrics, &config);
+
+        assert!(
+            matches!(assessment.rc_context, RcContext::AlongTrackDominated { along_track_km } if (along_track_km - 5.0).abs() < SAFETY_METRIC_TOL),
+            "Near V-bar [-0.0035, 5.0, -0.0118] should be AlongTrackDominated: {:?}",
+            assessment.rc_context
         );
     }
 

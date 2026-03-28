@@ -2,9 +2,10 @@
 
 use std::path::Path;
 
-use rpo_core::mission::{run_monte_carlo, MissionPhase, MonteCarloInput, MonteCarloReport};
+use rpo_core::mission::{run_monte_carlo, MissionPhase, MonteCarloInput};
 use rpo_core::pipeline::{
-    compute_mission_covariance, compute_transfer, plan_waypoints_from_transfer, PipelineInput,
+    build_output, compute_mission_covariance, compute_transfer, plan_waypoints_from_transfer,
+    PipelineInput, PipelineOutput,
 };
 use rpo_core::propagation::{load_full_almanac, DragConfig};
 
@@ -13,10 +14,11 @@ use crate::error::CliError;
 use crate::input::load_json;
 use crate::output::common::{
     create_spinner, print_insights, resolve_drag_and_propagator, status, write_json_report,
-    write_report, McBaseline,
+    write_report, McBaseline, SafetyTier,
 };
 use crate::output::markdown_fmt;
-use crate::output::mc_fmt::{print_mc_baseline, print_mc_report, print_mc_summary};
+use crate::output::mc_fmt::{print_mc_report, print_mc_summary};
+use crate::output::mission_fmt::print_mission_human;
 
 /// Run full-physics Monte Carlo pipeline.
 pub fn run(input_path: &Path, mode: OutputMode, auto_drag: bool) -> Result<(), CliError> {
@@ -105,27 +107,45 @@ pub fn run(input_path: &Path, mode: OutputMode, auto_drag: bool) -> Result<(), C
         report.elapsed_wall_s
     );
 
-    print_mc_output(mode, &report, &input, &baseline, derived_drag.as_ref())
+    // Build canonical output with nominal safety context (free-drift, POCA).
+    let mut output = build_output(&transfer, wp_mission, &input, &prop, derived_drag);
+    output.monte_carlo = Some(report);
+
+    print_mc_output(mode, &output, &input, &baseline, &prop, derived_drag.as_ref())
 }
 
 /// Format and print MC results in the requested output mode.
 fn print_mc_output(
     mode: OutputMode,
-    report: &MonteCarloReport,
+    output: &PipelineOutput,
     input: &PipelineInput,
     baseline: &McBaseline,
+    propagator: &rpo_core::propagation::PropagationModel,
     derived_drag: Option<&DragConfig>,
 ) -> Result<(), CliError> {
+    let report = output
+        .monte_carlo
+        .as_ref()
+        .expect("monte_carlo field must be set before print_mc_output");
+
     match mode {
-        OutputMode::Json => write_json_report("mc", report),
+        OutputMode::Json => write_json_report("mc", output),
         OutputMode::Markdown => {
-            let md = markdown_fmt::mc_to_markdown(report, input, baseline, derived_drag);
+            let md = markdown_fmt::mc_to_markdown(output, input, baseline, derived_drag);
             write_report("mc", &md)
         }
         OutputMode::Human => {
-            crate::output::common::print_header("Mission + Monte Carlo");
-            print_mc_baseline(baseline);
+            // Nominal mission context (Transfer, Waypoints, Safety, POCA, Free-Drift)
+            print_mission_human(
+                output,
+                input,
+                propagator,
+                derived_drag.is_some(),
+                "Mission + Monte Carlo",
+                SafetyTier::Analytical,
+            );
 
+            // MC ensemble statistics
             print_mc_report(report, baseline.lambert_dv_km_s, derived_drag);
 
             let safety_config = input.config.safety.unwrap_or_default();

@@ -127,11 +127,15 @@ pub fn validation_to_markdown(
 /// Generate a complete markdown report for the `mc` command.
 #[must_use]
 pub fn mc_to_markdown(
-    report: &MonteCarloReport,
+    output: &PipelineOutput,
     input: &PipelineInput,
     baseline: &McBaseline,
     derived_drag: Option<&DragConfig>,
 ) -> String {
+    let report = output
+        .monte_carlo
+        .as_ref()
+        .expect("monte_carlo field must be set for mc_to_markdown");
     let mut out = String::with_capacity(8192);
     let sc = input.config.safety.unwrap_or_default();
     let stats = &report.statistics;
@@ -144,6 +148,22 @@ pub fn mc_to_markdown(
             "> Drag-aware targeting; \u{0394}v differs slightly from analytical-only (`mission`) results.\n",
         );
     }
+
+    // Nominal safety context (free-drift, POCA)
+    if let Some(ref safety) = output.mission.safety {
+        write_safety_section(&mut out, safety, &sc, SafetyTier::Analytical);
+    }
+    if let Some(ref poca) = output.poca {
+        write_poca_section(&mut out, "Closest Approach (Brent-refined)", poca);
+    }
+    if let Some(ref fd) = output.free_drift {
+        write_free_drift_section(&mut out, fd, &sc);
+    }
+    if let Some(ref fd_poca) = output.free_drift_poca {
+        write_poca_section(&mut out, "Free-Drift Closest Approach (Brent-refined)", fd_poca);
+    }
+
+    // MC ensemble statistics
     write_mc_config_section(&mut out, report, baseline);
     write_mc_dv_distribution(&mut out, stats);
     write_mc_operational_safety(&mut out, stats, report);
@@ -796,7 +816,7 @@ fn write_safety_section(
         RcContext::RadialCrossTrack => {
             let _ = writeln!(
                 out,
-                "| Min R/C-plane distance | {} (radial/cross-track dominated) |",
+                "| Min R/C-plane distance | {} |",
                 fmt_m(rc_km, 1),
             );
         }
