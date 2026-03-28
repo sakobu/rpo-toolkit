@@ -6,6 +6,7 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::mission::closest_approach::ClosestApproach;
 use crate::mission::config::{MissionConfig, ProximityConfig};
 use crate::mission::free_drift::FreeDriftAnalysis;
 use crate::mission::monte_carlo::{MonteCarloConfig, MonteCarloReport};
@@ -212,4 +213,11 @@ pub struct PipelineOutput {
     /// Free-drift (abort-case) analysis per leg.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub free_drift: Option<Vec<FreeDriftAnalysis>>,
+    /// Refined closest-approach points per leg (outer Vec = legs, inner = POCAs).
+    /// Auto-computed when safety is enabled; empty inner Vec for diverging legs.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub poca: Option<Vec<Vec<ClosestApproach>>>,
+    /// Refined closest-approach points for free-drift trajectories per leg.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub free_drift_poca: Option<Vec<Vec<ClosestApproach>>>,
 }

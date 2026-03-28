@@ -202,16 +202,30 @@ Response: `eclipse_data`
 
 Fetch free-drift (abort-case) trajectory and safety data. On-demand, computed from stored mission. For each requested leg, propagates from the pre-departure ROE (burn skipped) and returns trajectory points and safety summaries.
 
-| Field        | Type                            | Required | Default | Description                                 |
-| ------------ | ------------------------------- | -------- | ------- | ------------------------------------------- |
-| `type`       | `"get_free_drift_trajectory"`   | yes      |         | Message discriminator                       |
-| `request_id` | `u64`                           | yes      |         | Client-assigned correlation ID              |
-| `legs`       | `usize[]`                       | no       | all     | Leg indices to include (None = all legs)    |
-| `max_points` | `u32`                           | no       | full    | Max points per leg (None = full resolution) |
+| Field        | Type                          | Required | Default | Description                                 |
+| ------------ | ----------------------------- | -------- | ------- | ------------------------------------------- |
+| `type`       | `"get_free_drift_trajectory"` | yes      |         | Message discriminator                       |
+| `request_id` | `u64`                         | yes      |         | Client-assigned correlation ID              |
+| `legs`       | `usize[]`                     | no       | all     | Leg indices to include (None = all legs)    |
+| `max_points` | `u32`                         | no       | full    | Max points per leg (None = full resolution) |
 
 Requires: `set_waypoints` must have been called (mission must exist).
 
 Response: `free_drift_data`
+
+### get_poca
+
+Fetch Brent-refined closest-approach data. On-demand, computed from stored mission. For each leg, refines the grid-sampled minimum distance using Brent's method on range rate to find the exact time, distance, and RIC position of closest approach.
+
+| Field        | Type         | Required | Default | Description                              |
+| ------------ | ------------ | -------- | ------- | ---------------------------------------- |
+| `type`       | `"get_poca"` | yes      |         | Message discriminator                    |
+| `request_id` | `u64`        | yes      |         | Client-assigned correlation ID           |
+| `legs`       | `usize[]`    | no       | all     | Leg indices to include (None = all legs) |
+
+Requires: `set_waypoints` must have been called (mission must exist).
+
+Response: `poca_data`
 
 ### validate
 
@@ -353,22 +367,44 @@ Each `LegTrajectory` contains a `leg_index` and `points` array of `TrajectoryPoi
 
 Free-drift trajectory and safety data for abort-case analysis.
 
-| Field        | Type                  | Description                            |
-| ------------ | --------------------- | -------------------------------------- |
-| `type`       | `"free_drift_data"`   | Message discriminator                  |
+| Field        | Type                 | Description                            |
+| ------------ | -------------------- | -------------------------------------- |
+| `type`       | `"free_drift_data"`  | Message discriminator                  |
 | `request_id` | `u64`                | Correlation ID from the client request |
 | `legs`       | `LegTrajectory[]`    | Per-leg free-drift trajectory points   |
 | `analyses`   | `FreeDriftSummary[]` | Per-leg free-drift safety summaries    |
 
 Each `FreeDriftSummary` contains:
 
-| Field                      | Type  | Description                                       |
-| -------------------------- | ----- | ------------------------------------------------- |
-| `leg_index`                | `usize` | Leg index                                       |
-| `min_distance_3d_km`       | `f64` | Min 3D distance on free-drift arc (km)            |
-| `min_rc_separation_km`     | `f64` | Min R/C distance on free-drift arc (km)           |
-| `min_ei_separation_km`     | `f64` | Min e/i separation on free-drift arc (km)         |
-| `bounded_motion_residual`  | `f64` | Bounded-motion residual (D'Amico Eq. 2.33). Zero = bounded; nonzero = drifting |
+| Field                     | Type    | Description                                                                    |
+| ------------------------- | ------- | ------------------------------------------------------------------------------ |
+| `leg_index`               | `usize` | Leg index                                                                      |
+| `min_distance_3d_km`      | `f64`   | Min 3D distance on free-drift arc (km)                                         |
+| `min_rc_separation_km`    | `f64`   | Min R/C distance on free-drift arc (km)                                        |
+| `min_ei_separation_km`    | `f64`   | Min e/i separation on free-drift arc (km)                                      |
+| `bounded_motion_residual` | `f64`   | Bounded-motion residual (D'Amico Eq. 2.33). Zero = bounded; nonzero = drifting |
+
+### poca_data
+
+Brent-refined closest-approach data.
+
+| Field        | Type          | Description                            |
+| ------------ | ------------- | -------------------------------------- |
+| `type`       | `"poca_data"` | Message discriminator                  |
+| `request_id` | `u64`         | Correlation ID from the client request |
+| `points`     | `PocaPoint[]` | Closest-approach points across legs    |
+
+Each `PocaPoint` contains:
+
+| Field               | Type       | Description                                          |
+| ------------------- | ---------- | ---------------------------------------------------- |
+| `leg_index`         | `usize`    | Leg index within the mission                         |
+| `elapsed_s`         | `f64`      | Elapsed time from leg start (seconds)                |
+| `distance_km`       | `f64`      | Refined minimum distance (km)                        |
+| `position_ric_km`   | `[f64; 3]` | RIC position at closest approach (km): [R, I, C]     |
+| `is_global_minimum` | `bool`     | True for the single closest approach across all legs |
+
+Legs with no close approach (diverging geometry) produce no points for that leg index.
 
 ### covariance_data
 
@@ -556,6 +592,7 @@ set_waypoints -> plan_result (~10-30KB)
 |- get_eclipse -> eclipse_data (on-demand)                           | parallel on-demand fetches
 |- get_covariance -> covariance_data (~70KB, on-demand)              |
 |- get_free_drift_trajectory -> free_drift_data (on-demand)          |
+|- get_poca -> poca_data (on-demand)                                |
 update_config(j2_drag) -> plan_result                    (when drag_result arrives)
 validate -> progress* + validation_result
 run_mc -> progress* + monte_carlo_result
@@ -578,7 +615,7 @@ validate -> validation_result
 ### Parallelism Notes
 
 - **classify + extract_drag (proximity):** Both only read `chief`/`deputy` from the session. No mutation conflict. Fire both after `set_states` to overlap the ~3s drag simulation with the instant classify.
-- **On-demand getters (get_trajectory, get_covariance, get_eclipse, get_free_drift_trajectory):** All read from the stored mission/transfer. No mutation. Fire whichever are needed in parallel after planning.
+- **On-demand getters (get_trajectory, get_covariance, get_eclipse, get_free_drift_trajectory, get_poca):** All read from the stored mission/transfer. No mutation. Fire whichever are needed in parallel after planning.
 - **extract_drag (far-field):** Must wait for `compute_transfer` because it uses perch states (post-Lambert geometry).
 
 ## Examples

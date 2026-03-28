@@ -1,5 +1,6 @@
 //! Mission-level orchestration: classification, Lambert transfers, targeting, safety, and validation.
 
+pub mod closest_approach;
 pub mod config;
 pub mod covariance;
 pub mod errors;
@@ -17,6 +18,7 @@ mod regression_tests;
 
 pub use config::{MissionConfig, ProximityConfig, SafetyConfig, TargetingConfig, TofOptConfig};
 pub use errors::{EclipseComputeError, MissionError};
+pub use closest_approach::{find_closest_approaches, ClosestApproach, PocaError};
 pub use free_drift::{bounded_motion_residual, compute_free_drift, FreeDriftAnalysis, FreeDriftError};
 pub use planning::{
     classify_separation, compute_transfer_eclipse, dimensionless_separation, eci_separation_km,

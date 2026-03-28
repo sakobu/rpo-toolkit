@@ -4,6 +4,7 @@
 //! targeting, covariance, eclipse) into a complete mission pipeline.
 
 use crate::constants::DEFAULT_COVARIANCE_SAMPLES_PER_LEG;
+use crate::mission::closest_approach::{find_closest_approaches, ClosestApproach};
 use crate::mission::free_drift::{compute_free_drift, FreeDriftAnalysis};
 use crate::mission::planning::{compute_transfer_eclipse, plan_mission};
 use crate::mission::waypoints::{plan_waypoint_mission, replan_from_waypoint};
@@ -106,6 +107,82 @@ pub fn compute_free_drift_analysis(
     Some(results)
 }
 
+/// Compute refined closest-approach (POCA) for each leg of a waypoint mission.
+///
+/// For each leg, runs Brent-method refinement on the grid-sampled trajectory
+/// to find exact conjunction time/position/distance. Returns `None` if any
+/// leg fails (non-fatal).
+#[must_use]
+pub fn compute_poca_analysis(
+    mission: &crate::mission::types::WaypointMission,
+    propagator: &PropagationModel,
+) -> Option<Vec<Vec<ClosestApproach>>> {
+    let mut results = Vec::with_capacity(mission.legs.len());
+    for (i, leg) in mission.legs.iter().enumerate() {
+        match find_closest_approaches(
+            &leg.trajectory,
+            &leg.departure_chief_mean,
+            leg.departure_maneuver.epoch,
+            propagator,
+            &leg.post_departure_roe,
+            i,
+        ) {
+            Ok(pocas) => results.push(pocas),
+            Err(_) => return None,
+        }
+    }
+    flag_global_minimum(&mut results);
+    Some(results)
+}
+
+/// Compute refined closest-approach (POCA) on free-drift trajectories.
+///
+/// For each free-drift trajectory, runs bracket detection + Brent refinement
+/// using the pre-departure ROE (the free-drift departure state). Returns
+/// `None` if any leg fails (non-fatal).
+#[must_use]
+pub fn compute_free_drift_poca(
+    free_drift: &[FreeDriftAnalysis],
+    legs: &[crate::mission::types::ManeuverLeg],
+    propagator: &PropagationModel,
+) -> Option<Vec<Vec<ClosestApproach>>> {
+    let mut results = Vec::with_capacity(free_drift.len());
+    for (i, (fd, leg)) in free_drift.iter().zip(legs.iter()).enumerate() {
+        match find_closest_approaches(
+            &fd.trajectory,
+            &leg.departure_chief_mean,
+            leg.departure_maneuver.epoch,
+            propagator,
+            &leg.pre_departure_roe,
+            i,
+        ) {
+            Ok(pocas) => results.push(pocas),
+            Err(_) => return None,
+        }
+    }
+    flag_global_minimum(&mut results);
+    Some(results)
+}
+
+/// Set `is_global_minimum` on the single closest approach across all legs.
+fn flag_global_minimum(results: &mut [Vec<ClosestApproach>]) {
+    let mut best_dist = f64::INFINITY;
+    let mut best_leg = 0;
+    let mut best_idx = 0;
+    for (leg_i, pocas) in results.iter().enumerate() {
+        for (poca_i, poca) in pocas.iter().enumerate() {
+            if poca.distance_km < best_dist {
+                best_dist = poca.distance_km;
+                best_leg = leg_i;
+                best_idx = poca_i;
+            }
+        }
+    }
+    if best_dist < f64::INFINITY {
+        results[best_leg][best_idx].is_global_minimum = true;
+    }
+}
+
 /// Assemble a [`PipelineOutput`] from pipeline components.
 ///
 /// Runs covariance propagation (if `navigation_accuracy` is present)
@@ -154,6 +231,14 @@ pub fn build_output(
         compute_free_drift_analysis(&wp_mission, propagator)
     });
 
+    let poca = input.config.safety.as_ref().and_then(|_| {
+        compute_poca_analysis(&wp_mission, propagator)
+    });
+
+    let free_drift_poca = free_drift.as_ref().and_then(|fd| {
+        compute_free_drift_poca(fd, &wp_mission.legs, propagator)
+    });
+
     PipelineOutput {
         phase: transfer.plan.phase.clone(),
         transfer: transfer.plan.transfer.clone(),
@@ -166,6 +251,8 @@ pub fn build_output(
         covariance,
         monte_carlo: None,
         free_drift,
+        poca,
+        free_drift_poca,
     }
 }
 

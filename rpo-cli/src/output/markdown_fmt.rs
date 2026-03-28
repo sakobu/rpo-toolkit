@@ -49,8 +49,16 @@ pub fn mission_to_markdown(
         write_safety_section(&mut out, safety, &sc, SafetyTier::Analytical);
     }
 
+    if let Some(ref poca) = output.poca {
+        write_poca_section(&mut out, "Closest Approach (Brent-refined)", poca);
+    }
+
     if let Some(ref fd) = output.free_drift {
         write_free_drift_section(&mut out, fd, &sc);
+    }
+
+    if let Some(ref fd_poca) = output.free_drift_poca {
+        write_poca_section(&mut out, "Free-Drift Closest Approach (Brent-refined)", fd_poca);
     }
 
     write_eclipse_section(&mut out, output);
@@ -92,8 +100,16 @@ pub fn validation_to_markdown(
         write_safety_section(&mut out, safety, &sc, SafetyTier::NyxValidated);
     }
 
+    if let Some(ref poca) = output.poca {
+        write_poca_section(&mut out, "Closest Approach (Brent-refined)", poca);
+    }
+
     if let Some(ref fd) = output.free_drift {
         write_free_drift_section(&mut out, fd, &sc);
+    }
+
+    if let Some(ref fd_poca) = output.free_drift_poca {
+        write_poca_section(&mut out, "Free-Drift Closest Approach (Brent-refined)", fd_poca);
     }
 
     write_eclipse_section(&mut out, output);
@@ -909,6 +925,39 @@ fn write_free_drift_section(
         );
 
         let _ = writeln!(out, "| Bounded-motion | {} |", fmt_bounded_motion_residual(analysis.bounded_motion_residual));
+        let _ = writeln!(out);
+    }
+}
+
+fn write_poca_section(
+    out: &mut String,
+    title: &str,
+    poca_per_leg: &[Vec<rpo_core::mission::ClosestApproach>],
+) {
+    let _ = writeln!(out, "## {title}\n");
+    for (leg_idx, pocas) in poca_per_leg.iter().enumerate() {
+        if pocas.is_empty() {
+            let _ = writeln!(out, "**Leg {}**: no close approach (diverging)\n", leg_idx + 1);
+            continue;
+        }
+        let closest = &pocas[0];
+        let marker = if closest.is_global_minimum { " (global min)" } else { "" };
+        let _ = writeln!(out, "**Leg {}**{marker}:\n", leg_idx + 1);
+        let _ = writeln!(out, "| Metric | Value |");
+        let _ = writeln!(out, "|--------|-------|");
+        let _ = writeln!(
+            out,
+            "| Distance | {:.1} m at t = {:.1} s |",
+            closest.distance_km * 1000.0,
+            closest.elapsed_s,
+        );
+        let _ = writeln!(
+            out,
+            "| Position (RIC) | [{:.4}, {:.4}, {:.4}] km |",
+            closest.position_ric_km.x,
+            closest.position_ric_km.y,
+            closest.position_ric_km.z,
+        );
         let _ = writeln!(out);
     }
 }

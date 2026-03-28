@@ -12,8 +12,10 @@ use crate::elements::eci_ric_dcm::eci_to_ric_relative;
 use crate::elements::keplerian_conversions::{keplerian_to_state, state_to_keplerian};
 use crate::elements::roe::compute_roe;
 use crate::elements::roe_to_ric::roe_to_ric;
+use crate::mission::closest_approach::find_closest_approaches;
 use crate::mission::config::ProximityConfig;
 use crate::mission::planning::{classify_separation, plan_mission};
+use crate::mission::safety::analyze_trajectory_safety;
 use crate::mission::types::{MissionPhase, PerchGeometry};
 use crate::propagation::lambert::LambertConfig;
 use crate::propagation::nyx_bridge;
@@ -914,4 +916,46 @@ fn extract_dmf_rates_identical() {
         "dey_dot should be zero for identical configs, got {:.2e}",
         drag.dey_dot
     );
+}
+
+/// POCA invariant sweep: refined distance ≤ grid-sampled distance.
+///
+/// Validates across all paper-traced orbits (Koenig Cases 1–3, D'Amico Table 2.1).
+/// Diverging legs (no POCA) are skipped — the invariant only applies when a
+/// range-rate sign change exists.
+#[test]
+fn poca_refined_leq_grid_sampled_sweep() {
+    let epoch = test_epoch();
+    let cases: &[(&str, KeplerianElements, QuasiNonsingularROE)] = &[
+        ("Koenig Case 1", koenig_table2_case1(), koenig_table2_case1_roe()),
+        ("Koenig Case 2", koenig_table2_case2(), koenig_table2_case2_roe()),
+        ("Koenig Case 3", koenig_table2_case3(), koenig_table2_case3_roe()),
+        ("D'Amico Table 2.1", damico_table21_chief(), damico_table21_case1_roe()),
+    ];
+
+    for (label, chief, roe) in cases {
+        let period_s = chief.period().expect("period should succeed");
+        let traj = PropagationModel::J2Stm
+            .propagate_with_steps(roe, chief, epoch, period_s, 200)
+            .unwrap_or_else(|e| panic!("{label}: propagation failed: {e}"));
+
+        let grid_min_km = analyze_trajectory_safety(&traj)
+            .unwrap_or_else(|e| panic!("{label}: safety analysis failed: {e}"))
+            .operational
+            .min_distance_3d_km;
+
+        let pocas = find_closest_approaches(&traj, chief, epoch, &PropagationModel::J2Stm, roe, 0)
+            .unwrap_or_else(|e| panic!("{label}: POCA failed: {e}"));
+
+        if pocas.is_empty() {
+            // Diverging leg — no bracket found, invariant not applicable
+            continue;
+        }
+
+        assert!(
+            pocas[0].distance_km <= grid_min_km + f64::EPSILON,
+            "{label}: refined POCA {:.6} km > grid-sampled {grid_min_km:.6} km",
+            pocas[0].distance_km,
+        );
+    }
 }

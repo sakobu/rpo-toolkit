@@ -12,7 +12,7 @@ use super::common::{
 };
 use super::thresholds::fidelity;
 use super::eclipse_fmt::{print_eclipse_summary, print_eclipse_validation};
-use super::safety_fmt::{print_free_drift_analysis, print_safety_analysis, print_safety_comparison, print_safety_summary};
+use super::safety_fmt::{print_free_drift_analysis, print_poca_analysis, print_safety_analysis, print_safety_comparison, print_safety_summary};
 
 /// Print the common Transfer + Waypoint Targeting output shared by mission/validate.
 pub fn print_mission_human(
@@ -51,10 +51,20 @@ pub fn print_mission_human(
         print_safety_analysis(safety, &sc);
     }
 
+    // ── POCA (nominal trajectory) ──────────────────────────
+    if let Some(ref poca) = output.poca {
+        print_poca_analysis("Closest Approach (Brent-refined)", poca);
+    }
+
     // ── Free-Drift ──────────────────────────────────────────
     if let Some(ref analyses) = output.free_drift {
         let sc = input.config.safety.unwrap_or_default();
         print_free_drift_analysis(analyses, &sc);
+    }
+
+    // ── Free-Drift POCA ─────────────────────────────────────
+    if let Some(ref fd_poca) = output.free_drift_poca {
+        print_poca_analysis("Free-Drift Closest Approach (Brent-refined)", fd_poca);
     }
 
     // ── Eclipse ───────────────────────────────────────────────
