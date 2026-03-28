@@ -2,8 +2,8 @@
 
 use owo_colors::{OwoColorize, Stream};
 use rpo_core::mission::{
-    assess_safety, FreeDriftAnalysis, MissionConfig, RcContext, SafetyConfig, SafetyMetrics,
-    ValidationReport,
+    assess_safety, ClosestApproach, FreeDriftAnalysis, MissionConfig, RcContext, SafetyConfig,
+    SafetyMetrics, ValidationReport,
 };
 
 use super::common::{fmt_bounded_motion_residual, fmt_duration, fmt_m, print_subheader};
@@ -257,5 +257,41 @@ pub fn print_free_drift_analysis(analyses: &[FreeDriftAnalysis], config: &Safety
         );
 
         println!("    Bounded-motion:       {}", fmt_bounded_motion_residual(analysis.bounded_motion_residual));
+    }
+}
+
+/// Print refined closest-approach (POCA) results per leg.
+///
+/// Shows the closest approach for each leg — one line per leg, not one per
+/// POCA event. The mission-wide global minimum is labeled "(global min)".
+/// Diverging legs (empty vec) are noted. Multi-POCA legs show a count.
+pub fn print_poca_analysis(label: &str, poca_per_leg: &[Vec<ClosestApproach>]) {
+    print_subheader(label);
+    for (leg_idx, pocas) in poca_per_leg.iter().enumerate() {
+        if pocas.is_empty() {
+            println!("  Leg {}: no close approach (diverging)", leg_idx + 1);
+            continue;
+        }
+
+        // Print the closest POCA for this leg (already sorted ascending)
+        let closest = &pocas[0];
+        let global_marker = if closest.is_global_minimum {
+            " (global min)"
+        } else {
+            ""
+        };
+
+        println!("  Leg {}{global_marker}:", leg_idx + 1);
+        println!(
+            "    Distance:  {} at t = {}",
+            fmt_m(closest.distance_km, 1),
+            fmt_duration(closest.elapsed_s),
+        );
+        println!(
+            "    Position:  [{:.4}, {:.4}, {:.4}] km (RIC)",
+            closest.position_ric_km.x,
+            closest.position_ric_km.y,
+            closest.position_ric_km.z,
+        );
     }
 }

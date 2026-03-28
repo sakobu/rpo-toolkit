@@ -11,6 +11,7 @@ use rpo_core::mission::config::MissionConfig;
 use rpo_core::mission::monte_carlo::MonteCarloConfig;
 use rpo_core::mission::types::PerchGeometry;
 use rpo_core::mission::{MissionPhase, MonteCarloReport, ProximityConfig, ValidationReport};
+use rpo_core::mission::closest_approach::ClosestApproach;
 use rpo_core::mission::free_drift::FreeDriftAnalysis;
 use rpo_core::pipeline::{
     LeanPlanResult, LegTrajectory, SpacecraftChoice, TransferResult as CoreTransferResult,
@@ -173,6 +174,14 @@ pub enum ClientMessage {
         #[serde(default)]
         max_points: Option<u32>,
     },
+    /// Fetch refined closest-approach (POCA) data.
+    GetPoca {
+        /// Client-assigned correlation ID.
+        request_id: u64,
+        /// Leg indices to include (None = all legs).
+        #[serde(default)]
+        legs: Option<Vec<usize>>,
+    },
     /// Per-leg nyx validation with progress streaming.
     Validate {
         /// Client-assigned correlation ID.
@@ -280,6 +289,13 @@ pub enum ServerMessage {
         /// Per-leg free-drift safety analysis.
         analyses: Vec<FreeDriftSummary>,
     },
+    /// Refined closest-approach data.
+    PocaData {
+        /// Correlation ID from the client request.
+        request_id: u64,
+        /// POCA points across requested legs.
+        points: Vec<PocaPoint>,
+    },
     /// Eclipse data for transfer and/or mission.
     EclipseData {
         /// Correlation ID from the client request.
@@ -372,6 +388,39 @@ impl FreeDriftSummary {
             min_rc_separation_km: analysis.safety.operational.min_rc_separation_km,
             min_ei_separation_km: analysis.safety.passive.min_ei_separation_km,
             bounded_motion_residual: analysis.bounded_motion_residual,
+        }
+    }
+}
+
+/// Lean POCA point for API responses (no full velocity, just what the frontend needs).
+#[derive(Debug, Clone, Serialize)]
+pub struct PocaPoint {
+    /// Leg index within the mission.
+    pub leg_index: usize,
+    /// Elapsed time from leg start (s).
+    pub elapsed_s: f64,
+    /// Refined minimum distance (km).
+    pub distance_km: f64,
+    /// RIC position at closest approach (km): [R, I, C].
+    pub position_ric_km: [f64; 3],
+    /// Whether this is the global minimum for this leg.
+    pub is_global_minimum: bool,
+}
+
+impl PocaPoint {
+    /// Project a [`ClosestApproach`] to a lean point for the wire.
+    #[must_use]
+    pub fn from_closest_approach(ca: &ClosestApproach) -> Self {
+        Self {
+            leg_index: ca.leg_index,
+            elapsed_s: ca.elapsed_s,
+            distance_km: ca.distance_km,
+            position_ric_km: [
+                ca.position_ric_km[0],
+                ca.position_ric_km[1],
+                ca.position_ric_km[2],
+            ],
+            is_global_minimum: ca.is_global_minimum,
         }
     }
 }

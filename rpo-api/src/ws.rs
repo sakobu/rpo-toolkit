@@ -409,6 +409,24 @@ async fn handle_text_message(
             }
         }
 
+        ClientMessage::GetPoca { request_id, legs } => {
+            match handlers::handle_get_poca(session, legs.as_deref()) {
+                Ok(points) => {
+                    send_message(
+                        ws,
+                        &ServerMessage::PocaData {
+                            request_id,
+                            points,
+                        },
+                    )
+                    .await;
+                }
+                Err(e) => {
+                    send_message(ws, &e.to_server_message(Some(request_id))).await;
+                }
+            }
+        }
+
         ClientMessage::GetCovariance { request_id } => {
             match handlers::handle_get_covariance(session) {
                 Ok(report) => {
