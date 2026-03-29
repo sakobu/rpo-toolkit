@@ -101,6 +101,23 @@ pub struct ClosestApproach {
     pub is_global_minimum: bool,
 }
 
+impl ClosestApproach {
+    /// Return the closest approach with the smallest distance from a slice.
+    ///
+    /// NaN distances are treated as infinitely far (sorted last). Returns
+    /// `None` if the slice is empty.
+    #[must_use]
+    pub fn nearest(pocas: &[Self]) -> Option<&Self> {
+        pocas
+            .iter()
+            .min_by(|a, b| {
+                a.distance_km
+                    .partial_cmp(&b.distance_km)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            })
+    }
+}
+
 /// Errors from POCA computation.
 #[derive(Debug, Clone)]
 pub enum PocaError {

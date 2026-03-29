@@ -13,16 +13,23 @@ use crate::cli::OutputMode;
 use crate::error::CliError;
 use crate::input::load_json;
 use crate::output::common::{
-    create_spinner, print_insights, resolve_drag_and_propagator, status, write_json_report,
-    write_report, McBaseline, SafetyTier,
+    apply_cola_overlay, create_spinner, print_insights, resolve_drag_and_propagator, status,
+    write_json_report, write_report, McBaseline, SafetyTier, ValidationTier,
 };
 use crate::output::markdown_fmt;
 use crate::output::mc_fmt::{print_mc_report, print_mc_summary};
 use crate::output::mission_fmt::print_mission_human;
 
 /// Run full-physics Monte Carlo pipeline.
-pub fn run(input_path: &Path, mode: OutputMode, auto_drag: bool) -> Result<(), CliError> {
-    let input: PipelineInput = load_json(input_path)?;
+pub fn run(
+    input_path: &Path,
+    mode: OutputMode,
+    auto_drag: bool,
+    cola_threshold: Option<f64>,
+    cola_budget: Option<f64>,
+) -> Result<(), CliError> {
+    let mut input: PipelineInput = load_json(input_path)?;
+    apply_cola_overlay(&mut input, cola_threshold, cola_budget);
 
     let chief_config = input
         .chief_config
@@ -142,7 +149,7 @@ fn print_mc_output(
                 propagator,
                 derived_drag.is_some(),
                 "Mission + Monte Carlo",
-                SafetyTier::Analytical,
+                SafetyTier::Baseline(ValidationTier::MonteCarlo),
             );
 
             // MC ensemble statistics

@@ -372,6 +372,7 @@ impl Session {
             navigation_accuracy: self.navigation_accuracy,
             maneuver_uncertainty: self.maneuver_uncertainty,
             monte_carlo: self.monte_carlo_config.clone(),
+            cola: None,
         })
     }
 

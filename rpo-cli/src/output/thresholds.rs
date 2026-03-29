@@ -8,7 +8,7 @@ pub mod fidelity {
     pub const CLOSE_PROXIMITY_KM: f64 = 0.05;
     /// Position error (km) below which model is suitable for safety screening.
     pub const SAFETY_SCREENING_KM: f64 = 0.2;
-    /// Dv percentage above which Lambert transfer is the dominant cost.
+    /// Δv percentage above which Lambert transfer is the dominant cost driver.
     pub const FAR_FIELD_DV_DRIVER_PCT: f64 = 90.0;
     /// Ratio below which numerical safety is flagged as non-conservative vs analytical.
     pub const NONCONSERVATIVE_RATIO: f64 = 0.9;

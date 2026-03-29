@@ -6,6 +6,8 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::mission::cola_assessment::{SecondaryViolation, SkippedLeg};
+use crate::mission::avoidance::{AvoidanceManeuver, ColaConfig};
 use crate::mission::closest_approach::ClosestApproach;
 use crate::mission::config::{MissionConfig, ProximityConfig};
 use crate::mission::free_drift::FreeDriftAnalysis;
@@ -154,6 +156,9 @@ pub struct PipelineInput {
     /// Monte Carlo configuration (required for MC only).
     #[serde(default)]
     pub monte_carlo: Option<MonteCarloConfig>,
+    /// Collision avoidance (COLA) configuration.
+    #[serde(default)]
+    pub cola: Option<ColaConfig>,
 }
 
 // ---- TransferResult ----
@@ -220,4 +225,13 @@ pub struct PipelineOutput {
     /// Refined closest-approach points for free-drift trajectories per leg.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub free_drift_poca: Option<Vec<Vec<ClosestApproach>>>,
+    /// Collision avoidance maneuvers computed for legs with POCA violations.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cola: Option<Vec<AvoidanceManeuver>>,
+    /// Secondary conjunction warnings from post-avoidance multi-leg verification.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub secondary_conjunctions: Option<Vec<SecondaryViolation>>,
+    /// Legs where COLA was attempted but failed (budget exceeded, degenerate geometry, etc.).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cola_skipped: Option<Vec<SkippedLeg>>,
 }

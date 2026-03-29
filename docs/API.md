@@ -227,6 +227,27 @@ Requires: `set_waypoints` must have been called (mission must exist).
 
 Response: `poca_data`
 
+### run_cola
+
+Compute collision avoidance maneuvers for POCA violations with multi-leg post-avoidance verification. On-demand, computed from stored mission. For each leg where the Brent-refined POCA distance is below the target, computes the minimum-fuel impulsive maneuver to push the closest approach beyond the threshold, then cascades the perturbation through all downstream legs to detect secondary conjunctions.
+
+| Field        | Type         | Required | Description                     |
+| ------------ | ------------ | -------- | ------------------------------- |
+| `type`       | `"run_cola"` | yes      | Message discriminator           |
+| `request_id` | `u64`        | yes      | Client-assigned correlation ID  |
+| `config`     | `ColaConfig` | yes      | Target distance and fuel budget |
+
+`ColaConfig` fields:
+
+| Field                | Type  | Description                                        |
+| -------------------- | ----- | -------------------------------------------------- |
+| `target_distance_km` | `f64` | Desired minimum POCA distance after avoidance (km) |
+| `max_dv_km_s`        | `f64` | Maximum available delta-v budget (km/s)            |
+
+Requires: `set_waypoints` must have been called (mission must exist) and `config.safety` must be set.
+
+Response: `cola_result`
+
 ### validate
 
 Per-leg nyx high-fidelity validation with progress streaming. Background job (seconds to minutes depending on leg count).
@@ -405,6 +426,46 @@ Each `PocaPoint` contains:
 | `is_global_minimum` | `bool`     | True for the single closest approach across all legs |
 
 Legs with no close approach (diverging geometry) produce no points for that leg index.
+
+### cola_result
+
+Collision avoidance maneuvers for POCA violations, with multi-leg post-avoidance verification.
+
+| Field                      | Type                            | Description                                             |
+| -------------------------- | ------------------------------- | ------------------------------------------------------- |
+| `type`                     | `"cola_result"`                 | Message discriminator                                   |
+| `request_id`               | `u64`                           | Correlation ID from the client request                  |
+| `maneuvers`                | `AvoidanceManeuverSummary[]`    | Avoidance maneuvers (empty if no violations)            |
+| `secondary_conjunctions`   | `SecondaryViolationSummary[]`   | Downstream violations created by avoidance (omitted if empty) |
+| `skipped`                  | `SkippedLegSummary[]`           | Legs where COLA failed (omitted if empty)               |
+
+Each `AvoidanceManeuverSummary` contains:
+
+| Field                    | Type       | Description                                       |
+| ------------------------ | ---------- | ------------------------------------------------- |
+| `leg_index`              | `usize`    | Leg index where the violation was found           |
+| `dv_ric_km_s`            | `[f64; 3]` | Avoidance delta-v in RIC frame `[R, I, C]` (km/s) |
+| `maneuver_location_rad`  | `f64`      | Mean argument of latitude at optimal burn (rad)   |
+| `post_avoidance_poca_km` | `f64`      | Verified post-avoidance POCA distance (km)        |
+| `fuel_cost_km_s`         | `f64`      | Total delta-v magnitude (km/s)                    |
+| `correction_type`        | `string`   | `"in_plane"`, `"cross_track"`, or `"combined"`    |
+
+Each `SecondaryViolationSummary` contains:
+
+| Field                | Type       | Description                                             |
+| -------------------- | ---------- | ------------------------------------------------------- |
+| `original_leg_index` | `usize`    | Leg where the avoidance maneuver was applied            |
+| `violated_leg_index` | `usize`    | Downstream leg where the new violation was detected     |
+| `distance_km`        | `f64`      | Closest approach distance on the violated leg (km)      |
+| `elapsed_s`          | `f64`      | Elapsed time from downstream leg start (s)              |
+| `position_ric_km`    | `[f64; 3]` | RIC position at closest approach `[R, I, C]` (km)      |
+
+Each `SkippedLegSummary` contains:
+
+| Field           | Type     | Description                                        |
+| --------------- | -------- | -------------------------------------------------- |
+| `leg_index`     | `usize`  | Leg with the unaddressed POCA violation             |
+| `error_message` | `string` | Why COLA failed (e.g., budget exceeded, degenerate) |
 
 ### covariance_data
 
@@ -592,7 +653,8 @@ set_waypoints -> plan_result (~10-30KB)
 |- get_eclipse -> eclipse_data (on-demand)                           | parallel on-demand fetches
 |- get_covariance -> covariance_data (~70KB, on-demand)              |
 |- get_free_drift_trajectory -> free_drift_data (on-demand)          |
-|- get_poca -> poca_data (on-demand)                                |
+|- get_poca -> poca_data (on-demand)                                 |
+|- run_cola -> cola_result (on-demand, requires safety config)       |
 update_config(j2_drag) -> plan_result                    (when drag_result arrives)
 validate -> progress* + validation_result
 run_mc -> progress* + monte_carlo_result
@@ -609,13 +671,14 @@ set_waypoints -> plan_result (auto-computes transfer)
 |- get_eclipse -> eclipse_data                                   | parallel on-demand fetches
 |- get_covariance -> covariance_data                             |
 |- get_free_drift_trajectory -> free_drift_data                  |
+|- run_cola -> cola_result (on-demand, requires safety config)   |
 validate -> validation_result
 ```
 
 ### Parallelism Notes
 
 - **classify + extract_drag (proximity):** Both only read `chief`/`deputy` from the session. No mutation conflict. Fire both after `set_states` to overlap the ~3s drag simulation with the instant classify.
-- **On-demand getters (get_trajectory, get_covariance, get_eclipse, get_free_drift_trajectory, get_poca):** All read from the stored mission/transfer. No mutation. Fire whichever are needed in parallel after planning.
+- **On-demand getters (get_trajectory, get_covariance, get_eclipse, get_free_drift_trajectory, get_poca, run_cola):** All read from the stored mission/transfer. No mutation. Fire whichever are needed in parallel after planning.
 - **extract_drag (far-field):** Must wait for `compute_transfer` because it uses perch states (post-Lambert geometry).
 
 ## Examples

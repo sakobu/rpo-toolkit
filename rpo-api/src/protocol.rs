@@ -10,7 +10,10 @@ use serde::{Deserialize, Serialize};
 use rpo_core::mission::config::MissionConfig;
 use rpo_core::mission::monte_carlo::MonteCarloConfig;
 use rpo_core::mission::types::PerchGeometry;
-use rpo_core::mission::{MissionPhase, MonteCarloReport, ProximityConfig, ValidationReport};
+use rpo_core::mission::{
+    AvoidanceManeuver, ColaConfig, CorrectionType, MissionPhase, MonteCarloReport, ProximityConfig,
+    SecondaryViolation, SkippedLeg, ValidationReport,
+};
 use rpo_core::mission::closest_approach::ClosestApproach;
 use rpo_core::mission::free_drift::FreeDriftAnalysis;
 use rpo_core::pipeline::{
@@ -182,6 +185,13 @@ pub enum ClientMessage {
         #[serde(default)]
         legs: Option<Vec<usize>>,
     },
+    /// Run collision avoidance analysis.
+    RunCola {
+        /// Client-assigned correlation ID.
+        request_id: u64,
+        /// COLA configuration (target distance and fuel budget).
+        config: ColaConfig,
+    },
     /// Per-leg nyx validation with progress streaming.
     Validate {
         /// Client-assigned correlation ID.
@@ -295,6 +305,19 @@ pub enum ServerMessage {
         request_id: u64,
         /// POCA points across requested legs.
         points: Vec<PocaPoint>,
+    },
+    /// Collision avoidance result.
+    ColaResult {
+        /// Correlation ID from the client request.
+        request_id: u64,
+        /// Avoidance maneuvers for POCA violations.
+        maneuvers: Vec<AvoidanceManeuverSummary>,
+        /// Downstream violations created by avoidance maneuvers.
+        #[serde(skip_serializing_if = "Vec::is_empty")]
+        secondary_conjunctions: Vec<SecondaryViolationSummary>,
+        /// Legs where COLA was attempted but failed.
+        #[serde(skip_serializing_if = "Vec::is_empty")]
+        skipped: Vec<SkippedLegSummary>,
     },
     /// Eclipse data for transfer and/or mission.
     EclipseData {
@@ -415,12 +438,89 @@ impl PocaPoint {
             leg_index: ca.leg_index,
             elapsed_s: ca.elapsed_s,
             distance_km: ca.distance_km,
-            position_ric_km: [
-                ca.position_ric_km[0],
-                ca.position_ric_km[1],
-                ca.position_ric_km[2],
-            ],
+            position_ric_km: ca.position_ric_km.into(),
             is_global_minimum: ca.is_global_minimum,
+        }
+    }
+}
+
+/// Lean avoidance maneuver summary for API responses.
+#[derive(Debug, Clone, Serialize)]
+pub struct AvoidanceManeuverSummary {
+    /// Leg index within the mission.
+    pub leg_index: usize,
+    /// Delta-v in RIC frame (km/s): [R, I, C].
+    pub dv_ric_km_s: [f64; 3],
+    /// Mean argument of latitude at burn (rad).
+    pub maneuver_location_rad: f64,
+    /// POCA distance after avoidance (km).
+    pub post_avoidance_poca_km: f64,
+    /// Total fuel cost (km/s).
+    pub fuel_cost_km_s: f64,
+    /// Correction type: `in_plane`, `cross_track`, or `combined`.
+    pub correction_type: CorrectionType,
+}
+
+impl AvoidanceManeuverSummary {
+    /// Project an [`AvoidanceManeuver`] to a lean summary for the wire.
+    #[must_use]
+    pub fn from_avoidance(m: &AvoidanceManeuver) -> Self {
+        Self {
+            leg_index: m.leg_index,
+            dv_ric_km_s: m.dv_ric_km_s.into(),
+            maneuver_location_rad: m.maneuver_location_rad,
+            post_avoidance_poca_km: m.post_avoidance_poca_km,
+            fuel_cost_km_s: m.fuel_cost_km_s,
+            correction_type: m.correction_type,
+        }
+    }
+}
+
+/// Lean secondary conjunction warning for API responses.
+#[derive(Debug, Clone, Serialize)]
+pub struct SecondaryViolationSummary {
+    /// Leg index where the avoidance maneuver was applied.
+    pub original_leg_index: usize,
+    /// Downstream leg index where the new violation was detected.
+    pub violated_leg_index: usize,
+    /// Distance at closest approach (km).
+    pub distance_km: f64,
+    /// Elapsed time from downstream leg start (s).
+    pub elapsed_s: f64,
+    /// RIC position at closest approach (km): [R, I, C].
+    pub position_ric_km: [f64; 3],
+}
+
+impl SecondaryViolationSummary {
+    /// Project a [`SecondaryViolation`] to a lean summary for the wire.
+    #[must_use]
+    pub fn from_violation(sv: &SecondaryViolation) -> Self {
+        Self {
+            original_leg_index: sv.original_leg_index,
+            violated_leg_index: sv.violated_leg_index,
+            distance_km: sv.poca.distance_km,
+            elapsed_s: sv.poca.elapsed_s,
+            position_ric_km: sv.poca.position_ric_km.into(),
+        }
+    }
+}
+
+/// Lean skipped-leg summary for API responses.
+#[derive(Debug, Clone, Serialize)]
+pub struct SkippedLegSummary {
+    /// Index of the leg with the unaddressed POCA violation.
+    pub leg_index: usize,
+    /// Human-readable description of why COLA failed.
+    pub error_message: String,
+}
+
+impl SkippedLegSummary {
+    /// Project a [`SkippedLeg`] to a lean summary for the wire.
+    #[must_use]
+    pub fn from_skipped(s: &SkippedLeg) -> Self {
+        Self {
+            leg_index: s.leg_index,
+            error_message: s.error_message.clone(),
         }
     }
 }

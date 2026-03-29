@@ -70,6 +70,10 @@
     "monte_carlo": {
       "$ref": "#/$defs/MonteCarloConfig",
       "description": "Monte Carlo configuration. Required for the RunMC command."
+    },
+    "cola": {
+      "$ref": "#/$defs/ColaConfig",
+      "description": "Collision avoidance configuration. If omitted, COLA auto-computes when config.safety is present and POCA violations exist (using min_distance_3d_km as target, 10 m/s budget). Explicit config overrides auto-derived values."
     }
   },
   "additionalProperties": false,
@@ -400,6 +404,24 @@
         "dey_dot": {
           "type": "number",
           "description": "Time derivative of relative eccentricity y-component due to drag (1/s)."
+        }
+      },
+      "additionalProperties": false
+    },
+    "ColaConfig": {
+      "type": "object",
+      "description": "Collision avoidance (COLA) maneuver design configuration. When a Brent-refined POCA distance falls below target_distance_km, the solver computes the minimum-fuel impulsive correction to push closest approach beyond the target.",
+      "required": ["target_distance_km", "max_dv_km_s"],
+      "properties": {
+        "target_distance_km": {
+          "type": "number",
+          "description": "Target POCA distance after avoidance maneuver in km.",
+          "exclusiveMinimum": 0
+        },
+        "max_dv_km_s": {
+          "type": "number",
+          "description": "Maximum available delta-v budget for avoidance in km/s.",
+          "exclusiveMinimum": 0
         }
       },
       "additionalProperties": false

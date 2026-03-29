@@ -427,6 +427,29 @@ async fn handle_text_message(
             }
         }
 
+        ClientMessage::RunCola {
+            request_id,
+            ref config,
+        } => {
+            match handlers::handle_run_cola(session, config) {
+                Ok(eval) => {
+                    send_message(
+                        ws,
+                        &ServerMessage::ColaResult {
+                            request_id,
+                            maneuvers: eval.maneuvers,
+                            secondary_conjunctions: eval.secondary_conjunctions,
+                            skipped: eval.skipped,
+                        },
+                    )
+                    .await;
+                }
+                Err(e) => {
+                    send_message(ws, &e.to_server_message(Some(request_id))).await;
+                }
+            }
+        }
+
         ClientMessage::GetCovariance { request_id } => {
             match handlers::handle_get_covariance(session) {
                 Ok(report) => {

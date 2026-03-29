@@ -7,12 +7,12 @@ use rpo_core::propagation::{DragConfig, PropagationModel};
 use rpo_core::types::TransferEclipseData;
 
 use super::common::{
-    determine_verdict, fmt_duration, fmt_m, fmt_m_s, print_derived_drag, print_header,
-    print_per_leg_errors, print_roe, print_subheader, SafetyTier, Verdict,
+    determine_verdict, fmt_duration, fmt_m, fmt_m_s, print_derived_drag, print_dv_budget,
+    print_header, print_per_leg_errors, print_roe, print_subheader, SafetyTier, Verdict,
 };
 use super::thresholds::fidelity;
 use super::eclipse_fmt::{print_eclipse_summary, print_eclipse_validation};
-use super::safety_fmt::{print_free_drift_analysis, print_poca_analysis, print_safety_analysis, print_safety_comparison, print_safety_summary};
+use super::safety_fmt::{print_cola_analysis, print_cola_skipped, print_free_drift_analysis, print_poca_analysis, print_safety_analysis, print_safety_comparison, print_safety_summary, print_secondary_conjunctions};
 
 /// Print the common Transfer + Waypoint Targeting output shared by mission/validate.
 pub fn print_mission_human(
@@ -45,8 +45,8 @@ pub fn print_mission_human(
     if let Some(ref safety) = output.mission.safety {
         let sc = input.config.safety.unwrap_or_default();
         match tier {
-            SafetyTier::NyxValidated => print_subheader("Analytical Safety"),
-            SafetyTier::Analytical => print_subheader("Safety"),
+            SafetyTier::Governing => print_subheader("Safety"),
+            SafetyTier::Baseline(_) => print_subheader("Safety (Analytical Baseline)"),
         }
         print_safety_analysis(safety, &sc);
     }
@@ -65,6 +65,17 @@ pub fn print_mission_human(
     // ── Free-Drift POCA ─────────────────────────────────────
     if let Some(ref fd_poca) = output.free_drift_poca {
         print_poca_analysis("Free-Drift Closest Approach (Brent-refined)", fd_poca);
+    }
+
+    // ── COLA ────────────────────────────────────────────────
+    if let Some(ref cola) = output.cola {
+        print_cola_analysis(cola);
+    }
+    if let Some(ref secondary) = output.secondary_conjunctions {
+        print_secondary_conjunctions(secondary);
+    }
+    if let Some(ref skipped) = output.cola_skipped {
+        print_cola_skipped(skipped);
     }
 
     // ── Eclipse ───────────────────────────────────────────────
@@ -226,7 +237,6 @@ pub fn print_mission_verdict(
         .as_ref()
         .map_or(0.0, |t| t.total_dv_km_s);
     let waypoint_dv_km_s = output.mission.total_dv_km_s;
-    let total_dv_km_s = output.total_dv_km_s;
     let lambert_tof_s = output.transfer.as_ref().map_or(0.0, |t| t.tof_s);
     let total_duration_s = output.total_duration_s;
 
@@ -247,38 +257,11 @@ pub fn print_mission_verdict(
         );
     }
 
-    println!("\n  \u{0394}v Budget:");
-    if total_dv_km_s > 0.0 {
-        let lambert_pct = lambert_dv_km_s / total_dv_km_s * 100.0;
-        let wp_pct = waypoint_dv_km_s / total_dv_km_s * 100.0;
-        if lambert_pct > fidelity::FAR_FIELD_DV_DRIVER_PCT {
-            println!(
-                "    Transfer:        {}  ({lambert_pct:.1}%{})",
-                fmt_m_s(lambert_dv_km_s, 1),
-                " -- far-field driver".if_supports_color(Stream::Stdout, |v| v.red()),
-            );
-        } else {
-            println!(
-                "    Transfer:        {}  ({lambert_pct:.1}%)",
-                fmt_m_s(lambert_dv_km_s, 1),
-            );
-        }
-        println!(
-            "    Targeting:       {}  ({wp_pct:.1}%)",
-            fmt_m_s(waypoint_dv_km_s, 1),
-        );
-    } else {
-        println!("    Transfer:        {}", fmt_m_s(lambert_dv_km_s, 1));
-        println!("    Targeting:       {}", fmt_m_s(waypoint_dv_km_s, 1));
-    }
-    println!(
-        "    Total:           {}",
-        fmt_m_s(total_dv_km_s, 1)
-            .if_supports_color(Stream::Stdout, |v| v.green()),
+    print_dv_budget(
+        lambert_dv_km_s,
+        waypoint_dv_km_s,
+        output.auto_drag_config.is_some(),
     );
-    if output.auto_drag_config.is_some() {
-        println!("    (drag-aware targeting; Δv differs slightly from analytical-only)");
-    }
 
     println!(
         "\n  Duration:          {} ({} transfer + {} proximity)",
@@ -300,7 +283,7 @@ pub fn print_mission_verdict(
     if let Some(safety) = safety_source {
         let source = if validation.is_some() { "Nyx" } else { "analytical" };
         println!(
-            "  Closest approach:  leg {} at {} ({source})",
+            "  Closest approach:  leg {} at T+{} ({source})",
             safety.operational.min_3d_leg_index + 1,
             fmt_duration(safety.operational.min_3d_elapsed_s),
         );
