@@ -2,8 +2,9 @@
 
 use owo_colors::{OwoColorize, Stream};
 use rpo_core::mission::{
-    assess_safety, ClosestApproach, FreeDriftAnalysis, MissionConfig, RcContext, SafetyConfig,
-    SafetyMetrics, ValidationReport,
+    assess_safety, AvoidanceManeuver, ClosestApproach, CorrectionType, FreeDriftAnalysis,
+    MissionConfig, RcContext, SafetyConfig, SafetyMetrics, SecondaryViolation, SkippedLeg,
+    ValidationReport,
 };
 
 use super::common::{fmt_bounded_motion_residual, fmt_duration, fmt_m, print_subheader};
@@ -103,7 +104,7 @@ fn print_margin(value_km: f64, threshold_km: f64) {
     if margin_km > 0.0 {
         let ratio = value_km / threshold_km;
         let margin_str = format!(
-            "    Margin:               +{} margin",
+            "    Margin:               +{}",
             fmt_m(margin_km, 1),
         );
         if ratio > 2.0 {
@@ -293,5 +294,65 @@ pub fn print_poca_analysis(label: &str, poca_per_leg: &[Vec<ClosestApproach>]) {
             closest.position_ric_km.y,
             closest.position_ric_km.z,
         );
+    }
+}
+
+/// Print collision avoidance maneuver results.
+pub fn print_cola_analysis(maneuvers: &[AvoidanceManeuver]) {
+    print_subheader("Collision Avoidance (Post-Baseline Adjustment)");
+    if maneuvers.is_empty() {
+        println!("  No POCA violations requiring avoidance.");
+        return;
+    }
+    for m in maneuvers {
+        let correction_label = match m.correction_type {
+            CorrectionType::InPlane => "in-plane (e-vector)",
+            CorrectionType::CrossTrack => "cross-track (i-vector)",
+            CorrectionType::Combined => "combined (e + i)",
+        };
+        println!("  Leg {}:", m.leg_index + 1);
+        println!(
+            "    Avoidance burn: [{:.6}, {:.6}, {:.6}] km/s at u = {:.4} rad",
+            m.dv_ric_km_s.x, m.dv_ric_km_s.y, m.dv_ric_km_s.z, m.maneuver_location_rad
+        );
+        println!("    Post-COLA POCA: {}", fmt_m(m.post_avoidance_poca_km, 1));
+        println!("    Fuel cost:      {:.2} m/s", m.fuel_cost_km_s * 1000.0);
+        println!("    Correction:     {correction_label}");
+    }
+}
+
+/// Print secondary conjunction warnings from post-avoidance verification.
+pub fn print_secondary_conjunctions(violations: &[SecondaryViolation]) {
+    print_subheader("Secondary Conjunctions");
+    if violations.is_empty() {
+        println!("  No secondary conjunctions detected.");
+        return;
+    }
+    println!(
+        "  {} downstream violation(s) created by avoidance maneuvers:\n",
+        violations.len().bright_red().if_supports_color(Stream::Stdout, |t| t.bold()),
+    );
+    for sv in violations {
+        println!(
+            "  COLA on leg {} → violation on leg {}:",
+            sv.original_leg_index + 1,
+            sv.violated_leg_index + 1,
+        );
+        println!("    Distance:  {}", fmt_m(sv.poca.distance_km, 1));
+        println!("    Elapsed:   {}", fmt_duration(sv.poca.elapsed_s));
+        println!(
+            "    Position:  [{:.4}, {:.4}, {:.4}] km (RIC)",
+            sv.poca.position_ric_km.x,
+            sv.poca.position_ric_km.y,
+            sv.poca.position_ric_km.z,
+        );
+    }
+}
+
+/// Print legs where COLA was attempted but failed.
+pub fn print_cola_skipped(skipped: &[SkippedLeg]) {
+    print_subheader("COLA Skipped Legs");
+    for s in skipped {
+        println!("  Leg {}: {}", s.leg_index + 1, s.error_message);
     }
 }

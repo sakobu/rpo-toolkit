@@ -10,7 +10,7 @@ use owo_colors::{OwoColorize, Stream};
 use serde::Serialize;
 
 use rpo_core::mission::{
-    assess_safety, MonteCarloReport, PercentileStats, SafetyConfig, ValidationReport,
+    assess_safety, ColaConfig, MonteCarloReport, PercentileStats, SafetyConfig, ValidationReport,
 };
 use rpo_core::pipeline::{
     resolve_propagator, to_propagation_model, PipelineInput, PipelineOutput, TransferResult,
@@ -22,13 +22,43 @@ use crate::error::CliError;
 
 use super::thresholds::mc as mc_thresh;
 
-/// Whether safety metrics come from analytical propagation or Nyx full-physics validation.
+/// Whether analytical safety is the governing tier or a baseline for comparison.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SafetyTier {
-    /// Analytical (J2/drag STM) safety analysis.
-    Analytical,
-    /// Full-physics Nyx validation — analytical safety is shown as a baseline.
-    NyxValidated,
+    /// Analytical is the governing and only fidelity tier (mission command).
+    Governing,
+    /// Analytical is a baseline; a higher-fidelity validation tier governs.
+    Baseline(ValidationTier),
+}
+
+/// The higher-fidelity validation source that governs safety margins.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ValidationTier {
+    /// Nyx full-physics propagation.
+    Nyx,
+    /// Monte Carlo ensemble statistics.
+    MonteCarlo,
+}
+
+/// Default delta-v budget for CLI COLA overlay (km/s).
+/// 10 m/s — matches the pipeline auto-COLA default in `execute.rs`.
+const DEFAULT_COLA_BUDGET_KM_S: f64 = 0.01;
+
+/// Apply CLI `--cola-threshold` / `--cola-budget` flags onto a `PipelineInput`.
+///
+/// When `threshold` is `Some`, creates a `ColaConfig` with the given target
+/// distance and budget (defaulting to 10 m/s if `budget` is `None`).
+pub fn apply_cola_overlay(
+    input: &mut PipelineInput,
+    threshold: Option<f64>,
+    budget: Option<f64>,
+) {
+    if let Some(threshold) = threshold {
+        input.cola = Some(ColaConfig {
+            target_distance_km: threshold,
+            max_dv_km_s: budget.unwrap_or(DEFAULT_COLA_BUDGET_KM_S),
+        });
+    }
 }
 
 /// Mission feasibility verdict.
@@ -610,25 +640,72 @@ pub fn print_insights(insights: &[Insight]) {
             Severity::Critical => {
                 println!(
                     "{}",
-                    format!("  CRITICAL: {}", insight.message)
+                    format!("  Critical: {}", insight.message)
                         .if_supports_color(Stream::Stdout, |v| v.red())
                 );
             }
             Severity::Warning => {
                 println!(
                     "{}",
-                    format!("  WARNING: {}", insight.message)
+                    format!("  Warning: {}", insight.message)
                         .if_supports_color(Stream::Stdout, |v| v.yellow())
                 );
             }
             Severity::Info => {
                 println!(
                     "{}",
-                    format!("  \u{25b6} {}", insight.message)
+                    format!("  Insight: {}", insight.message)
                         .if_supports_color(Stream::Stdout, |v| v.cyan())
                 );
             }
         }
+    }
+}
+
+// ── Δv budget ───────────────────────────────────────────────────────────
+
+/// Print the Δv budget block (Transfer / Targeting / Total) used by mission and MC summaries.
+///
+/// Flags when Lambert transfer dominates the budget (>90% of total) to highlight
+/// that far-field transfer is the primary cost driver.
+pub fn print_dv_budget(
+    lambert_dv_km_s: f64,
+    targeting_dv_km_s: f64,
+    drag_aware: bool,
+) {
+    use super::thresholds::fidelity;
+
+    let total = lambert_dv_km_s + targeting_dv_km_s;
+    println!("\n  \u{0394}v Budget:");
+    if total > 0.0 {
+        let lambert_pct = lambert_dv_km_s / total * 100.0;
+        let wp_pct = targeting_dv_km_s / total * 100.0;
+        if lambert_pct > fidelity::FAR_FIELD_DV_DRIVER_PCT {
+            println!(
+                "    Transfer:        {}  ({lambert_pct:.1}%{})",
+                fmt_m_s(lambert_dv_km_s, 1),
+                " -- far-field driver".if_supports_color(Stream::Stdout, |v| v.red()),
+            );
+        } else {
+            println!(
+                "    Transfer:        {}  ({lambert_pct:.1}%)",
+                fmt_m_s(lambert_dv_km_s, 1),
+            );
+        }
+        println!(
+            "    Targeting:       {}  ({wp_pct:.1}%)",
+            fmt_m_s(targeting_dv_km_s, 1),
+        );
+    } else {
+        println!("    Transfer:        {}", fmt_m_s(lambert_dv_km_s, 1));
+        println!("    Targeting:       {}", fmt_m_s(targeting_dv_km_s, 1));
+    }
+    println!(
+        "    Total:           {}",
+        fmt_m_s(total, 1).if_supports_color(Stream::Stdout, |v| v.green()),
+    );
+    if drag_aware {
+        println!("    (drag-aware targeting; \u{0394}v differs slightly from analytical-only)");
     }
 }
 
@@ -704,15 +781,25 @@ pub fn determine_mc_verdict(report: &MonteCarloReport) -> VerdictResult {
     let no_collisions = stats.collision_probability <= 0.0;
     let no_keepout = stats.keepout_violation_rate <= 0.0;
 
+    let ei_degraded = stats.ei_violation_rate > 0.0;
+
     if all_converged && no_collisions && no_keepout {
         VerdictResult {
             verdict: Verdict::Feasible,
-            reason: "100% convergence, no collisions, operational safety holds",
+            reason: if ei_degraded {
+                "operationally feasible, passive abort safety degraded under dispersion"
+            } else {
+                "100% convergence, no collisions, operational safety holds"
+            },
         }
     } else if stats.convergence_rate >= mc_thresh::CONVERGENCE_ALERT && no_collisions {
         VerdictResult {
             verdict: Verdict::Feasible,
-            reason: "convergence acceptable, no collisions",
+            reason: if ei_degraded {
+                "convergence acceptable, no collisions, passive abort safety degraded"
+            } else {
+                "convergence acceptable, no collisions"
+            },
         }
     } else {
         VerdictResult {

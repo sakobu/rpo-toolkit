@@ -10,8 +10,8 @@ use crate::cli::OutputMode;
 use crate::error::CliError;
 use crate::input::load_json;
 use crate::output::common::{
-    create_spinner, print_insights, resolve_drag_and_propagator, status, write_json_report,
-    write_report, SafetyTier,
+    apply_cola_overlay, create_spinner, print_insights, resolve_drag_and_propagator, status,
+    write_json_report, write_report, SafetyTier, ValidationTier,
 };
 use crate::output::markdown_fmt::{self, ValidationContext};
 use crate::output::mission_fmt::{
@@ -33,8 +33,11 @@ pub fn run(
     mode: OutputMode,
     samples_per_leg: u32,
     auto_drag: bool,
+    cola_threshold: Option<f64>,
+    cola_budget: Option<f64>,
 ) -> Result<(), CliError> {
-    let input: PipelineInput = load_json(input_path)?;
+    let mut input: PipelineInput = load_json(input_path)?;
+    apply_cola_overlay(&mut input, cola_threshold, cola_budget);
 
     let chief_config = input.chief_config.unwrap_or_default().resolve();
     let deputy_config = input.deputy_config.unwrap_or_default().resolve();
@@ -105,7 +108,7 @@ pub fn run(
             write_report("validate", &md)
         }
         OutputMode::Human => {
-            print_mission_human(&output, &input, &prop, auto_drag, "Mission + Validation", SafetyTier::NyxValidated);
+            print_mission_human(&output, &input, &prop, auto_drag, "Mission + Validation", SafetyTier::Baseline(ValidationTier::Nyx));
             print_validation_details(
                 &output,
                 &input,

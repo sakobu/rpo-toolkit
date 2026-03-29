@@ -8,7 +8,7 @@ Astrodynamics toolkit for rendezvous and proximity operations (RPO) mission plan
 - **Propagate relative motion analytically** -- J2-perturbed closed-form state transition matrices (Koenig Eq. A6), with optional density-model-free differential drag (Koenig Sec. VIII)
 - **Validate against full-physics truth** -- nyx-space numerical propagation with J2 harmonics, atmospheric drag, SRP with eclipses, Sun/Moon third-body
 - **Assess robustness with Monte Carlo** -- full-physics ensemble analysis with open/closed-loop modes, deterministic seeding, dispersion envelopes
-- **Analyze safety and closest approach** -- e/i vector separation (passive safety), 3D keep-out evaluation, free-drift abort-case trajectory analysis, Brent-refined closest approach (POCA) on both nominal and free-drift arcs
+- **Analyze safety and closest approach** -- e/i vector separation (passive safety), 3D keep-out evaluation, free-drift abort-case trajectory analysis, Brent-refined closest approach (POCA) on both nominal and free-drift arcs, autonomous collision avoidance (COLA) with multi-leg secondary conjunction detection
 - **Compute covariance and eclipses** -- linear covariance propagation with RIC 3-sigma bounds, Mahalanobis proximity distance, empirical collision probability, analytical Sun/Moon ephemeris with conical shadow model
 
 **Two-engine architecture.** An analytical engine (custom J2/drag STMs) evaluates in microseconds for interactive mission design. A numerical engine (nyx-space) runs in seconds-to-minutes for Lambert transfers, high-fidelity validation, and Monte Carlo. All types are serde-serializable.
@@ -17,7 +17,7 @@ Astrodynamics toolkit for rendezvous and proximity operations (RPO) mission plan
 
 ```bash
 cargo build                     # build workspace
-cargo test                      # 386 tests across 3 crates (19 ignored: full-physics, require ANISE kernels)
+cargo test                      # 403 tests across 3 crates (19 ignored: full-physics, require ANISE kernels)
 ```
 
 Run an example mission (analytical):
@@ -50,7 +50,7 @@ flowchart TD
     C -- "Proximity\n(δr/r < 0.005)" --> E2["Drag estimation\nfrom current states\n(~3 s, async)"]
     D -- "iterate" --> D
     D -- "lock in" --> E1["Drag estimation\nfrom perch states\n(~3 s, async)"]
-    E1 --> F["Waypoint planning\nsafety · POCA · free-drift · covariance · eclipse\n(microseconds)"]
+    E1 --> F["Waypoint planning\nsafety · POCA · COLA · free-drift · covariance · eclipse\n(microseconds)"]
     E2 --> F
     F -- "iterate" --> F
     F --> G["Validate\nnyx full-physics\n(seconds)"]
@@ -68,6 +68,7 @@ flowchart TD
 | Safety analysis           | `assess_safety()`                | Analytical        | microseconds          |
 | Free-drift abort analysis | `compute_free_drift_analysis()`  | Analytical        | microseconds          |
 | Closest approach (POCA)   | `compute_poca_analysis()`        | Analytical        | microseconds          |
+| Collision avoidance       | `assess_cola()`                  | Analytical        | microseconds          |
 | Covariance + Mahalanobis  | `propagate_mission_covariance()` | Analytical        | microseconds          |
 | Eclipse computation       | inside `plan_waypoint_mission()` | Analytical        | ~10 ms (full mission) |
 | Full-physics validation   | `validate_mission_nyx()`         | nyx-space         | seconds               |
@@ -93,7 +94,7 @@ Reproduce with:
 ## Reference Papers
 
 - **Koenig, Guffanti, D'Amico** -- "New State Transition Matrices for Spacecraft Relative Motion in Perturbed Orbits" ([PDF](docs/references/Koenig_Guffanti_Damico.pdf)), _Journal of Guidance, Control, and Dynamics_, 2017. Source for QNS ROE definition (Eq. 2), J2 perturbation parameters (Eqs. 13-16), J2 6x6 STM (Eq. A6), J2+drag 9x9 STM (Appendix D, Eq. D2), density-model-free drag (Sec. VIII, Eqs. 73-77), dimensionless separation norm (Sec. V). Validation data: Tables 2-4.
-- **D'Amico** -- "Autonomous Formation Flying in Low Earth Orbit" ([PDF](docs/references/Damico_PhD.pdf)), PhD thesis, TU Delft, 2010. Source for QNS ROE definition (Eq. 2.2), ROE-to-RIC mapping (Eq. 2.17), e/i vector separation (Eq. 2.22), minimum distance bound (Eq. 2.23), γ parameter (Eq. 2.25), secular ROE drift under J2 (Eq. 2.29), J2-perturbed relative velocity (Eq. 2.31), bounded-motion condition (Eq. 2.33).
+- **D'Amico** -- "Autonomous Formation Flying in Low Earth Orbit" ([PDF](docs/references/Damico_PhD.pdf)), PhD thesis, TU Delft, 2010. Source for QNS ROE definition (Eq. 2.2), ROE-to-RIC mapping (Eq. 2.17), e/i vector separation (Eq. 2.22), minimum distance bound (Eq. 2.23), γ parameter (Eq. 2.25), secular ROE drift under J2 (Eq. 2.29), J2-perturbed relative velocity (Eq. 2.31), bounded-motion condition (Eq. 2.33), GVE B matrix (Eq. 2.38), inverse GVE collision avoidance maneuvers (Eqs. 2.41, 2.50-2.53), AFC mode logic (§4.3.4).
 
 **Every module in the codebase traces to specific equations in these papers.**
 
@@ -104,7 +105,7 @@ rpo-core/src/
   types/        StateVector, KeplerianElements, QuasiNonsingularROE, SpacecraftConfig
   elements/     ECI/Keplerian/ROE/RIC conversions, GVE B-matrix, eclipse (Meeus)
   propagation/  J2 & J2+drag STMs, Lambert solver, covariance kernels, nyx bridge
-  mission/      Planning, targeting, safety, free-drift, closest approach, validation, Monte Carlo
+  mission/      Planning, targeting, safety, free-drift, closest approach, avoidance, COLA assessment, validation, Monte Carlo
   pipeline/     Shared CLI/API orchestration: execute_mission(), canonical I/O types
 
 rpo-cli/src/              → docs/CLI.md
@@ -115,7 +116,7 @@ rpo-cli/src/              → docs/CLI.md
 rpo-api/src/              → docs/API.md
   lib.rs        axum WebSocket API server
   protocol.rs   Wire types: ClientMessage / ServerMessage enums
-  handlers/     classify, transfer, plan, free_drift, poca, eclipse, update_config, extract_drag, validate, mc
+  handlers/     classify, transfer, plan, free_drift, poca, cola, eclipse, update_config, extract_drag, validate, mc
 ```
 
 |                   | Analytical Engine (rpo-core)                            | Numerical Engine (nyx-space)               |
@@ -199,7 +200,7 @@ The CLI (`rpo-cli`) provides batch execution and shell-composable plumbing for s
 
 ## Testing
 
-386 tests across 3 crates (336 rpo-core, 37 rpo-api, 13 rpo-cli), 19 ignored (full-physics tests requiring ANISE ephemeris kernels, ~50 MB cached download). Tests cover roundtrip transform invariants, STM identity at dt=0, energy/momentum conservation, regression against published data (Koenig Tables 2-3, D'Amico Sec. 2.1-2.2), Newton-Raphson convergence, POCA Brent-refinement invariants (refined distance <= grid-sampled), free-drift abort-case trajectories, deterministic Monte Carlo seeding, covariance symmetry preservation, session invalidation, WebSocket handler integration, error serialization, and CLI smoke tests.
+403 tests across 3 crates (351 rpo-core, 37 rpo-api, 13 rpo-cli, 2 doc-tests), 19 ignored (full-physics tests requiring ANISE ephemeris kernels, ~50 MB cached download). Tests cover roundtrip transform invariants, STM identity at dt=0, energy/momentum conservation, regression against published data (Koenig Tables 2-3, D'Amico Sec. 2.1-2.2), Newton-Raphson convergence, POCA Brent-refinement invariants (refined distance <= grid-sampled), free-drift abort-case trajectories, COLA inverse GVE analytical solutions and post-avoidance verification, autonomous COLA evaluation with multi-leg secondary conjunction detection, deterministic Monte Carlo seeding, covariance symmetry preservation, session invalidation, WebSocket handler integration, error serialization, and CLI smoke tests.
 
 ```bash
 cargo test                  # full suite

@@ -1,5 +1,7 @@
 //! Mission-level orchestration: classification, Lambert transfers, targeting, safety, and validation.
 
+pub mod cola_assessment;
+pub mod avoidance;
 pub mod closest_approach;
 pub mod config;
 pub mod covariance;
@@ -45,4 +47,10 @@ pub use monte_carlo::{
 pub use waypoints::{
     get_mission_state_at_time, plan_waypoint_mission, replan_from_waypoint,
     resample_leg_trajectory,
+};
+pub use cola_assessment::{
+    assess_cola, ColaAssessment, SecondaryViolation, SkippedLeg,
+};
+pub use avoidance::{
+    compute_avoidance, AvoidanceError, AvoidanceManeuver, ColaConfig, CorrectionType,
 };

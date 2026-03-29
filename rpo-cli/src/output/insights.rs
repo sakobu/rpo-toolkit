@@ -223,7 +223,7 @@ pub fn mc_insights(
             .as_ref()
             .map(|ei| {
                 format!(
-                    " \u{2014} worst-case separation drops to {:.0}m (p05) against {:.0}m threshold",
+                    " \u{2014} 5th-percentile separation is {:.1}m against {:.0}m threshold",
                     ei.p05 * 1000.0,
                     config.min_ei_separation_km * 1000.0,
                 )

@@ -68,6 +68,12 @@ pub enum Command {
         /// Output as self-contained markdown report.
         #[arg(long, conflicts_with = "json")]
         markdown: bool,
+        /// Target miss distance for collision avoidance (km). Enables COLA.
+        #[arg(long, value_name = "KM")]
+        cola_threshold: Option<f64>,
+        /// Maximum delta-v budget for collision avoidance (km/s).
+        #[arg(long, value_name = "KM_S", requires = "cola_threshold")]
+        cola_budget: Option<f64>,
     },
     /// End-to-end mission with Nyx high-fidelity validation (requires network on first run).
     Validate {
@@ -86,6 +92,12 @@ pub enum Command {
         /// Auto-derive differential drag config from spacecraft properties via Nyx.
         #[arg(long)]
         auto_drag: bool,
+        /// Target miss distance for collision avoidance (km). Enables COLA.
+        #[arg(long, value_name = "KM")]
+        cola_threshold: Option<f64>,
+        /// Maximum delta-v budget for collision avoidance (km/s).
+        #[arg(long, value_name = "KM_S", requires = "cola_threshold")]
+        cola_budget: Option<f64>,
     },
     /// Full-physics Monte Carlo ensemble analysis (requires network on first run).
     Mc {
@@ -101,6 +113,12 @@ pub enum Command {
         /// Auto-derive differential drag config from spacecraft properties via Nyx.
         #[arg(long)]
         auto_drag: bool,
+        /// Target miss distance for collision avoidance (km). Enables COLA.
+        #[arg(long, value_name = "KM")]
+        cola_threshold: Option<f64>,
+        /// Maximum delta-v budget for collision avoidance (km/s).
+        #[arg(long, value_name = "KM_S", requires = "cola_threshold")]
+        cola_budget: Option<f64>,
     },
 
     // ---- Plumbing ----

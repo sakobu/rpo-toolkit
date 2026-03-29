@@ -22,7 +22,8 @@ use rpo_core::propagation::{DragConfig, PropagationModel};
 
 use super::common::{
     compute_leg_error_stats, determine_mc_verdict, determine_verdict, fmt_bounded_motion_residual,
-    fmt_duration, fmt_m, fmt_m_s, fmt_roe_component, McBaseline, SafetyTier, VerdictResult,
+    fmt_duration, fmt_m, fmt_m_s, fmt_roe_component, McBaseline, SafetyTier, ValidationTier,
+    VerdictResult,
 };
 use super::insights;
 
@@ -46,7 +47,7 @@ pub fn mission_to_markdown(
     write_waypoint_section(&mut out, output, input, propagator, auto_drag);
 
     if let Some(ref safety) = output.mission.safety {
-        write_safety_section(&mut out, safety, &sc, SafetyTier::Analytical);
+        write_safety_section(&mut out, safety, &sc, SafetyTier::Governing);
     }
 
     if let Some(ref poca) = output.poca {
@@ -60,6 +61,8 @@ pub fn mission_to_markdown(
     if let Some(ref fd_poca) = output.free_drift_poca {
         write_poca_section(&mut out, "Free-Drift Closest Approach (Brent-refined)", fd_poca);
     }
+
+    write_cola_sections(&mut out, output);
 
     write_eclipse_section(&mut out, output);
 
@@ -93,11 +96,18 @@ pub fn validation_to_markdown(
     let vr = determine_verdict(output, &sc, Some(report));
     write_summary_block_mission(&mut out, &vr, output, &sc, Some(report));
 
+    let _ = writeln!(
+        out,
+        "> \u{0394}v values below reflect the analytical targeting plan (J2 STM). \
+         Nyx full-physics validation governs safety margins \u{2014} \
+         it does not recompute maneuvers.\n",
+    );
+
     write_transfer_section(&mut out, output, input);
     write_waypoint_section(&mut out, output, input, ctx.propagator, ctx.auto_drag);
 
     if let Some(ref safety) = output.mission.safety {
-        write_safety_section(&mut out, safety, &sc, SafetyTier::NyxValidated);
+        write_safety_section(&mut out, safety, &sc, SafetyTier::Baseline(ValidationTier::Nyx));
     }
 
     if let Some(ref poca) = output.poca {
@@ -111,6 +121,8 @@ pub fn validation_to_markdown(
     if let Some(ref fd_poca) = output.free_drift_poca {
         write_poca_section(&mut out, "Free-Drift Closest Approach (Brent-refined)", fd_poca);
     }
+
+    write_cola_sections(&mut out, output);
 
     write_eclipse_section(&mut out, output);
     write_validation_section(
@@ -151,7 +163,7 @@ pub fn mc_to_markdown(
 
     // Nominal safety context (free-drift, POCA)
     if let Some(ref safety) = output.mission.safety {
-        write_safety_section(&mut out, safety, &sc, SafetyTier::Analytical);
+        write_safety_section(&mut out, safety, &sc, SafetyTier::Baseline(ValidationTier::MonteCarlo));
     }
     if let Some(ref poca) = output.poca {
         write_poca_section(&mut out, "Closest Approach (Brent-refined)", poca);
@@ -162,6 +174,7 @@ pub fn mc_to_markdown(
     if let Some(ref fd_poca) = output.free_drift_poca {
         write_poca_section(&mut out, "Free-Drift Closest Approach (Brent-refined)", fd_poca);
     }
+    write_cola_sections(&mut out, output);
 
     // MC ensemble statistics
     write_mc_config_section(&mut out, report, baseline);
@@ -758,7 +771,7 @@ fn write_safety_section(
     let assessment = assess_safety(safety, config);
 
     match tier {
-        SafetyTier::NyxValidated => {
+        SafetyTier::Baseline(ValidationTier::Nyx) => {
             let _ = writeln!(out, "## Safety (Analytical Baseline)\n");
             let _ = writeln!(
                 out,
@@ -766,7 +779,10 @@ fn write_safety_section(
                  Summary table above and in Safety Comparison below.\n",
             );
         }
-        SafetyTier::Analytical => {
+        SafetyTier::Baseline(ValidationTier::MonteCarlo) => {
+            let _ = writeln!(out, "## Safety (Analytical Baseline)\n");
+        }
+        SafetyTier::Governing => {
             let _ = writeln!(out, "## Safety\n");
         }
     }
@@ -980,6 +996,98 @@ fn write_poca_section(
         );
         let _ = writeln!(out);
     }
+}
+
+fn write_cola_sections(out: &mut String, output: &PipelineOutput) {
+    if let Some(ref cola) = output.cola {
+        write_cola_section(out, cola);
+    }
+    if let Some(ref secondary) = output.secondary_conjunctions {
+        write_secondary_conjunction_section(out, secondary);
+    }
+    if let Some(ref skipped) = output.cola_skipped {
+        write_cola_skipped_section(out, skipped);
+    }
+}
+
+fn write_cola_section(out: &mut String, maneuvers: &[rpo_core::mission::AvoidanceManeuver]) {
+    let _ = writeln!(out, "## Collision Avoidance (Post-Baseline Adjustment)\n");
+    let _ = writeln!(
+        out,
+        "> Avoidance maneuvers computed after baseline targeting to increase closest-approach distance.\n",
+    );
+    if maneuvers.is_empty() {
+        let _ = writeln!(out, "No POCA violations requiring avoidance.\n");
+        return;
+    }
+    let _ = writeln!(
+        out,
+        "| Leg | \u{0394}v (km/s) | u (rad) | Post-COLA POCA | Cost (m/s) | Type |",
+    );
+    let _ = writeln!(out, "|-----|-----------|---------|---------------|------------|------|");
+    for m in maneuvers {
+        let correction = match m.correction_type {
+            rpo_core::mission::CorrectionType::InPlane => "in-plane",
+            rpo_core::mission::CorrectionType::CrossTrack => "cross-track",
+            rpo_core::mission::CorrectionType::Combined => "combined",
+        };
+        let _ = writeln!(
+            out,
+            "| {} | [{:.6}, {:.6}, {:.6}] | {:.4} | {:.1} m | {:.2} | {} |",
+            m.leg_index + 1,
+            m.dv_ric_km_s.x,
+            m.dv_ric_km_s.y,
+            m.dv_ric_km_s.z,
+            m.maneuver_location_rad,
+            m.post_avoidance_poca_km * 1000.0,
+            m.fuel_cost_km_s * 1000.0,
+            correction,
+        );
+    }
+    let _ = writeln!(out);
+}
+
+fn write_secondary_conjunction_section(
+    out: &mut String,
+    violations: &[rpo_core::mission::SecondaryViolation],
+) {
+    let _ = writeln!(out, "## Secondary Conjunctions\n");
+    if violations.is_empty() {
+        let _ = writeln!(out, "No secondary conjunctions detected.\n");
+        return;
+    }
+    let _ = writeln!(
+        out,
+        "| COLA Leg | Violated Leg | Distance (m) | Elapsed (s) | Position (RIC km) |",
+    );
+    let _ = writeln!(
+        out,
+        "|----------|-------------|-------------|-------------|-------------------|",
+    );
+    for sv in violations {
+        let _ = writeln!(
+            out,
+            "| {} | {} | {:.1} | {:.1} | [{:.4}, {:.4}, {:.4}] |",
+            sv.original_leg_index + 1,
+            sv.violated_leg_index + 1,
+            sv.poca.distance_km * 1000.0,
+            sv.poca.elapsed_s,
+            sv.poca.position_ric_km.x,
+            sv.poca.position_ric_km.y,
+            sv.poca.position_ric_km.z,
+        );
+    }
+    let _ = writeln!(out);
+}
+
+fn write_cola_skipped_section(out: &mut String, skipped: &[rpo_core::mission::SkippedLeg]) {
+    let _ = writeln!(out, "## COLA Skipped Legs\n");
+    let _ = writeln!(out, "| Leg | Reason |");
+    let _ = writeln!(out, "|-----|--------|");
+    for s in skipped {
+        let _ = writeln!(out, "| {} | {} |", s.leg_index + 1, s.error_message);
+    }
+    let _ = writeln!(out);
 }
 
 fn write_eclipse_section(out: &mut String, output: &PipelineOutput) {

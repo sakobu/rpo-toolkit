@@ -4,6 +4,8 @@
 //! targeting, covariance, eclipse) into a complete mission pipeline.
 
 use crate::constants::DEFAULT_COVARIANCE_SAMPLES_PER_LEG;
+use crate::mission::cola_assessment::{assess_cola, ColaAssessment};
+use crate::mission::avoidance::ColaConfig;
 use crate::mission::closest_approach::{find_closest_approaches, ClosestApproach};
 use crate::mission::free_drift::{compute_free_drift, FreeDriftAnalysis};
 use crate::mission::planning::{compute_transfer_eclipse, plan_mission};
@@ -23,6 +25,11 @@ use super::types::{PipelineInput, PipelineOutput, TransferResult};
 
 /// Number of eclipse evaluation points along the Lambert transfer arc.
 const DEFAULT_TRANSFER_ECLIPSE_SAMPLES: u32 = 200;
+
+/// Default delta-v budget for auto-triggered COLA (km/s).
+/// 10 m/s = 0.01 km/s — matches CLI default, sufficient for typical
+/// proximity-phase collision avoidance maneuvers.
+const AUTO_COLA_BUDGET_KM_S: f64 = 0.01;
 
 /// Classify separation, solve Lambert if far-field, compute perch ECI states.
 ///
@@ -239,6 +246,40 @@ pub fn build_output(
         compute_free_drift_poca(fd, &wp_mission.legs, propagator)
     });
 
+    // COLA: explicit config takes priority; auto-derive from safety thresholds
+    // otherwise. When safety is enabled and POCA detects violations, COLA
+    // auto-computes avoidance using min_distance_3d_km as the target separation.
+    let cola_config = input.cola.or_else(|| {
+        input.config.safety.as_ref().map(|safety| ColaConfig {
+            target_distance_km: safety.min_distance_3d_km,
+            max_dv_km_s: AUTO_COLA_BUDGET_KM_S,
+        })
+    });
+
+    let (cola, secondary_conjunctions, cola_skipped) = cola_config
+        .zip(poca.as_ref())
+        .map_or((None, None, None), |(config, poca_data)| {
+            let decision =
+                assess_cola(&wp_mission, poca_data, propagator, &config);
+            match decision {
+                ColaAssessment::Nominal => (None, None, None),
+                ColaAssessment::Avoidance { maneuvers, skipped } => {
+                    let skipped_opt =
+                        if skipped.is_empty() { None } else { Some(skipped) };
+                    (Some(maneuvers), None, skipped_opt)
+                }
+                ColaAssessment::SecondaryConjunction {
+                    maneuvers,
+                    secondary_violations,
+                    skipped,
+                } => {
+                    let skipped_opt =
+                        if skipped.is_empty() { None } else { Some(skipped) };
+                    (Some(maneuvers), Some(secondary_violations), skipped_opt)
+                }
+            }
+        });
+
     PipelineOutput {
         phase: transfer.plan.phase.clone(),
         transfer: transfer.plan.transfer.clone(),
@@ -253,6 +294,9 @@ pub fn build_output(
         free_drift,
         poca,
         free_drift_poca,
+        cola,
+        secondary_conjunctions,
+        cola_skipped,
     }
 }
 
@@ -427,6 +471,7 @@ mod tests {
             navigation_accuracy: None,
             maneuver_uncertainty: None,
             monte_carlo: None,
+            cola: None,
         }
     }
 
@@ -513,6 +558,7 @@ mod tests {
             navigation_accuracy: None,
             maneuver_uncertainty: None,
             monte_carlo: None,
+            cola: None,
         }
     }
 

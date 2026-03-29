@@ -6,6 +6,7 @@
 //! be spawned on a blocking thread.
 
 pub mod classify;
+pub mod cola;
 pub mod common;
 pub mod drag;
 pub mod free_drift;
@@ -16,6 +17,7 @@ pub mod transfer;
 pub mod validate;
 
 pub use classify::handle_classify;
+pub use cola::handle_run_cola;
 pub use common::resolve_propagator_toggle;
 pub use drag::handle_extract_drag;
 pub use free_drift::handle_get_free_drift;

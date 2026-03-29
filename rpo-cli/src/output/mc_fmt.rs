@@ -5,9 +5,9 @@ use rpo_core::mission::{MonteCarloMode, MonteCarloReport, SafetyConfig};
 use rpo_core::propagation::DragConfig;
 
 use super::common::{
-    determine_mc_verdict, fmt_duration, fmt_m_s, print_colored, print_derived_drag, print_header,
-    print_optional_percentile_summary, print_percentile_stats, print_rate_metric,
-    print_subheader, RateFormat, ThresholdDirection, Verdict,
+    determine_mc_verdict, fmt_duration, fmt_m_s, print_colored, print_derived_drag,
+    print_dv_budget, print_header, print_optional_percentile_summary, print_percentile_stats,
+    print_rate_metric, print_subheader, RateFormat, ThresholdDirection, Verdict,
 };
 use super::thresholds::mc as mc_thresh;
 
@@ -138,7 +138,9 @@ fn print_mc_safety_stats(
     println!("    Min e/i separation (m):");
     print_optional_percentile_summary("      ", stats.min_ei_separation_km.as_ref(), 1000.0, 1);
     if stats.ei_violation_rate > 0.0 {
-        println!("    Note: e/i is a free-drift passive safety metric. High violation rates are");
+        println!(
+            "    Note: e/i is a free-drift passive safety metric; high violation rates are"
+        );
         println!("          common in guided missions while operational safety holds.");
     }
 }
@@ -235,37 +237,10 @@ pub fn print_mc_summary(
         );
     }
 
-    // Δv Budget
-    let total = lambert_dv_km_s + report.nominal_dv_km_s;
-    println!("\n  \u{0394}v Budget:");
-    if total > 0.0 {
-        let transfer_pct = lambert_dv_km_s / total * 100.0;
-        let targeting_pct = report.nominal_dv_km_s / total * 100.0;
-        println!(
-            "    Transfer:        {}  ({transfer_pct:.1}%)",
-            fmt_m_s(lambert_dv_km_s, 1),
-        );
-        println!(
-            "    Targeting:       {}  ({targeting_pct:.1}%)",
-            fmt_m_s(report.nominal_dv_km_s, 1),
-        );
-    } else {
-        println!("    Transfer:        {}", fmt_m_s(lambert_dv_km_s, 1));
-        println!(
-            "    Targeting:       {}",
-            fmt_m_s(report.nominal_dv_km_s, 1),
-        );
-    }
-    println!(
-        "    Total:           {}",
-        fmt_m_s(total, 1).if_supports_color(Stream::Stdout, |v| v.green()),
-    );
-    if drag_aware {
-        println!("    (drag-aware targeting; \u{0394}v differs slightly from analytical-only)");
-    }
+    print_dv_budget(lambert_dv_km_s, report.nominal_dv_km_s, drag_aware);
 
     // Safety
-    println!("\n  Safety:");
+    println!("\n  Safety (Monte Carlo):");
     let n = f64::from(report.config.num_samples);
     print_rate_metric(
         "    Collision probability",
