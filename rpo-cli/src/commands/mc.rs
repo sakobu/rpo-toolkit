@@ -160,7 +160,8 @@ fn print_mc_output(
                 crate::output::insights::mc_insights(report, &safety_config);
             print_insights(&insight_lines);
 
-            print_mc_summary(report, baseline.lambert_dv_km_s, &safety_config, derived_drag.is_some());
+            let cola_dv = crate::output::common::cola_dv_summary(output.cola.as_deref());
+            print_mc_summary(report, baseline.lambert_dv_km_s, &safety_config, derived_drag.is_some(), cola_dv);
 
             Ok(())
         }

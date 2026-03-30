@@ -156,6 +156,8 @@ pub fn assess_safety(metrics: &SafetyMetrics, config: &SafetyConfig) -> SafetyAs
 /// - **Instantaneous R/C distance**: `sqrt(R^2 + C^2)` from the RIC position.
 /// - **e/i vector separation** (D'Amico Eq. 2.22): analytic orbit-averaged
 ///   minimum R/C bound from formation geometry.
+///   Parallel e/i vectors → maximum separation (safe);
+///   perpendicular → zero separation (unsafe). See D'Amico Sec. 2.2.2.
 /// - **3D distance**: `‖RIC position‖`.
 ///
 /// # Arguments
@@ -191,12 +193,18 @@ pub fn analyze_safety(
     };
 
     // e/i vector separation (D'Amico Eq. 2.22):
-    // δr_nr^min = sqrt(2) · a · |δe × δi| / sqrt(δe² + δi²)
-    // Cross product magnitude |dex*diy - dey*dix| avoids trig on the phase angle.
+    // δr_nr^min = √2 · a · |δe · δi| / √(δe² + δi² + |δe+δi|·|δe−δi|)
+    // Dot product |dex*dix + dey*diy| measures e/i parallelism:
+    // parallel → maximum separation (safe), perpendicular → zero (unsafe).
     let ei_separation = if ecc_mag > ROE_MAG_EPSILON && inc_mag > ROE_MAG_EPSILON {
-        let cross = (roe.dex * roe.diy - roe.dey * roe.dix).abs();
-        let norm_sq = ecc_mag * ecc_mag + inc_mag * inc_mag;
-        std::f64::consts::SQRT_2 * sma * cross / norm_sq.sqrt()
+        let dot = (roe.dex * roe.dix + roe.dey * roe.diy).abs();
+        let e_plus_i_mag =
+            ((roe.dex + roe.dix).powi(2) + (roe.dey + roe.diy).powi(2)).sqrt();
+        let e_minus_i_mag =
+            ((roe.dex - roe.dix).powi(2) + (roe.dey - roe.diy).powi(2)).sqrt();
+        let denom =
+            (ecc_mag * ecc_mag + inc_mag * inc_mag + e_plus_i_mag * e_minus_i_mag).sqrt();
+        std::f64::consts::SQRT_2 * sma * dot / denom
     } else {
         0.0
     };
@@ -326,13 +334,9 @@ mod tests {
     /// Computed from ROE formulas with O(1e-15) precision; 1e-10 is conservative.
     const SAFETY_METRIC_TOL: f64 = 1e-10;
 
-    /// D'Amico Eq. 2.22 e/i separation with exact perpendicular geometry.
-    /// a·d cross-product formula; 1e-9 km tolerance for 0.200 km separation.
+    /// D'Amico Eq. 2.22 e/i separation, dot-product formula.
+    /// 1e-9 km tolerance for separations on the order of 0.200–0.300 km.
     const EI_SEPARATION_TOL_KM: f64 = 1e-9;
-
-    /// D'Amico Eq. 2.22 e/i separation for unequal-magnitude case.
-    /// Cross-product formula with sqrt; 1e-6 km for ~0.364 km expected.
-    const EI_SEPARATION_UNEQUAL_TOL_KM: f64 = 1e-6;
 
     /// Trajectory point matching: find the point at a given elapsed_s.
     /// Exact f64 comparison after propagation; 1e-12 s.
@@ -401,11 +405,13 @@ mod tests {
         );
     }
 
-    /// Full e/i separation with perpendicular vectors should be safe.
+    /// Perpendicular e/i vectors give zero e/i separation but operational
+    /// metrics (R/C, 3D) can still pass when RIC position is far enough.
     #[test]
-    fn full_ei_separation_safe() {
+    fn perpendicular_ei_operational_metrics_pass() {
         let chief = iss_like_elements();
-        // δe along x, δi along y → perpendicular → maximum safety
+        // δe along x, δi along y → perpendicular → zero e/i separation,
+        // but RIC position gives good operational metrics
         let roe = QuasiNonsingularROE {
             da: 0.0,
             dlambda: 0.0,
@@ -428,19 +434,19 @@ mod tests {
         );
     }
 
-    /// Phase angle: parallel e/i vectors should give zero e/i separation.
+    /// Phase angle: perpendicular e/i vectors should give zero e/i separation.
     /// RIC [1,0,0] gives instantaneous R/C = 1.0.
     #[test]
-    fn parallel_ei_zero_separation() {
+    fn perpendicular_ei_zero_separation() {
         let chief = iss_like_elements();
-        // δe and δi both along x → parallel → zero cross product
+        // δe along x, δi along y → perpendicular → zero dot product
         let roe = QuasiNonsingularROE {
             da: 0.0,
             dlambda: 0.0,
             dex: 0.001,
             dey: 0.0,
-            dix: 0.001,
-            diy: 0.0,
+            dix: 0.0,
+            diy: 0.001,
         };
         let ric_pos = Vector3::new(1.0, 0.0, 0.0);
         let config = SafetyConfig::default();
@@ -448,12 +454,12 @@ mod tests {
 
         assert!(
             metrics.passive.min_ei_separation_km < SAFETY_METRIC_TOL,
-            "Parallel e/i vectors should give zero e/i separation: {} km",
+            "Perpendicular e/i vectors should give zero e/i separation: {} km",
             metrics.passive.min_ei_separation_km
         );
         assert!(
             metrics.passive.min_ei_separation_km < config.min_ei_separation_km,
-            "Parallel e/i should fail threshold"
+            "Perpendicular e/i should fail threshold"
         );
     }
 
@@ -462,11 +468,12 @@ mod tests {
     #[test]
     fn small_3d_distance_unsafe() {
         let chief = iss_like_elements();
+        // Parallel e/i vectors (both along +y) so e/i separation passes
         let roe = QuasiNonsingularROE {
             da: 0.0,
             dlambda: 0.0,
-            dex: 0.001,
-            dey: 0.0,
+            dex: 0.0,
+            dey: 0.001,
             dix: 0.0,
             diy: 0.001,
         };
@@ -576,11 +583,12 @@ mod tests {
         let propagator = PropagationModel::J2Stm;
         let period = std::f64::consts::TAU / chief.mean_motion().unwrap();
 
+        // Parallel e/i vectors (both along +y) so e/i separation is nonzero
         let roe = QuasiNonsingularROE {
             da: 0.0,
             dlambda: 0.001,
-            dex: 0.001,
-            dey: 0.0,
+            dex: 0.0,
+            dey: 0.001,
             dix: 0.0,
             diy: 0.001,
         };
@@ -658,11 +666,11 @@ mod tests {
 
     // --- Paper-traced regression tests (D'Amico Eq. 2.22/2.23) ---
 
-    /// D'Amico Eq. 2.22: perpendicular e/i vectors of equal magnitude.
-    /// δex=d, δiy=d with a·d=200m → exact separation = a·d = 0.200 km.
-    /// This case matches both Eq. 2.22 and the cross-product formula exactly.
+    /// D'Amico Eq. 2.22: perpendicular e/i vectors give zero separation.
+    /// δex=d, δiy=d → dot product δex·δix + δey·δiy = d·0 + 0·d = 0.
+    /// Perpendicular e/i is the unsafe configuration (D'Amico Sec. 2.2.2).
     #[test]
-    fn damico_eq222_perpendicular_equal_magnitude() {
+    fn damico_eq222_perpendicular_gives_zero() {
         let chief = damico_table21_chief();
         let d = 0.200 / chief.a_km; // a·d = 200m = 0.200 km
         let roe = QuasiNonsingularROE {
@@ -677,16 +685,17 @@ mod tests {
         let metrics = analyze_safety(&roe, &chief, &ric_pos);
 
         assert!(
-            (metrics.passive.min_ei_separation_km - 0.200).abs() < EI_SEPARATION_TOL_KM,
-            "e/i separation: got {}, expected 0.200 km", metrics.passive.min_ei_separation_km
+            metrics.passive.min_ei_separation_km.abs() < SAFETY_METRIC_TOL,
+            "Perpendicular e/i should give 0 separation, got {}",
+            metrics.passive.min_ei_separation_km
         );
     }
 
-    /// D'Amico Eq. 2.22: perpendicular e/i vectors of unequal magnitude.
-    /// δex=d1 (300m/a), δiy=d2 (500m/a), a=6892.945 km (TanDEM-X approx).
-    /// Code gives √2·a·d1·d2/√(d1²+d2²) = √2·0.300·0.500/√(0.300²+0.500²).
+    /// D'Amico Eq. 2.22: perpendicular e/i vectors of unequal magnitude
+    /// still give zero separation.
+    /// δex=d1, δiy=d2 → dot product = d1·0 + 0·d2 = 0.
     #[test]
-    fn damico_eq222_perpendicular_unequal() {
+    fn damico_eq222_perpendicular_unequal_gives_zero() {
         let chief = KeplerianElements {
             a_km: 6892.945,
             e: 0.001,
@@ -708,30 +717,117 @@ mod tests {
         let ric_pos = Vector3::new(1.0, 2.0, 1.0);
         let metrics = analyze_safety(&roe, &chief, &ric_pos);
 
-        // Expected: √2 · 0.300 · 0.500 / √(0.300² + 0.500²) ≈ 0.36394 km
-        let expected = std::f64::consts::SQRT_2 * 0.300 * 0.500
-            / (0.300_f64.powi(2) + 0.500_f64.powi(2)).sqrt();
         assert!(
-            (metrics.passive.min_ei_separation_km - expected).abs() < EI_SEPARATION_UNEQUAL_TOL_KM,
-            "e/i separation: got {}, expected {expected}", metrics.passive.min_ei_separation_km
+            metrics.passive.min_ei_separation_km.abs() < SAFETY_METRIC_TOL,
+            "Perpendicular e/i should give 0 separation, got {}",
+            metrics.passive.min_ei_separation_km
         );
     }
 
-    /// D'Amico Eq. 2.23 edge case: parallel e/i vectors give zero cross product.
-    /// D'Amico Table 2.1 Case 1 has parallel e/i vectors (both along +y).
-    /// The cross-product formula correctly returns 0; D'Amico Eq. 2.23 gives
-    /// the true minimum a·min(δe,δi)=0.200 km for parallel vectors, but the
-    /// instantaneous R/C distance check in analyze_safety covers this case.
+    /// D'Amico Eq. 2.22/2.23: parallel e/i vectors give a·min(δe,δi).
+    /// D'Amico Table 2.1 Case 1: δey=400m/a, δiy=200m/a (parallel along +y).
+    /// Eq. 2.22 reduces to Eq. 2.23: δr_nr^min = a·min(δe,δi) = 0.200 km.
     #[test]
-    fn damico_eq223_parallel_gives_zero() {
+    fn damico_eq222_parallel_gives_a_min_de_di() {
         let chief = damico_table21_chief();
         let roe = damico_table21_case1_roe(); // δey, δiy both along +y → parallel
         let ric_pos = Vector3::new(1.0, 2.0, 1.0);
         let metrics = analyze_safety(&roe, &chief, &ric_pos);
 
         assert!(
-            metrics.passive.min_ei_separation_km.abs() < SAFETY_METRIC_TOL,
-            "Parallel e/i should give 0 separation, got {}", metrics.passive.min_ei_separation_km
+            (metrics.passive.min_ei_separation_km - 0.200).abs() < EI_SEPARATION_TOL_KM,
+            "Parallel e/i should give a·min(δe,δi)=0.200 km, got {}",
+            metrics.passive.min_ei_separation_km
+        );
+    }
+
+    /// D'Amico Eq. 2.22/2.23: parallel e/i with equal magnitudes.
+    /// δey = δiy = 300m/a → δr_nr^min = a·min(δe,δi) = 0.300 km.
+    #[test]
+    fn damico_eq222_parallel_equal_magnitudes() {
+        let chief = damico_table21_chief();
+        let d = 0.300 / chief.a_km;
+        let roe = QuasiNonsingularROE {
+            da: 0.0,
+            dlambda: 0.0,
+            dex: 0.0,
+            dey: d,
+            dix: 0.0,
+            diy: d,
+        };
+        let ric_pos = Vector3::new(1.0, 2.0, 1.0);
+        let metrics = analyze_safety(&roe, &chief, &ric_pos);
+
+        assert!(
+            (metrics.passive.min_ei_separation_km - 0.300).abs() < EI_SEPARATION_TOL_KM,
+            "Parallel equal e/i should give a·δe = 0.300 km, got {}",
+            metrics.passive.min_ei_separation_km
+        );
+    }
+
+    /// D'Amico Eq. 2.22: 45° phase angle between e/i vectors.
+    /// δe along +x, δi at 45° → intermediate separation between 0 and a·min.
+    #[test]
+    fn damico_eq222_45_degree_phase() {
+        let chief = damico_table21_chief();
+        let d = 0.300 / chief.a_km;
+        let cos45 = std::f64::consts::FRAC_PI_4.cos();
+        let sin45 = std::f64::consts::FRAC_PI_4.sin();
+        let roe = QuasiNonsingularROE {
+            da: 0.0,
+            dlambda: 0.0,
+            dex: d,
+            dey: 0.0,
+            dix: d * cos45,
+            diy: d * sin45,
+        };
+        let ric_pos = Vector3::new(1.0, 2.0, 1.0);
+        let metrics = analyze_safety(&roe, &chief, &ric_pos);
+
+        // Compute expected from Eq. 2.22 directly
+        let dot = (d * d * cos45).abs();
+        let ecc_mag = d;
+        let inc_mag = d;
+        let e_plus_i_mag = ((d + d * cos45).powi(2) + (d * sin45).powi(2)).sqrt();
+        let e_minus_i_mag = ((d - d * cos45).powi(2) + (d * sin45).powi(2)).sqrt();
+        let denom =
+            (ecc_mag * ecc_mag + inc_mag * inc_mag + e_plus_i_mag * e_minus_i_mag).sqrt();
+        let expected = std::f64::consts::SQRT_2 * chief.a_km * dot / denom;
+
+        assert!(
+            expected > 0.0 && expected < 0.300,
+            "45° expected should be between 0 and 0.300 km, got {expected}"
+        );
+        assert!(
+            (metrics.passive.min_ei_separation_km - expected).abs() < EI_SEPARATION_TOL_KM,
+            "45° e/i phase: got {}, expected {expected}",
+            metrics.passive.min_ei_separation_km
+        );
+    }
+
+    /// D'Amico Eq. 2.22: anti-parallel e/i vectors give same result as parallel.
+    /// δey = +d, δiy = −d → |δe · δi| = d² (same magnitude as parallel dot product).
+    /// Expected: a·min(δe,δi) = 0.200 km.
+    #[test]
+    fn damico_eq222_anti_parallel() {
+        let chief = damico_table21_chief();
+        let d1 = 0.400 / chief.a_km;
+        let d2 = 0.200 / chief.a_km;
+        let roe = QuasiNonsingularROE {
+            da: 0.0,
+            dlambda: 0.0,
+            dex: 0.0,
+            dey: d1,
+            dix: 0.0,
+            diy: -d2,
+        };
+        let ric_pos = Vector3::new(1.0, 2.0, 1.0);
+        let metrics = analyze_safety(&roe, &chief, &ric_pos);
+
+        assert!(
+            (metrics.passive.min_ei_separation_km - 0.200).abs() < EI_SEPARATION_TOL_KM,
+            "Anti-parallel e/i should give a·min(δe,δi)=0.200 km, got {}",
+            metrics.passive.min_ei_separation_km
         );
     }
 
@@ -832,11 +928,12 @@ mod tests {
     #[test]
     fn assess_3d_fail_overall_fail() {
         let chief = iss_like_elements();
+        // Parallel e/i vectors (both along +y) so e/i separation passes
         let roe = QuasiNonsingularROE {
             da: 0.0,
             dlambda: 0.0,
-            dex: 0.001,
-            dey: 0.0,
+            dex: 0.0,
+            dey: 0.001,
             dix: 0.0,
             diy: 0.001,
         };
@@ -858,11 +955,12 @@ mod tests {
     #[test]
     fn assess_both_pass() {
         let chief = iss_like_elements();
+        // Parallel e/i vectors (both along +y) so e/i separation passes
         let roe = QuasiNonsingularROE {
             da: 0.0,
             dlambda: 0.0,
-            dex: 0.001,
-            dey: 0.0,
+            dex: 0.0,
+            dey: 0.001,
             dix: 0.0,
             diy: 0.001,
         };

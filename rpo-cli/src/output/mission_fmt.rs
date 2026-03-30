@@ -257,10 +257,12 @@ pub fn print_mission_verdict(
         );
     }
 
+    let cola_dv = super::common::cola_dv_summary(output.cola.as_deref());
     print_dv_budget(
         lambert_dv_km_s,
         waypoint_dv_km_s,
         output.auto_drag_config.is_some(),
+        cola_dv,
     );
 
     println!(

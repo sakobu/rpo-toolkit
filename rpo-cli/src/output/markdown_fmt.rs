@@ -21,9 +21,9 @@ use rpo_core::pipeline::{PipelineInput, PipelineOutput};
 use rpo_core::propagation::{DragConfig, PropagationModel};
 
 use super::common::{
-    compute_leg_error_stats, determine_mc_verdict, determine_verdict, fmt_bounded_motion_residual,
-    fmt_duration, fmt_m, fmt_m_s, fmt_roe_component, McBaseline, SafetyTier, ValidationTier,
-    VerdictResult,
+    cola_dv_summary, compute_leg_error_stats, determine_mc_verdict, determine_verdict,
+    fmt_bounded_motion_residual, fmt_duration, fmt_m, fmt_m_s, fmt_roe_component, McBaseline,
+    SafetyTier, ValidationTier, VerdictResult,
 };
 use super::insights;
 
@@ -153,6 +153,9 @@ pub fn mc_to_markdown(
     let stats = &report.statistics;
 
     write_mc_summary_table(&mut out, report, baseline, &sc);
+
+    write_cola_callout(&mut out, output);
+
     write_mc_baseline_section(&mut out, baseline);
     if derived_drag.is_some() {
         let _ = writeln!(
@@ -567,6 +570,7 @@ fn write_summary_block_mission(
         }
         let _ = writeln!(out);
     }
+    write_cola_callout(out, output);
     if output.auto_drag_config.is_some() {
         let _ = writeln!(
             out,
@@ -1007,6 +1011,20 @@ fn write_cola_sections(out: &mut String, output: &PipelineOutput) {
     }
     if let Some(ref skipped) = output.cola_skipped {
         write_cola_skipped_section(out, skipped);
+    }
+}
+
+/// Write a one-line COLA Δv callout (blockquote) if COLA maneuvers exist.
+fn write_cola_callout(out: &mut String, output: &PipelineOutput) {
+    if let Some((cola_dv, num_burns)) = cola_dv_summary(output.cola.as_deref()) {
+        let burn_label = if num_burns == 1 { "burn" } else { "burns" };
+        let total_with_cola = output.total_dv_km_s + cola_dv;
+        let _ = writeln!(
+            out,
+            "> COLA: +{} ({num_burns} {burn_label}) \u{2192} {} total (w/ COLA)\n",
+            fmt_m_s(cola_dv, 2),
+            fmt_m_s(total_with_cola, 1),
+        );
     }
 }
 

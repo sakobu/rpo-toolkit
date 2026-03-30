@@ -218,6 +218,7 @@ pub fn print_mc_summary(
     lambert_dv_km_s: f64,
     safety_config: &SafetyConfig,
     drag_aware: bool,
+    cola_dv_km_s: Option<(f64, usize)>,
 ) {
     let stats = &report.statistics;
 
@@ -237,7 +238,7 @@ pub fn print_mc_summary(
         );
     }
 
-    print_dv_budget(lambert_dv_km_s, report.nominal_dv_km_s, drag_aware);
+    print_dv_budget(lambert_dv_km_s, report.nominal_dv_km_s, drag_aware, cola_dv_km_s);
 
     // Safety
     println!("\n  Safety (Monte Carlo):");

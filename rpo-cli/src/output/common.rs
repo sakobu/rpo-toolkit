@@ -10,7 +10,8 @@ use owo_colors::{OwoColorize, Stream};
 use serde::Serialize;
 
 use rpo_core::mission::{
-    assess_safety, ColaConfig, MonteCarloReport, PercentileStats, SafetyConfig, ValidationReport,
+    assess_safety, AvoidanceManeuver, ColaConfig, MonteCarloReport, PercentileStats, SafetyConfig,
+    ValidationReport,
 };
 use rpo_core::pipeline::{
     resolve_propagator, to_propagation_model, PipelineInput, PipelineOutput, TransferResult,
@@ -662,6 +663,17 @@ pub fn print_insights(insights: &[Insight]) {
     }
 }
 
+// ── COLA helpers ────────────────────────────────────────────────────────
+
+/// Compute total COLA Δv and burn count from avoidance maneuvers.
+#[must_use]
+pub fn cola_dv_summary(cola: Option<&[AvoidanceManeuver]>) -> Option<(f64, usize)> {
+    cola.map(|maneuvers| {
+        let total: f64 = maneuvers.iter().map(|m| m.fuel_cost_km_s).sum();
+        (total, maneuvers.len())
+    })
+}
+
 // ── Δv budget ───────────────────────────────────────────────────────────
 
 /// Print the Δv budget block (Transfer / Targeting / Total) used by mission and MC summaries.
@@ -672,6 +684,7 @@ pub fn print_dv_budget(
     lambert_dv_km_s: f64,
     targeting_dv_km_s: f64,
     drag_aware: bool,
+    cola_dv_km_s: Option<(f64, usize)>,
 ) {
     use super::thresholds::fidelity;
 
@@ -704,6 +717,17 @@ pub fn print_dv_budget(
         "    Total:           {}",
         fmt_m_s(total, 1).if_supports_color(Stream::Stdout, |v| v.green()),
     );
+    if let Some((cola_dv, num_burns)) = cola_dv_km_s {
+        let burn_label = if num_burns == 1 { "burn" } else { "burns" };
+        println!(
+            "    COLA:            +{}  ({num_burns} {burn_label})",
+            fmt_m_s(cola_dv, 2),
+        );
+        println!(
+            "    Total (w/ COLA): {}",
+            fmt_m_s(total + cola_dv, 1).if_supports_color(Stream::Stdout, |v| v.green()),
+        );
+    }
     if drag_aware {
         println!("    (drag-aware targeting; \u{0394}v differs slightly from analytical-only)");
     }
