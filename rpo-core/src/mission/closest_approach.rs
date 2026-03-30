@@ -319,12 +319,14 @@ fn brent_refine(
     let mut d = b - a;
     let mut e = d;
 
-    // Track the best point (smallest |range_rate|) for soft convergence
+    // Track the best point (smallest |range_rate|) for soft convergence.
+    // Store only the time value — not the state — to avoid cloning
+    // PropagatedState inside the iteration loop.
     let mut best_rr = fa.abs().min(fb.abs());
+    let mut best_time: Option<f64> = None;
     // Cache the last propagated state at `b` to avoid re-propagating at
     // convergence. Invalidated when the b/c swap changes `b`.
     let mut last_state_at_b: Option<PropagatedState> = None;
-    let mut best_state: Option<PropagatedState> = None;
 
     for _iter in 0..POCA_MAX_ITERATIONS {
         if (fb_val > 0.0 && fc > 0.0) || (fb_val < 0.0 && fc < 0.0) {
@@ -385,14 +387,16 @@ fn brent_refine(
 
         if fb_val.abs() < best_rr {
             best_rr = fb_val.abs();
-            best_state = Some(state.clone());
+            best_time = Some(b);
         }
         last_state_at_b = Some(state);
     }
 
-    // Soft convergence: best residual is at the numerical noise floor
+    // Soft convergence: best residual is at the numerical noise floor.
+    // Re-propagate once at the best time (avoids storing state in the loop).
     if best_rr < POCA_SOFT_CONVERGENCE_TOL_KM_S {
-        if let Some(state) = best_state {
+        if let Some(t) = best_time {
+            let state = eval.propagate(t)?;
             return Ok(closest_approach_from_state(&state, leg_index));
         }
     }

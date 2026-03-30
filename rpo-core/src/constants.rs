@@ -34,14 +34,6 @@ pub const KEPLER_TOL: f64 = 1e-14;
 /// Maximum iterations for Kepler's equation
 pub const KEPLER_MAX_ITER: usize = 50;
 
-/// Earth J2000 frame for anise orbit construction.
-pub const EARTH_J2000: anise::prelude::Frame = anise::prelude::Frame {
-    ephemeris_id: 399,
-    orientation_id: 1,
-    mu_km3_s2: Some(MU_EARTH),
-    shape: None,
-};
-
 // --- Covariance propagation constants ---
 
 /// Tolerance for covariance matrix symmetry checks.

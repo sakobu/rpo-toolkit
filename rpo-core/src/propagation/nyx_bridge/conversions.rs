@@ -6,7 +6,7 @@ use anise::prelude::Orbit;
 use nalgebra::Vector3;
 use nyx_space::cosmic::Spacecraft;
 
-use crate::constants::EARTH_J2000;
+use super::EARTH_J2000;
 use crate::types::{SpacecraftConfig, StateVector};
 
 /// Convert a [`StateVector`] to an ANISE [`Orbit`] for ephemeris queries.
