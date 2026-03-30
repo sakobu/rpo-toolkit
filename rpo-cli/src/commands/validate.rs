@@ -2,7 +2,7 @@
 
 use std::path::Path;
 
-use rpo_core::mission::{validate_mission_nyx, ValidationReport};
+use rpo_core::mission::{validate_mission_nyx, ValidationConfig, ValidationReport};
 use rpo_core::pipeline::{compute_transfer, plan_waypoints_from_transfer, PipelineInput, PipelineOutput};
 use rpo_core::propagation::load_full_almanac;
 
@@ -61,13 +61,16 @@ pub fn run(
         spinner,
         "Nyx validation ({samples_per_leg} samples/leg)..."
     );
+    let val_config = ValidationConfig {
+        samples_per_leg,
+        chief_config,
+        deputy_config,
+    };
     let report = validate_mission_nyx(
         &wp_mission,
         &transfer.perch_chief,
         &transfer.perch_deputy,
-        samples_per_leg,
-        &chief_config,
-        &deputy_config,
+        &val_config,
         &almanac,
     )?;
 

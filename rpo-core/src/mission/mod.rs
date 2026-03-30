@@ -36,7 +36,7 @@ pub use types::{
     Maneuver, ManeuverLeg, MissionPhase, MissionPlan, OperationalSafety, PassiveSafety,
     PerchGeometry, SafetyMetrics, ValidationPoint, ValidationReport, Waypoint, WaypointMission,
 };
-pub use validation::{validate_leg_nyx, validate_mission_nyx, LegValidationOutput, ValidationError};
+pub use validation::{validate_leg_nyx, validate_mission_nyx, LegValidationOutput, ValidationConfig, ValidationError};
 pub use covariance::propagate_mission_covariance;
 pub use monte_carlo::{
     run_monte_carlo, MonteCarloControl, MonteCarloError,

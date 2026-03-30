@@ -11,7 +11,7 @@ use tokio::sync::mpsc;
 
 use rpo_core::mission::config::MissionConfig;
 use rpo_core::mission::types::WaypointMission;
-use rpo_core::mission::{validate_mission_nyx, ValidationReport};
+use rpo_core::mission::{validate_mission_nyx, ValidationConfig, ValidationReport};
 use rpo_core::pipeline::{TransferResult, WaypointInput};
 use rpo_core::propagation::PropagationModel;
 use rpo_core::types::{SpacecraftConfig, StateVector};
@@ -96,13 +96,16 @@ pub fn handle_validate(
 
     send_progress(progress_tx, ProgressPhase::Validate, "Running nyx validation...", 0.1);
 
+    let val_config = ValidationConfig {
+        samples_per_leg: request.samples_per_leg,
+        chief_config: request.chief_config,
+        deputy_config: request.deputy_config,
+    };
     let report = validate_mission_nyx(
         &mission,
         &request.perch_chief,
         &request.perch_deputy,
-        request.samples_per_leg,
-        &request.chief_config,
-        &request.deputy_config,
+        &val_config,
         almanac,
     )?;
 
