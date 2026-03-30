@@ -288,7 +288,7 @@ async fn handle_text_message(
             // Extract cached mission before set_waypoints clears it
             let cached_mission = session.mission.take();
             session.set_waypoints(waypoints);
-            match handlers::handle_set_waypoints(session, changed_from, cached_mission.as_ref()) {
+            match handlers::handle_set_waypoints(session, changed_from, cached_mission) {
                 Ok(result) => {
                     send_message(
                         ws,

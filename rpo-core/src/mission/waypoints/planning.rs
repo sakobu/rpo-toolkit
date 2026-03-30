@@ -1,4 +1,4 @@
-//! Waypoint-based mission chaining.
+//! Core leg-chaining orchestration for multi-waypoint missions.
 //!
 //! Chains multiple two-burn transfer legs to visit a sequence of waypoints
 //! in RIC space. The arrival state of each leg becomes the departure state
@@ -7,18 +7,12 @@
 use hifitime::Duration;
 use nalgebra::Vector3;
 
-use crate::elements::{
-    compute_eclipse_state, extract_eclipse_intervals,
-    keplerian_to_state, ric_to_eci_position,
-};
-use crate::elements::eclipse::{build_celestial_snapshot, is_deeper_shadow};
+use crate::mission::config::{MissionConfig, SafetyConfig};
+use crate::mission::errors::MissionError;
 use crate::mission::targeting::{optimize_tof, solve_leg};
-use crate::propagation::propagator::{PropagatedState, PropagationError, PropagationModel};
-use crate::types::{DepartureState, LegEclipseData, MissionEclipseData};
-
-use super::config::{MissionConfig, SafetyConfig};
-use super::errors::{EclipseComputeError, MissionError};
-use super::types::{ManeuverLeg, SafetyMetrics, Waypoint, WaypointMission};
+use crate::mission::types::{ManeuverLeg, SafetyMetrics, Waypoint, WaypointMission};
+use crate::propagation::propagator::PropagationModel;
+use crate::types::DepartureState;
 
 /// Compute worst-case safety metrics across all leg trajectories.
 ///
@@ -75,151 +69,6 @@ fn compute_worst_safety(
     })
 }
 
-/// Compute eclipse data across all mission legs (chief and deputy).
-///
-/// Single-pass per leg: calls [`keplerian_to_state`] once per trajectory
-/// point, then reuses the chief ECI state for both the chief
-/// [`CelestialSnapshot`] (via [`build_celestial_snapshot`]) and the deputy
-/// eclipse state (via [`ric_to_eci_position`] + [`compute_eclipse_state`]).
-///
-/// # Errors
-///
-/// Returns [`EclipseComputeError::Conversion`] if a Keplerian-to-ECI
-/// conversion fails, [`EclipseComputeError::Dcm`] if an RIC-to-ECI frame
-/// transformation fails, or [`EclipseComputeError::EmptyTrajectory`] if
-/// all legs have empty trajectories.
-///
-/// # Cross-leg interval merging
-///
-/// Eclipse intervals are extracted per-leg, then merged across boundaries.
-/// The chief does not maneuver, so its eclipse state is continuous across
-/// leg boundaries. If the last interval of leg N ends at the same epoch as
-/// (or later than) the first interval of leg N+1, they are merged into one
-/// contiguous interval.
-///
-/// # Deputy eclipse
-///
-/// Deputy ECI position at each point is reconstructed via:
-/// 1. [`keplerian_to_state`]`(&chief_mean)` → chief [`StateVector`]
-/// 2. [`ric_to_eci_position`]`(&chief_sv, &ric.position_ric_km)` → deputy ECI
-/// 3. [`compute_eclipse_state`]`(&deputy_eci, &sun_eci)` → deputy shadow state
-///
-/// The Sun position for the deputy is obtained from the chief snapshot's
-/// direction and distance fields (already computed by `build_celestial_snapshot`),
-/// avoiding a redundant ephemeris call.
-fn compute_mission_eclipse(
-    legs: &[ManeuverLeg],
-) -> Result<MissionEclipseData, EclipseComputeError> {
-    let mut leg_data = Vec::with_capacity(legs.len());
-    let mut merged_intervals: Vec<crate::types::EclipseInterval> = Vec::new();
-
-    for leg in legs {
-        if leg.trajectory.is_empty() {
-            leg_data.push(LegEclipseData {
-                chief_celestial: Vec::new(),
-                deputy_eclipse: Vec::new(),
-            });
-            continue;
-        }
-
-        // Single pass: keplerian_to_state once per point, reuse for both
-        // chief snapshot and deputy RIC-to-ECI conversion.
-        let mut chief_snapshots = Vec::with_capacity(leg.trajectory.len());
-        let mut deputy_states = Vec::with_capacity(leg.trajectory.len());
-
-        for state in &leg.trajectory {
-            let chief_sv = keplerian_to_state(&state.chief_mean, state.epoch)?;
-
-            // Chief celestial snapshot (Sun + Moon ephemeris + shadow)
-            let snapshot = build_celestial_snapshot(state.epoch, &chief_sv.position_eci_km);
-
-            // Deputy eclipse: reconstruct deputy ECI from chief + RIC offset
-            let deputy_eci =
-                ric_to_eci_position(&chief_sv, &state.ric.position_ric_km)?;
-            // Reconstruct Sun ECI from snapshot (avoids redundant ephemeris call)
-            let sun_eci = chief_sv.position_eci_km
-                + snapshot.sun_direction_eci * snapshot.sun_distance_km;
-            deputy_states.push(compute_eclipse_state(&deputy_eci, &sun_eci));
-
-            chief_snapshots.push(snapshot);
-        }
-
-        // Extract intervals for this leg, then merge across leg boundaries.
-        let leg_summary = extract_eclipse_intervals(&chief_snapshots);
-        merge_intervals(&mut merged_intervals, leg_summary.intervals);
-
-        leg_data.push(LegEclipseData {
-            chief_celestial: chief_snapshots,
-            deputy_eclipse: deputy_states,
-        });
-    }
-
-    if leg_data.iter().all(|d| d.chief_celestial.is_empty()) {
-        return Err(EclipseComputeError::EmptyTrajectory);
-    }
-
-    // Recompute aggregate metrics from merged intervals.
-    let total_shadow_duration_s: f64 = merged_intervals.iter().map(|i| i.duration_s).sum();
-    let max_shadow_duration_s = merged_intervals
-        .iter()
-        .map(|i| i.duration_s)
-        .fold(0.0_f64, f64::max);
-
-    // Total mission duration from first non-empty leg start to last non-empty leg end.
-    let first_epoch = leg_data.iter()
-        .filter_map(|d| d.chief_celestial.first())
-        .map(|s| s.epoch)
-        .next();
-    let last_epoch = leg_data.iter()
-        .filter_map(|d| d.chief_celestial.last())
-        .map(|s| s.epoch)
-        .next_back();
-
-    let time_in_shadow_fraction = match (first_epoch, last_epoch) {
-        (Some(first), Some(last)) => {
-            let total_s = (last - first).to_seconds();
-            if total_s > 0.0 { total_shadow_duration_s / total_s } else { 0.0 }
-        }
-        _ => 0.0,
-    };
-
-    Ok(MissionEclipseData {
-        summary: crate::types::EclipseSummary {
-            intervals: merged_intervals,
-            total_shadow_duration_s,
-            time_in_shadow_fraction,
-            max_shadow_duration_s,
-        },
-        legs: leg_data,
-    })
-}
-
-/// Merge per-leg intervals into a running merged list.
-///
-/// If the last interval in `merged` ends at or after the start of the first
-/// interval in `new`, they are joined into one contiguous interval (the chief
-/// does not maneuver, so shadow state is continuous across leg boundaries).
-fn merge_intervals(
-    merged: &mut Vec<crate::types::EclipseInterval>,
-    new: Vec<crate::types::EclipseInterval>,
-) {
-    for interval in new {
-        if let Some(last) = merged.last_mut()
-            && last.end >= interval.start
-        {
-            // Contiguous — extend the existing interval
-            last.end = interval.end;
-            last.duration_s = (last.end - last.start).to_seconds();
-            // Keep worst-case state
-            if is_deeper_shadow(&interval.state, &last.state) {
-                last.state = interval.state;
-            }
-            continue;
-        }
-        merged.push(interval);
-    }
-}
-
 /// Build a `WaypointMission` from a set of legs with computed aggregates.
 fn build_mission(
     legs: Vec<ManeuverLeg>,
@@ -228,7 +77,7 @@ fn build_mission(
     let total_dv_km_s: f64 = legs.iter().map(|l| l.total_dv_km_s).sum();
     let total_duration_s: f64 = legs.iter().map(|l| l.tof_s).sum();
     let safety = compute_worst_safety(&legs, safety_config);
-    let eclipse = compute_mission_eclipse(&legs).ok();
+    let eclipse = super::eclipse::compute_mission_eclipse(&legs).ok();
     WaypointMission {
         legs,
         total_dv_km_s,
@@ -247,6 +96,11 @@ fn build_mission(
 /// with the time of flight.
 ///
 /// # Invariants
+///
+/// **Validated:**
+/// - `waypoints` must be non-empty
+///
+/// **Caller-enforced:**
 /// - `initial.chief.a_km > 0` and `0 <= initial.chief.e < 1`
 /// - `initial.chief` must be **mean** Keplerian elements, not osculating
 /// - Each `Waypoint.tof_s`, if `Some`, must be > 0
@@ -329,15 +183,20 @@ pub fn plan_waypoint_mission(
 /// - Other params — same as [`plan_waypoint_mission`]
 ///
 /// # Invariants
+///
+/// **Validated:**
+/// - `modified_index <= new_waypoints.len()`
+/// - `modified_index <= existing.legs.len()`
+///
+/// **Caller-enforced:**
 /// - `initial.chief` must be **mean** Keplerian elements, not osculating
-/// - `modified_index <= new_waypoints.len()` and `modified_index <= existing.legs.len()`
 /// - `existing` must have been produced by `plan_waypoint_mission` with the same `initial`
 ///
 /// # Errors
-/// Returns `MissionError::InvalidReplanIndex` if `modified_index > new_waypoints.len()`,
+/// Returns `MissionError::InvalidReplanIndex` if `modified_index` exceeds bounds,
 /// or propagates errors from the underlying solver.
 pub fn replan_from_waypoint(
-    existing: &WaypointMission,
+    existing: WaypointMission,
     modified_index: usize,
     new_waypoints: &[Waypoint],
     initial: &DepartureState,
@@ -368,8 +227,9 @@ pub fn replan_from_waypoint(
         });
     }
 
-    // Keep legs before the modified index
-    let kept_legs: Vec<ManeuverLeg> = existing.legs[..modified_index].to_vec();
+    // Take ownership of legs, keep only those before the modified index
+    let mut kept_legs = existing.legs;
+    kept_legs.truncate(modified_index);
 
     // Remaining waypoints to plan
     let remaining_waypoints = &new_waypoints[modified_index..];
@@ -402,106 +262,20 @@ pub fn replan_from_waypoint(
     Ok(build_mission(all_legs, config.safety.as_ref()))
 }
 
-/// Evaluate the propagated state at a given elapsed time into the mission.
-///
-/// Re-evaluates the closed-form propagation model at the exact query time,
-/// avoiding discretization error from sampled trajectory lookup. Uses the
-/// explicit initial conditions (`post_departure_roe`, `departure_chief_mean`,
-/// `departure_maneuver.epoch`) stored on each leg.
-///
-/// Returns `Ok(None)` exclusively when `elapsed_s` is out of bounds (negative
-/// or past the mission end).
-///
-/// # Invariants
-/// - `elapsed_s` must be finite
-/// - `mission` must have been produced by `plan_waypoint_mission`
-///
-/// # Arguments
-/// * `mission` — Completed waypoint mission
-/// * `elapsed_s` — Elapsed time from mission start (seconds)
-/// * `propagator` — Propagation model (must match the one used to plan)
-///
-/// # Errors
-/// Returns `PropagationError` if propagation fails (e.g., invalid orbital elements).
-pub fn get_mission_state_at_time(
-    mission: &WaypointMission,
-    elapsed_s: f64,
-    propagator: &PropagationModel,
-) -> Result<Option<PropagatedState>, PropagationError> {
-    if elapsed_s < 0.0 {
-        return Ok(None);
-    }
-
-    let mut t_offset = 0.0;
-    for leg in &mission.legs {
-        if elapsed_s <= t_offset + leg.tof_s {
-            let local_t = elapsed_s - t_offset;
-            return Ok(Some(propagator.propagate(
-                &leg.post_departure_roe,
-                &leg.departure_chief_mean,
-                leg.departure_maneuver.epoch,
-                local_t,
-            )?));
-        }
-        t_offset += leg.tof_s;
-    }
-
-    Ok(None)
-}
-
-/// Resample a leg's trajectory at a specified number of steps using exact propagation.
-///
-/// Re-evaluates the closed-form propagation model at equally-spaced times,
-/// avoiding discretization error from the original sampled trajectory.
-/// Uses the explicit initial conditions on the leg, independent of the
-/// stored `trajectory` vector.
-///
-/// `n_steps` intervals produces `n_steps + 1` states, including both the
-/// t=0 and t=tof endpoints.
-///
-/// # Invariants
-/// - `n_steps > 0`
-/// - `leg` must have been produced by `solve_leg` or `plan_waypoint_mission`
-///
-/// # Arguments
-/// * `leg` — Maneuver leg to resample
-/// * `n_steps` — Number of time intervals (produces `n_steps + 1` states)
-/// * `propagator` — Propagation model (must match the one used to plan)
-///
-/// # Errors
-/// Returns `PropagationError::ZeroSteps` if `n_steps` is zero.
-pub fn resample_leg_trajectory(
-    leg: &ManeuverLeg,
-    n_steps: usize,
-    propagator: &PropagationModel,
-) -> Result<Vec<PropagatedState>, PropagationError> {
-    propagator.propagate_with_steps(
-        &leg.post_departure_roe,
-        &leg.departure_chief_mean,
-        leg.departure_maneuver.epoch,
-        leg.tof_s,
-        n_steps,
-    )
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::mission::config::MissionConfig;
+    use crate::mission::types::Waypoint;
     use crate::propagation::propagator::PropagationModel;
     use crate::test_helpers::{iss_like_elements, test_epoch};
-    use crate::mission::config::MissionConfig;
-    use crate::types::QuasiNonsingularROE;
+    use crate::types::{DepartureState, QuasiNonsingularROE};
     use nalgebra::Vector3;
 
     /// Tolerance for f64 scalar/vector roundtrips where both values come from
     /// the same computation path (serde, kept-leg identity, Δv sums).
     /// No independent evaluation — agreement limited only by f64 representation.
     const SCALAR_ROUNDTRIP_TOL: f64 = 1e-14;
-
-    /// Tolerance for propagated state agreement when the same propagation model
-    /// is evaluated at t=0 (identity) or at the exact same query time.
-    /// Single STM evaluation — error is f64 arithmetic only.
-    const SAME_PATH_PROPAGATION_TOL: f64 = 1e-12;
 
     /// Tolerance for cross-path propagation agreement: comparing a freshly
     /// propagated state against the last point of a discretized trajectory.
@@ -629,180 +403,6 @@ mod tests {
         );
     }
 
-    /// `get_mission_state_at_time` returns exact state via propagator.
-    #[test]
-    fn get_state_at_time() {
-        let departure = zero_departure();
-        let propagator = PropagationModel::J2Stm;
-        let config = default_config();
-        let period = std::f64::consts::TAU / departure.chief.mean_motion().unwrap();
-
-        let waypoints = vec![Waypoint {
-            position_ric_km: Vector3::new(0.0, 5.0, 0.0),
-            velocity_ric_km_s: Vector3::zeros(),
-            tof_s: Some(period),
-        }];
-
-        let mission =
-            plan_waypoint_mission(&departure, &waypoints, &config, &propagator)
-                .expect("should succeed");
-
-        // Mid-mission should return a state with exact elapsed_s
-        let query_t = period / 2.0;
-        let state = get_mission_state_at_time(&mission, query_t, &propagator).unwrap();
-        assert!(state.is_some(), "Should find state at mid-mission");
-        let s = state.unwrap();
-        assert!(
-            (s.elapsed_s - query_t).abs() < SAME_PATH_PROPAGATION_TOL,
-            "elapsed_s should exactly match query time"
-        );
-
-        // Before mission should return None
-        let state = get_mission_state_at_time(&mission, -1.0, &propagator).unwrap();
-        assert!(state.is_none(), "Should return None before mission");
-
-        // After mission should return None
-        let state = get_mission_state_at_time(&mission, period * 2.0, &propagator).unwrap();
-        assert!(state.is_none(), "Should return None after mission");
-    }
-
-    /// Exact evaluation at leg endpoints matches trajectory start/end.
-    #[test]
-    fn exact_evaluation_at_endpoints() {
-        let departure = zero_departure();
-        let propagator = PropagationModel::J2Stm;
-        let config = default_config();
-        let period = std::f64::consts::TAU / departure.chief.mean_motion().unwrap();
-
-        let waypoints = vec![Waypoint {
-            position_ric_km: Vector3::new(0.0, 5.0, 0.0),
-            velocity_ric_km_s: Vector3::zeros(),
-            tof_s: Some(period),
-        }];
-
-        let mission =
-            plan_waypoint_mission(&departure, &waypoints, &config, &propagator)
-                .expect("should succeed");
-
-        // At t=0, should match first trajectory point
-        let at_start = get_mission_state_at_time(&mission, 0.0, &propagator)
-            .unwrap().expect("t=0 should be valid");
-        let first = &mission.legs[0].trajectory[0];
-        assert!(
-            (at_start.ric.position_ric_km - first.ric.position_ric_km).norm() < SAME_PATH_PROPAGATION_TOL,
-            "Start position should match trajectory[0]"
-        );
-
-        // At t=tof, should match last trajectory point
-        let at_end = get_mission_state_at_time(&mission, period, &propagator)
-            .unwrap().expect("t=tof should be valid");
-        let last = mission.legs[0].trajectory.last().unwrap();
-        assert!(
-            (at_end.ric.position_ric_km - last.ric.position_ric_km).norm() < CROSS_PATH_PROPAGATION_TOL,
-            "End position should match trajectory.last()"
-        );
-    }
-
-    /// Exact evaluation at an arbitrary mid-leg time returns exact elapsed_s.
-    #[test]
-    fn exact_evaluation_midpoint() {
-        let departure = zero_departure();
-        let propagator = PropagationModel::J2Stm;
-        let config = default_config();
-        let period = std::f64::consts::TAU / departure.chief.mean_motion().unwrap();
-        let tof = period * 0.75;
-
-        let waypoints = vec![
-            Waypoint {
-                position_ric_km: Vector3::new(0.0, 5.0, 0.0),
-                velocity_ric_km_s: Vector3::zeros(),
-                tof_s: Some(tof),
-            },
-            Waypoint {
-                position_ric_km: Vector3::new(2.0, 3.0, 0.0),
-                velocity_ric_km_s: Vector3::zeros(),
-                tof_s: Some(tof),
-            },
-        ];
-
-        let mission =
-            plan_waypoint_mission(&departure, &waypoints, &config, &propagator)
-                .expect("should succeed");
-
-        // Query a point in the second leg
-        let query_t = tof + tof * 0.37; // 37% into second leg
-        let state = get_mission_state_at_time(&mission, query_t, &propagator)
-            .unwrap().expect("mid-leg query should succeed");
-
-        // elapsed_s should be the local time within the second leg
-        let expected_local_t = tof * 0.37;
-        assert!(
-            (state.elapsed_s - expected_local_t).abs() < CROSS_PATH_PROPAGATION_TOL,
-            "elapsed_s should be local time within leg: got {} expected {}",
-            state.elapsed_s,
-            expected_local_t,
-        );
-    }
-
-    /// Resample at higher density produces correct number of points.
-    #[test]
-    fn resample_leg_denser() {
-        let departure = zero_departure();
-        let propagator = PropagationModel::J2Stm;
-        let config = default_config();
-        let period = std::f64::consts::TAU / departure.chief.mean_motion().unwrap();
-
-        let waypoints = vec![Waypoint {
-            position_ric_km: Vector3::new(0.0, 5.0, 0.0),
-            velocity_ric_km_s: Vector3::zeros(),
-            tof_s: Some(period),
-        }];
-
-        let mission =
-            plan_waypoint_mission(&departure, &waypoints, &config, &propagator)
-                .expect("should succeed");
-
-        let resampled = resample_leg_trajectory(&mission.legs[0], 1000, &propagator)
-            .expect("resample should succeed");
-
-        assert_eq!(resampled.len(), 1001, "1000 steps → 1001 points");
-
-        // First point should match trajectory[0]
-        let first_orig = &mission.legs[0].trajectory[0];
-        assert!(
-            (resampled[0].ric.position_ric_km - first_orig.ric.position_ric_km).norm() < SAME_PATH_PROPAGATION_TOL,
-            "Resampled first point should match original"
-        );
-    }
-
-    /// Out-of-bounds queries return None.
-    #[test]
-    fn evaluate_out_of_bounds() {
-        let departure = zero_departure();
-        let propagator = PropagationModel::J2Stm;
-        let config = default_config();
-        let period = std::f64::consts::TAU / departure.chief.mean_motion().unwrap();
-
-        let waypoints = vec![Waypoint {
-            position_ric_km: Vector3::new(0.0, 5.0, 0.0),
-            velocity_ric_km_s: Vector3::zeros(),
-            tof_s: Some(period),
-        }];
-
-        let mission =
-            plan_waypoint_mission(&departure, &waypoints, &config, &propagator)
-                .expect("should succeed");
-
-        assert!(
-            get_mission_state_at_time(&mission, -1.0, &propagator).unwrap().is_none(),
-            "Negative time should return None"
-        );
-        assert!(
-            get_mission_state_at_time(&mission, period + 1.0, &propagator).unwrap().is_none(),
-            "Past-end time should return None"
-        );
-    }
-
     /// Empty waypoints returns error.
     #[test]
     fn empty_waypoints_error() {
@@ -875,14 +475,16 @@ mod tests {
 
         let full = plan_waypoint_mission(&departure, &waypoints, &config, &propagator)
             .expect("full plan should succeed");
+        let full_legs_len = full.legs.len();
+        let full_dv = full.total_dv_km_s;
         let replanned = replan_from_waypoint(
-            &full, 0, &waypoints, &departure, &config, &propagator,
+            full, 0, &waypoints, &departure, &config, &propagator,
         )
         .expect("replan from 0 should succeed");
 
-        assert_eq!(full.legs.len(), replanned.legs.len());
+        assert_eq!(full_legs_len, replanned.legs.len());
         assert!(
-            (full.total_dv_km_s - replanned.total_dv_km_s).abs() < SCALAR_ROUNDTRIP_TOL,
+            (full_dv - replanned.total_dv_km_s).abs() < SCALAR_ROUNDTRIP_TOL,
             "Total Δv should match"
         );
     }
@@ -901,12 +503,16 @@ mod tests {
             plan_waypoint_mission(&departure, &waypoints, &config, &propagator)
                 .expect("original should succeed");
 
+        // Capture kept-leg scalars before ownership transfer
+        let kept_dvs: Vec<f64> = original.legs.iter().take(2).map(|l| l.total_dv_km_s).collect();
+        let kept_tofs: Vec<f64> = original.legs.iter().take(2).map(|l| l.tof_s).collect();
+
         // Modify WP2 (index 2) — keep legs 0 and 1
         let mut modified_wps = waypoints.clone();
         modified_wps[2].position_ric_km = Vector3::new(1.0, 2.0, 0.0);
 
         let replanned = replan_from_waypoint(
-            &original, 2, &modified_wps, &departure, &config, &propagator,
+            original, 2, &modified_wps, &departure, &config, &propagator,
         )
         .expect("replan should succeed");
 
@@ -914,11 +520,11 @@ mod tests {
         // First two legs should be identical
         for i in 0..2 {
             assert!(
-                (original.legs[i].total_dv_km_s - replanned.legs[i].total_dv_km_s).abs() < SCALAR_ROUNDTRIP_TOL,
+                (kept_dvs[i] - replanned.legs[i].total_dv_km_s).abs() < SCALAR_ROUNDTRIP_TOL,
                 "Kept leg {i} Δv should be identical"
             );
             assert!(
-                (original.legs[i].tof_s - replanned.legs[i].tof_s).abs() < SCALAR_ROUNDTRIP_TOL,
+                (kept_tofs[i] - replanned.legs[i].tof_s).abs() < SCALAR_ROUNDTRIP_TOL,
                 "Kept leg {i} TOF should be identical"
             );
         }
@@ -942,7 +548,7 @@ mod tests {
         modified_wps[1].position_ric_km = Vector3::new(1.0, 4.0, 0.0);
 
         let replanned = replan_from_waypoint(
-            &original, 1, &modified_wps, &departure, &config, &propagator,
+            original, 1, &modified_wps, &departure, &config, &propagator,
         )
         .expect("replan should succeed");
 
@@ -968,23 +574,27 @@ mod tests {
             plan_waypoint_mission(&departure, &waypoints, &config, &propagator)
                 .expect("original should succeed");
 
+        // Capture scalars before ownership transfer
+        let original_leg0_dv = original.legs[0].total_dv_km_s;
+        let original_leg1_dv = original.legs[1].total_dv_km_s;
+
         let mut modified_wps = waypoints.clone();
         modified_wps[1].position_ric_km = Vector3::new(1.0, 4.0, 0.5);
 
         let replanned = replan_from_waypoint(
-            &original, 1, &modified_wps, &departure, &config, &propagator,
+            original, 1, &modified_wps, &departure, &config, &propagator,
         )
         .expect("replan should succeed");
 
         assert_eq!(replanned.legs.len(), 3);
         // Leg 0 should be identical
         assert!(
-            (original.legs[0].total_dv_km_s - replanned.legs[0].total_dv_km_s).abs() < SCALAR_ROUNDTRIP_TOL,
+            (original_leg0_dv - replanned.legs[0].total_dv_km_s).abs() < SCALAR_ROUNDTRIP_TOL,
             "Kept leg 0 should be identical"
         );
         // Leg 1 should differ (different target)
         assert!(
-            (original.legs[1].total_dv_km_s - replanned.legs[1].total_dv_km_s).abs() > CROSS_PATH_PROPAGATION_TOL,
+            (original_leg1_dv - replanned.legs[1].total_dv_km_s).abs() > CROSS_PATH_PROPAGATION_TOL,
             "Replanned leg 1 should differ from original"
         );
     }
@@ -1005,7 +615,7 @@ mod tests {
 
         // Try to replan from index 2, but only 1 leg exists
         let result = replan_from_waypoint(
-            &short_mission, 2, &waypoints, &departure, &config, &propagator,
+            short_mission, 2, &waypoints, &departure, &config, &propagator,
         );
 
         assert!(
@@ -1028,7 +638,7 @@ mod tests {
                 .expect("original should succeed");
 
         let result = replan_from_waypoint(
-            &original, 5, &waypoints, &departure, &config, &propagator,
+            original, 5, &waypoints, &departure, &config, &propagator,
         );
 
         assert!(
@@ -1057,10 +667,13 @@ mod tests {
             plan_waypoint_mission(&departure, &waypoints, &config, &propagator)
                 .expect("original should succeed");
 
+        // Capture kept-leg scalars before ownership transfer
+        let kept_dvs: Vec<f64> = original.legs.iter().take(2).map(|l| l.total_dv_km_s).collect();
+
         // Replan with only 2 waypoints, from index 2 → remaining slice is empty
         let shortened = &waypoints[..2];
         let replanned = replan_from_waypoint(
-            &original, 2, shortened, &departure, &config, &propagator,
+            original, 2, shortened, &departure, &config, &propagator,
         )
         .expect("trailing deletion should succeed");
 
@@ -1068,7 +681,7 @@ mod tests {
         // Both kept legs should be identical to original
         for i in 0..2 {
             assert!(
-                (original.legs[i].total_dv_km_s - replanned.legs[i].total_dv_km_s).abs() < SCALAR_ROUNDTRIP_TOL,
+                (kept_dvs[i] - replanned.legs[i].total_dv_km_s).abs() < SCALAR_ROUNDTRIP_TOL,
                 "Kept leg {i} should be identical"
             );
         }
@@ -1114,46 +727,6 @@ mod tests {
             leg.from_position_ric_km.norm() < ZERO_ROE_POSITION_BOUND_KM,
             "from_position_ric_km should be near origin for zero ROE departure"
         );
-    }
-
-    /// Leg boundary ownership: intermediate and final boundaries are included.
-    #[test]
-    fn leg_boundary_ownership() {
-        let departure = zero_departure();
-        let propagator = PropagationModel::J2Stm;
-        let config = default_config();
-        let period = std::f64::consts::TAU / departure.chief.mean_motion().unwrap();
-        let tof = period * 0.75;
-
-        let waypoints = vec![
-            Waypoint {
-                position_ric_km: Vector3::new(0.0, 5.0, 0.0),
-                velocity_ric_km_s: Vector3::zeros(),
-                tof_s: Some(tof),
-            },
-            Waypoint {
-                position_ric_km: Vector3::new(2.0, 3.0, 0.0),
-                velocity_ric_km_s: Vector3::zeros(),
-                tof_s: Some(tof),
-            },
-        ];
-
-        let mission =
-            plan_waypoint_mission(&departure, &waypoints, &config, &propagator)
-                .expect("should succeed");
-
-        // At exactly tof (end of leg 1 / start of leg 2): should return Some,
-        // owned by leg 1 (due to `elapsed_s <= t_offset + leg.tof_s`)
-        let at_boundary = get_mission_state_at_time(&mission, tof, &propagator).unwrap();
-        assert!(at_boundary.is_some(), "Boundary at tof should be included");
-
-        // At exactly 2*tof (mission end): should return Some
-        let at_end = get_mission_state_at_time(&mission, 2.0 * tof, &propagator).unwrap();
-        assert!(at_end.is_some(), "Mission endpoint should be included");
-
-        // At 2*tof + epsilon: should return None
-        let past_end = get_mission_state_at_time(&mission, 2.0 * tof + crate::constants::ELAPSED_TIME_TOL_S, &propagator).unwrap();
-        assert!(past_end.is_none(), "Past mission end should return None");
     }
 
     /// Serde roundtrip preserves new metadata fields.
@@ -1429,7 +1002,7 @@ mod tests {
         };
 
         let replanned = replan_from_waypoint(
-            &original, 2, &new_waypoints, &departure, &config, &propagator,
+            original, 2, &new_waypoints, &departure, &config, &propagator,
         )
         .expect("replan should succeed");
 

@@ -52,7 +52,7 @@ pub struct EclipseResponse {
 pub fn handle_set_waypoints(
     session: &mut Session,
     changed_from: Option<usize>,
-    cached_mission: Option<&WaypointMission>,
+    cached_mission: Option<WaypointMission>,
 ) -> Result<LeanPlanResult, ApiError> {
     // Ensure we have a transfer. If none, try auto-compute.
     if session.transfer.is_none() {

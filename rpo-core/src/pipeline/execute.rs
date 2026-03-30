@@ -390,20 +390,16 @@ pub fn execute_mission(input: &PipelineInput) -> Result<PipelineOutput, Pipeline
 pub fn replan_mission(
     input: &PipelineInput,
     modified_index: usize,
-    cached_mission: Option<&crate::mission::types::WaypointMission>,
+    cached_mission: Option<crate::mission::types::WaypointMission>,
 ) -> Result<PipelineOutput, PipelineError> {
     let transfer = compute_transfer(input)?;
     let propagator = to_propagation_model(&input.propagator);
     let waypoints = to_waypoints(&input.waypoints);
     let departure = departure_from_transfer(&transfer);
 
-    let owned_mission;
-    let base_mission = if let Some(m) = cached_mission {
-        m
-    } else {
-        owned_mission =
-            plan_waypoint_mission(&departure, &waypoints, &input.config, &propagator)?;
-        &owned_mission
+    let base_mission = match cached_mission {
+        Some(m) => m,
+        None => plan_waypoint_mission(&departure, &waypoints, &input.config, &propagator)?,
     };
 
     let wp_mission = replan_from_waypoint(
@@ -513,7 +509,7 @@ mod tests {
         let full_output = execute_mission(&input).expect("execute_mission should succeed");
 
         // Replan from waypoint 1 using the cached mission
-        let output = replan_mission(&input, 1, Some(&full_output.mission))
+        let output = replan_mission(&input, 1, Some(full_output.mission))
             .expect("replan_mission with cache should succeed");
 
         assert!(!output.mission.legs.is_empty());
