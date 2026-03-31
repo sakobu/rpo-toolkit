@@ -35,8 +35,8 @@ pub(super) fn classify_correction(
     poca: &ClosestApproach,
     roe: &QuasiNonsingularROE,
 ) -> CorrectionType {
-    let de_mag = (roe.dex * roe.dex + roe.dey * roe.dey).sqrt();
-    let di_mag = (roe.dix * roe.dix + roe.diy * roe.diy).sqrt();
+    let de_mag = roe.de_magnitude();
+    let di_mag = roe.di_magnitude();
 
     // Degeneracy guards
     if de_mag < COLA_MIN_ROE_MAGNITUDE && di_mag < COLA_MIN_ROE_MAGNITUDE {

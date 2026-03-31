@@ -54,6 +54,18 @@ impl QuasiNonsingularROE {
         }
     }
 
+    /// Relative eccentricity vector magnitude: `|δe| = √(δex² + δey²)` (dimensionless).
+    #[must_use]
+    pub fn de_magnitude(&self) -> f64 {
+        (self.dex * self.dex + self.dey * self.dey).sqrt()
+    }
+
+    /// Relative inclination vector magnitude: `|δi| = √(δix² + δiy²)` (dimensionless).
+    #[must_use]
+    pub fn di_magnitude(&self) -> f64 {
+        (self.dix * self.dix + self.diy * self.diy).sqrt()
+    }
+
     /// Dimensionless separation metric: max(|δa|, |δex|, |δey|, |δix|).
     ///
     /// Excludes δλ and δiy per Koenig Sec. V (these can be large without

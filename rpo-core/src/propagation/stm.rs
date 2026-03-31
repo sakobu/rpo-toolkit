@@ -575,8 +575,8 @@ mod tests {
 
         // Eccentricity vector magnitude should be approximately conserved
         // (it rotates due to J2 but magnitude changes are second-order)
-        let de_initial = (roe.dex.powi(2) + roe.dey.powi(2)).sqrt();
-        let de_final = (roe_prop.dex.powi(2) + roe_prop.dey.powi(2)).sqrt();
+        let de_initial = roe.de_magnitude();
+        let de_final = roe_prop.de_magnitude();
         assert!(
             (de_final - de_initial).abs() / de_initial < DE_MAGNITUDE_RELATIVE_TOL,
             "δe magnitude should be ~conserved: initial={de_initial}, final={de_final}"

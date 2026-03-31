@@ -585,8 +585,8 @@ mod tests {
         // - Must be > 0 (vehicles don't collide)
         // - Must be < a * (δe + δi) ≈ 0.600 km (upper bound from triangle inequality)
         let a_km = chief.a_km;
-        let de_mag = (roe.dex * roe.dex + roe.dey * roe.dey).sqrt();
-        let di_mag = (roe.dix * roe.dix + roe.diy * roe.diy).sqrt();
+        let de_mag = roe.de_magnitude();
+        let di_mag = roe.di_magnitude();
         let upper_bound_km = a_km * (de_mag + di_mag);
 
         assert!(

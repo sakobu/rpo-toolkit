@@ -182,8 +182,8 @@ pub fn compute_avoidance(
         });
     }
 
-    let de_mag = (roe.dex * roe.dex + roe.dey * roe.dey).sqrt();
-    let di_mag = (roe.dix * roe.dix + roe.diy * roe.diy).sqrt();
+    let de_mag = roe.de_magnitude();
+    let di_mag = roe.di_magnitude();
     let n = chief_mean.mean_motion().map_err(|e| {
         AvoidanceError::PropagationFailure(PropagationError::KeplerFailure(e))
     })?;

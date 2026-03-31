@@ -27,8 +27,8 @@ pub use planning::{
     plan_mission,
 };
 pub use safety::{
-    analyze_safety, analyze_trajectory_safety, assess_safety, RcContext, SafetyAssessment,
-    SafetyError,
+    analyze_safety, analyze_trajectory_safety, assess_safety, compute_ei_separation,
+    EiSeparation, RcContext, SafetyAssessment, SafetyError,
 };
 pub use targeting::{optimize_tof, solve_leg};
 pub use types::{

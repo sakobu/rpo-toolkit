@@ -618,8 +618,8 @@ fn stm_structural_properties_eccentric() {
         );
 
         // |δe| approximately conserved (rotation, not growth)
-        let de_0 = (roe.dex.powi(2) + roe.dey.powi(2)).sqrt();
-        let de_f = (roe_prop.dex.powi(2) + roe_prop.dey.powi(2)).sqrt();
+        let de_0 = roe.de_magnitude();
+        let de_f = roe_prop.de_magnitude();
         if de_0 > PERCH_ROE_ZERO_BOUND {
             let rel_de = (de_f - de_0).abs() / de_0;
             assert!(

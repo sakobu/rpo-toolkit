@@ -17,7 +17,7 @@ Astrodynamics toolkit for rendezvous and proximity operations (RPO) mission plan
 
 ```bash
 cargo build                     # build workspace
-cargo test                      # 412 tests across 3 crates (19 ignored: full-physics, require ANISE kernels)
+cargo test                      # 434 tests across 3 crates (19 ignored: full-physics, require ANISE kernels)
 ```
 
 Run an example mission (analytical):
@@ -200,7 +200,7 @@ The CLI (`rpo-cli`) provides batch execution and shell-composable plumbing for s
 
 ## Testing
 
-412 tests across 3 crates (360 rpo-core, 37 rpo-api, 13 rpo-cli, 2 doc-tests), 19 ignored (full-physics tests requiring ANISE ephemeris kernels, ~50 MB cached download). Tests cover roundtrip transform invariants, STM identity at dt=0, energy/momentum conservation, regression against published data (Koenig Tables 2-3, D'Amico Sec. 2.1-2.2), Newton-Raphson convergence, POCA Brent-refinement invariants (refined distance <= grid-sampled), free-drift abort-case trajectories, COLA inverse GVE analytical solutions and post-avoidance verification, autonomous COLA evaluation with multi-leg secondary conjunction detection, deterministic Monte Carlo seeding, covariance symmetry preservation, session invalidation, WebSocket handler integration, error serialization, and CLI smoke tests.
+434 tests across 3 crates (382 rpo-core, 37 rpo-api, 13 rpo-cli, 2 doc-tests), 19 ignored (full-physics tests requiring ANISE ephemeris kernels, ~50 MB cached download). Tests cover roundtrip transform invariants, STM identity at dt=0, energy/momentum conservation, regression against published data (Koenig Tables 2-3, D'Amico Sec. 2.1-2.2), Newton-Raphson convergence, POCA Brent-refinement invariants (refined distance <= grid-sampled), free-drift abort-case trajectories, COLA inverse GVE analytical solutions and post-avoidance verification, autonomous COLA evaluation with multi-leg secondary conjunction detection, deterministic Monte Carlo seeding, covariance symmetry preservation, session invalidation, WebSocket handler integration, error serialization, and CLI smoke tests.
 
 ```bash
 cargo test                  # full suite

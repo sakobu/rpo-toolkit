@@ -7,7 +7,7 @@
   "deputy": {
     "epoch": "2024-01-01T00:00:00 UTC",
     "position_eci_km": [5199.839421, 4281.648523, 1398.070066],
-    "velocity_eci_km_s": [-3.993103, 2.970313, 5.764540]
+    "velocity_eci_km_s": [-3.993103, 2.970313, 5.76454]
   },
   "proximity": { "roe_threshold": 0.005 },
   "perch": { "v_bar": { "along_track_km": 5.0 } },

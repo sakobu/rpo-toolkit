@@ -63,6 +63,82 @@ impl std::fmt::Display for SafetyError {
 
 impl std::error::Error for SafetyError {}
 
+/// E/I vector separation metrics for a single ROE state.
+///
+/// Computed from D'Amico Eq. 2.22. Used by both safety analysis and
+/// formation design enrichment.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+pub struct EiSeparation {
+    /// Minimum R/C separation from e/i geometry (km). D'Amico Eq. 2.22.
+    pub min_separation_km: f64,
+    /// Eccentricity vector magnitude (dimensionless).
+    pub de_magnitude: f64,
+    /// Inclination vector magnitude (dimensionless).
+    pub di_magnitude: f64,
+    /// Phase angle between e/i vectors (rad, 0 = parallel, pi/2 = perpendicular).
+    pub phase_angle_rad: f64,
+}
+
+/// Compute the minimum radial/cross-track distance from e/i vector geometry.
+///
+/// Returns separation of 0.0 if either vector magnitude is below `ROE_MAG_EPSILON`.
+///
+/// # Invariants
+/// - `chief_mean.a_km > 0`
+/// - `chief_mean.e < 1`
+///
+/// # Validity regime
+/// Near-circular chief (e < ~0.1). Same linearization assumptions as `roe_to_ric.rs`.
+///
+/// # References
+/// - D'Amico Eq. 2.22: `dr_nr^min = sqrt(2)*a*|de*di| / sqrt(|de|^2+|di|^2+|de+di|*|de-di|)`
+/// - D'Amico Eq. 2.23: for parallel e/i, `d_min = a*min(|de|,|di|)`
+#[must_use]
+pub fn compute_ei_separation(
+    roe: &QuasiNonsingularROE,
+    chief_mean: &KeplerianElements,
+) -> EiSeparation {
+    let sma = chief_mean.a_km;
+
+    let ecc_mag = roe.de_magnitude();
+    let inc_mag = roe.di_magnitude();
+
+    // Phase angle between e/i vectors (D'Amico Eq. 2.22 context)
+    let phase_e = roe.dey.atan2(roe.dex);
+    let phase_i = roe.diy.atan2(roe.dix);
+    let ei_phase_raw = (phase_e - phase_i).rem_euclid(std::f64::consts::TAU);
+    // Normalize to [-pi, pi]
+    let ei_phase = if ei_phase_raw > std::f64::consts::PI {
+        ei_phase_raw - std::f64::consts::TAU
+    } else {
+        ei_phase_raw
+    };
+
+    // e/i vector separation (D'Amico Eq. 2.22):
+    // dr_nr^min = sqrt(2) * a * |de . di| / sqrt(de^2 + di^2 + |de+di|*|de-di|)
+    // Dot product |dex*dix + dey*diy| measures e/i parallelism:
+    // parallel -> maximum separation (safe), perpendicular -> zero (unsafe).
+    let min_separation = if ecc_mag > ROE_MAG_EPSILON && inc_mag > ROE_MAG_EPSILON {
+        let dot = (roe.dex * roe.dix + roe.dey * roe.diy).abs();
+        let e_plus_i_mag =
+            ((roe.dex + roe.dix).powi(2) + (roe.dey + roe.diy).powi(2)).sqrt();
+        let e_minus_i_mag =
+            ((roe.dex - roe.dix).powi(2) + (roe.dey - roe.diy).powi(2)).sqrt();
+        let denom =
+            (ecc_mag * ecc_mag + inc_mag * inc_mag + e_plus_i_mag * e_minus_i_mag).sqrt();
+        std::f64::consts::SQRT_2 * sma * dot / denom
+    } else {
+        0.0
+    };
+
+    EiSeparation {
+        min_separation_km: min_separation,
+        de_magnitude: ecc_mag,
+        di_magnitude: inc_mag,
+        phase_angle_rad: ei_phase,
+    }
+}
+
 /// Geometric context for the R/C plane minimum distance.
 ///
 /// Classifies whether the R/C minimum is along-track dominated (common
@@ -174,40 +250,7 @@ pub fn analyze_safety(
     chief: &KeplerianElements,
     ric_position: &Vector3<f64>,
 ) -> SafetyMetrics {
-    let sma = chief.a_km;
-
-    // Relative eccentricity vector magnitude
-    let ecc_mag = (roe.dex * roe.dex + roe.dey * roe.dey).sqrt();
-    // Relative inclination vector magnitude
-    let inc_mag = (roe.dix * roe.dix + roe.diy * roe.diy).sqrt();
-
-    // Phase angle between e/i vectors (D'Amico Eq. 2.22 context)
-    let phase_e = roe.dey.atan2(roe.dex);
-    let phase_i = roe.diy.atan2(roe.dix);
-    let ei_phase_raw = (phase_e - phase_i).rem_euclid(std::f64::consts::TAU);
-    // Normalize to [-π, π]
-    let ei_phase = if ei_phase_raw > std::f64::consts::PI {
-        ei_phase_raw - std::f64::consts::TAU
-    } else {
-        ei_phase_raw
-    };
-
-    // e/i vector separation (D'Amico Eq. 2.22):
-    // δr_nr^min = √2 · a · |δe · δi| / √(δe² + δi² + |δe+δi|·|δe−δi|)
-    // Dot product |dex*dix + dey*diy| measures e/i parallelism:
-    // parallel → maximum separation (safe), perpendicular → zero (unsafe).
-    let ei_separation = if ecc_mag > ROE_MAG_EPSILON && inc_mag > ROE_MAG_EPSILON {
-        let dot = (roe.dex * roe.dix + roe.dey * roe.diy).abs();
-        let e_plus_i_mag =
-            ((roe.dex + roe.dix).powi(2) + (roe.dey + roe.diy).powi(2)).sqrt();
-        let e_minus_i_mag =
-            ((roe.dex - roe.dix).powi(2) + (roe.dey - roe.diy).powi(2)).sqrt();
-        let denom =
-            (ecc_mag * ecc_mag + inc_mag * inc_mag + e_plus_i_mag * e_minus_i_mag).sqrt();
-        std::f64::consts::SQRT_2 * sma * dot / denom
-    } else {
-        0.0
-    };
+    let ei = compute_ei_separation(roe, chief);
 
     // Instantaneous R/C distance: sqrt(R^2 + C^2)
     let rc_instantaneous = (ric_position.x.powi(2) + ric_position.z.powi(2)).sqrt();
@@ -227,10 +270,10 @@ pub fn analyze_safety(
             min_3d_ric_position_km: *ric_position,
         },
         passive: PassiveSafety {
-            min_ei_separation_km: ei_separation,
-            de_magnitude: ecc_mag,
-            di_magnitude: inc_mag,
-            ei_phase_angle_rad: ei_phase,
+            min_ei_separation_km: ei.min_separation_km,
+            de_magnitude: ei.de_magnitude,
+            di_magnitude: ei.di_magnitude,
+            ei_phase_angle_rad: ei.phase_angle_rad,
         },
     }
 }
@@ -349,6 +392,12 @@ mod tests {
     /// Sampling density monotonicity: finer ≤ coarser + epsilon.
     /// 1e-12 guards against f64 non-determinism.
     const SAMPLING_MONOTONICITY_GUARD: f64 = 1e-12;
+
+    /// Tolerance for compute_ei_separation regression tests (km).
+    /// 1e-6 km = 1 mm. The formula is exact for the given ROE; the only error
+    /// source is f64 rounding in the square root and division (~1e-14 relative).
+    /// 1e-6 provides 8 orders of margin.
+    const EI_SEPARATION_TEST_TOL: f64 = 1e-6;
 
     /// Empty trajectory returns `SafetyError::EmptyTrajectory`.
     #[test]
@@ -828,6 +877,99 @@ mod tests {
             (metrics.passive.min_ei_separation_km - 0.200).abs() < EI_SEPARATION_TOL_KM,
             "Anti-parallel e/i should give a·min(δe,δi)=0.200 km, got {}",
             metrics.passive.min_ei_separation_km
+        );
+    }
+
+    // --- compute_ei_separation() direct tests ---
+    // These test the extracted function directly, mirroring the damico_eq222_*
+    // tests above to confirm the extraction preserves behavior.
+
+    /// Parallel e/i vectors (D'Amico Table 2.1 Case 1): a*min(de,di) = 0.200 km.
+    #[test]
+    fn compute_ei_separation_parallel_case() {
+        let chief = damico_table21_chief();
+        let roe = damico_table21_case1_roe();
+        let ei = compute_ei_separation(&roe, &chief);
+
+        assert!(
+            (ei.min_separation_km - 0.200).abs() < EI_SEPARATION_TEST_TOL,
+            "Parallel e/i should give 0.200 km, got {}",
+            ei.min_separation_km
+        );
+        assert!(ei.de_magnitude > 0.0);
+        assert!(ei.di_magnitude > 0.0);
+        assert!(
+            ei.phase_angle_rad.abs() < EI_SEPARATION_TEST_TOL,
+            "Parallel e/i phase should be ~0, got {}",
+            ei.phase_angle_rad
+        );
+    }
+
+    /// Perpendicular e/i vectors: separation = 0 (unsafe geometry).
+    #[test]
+    fn compute_ei_separation_perpendicular() {
+        let chief = damico_table21_chief();
+        let d = 0.300 / chief.a_km;
+        let roe = QuasiNonsingularROE {
+            da: 0.0,
+            dlambda: 0.0,
+            dex: d,
+            dey: 0.0,
+            dix: 0.0,
+            diy: d,
+        };
+        let ei = compute_ei_separation(&roe, &chief);
+
+        assert!(
+            ei.min_separation_km.abs() < EI_SEPARATION_TEST_TOL,
+            "Perpendicular e/i should give ~0 separation, got {}",
+            ei.min_separation_km
+        );
+    }
+
+    /// Zero e/i vectors: separation = 0 (degenerate, both magnitudes below epsilon).
+    #[test]
+    fn compute_ei_separation_zero_vectors() {
+        let chief = damico_table21_chief();
+        let roe = QuasiNonsingularROE {
+            da: 0.0,
+            dlambda: 0.0,
+            dex: 0.0,
+            dey: 0.0,
+            dix: 0.0,
+            diy: 0.0,
+        };
+        let ei = compute_ei_separation(&roe, &chief);
+
+        assert!(
+            ei.min_separation_km.abs() < EI_SEPARATION_TEST_TOL,
+            "Zero e/i should give ~0 separation, got {}",
+            ei.min_separation_km
+        );
+        assert!(ei.de_magnitude.abs() < EI_SEPARATION_TEST_TOL);
+        assert!(ei.di_magnitude.abs() < EI_SEPARATION_TEST_TOL);
+    }
+
+    /// Anti-parallel e/i vectors: same separation as parallel (|dot| is symmetric).
+    #[test]
+    fn compute_ei_separation_anti_parallel() {
+        let chief = damico_table21_chief();
+        let d1 = 0.400 / chief.a_km;
+        let d2 = 0.200 / chief.a_km;
+        let roe = QuasiNonsingularROE {
+            da: 0.0,
+            dlambda: 0.0,
+            dex: 0.0,
+            dey: d1,
+            dix: 0.0,
+            diy: -d2,
+        };
+        let ei = compute_ei_separation(&roe, &chief);
+
+        assert!(
+            (ei.min_separation_km - 0.200).abs() < EI_SEPARATION_TEST_TOL,
+            "Anti-parallel e/i should give 0.200 km, got {}",
+            ei.min_separation_km
         );
     }
 
