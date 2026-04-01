@@ -12,7 +12,7 @@ Each WebSocket connection has a server-side session. The client sets state incre
 Tier 0 - Base inputs:     chief, deputy
 Tier 1 - Spacecraft:      chief_config, deputy_config (default: cubesat_6u)
 Tier 2 - Transfer design: transfer, perch, lambert_tof_s, lambert_config, proximity, drag_config
-Tier 3 - Mission plan:    waypoints, config, propagator, mission (WaypointMission)
+Tier 3 - Mission plan:    waypoints, config, propagator, safety_requirements, mission (WaypointMission)
 Tier 4 - Overlays:        navigation_accuracy, maneuver_uncertainty, monte_carlo_config
 ```
 
@@ -27,6 +27,7 @@ Changing an upstream tier clears downstream computed results so that stale data 
 | `compute_transfer(perch, tof, config)`        | mission (via store_transfer)                     |
 | `store_drag(drag)`                            | nothing (propagator toggle is explicit)          |
 | `set_waypoints(waypoints)`                    | mission                                          |
+| `set_safety_requirements(requirements)`       | mission                                          |
 | `update_config(config)`                       | mission (if config/propagator/proximity changed) |
 | `reset()`                                     | everything                                       |
 
@@ -248,6 +249,52 @@ Requires: `set_waypoints` must have been called (mission must exist) and `config
 
 Response: `cola_result`
 
+### set_safety_requirements
+
+Set or clear safety requirements for formation design enrichment. Invalidates the mission (enriched perch changes the departure state, requiring retargeting). When set, `set_waypoints` will enforce perch enrichment before planning and include a `formation_design` report in the `plan_result`.
+
+| Field          | Type                           | Required | Description                    |
+| -------------- | ------------------------------ | -------- | ------------------------------ |
+| `type`         | `"set_safety_requirements"`    | yes      | Message discriminator          |
+| `request_id`   | `u64`                          | yes      | Client-assigned correlation ID |
+| `requirements` | `SafetyRequirements` or `null` | yes      | Requirements, or null to clear |
+
+`SafetyRequirements` fields:
+
+| Field               | Type     | Required | Default      | Description                                   |
+| ------------------- | -------- | -------- | ------------ | --------------------------------------------- |
+| `min_separation_km` | `f64`    | yes      |              | Minimum R/C separation (km, D'Amico Eq. 2.22) |
+| `alignment`         | `string` | no       | `"parallel"` | `"parallel"`, `"anti_parallel"`, or `"auto"`  |
+
+Response: `state_updated`
+
+### get_formation_design
+
+Compute formation design analysis for the current mission. On-demand, reads from stored mission, transfer, and safety requirements. Returns perch enrichment, per-waypoint enrichment (advisory), and per-leg transit e/i separation profiles.
+
+| Field        | Type                     | Required | Description                    |
+| ------------ | ------------------------ | -------- | ------------------------------ |
+| `type`       | `"get_formation_design"` | yes      | Message discriminator          |
+| `request_id` | `u64`                    | yes      | Client-assigned correlation ID |
+
+Requires: mission, transfer, and `safety_requirements` must be set.
+
+Response: `formation_design_result`
+
+### get_safe_alternative
+
+Compute a safe alternative ROE for a single waypoint. Stateless query -- computes on the fly from current session state. Shows what the waypoint's ROE would look like with safe e/i vectors.
+
+| Field            | Type                     | Required | Description                    |
+| ---------------- | ------------------------ | -------- | ------------------------------ |
+| `type`           | `"get_safe_alternative"` | yes      | Message discriminator          |
+| `request_id`     | `u64`                    | yes      | Client-assigned correlation ID |
+| `waypoint_index` | `usize`                  | yes      | 0-based leg index to enrich    |
+
+Requires: mission, transfer, and `safety_requirements` must be set.
+
+Response: `safe_alternative_result`
+
 ### validate
 
 Per-leg nyx high-fidelity validation with progress streaming. Background job (seconds to minutes depending on leg count).
@@ -344,13 +391,14 @@ Acknowledgement of a state-setting message. Reports what was set and what was in
 
 ### plan_result
 
-Lean mission plan result (~10-30 KB instead of 350-500 KB). Contains per-leg summaries without trajectory arrays.
+Lean mission plan result (~10-30 KB instead of 350-500 KB). Contains per-leg summaries without trajectory arrays. When `safety_requirements` is set, includes a `formation_design` report with perch enrichment, per-waypoint enrichment (advisory), and per-leg transit e/i separation.
 
-| Field        | Type             | Description                            |
-| ------------ | ---------------- | -------------------------------------- |
-| `type`       | `"plan_result"`  | Message discriminator                  |
-| `request_id` | `u64`            | Correlation ID from the client request |
-| `result`     | `LeanPlanResult` | Lean plan: phase, legs, safety, totals |
+| Field              | Type                     | Description                                                        |
+| ------------------ | ------------------------ | ------------------------------------------------------------------ |
+| `type`             | `"plan_result"`          | Message discriminator                                              |
+| `request_id`       | `u64`                    | Correlation ID from the client request                             |
+| `result`           | `LeanPlanResult`         | Lean plan: phase, legs, safety, totals                             |
+| `formation_design` | `FormationDesignReport?` | Formation design report (omitted when safety_requirements not set) |
 
 `LeanPlanResult` fields:
 
@@ -431,13 +479,13 @@ Legs with no close approach (diverging geometry) produce no points for that leg 
 
 Collision avoidance maneuvers for POCA violations, with multi-leg post-avoidance verification.
 
-| Field                      | Type                            | Description                                             |
-| -------------------------- | ------------------------------- | ------------------------------------------------------- |
-| `type`                     | `"cola_result"`                 | Message discriminator                                   |
-| `request_id`               | `u64`                           | Correlation ID from the client request                  |
-| `maneuvers`                | `AvoidanceManeuverSummary[]`    | Avoidance maneuvers (empty if no violations)            |
-| `secondary_conjunctions`   | `SecondaryViolationSummary[]`   | Downstream violations created by avoidance (omitted if empty) |
-| `skipped`                  | `SkippedLegSummary[]`           | Legs where COLA failed (omitted if empty)               |
+| Field                    | Type                          | Description                                                   |
+| ------------------------ | ----------------------------- | ------------------------------------------------------------- |
+| `type`                   | `"cola_result"`               | Message discriminator                                         |
+| `request_id`             | `u64`                         | Correlation ID from the client request                        |
+| `maneuvers`              | `AvoidanceManeuverSummary[]`  | Avoidance maneuvers (empty if no violations)                  |
+| `secondary_conjunctions` | `SecondaryViolationSummary[]` | Downstream violations created by avoidance (omitted if empty) |
+| `skipped`                | `SkippedLegSummary[]`         | Legs where COLA failed (omitted if empty)                     |
 
 Each `AvoidanceManeuverSummary` contains:
 
@@ -452,20 +500,67 @@ Each `AvoidanceManeuverSummary` contains:
 
 Each `SecondaryViolationSummary` contains:
 
-| Field                | Type       | Description                                             |
-| -------------------- | ---------- | ------------------------------------------------------- |
-| `original_leg_index` | `usize`    | Leg where the avoidance maneuver was applied            |
-| `violated_leg_index` | `usize`    | Downstream leg where the new violation was detected     |
-| `distance_km`        | `f64`      | Closest approach distance on the violated leg (km)      |
-| `elapsed_s`          | `f64`      | Elapsed time from downstream leg start (s)              |
-| `position_ric_km`    | `[f64; 3]` | RIC position at closest approach `[R, I, C]` (km)      |
+| Field                | Type       | Description                                         |
+| -------------------- | ---------- | --------------------------------------------------- |
+| `original_leg_index` | `usize`    | Leg where the avoidance maneuver was applied        |
+| `violated_leg_index` | `usize`    | Downstream leg where the new violation was detected |
+| `distance_km`        | `f64`      | Closest approach distance on the violated leg (km)  |
+| `elapsed_s`          | `f64`      | Elapsed time from downstream leg start (s)          |
+| `position_ric_km`    | `[f64; 3]` | RIC position at closest approach `[R, I, C]` (km)   |
 
 Each `SkippedLegSummary` contains:
 
-| Field           | Type     | Description                                        |
-| --------------- | -------- | -------------------------------------------------- |
+| Field           | Type     | Description                                         |
+| --------------- | -------- | --------------------------------------------------- |
 | `leg_index`     | `usize`  | Leg with the unaddressed POCA violation             |
 | `error_message` | `string` | Why COLA failed (e.g., budget exceeded, degenerate) |
+
+### formation_design_result
+
+Full formation design report (response to `get_formation_design`).
+
+| Field        | Type                        | Description                            |
+| ------------ | --------------------------- | -------------------------------------- |
+| `type`       | `"formation_design_result"` | Message discriminator                  |
+| `request_id` | `u64`                       | Correlation ID from the client request |
+| `report`     | `FormationDesignReport`     | Full formation design report           |
+
+`FormationDesignReport` fields:
+
+| Field                          | Type                              | Description                                                |
+| ------------------------------ | --------------------------------- | ---------------------------------------------------------- |
+| `perch`                        | `PerchEnrichmentResult`           | Perch enrichment: `enriched` (with safe e/i) or `fallback` |
+| `waypoints`                    | `(EnrichedWaypoint \| null)[]`    | Per-leg advisory enrichment (null if failed for that leg)  |
+| `transit_safety`               | `(TransitSafetyReport \| null)[]` | Per-leg e/i separation profile (null if failed)            |
+| `mission_min_ei_separation_km` | `f64?`                            | Mission-wide minimum e/i separation (omitted if no data)   |
+
+`PerchEnrichmentResult` is tagged by `status`:
+
+- `"enriched"`: `{ status: "enriched", roe, de_magnitude_km, di_magnitude_km, min_rc_separation_km, alignment }`
+- `"fallback"`: `{ status: "fallback", unenriched_roe, reason: { type: "singular_geometry" | "separation_unachievable" | ... } }`
+
+### safe_alternative_result
+
+Safe alternative ROE for a single waypoint (response to `get_safe_alternative`).
+
+| Field        | Type                        | Description                            |
+| ------------ | --------------------------- | -------------------------------------- |
+| `type`       | `"safe_alternative_result"` | Message discriminator                  |
+| `request_id` | `u64`                       | Correlation ID from the client request |
+| `enriched`   | `EnrichedWaypoint`          | Waypoint with safe e/i vectors         |
+
+`EnrichedWaypoint` fields:
+
+| Field                | Type                  | Description                                         |
+| -------------------- | --------------------- | --------------------------------------------------- |
+| `roe`                | `QuasiNonsingularROE` | Safety-enriched ROE target                          |
+| `baseline_roe`       | `QuasiNonsingularROE` | Original (minimum-norm) ROE for comparison          |
+| `position_ric_km`    | `Vector3`             | RIC position (identical to operator's input)        |
+| `enriched_ei`        | `EiSeparation`        | E/I separation of enriched state (D'Amico Eq. 2.22) |
+| `baseline_ei`        | `EiSeparation`        | E/I separation of unenriched state                  |
+| `perturbation_norm`  | `f64`                 | Euclidean norm of the null-space perturbation       |
+| `mode`               | `string`              | `"position_only"` or `"velocity_constrained"`       |
+| `resolved_alignment` | `string`              | `"parallel"` or `"anti_parallel"`                   |
 
 ### covariance_data
 
@@ -510,6 +605,7 @@ Diagnostic snapshot of the current session.
 | `has_navigation_accuracy`  | `bool`             | Whether nav accuracy is configured  |
 | `has_maneuver_uncertainty` | `bool`             | Whether maneuver uncertainty is set |
 | `has_monte_carlo_config`   | `bool`             | Whether MC config is set            |
+| `has_safety_requirements`  | `bool`             | Whether safety requirements are set |
 | `waypoint_count`           | `usize`            | Number of waypoints defined         |
 | `chief_config`             | `SpacecraftChoice` | Current chief spacecraft            |
 | `deputy_config`            | `SpacecraftChoice` | Current deputy spacecraft           |
@@ -585,19 +681,20 @@ The `propagator` field in `update_config` uses a simplified toggle enum:
 
 All error codes are lowercase snake_case strings.
 
-| Code                    | Description                                              |
-| ----------------------- | -------------------------------------------------------- |
-| `missing_session_state` | Required session state not available (call setter first) |
-| `targeting_convergence` | Newton-Raphson targeting solver did not converge         |
-| `lambert_failure`       | Lambert solver failure                                   |
-| `propagation_error`     | Propagation error                                        |
-| `validation_error`      | Nyx validation error                                     |
-| `monte_carlo_error`     | Monte Carlo error                                        |
-| `nyx_bridge_error`      | Nyx bridge error (almanac, dynamics, propagation)        |
-| `covariance_error`      | Covariance propagation error                             |
-| `invalid_input`         | Malformed JSON, missing fields, bad values               |
-| `mission_error`         | General mission planning error                           |
-| `cancelled`             | Operation was cancelled                                  |
+| Code                     | Description                                                         |
+| ------------------------ | ------------------------------------------------------------------- |
+| `missing_session_state`  | Required session state not available (call setter first)            |
+| `targeting_convergence`  | Newton-Raphson targeting solver did not converge                    |
+| `lambert_failure`        | Lambert solver failure                                              |
+| `propagation_error`      | Propagation error                                                   |
+| `validation_error`       | Nyx validation error                                                |
+| `monte_carlo_error`      | Monte Carlo error                                                   |
+| `nyx_bridge_error`       | Nyx bridge error (almanac, dynamics, propagation)                   |
+| `covariance_error`       | Covariance propagation error                                        |
+| `formation_design_error` | Formation design error (singular geometry, unachievable separation) |
+| `invalid_input`          | Malformed JSON, missing fields, bad values                          |
+| `mission_error`          | General mission planning error                                      |
+| `cancelled`              | Operation was cancelled                                             |
 
 The `detail` field carries per-error diagnostic data. Examples:
 
@@ -648,13 +745,16 @@ set_spacecraft -> state_updated                          (optional; defaults to 
 classify -> classify_result (far_field)
 compute_transfer -> transfer_result
 extract_drag -> drag_result (~3s async)                  (skip if spacecraft configs identical)
-set_waypoints -> plan_result (~10-30KB)
+set_safety_requirements -> state_updated                  (optional; enables formation design)
+set_waypoints -> plan_result (~10-30KB, +formation_design if safety_requirements set)
 |- get_trajectory -> trajectory_data (~20KB, on-demand)              |
-|- get_eclipse -> eclipse_data (on-demand)                           | parallel on-demand fetches
-|- get_covariance -> covariance_data (~70KB, on-demand)              |
+|- get_eclipse -> eclipse_data (on-demand)                           |
+|- get_covariance -> covariance_data (~70KB, on-demand)              | parallel on-demand fetches
 |- get_free_drift_trajectory -> free_drift_data (on-demand)          |
 |- get_poca -> poca_data (on-demand)                                 |
 |- run_cola -> cola_result (on-demand, requires safety config)       |
+|- get_formation_design -> formation_design_result (on-demand)       |
+|- get_safe_alternative -> safe_alternative_result (on-demand)       |
 update_config(j2_drag) -> plan_result                    (when drag_result arrives)
 validate -> progress* + validation_result
 run_mc -> progress* + monte_carlo_result
@@ -666,19 +766,21 @@ run_mc -> progress* + monte_carlo_result
 set_states -> state_updated
 |- classify -> classify_result (proximity)               |
 |- extract_drag -> drag_result (~3s async)               | parallel (both read session states)
-set_waypoints -> plan_result (auto-computes transfer)
+set_safety_requirements -> state_updated                  (optional)
+set_waypoints -> plan_result (auto-computes transfer, +formation_design if safety_requirements set)
 |- get_trajectory -> trajectory_data                             |
-|- get_eclipse -> eclipse_data                                   | parallel on-demand fetches
-|- get_covariance -> covariance_data                             |
+|- get_eclipse -> eclipse_data                                   |
+|- get_covariance -> covariance_data                             | parallel on-demand fetches
 |- get_free_drift_trajectory -> free_drift_data                  |
 |- run_cola -> cola_result (on-demand, requires safety config)   |
+|- get_formation_design -> formation_design_result (on-demand)   |
 validate -> validation_result
 ```
 
 ### Parallelism Notes
 
 - **classify + extract_drag (proximity):** Both only read `chief`/`deputy` from the session. No mutation conflict. Fire both after `set_states` to overlap the ~3s drag simulation with the instant classify.
-- **On-demand getters (get_trajectory, get_covariance, get_eclipse, get_free_drift_trajectory, get_poca, run_cola):** All read from the stored mission/transfer. No mutation. Fire whichever are needed in parallel after planning.
+- **On-demand getters (get_trajectory, get_covariance, get_eclipse, get_free_drift_trajectory, get_poca, run_cola, get_formation_design, get_safe_alternative):** All read from the stored mission/transfer. No mutation. Fire whichever are needed in parallel after planning.
 - **extract_drag (far-field):** Must wait for `compute_transfer` because it uses perch states (post-Lambert geometry).
 
 ## Examples

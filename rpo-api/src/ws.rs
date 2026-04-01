@@ -221,6 +221,22 @@ async fn handle_text_message(
             send_message(ws, &msg).await;
         }
 
+        ClientMessage::SetSafetyRequirements {
+            request_id,
+            requirements,
+        } => {
+            session.set_safety_requirements(requirements);
+            send_message(
+                ws,
+                &ServerMessage::StateUpdated {
+                    request_id,
+                    updated: vec!["safety_requirements".into()],
+                    invalidated: vec!["mission".into()],
+                },
+            )
+            .await;
+        }
+
         ClientMessage::Reset { request_id } => {
             cancel_active_job(active_job);
             session.reset();
@@ -289,12 +305,13 @@ async fn handle_text_message(
             let cached_mission = session.mission.take();
             session.set_waypoints(waypoints);
             match handlers::handle_set_waypoints(session, changed_from, cached_mission) {
-                Ok(result) => {
+                Ok(response) => {
                     send_message(
                         ws,
                         &ServerMessage::PlanResult {
                             request_id,
-                            result: Box::new(result),
+                            result: Box::new(response.plan),
+                            formation_design: response.formation_design.map(Box::new),
                         },
                     )
                     .await;
@@ -337,12 +354,13 @@ async fn handle_text_message(
             };
 
             match handlers::handle_update_config(session, update) {
-                Ok(Some(result)) => {
+                Ok(Some(response)) => {
                     send_message(
                         ws,
                         &ServerMessage::PlanResult {
                             request_id,
-                            result: Box::new(result),
+                            result: Box::new(response.plan),
+                            formation_design: response.formation_design.map(Box::new),
                         },
                     )
                     .await;
@@ -440,6 +458,45 @@ async fn handle_text_message(
                             maneuvers: eval.maneuvers,
                             secondary_conjunctions: eval.secondary_conjunctions,
                             skipped: eval.skipped,
+                        },
+                    )
+                    .await;
+                }
+                Err(e) => {
+                    send_message(ws, &e.to_server_message(Some(request_id))).await;
+                }
+            }
+        }
+
+        ClientMessage::GetFormationDesign { request_id } => {
+            match handlers::handle_get_formation_design(session) {
+                Ok(report) => {
+                    send_message(
+                        ws,
+                        &ServerMessage::FormationDesignResult {
+                            request_id,
+                            report: Box::new(report),
+                        },
+                    )
+                    .await;
+                }
+                Err(e) => {
+                    send_message(ws, &e.to_server_message(Some(request_id))).await;
+                }
+            }
+        }
+
+        ClientMessage::GetSafeAlternative {
+            request_id,
+            waypoint_index,
+        } => {
+            match handlers::handle_get_safe_alternative(session, waypoint_index) {
+                Ok(enriched) => {
+                    send_message(
+                        ws,
+                        &ServerMessage::SafeAlternativeResult {
+                            request_id,
+                            enriched: Box::new(enriched),
                         },
                     )
                     .await;

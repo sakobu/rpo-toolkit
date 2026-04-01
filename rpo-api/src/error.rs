@@ -10,6 +10,7 @@
 use std::fmt;
 
 use rpo_core::elements::keplerian_conversions::ConversionError;
+use rpo_core::mission::formation::FormationDesignError;
 use rpo_core::mission::{FreeDriftError, MissionError, MonteCarloError, ValidationError};
 use rpo_core::propagation::{CovarianceError, LambertError, NyxBridgeError, PropagationError};
 
@@ -32,6 +33,8 @@ pub enum ApiError {
     NyxBridge(Box<NyxBridgeError>),
     /// Covariance propagation error.
     Covariance(CovarianceError),
+    /// Formation design error.
+    FormationDesign(FormationDesignError),
     /// Invalid client input.
     InvalidInput(InvalidInputError),
     /// Operation was cancelled.
@@ -74,6 +77,7 @@ impl fmt::Display for ApiError {
             Self::MonteCarlo(e) => write!(f, "{e}"),
             Self::NyxBridge(e) => write!(f, "{e}"),
             Self::Covariance(e) => write!(f, "{e}"),
+            Self::FormationDesign(e) => write!(f, "{e}"),
             Self::InvalidInput(e) => write!(f, "invalid input: {e}"),
             Self::Cancelled => write!(f, "operation cancelled"),
         }
@@ -156,6 +160,12 @@ impl From<CovarianceError> for ApiError {
     }
 }
 
+impl From<FormationDesignError> for ApiError {
+    fn from(e: FormationDesignError) -> Self {
+        Self::FormationDesign(e)
+    }
+}
+
 impl From<ConversionError> for ApiError {
     fn from(e: ConversionError) -> Self {
         Self::Mission(Box::new(MissionError::Conversion(e)))
@@ -210,79 +220,135 @@ impl ApiError {
     /// Extract machine-readable error code and structured diagnostic detail.
     fn extract_code_and_detail(&self) -> (ErrorCode, Option<serde_json::Value>) {
         match self {
-            Self::Mission(inner) => match **inner {
-                MissionError::TargetingConvergence {
-                    final_error_km,
-                    iterations,
-                } => (
-                    ErrorCode::TargetingConvergence,
-                    Some(serde_json::json!({
-                        "final_error_km": final_error_km,
-                        "iterations": iterations,
-                    })),
-                ),
-                MissionError::EmptyWaypoints => (
-                    ErrorCode::InvalidInput,
-                    Some(serde_json::json!({ "reason": "no waypoints provided" })),
-                ),
-                MissionError::InvalidReplanIndex {
-                    index,
-                    num_waypoints,
-                } => (
-                    ErrorCode::InvalidInput,
-                    Some(serde_json::json!({
-                        "reason": "replan index out of bounds",
-                        "index": index,
-                        "num_waypoints": num_waypoints,
-                    })),
-                ),
-                MissionError::TofOptimizationFailure {
-                    min_tof,
-                    max_tof,
-                    num_starts,
-                } => (
-                    ErrorCode::MissionError,
-                    Some(serde_json::json!({
-                        "reason": "tof_optimization_failure",
-                        "min_tof_s": min_tof,
-                        "max_tof_s": max_tof,
-                        "num_starts": num_starts,
-                    })),
-                ),
-                _ => (ErrorCode::MissionError, None),
-            },
+            Self::Mission(inner) => mission_error_detail(inner),
             Self::Propagation(_) => (ErrorCode::PropagationError, None),
             Self::Lambert(_) => (ErrorCode::LambertFailure, None),
             Self::Validation(_) => (ErrorCode::ValidationError, None),
-            Self::MonteCarlo(inner) => match **inner {
-                MonteCarloError::Cancelled => (ErrorCode::Cancelled, None),
-                MonteCarloError::ZeroSamples => (
-                    ErrorCode::InvalidInput,
-                    Some(serde_json::json!({ "reason": "num_samples must be > 0" })),
-                ),
-                _ => (ErrorCode::MonteCarloError, None),
-            },
+            Self::MonteCarlo(inner) => monte_carlo_error_detail(inner),
             Self::NyxBridge(_) => (ErrorCode::NyxBridgeError, None),
             Self::Covariance(_) => (ErrorCode::CovarianceError, None),
-            Self::InvalidInput(inner) => match inner {
-                InvalidInputError::MalformedJson { detail } => (
-                    ErrorCode::InvalidInput,
-                    Some(serde_json::json!({ "reason": "malformed_json", "detail": detail })),
-                ),
-                InvalidInputError::MissingField { field, context } => (
-                    ErrorCode::InvalidInput,
-                    Some(serde_json::json!({ "reason": "missing_field", "field": field, "context": context })),
-                ),
-                InvalidInputError::EmptyTrajectory => (
-                    ErrorCode::InvalidInput,
-                    Some(serde_json::json!({ "reason": "empty_trajectory" })),
-                ),
-                InvalidInputError::MissingSessionState { missing, context } => (
-                    ErrorCode::MissingSessionState,
-                    Some(serde_json::json!({ "missing": missing, "context": context })),
-                ),
-            },
+            Self::FormationDesign(inner) => formation_design_error_detail(inner),
+            Self::InvalidInput(inner) => invalid_input_error_detail(inner),
             Self::Cancelled => (ErrorCode::Cancelled, None),
         }
+    }
+}
+
+/// Diagnostic detail for [`MissionError`] variants.
+fn mission_error_detail(inner: &MissionError) -> (ErrorCode, Option<serde_json::Value>) {
+    match *inner {
+        MissionError::TargetingConvergence {
+            final_error_km,
+            iterations,
+        } => (
+            ErrorCode::TargetingConvergence,
+            Some(serde_json::json!({
+                "final_error_km": final_error_km,
+                "iterations": iterations,
+            })),
+        ),
+        MissionError::EmptyWaypoints => (
+            ErrorCode::InvalidInput,
+            Some(serde_json::json!({ "reason": "no waypoints provided" })),
+        ),
+        MissionError::InvalidReplanIndex {
+            index,
+            num_waypoints,
+        } => (
+            ErrorCode::InvalidInput,
+            Some(serde_json::json!({
+                "reason": "replan index out of bounds",
+                "index": index,
+                "num_waypoints": num_waypoints,
+            })),
+        ),
+        MissionError::TofOptimizationFailure {
+            min_tof,
+            max_tof,
+            num_starts,
+        } => (
+            ErrorCode::MissionError,
+            Some(serde_json::json!({
+                "reason": "tof_optimization_failure",
+                "min_tof_s": min_tof,
+                "max_tof_s": max_tof,
+                "num_starts": num_starts,
+            })),
+        ),
+        _ => (ErrorCode::MissionError, None),
+    }
+}
+
+/// Diagnostic detail for [`MonteCarloError`] variants.
+fn monte_carlo_error_detail(inner: &MonteCarloError) -> (ErrorCode, Option<serde_json::Value>) {
+    match *inner {
+        MonteCarloError::Cancelled => (ErrorCode::Cancelled, None),
+        MonteCarloError::ZeroSamples => (
+            ErrorCode::InvalidInput,
+            Some(serde_json::json!({ "reason": "num_samples must be > 0" })),
+        ),
+        _ => (ErrorCode::MonteCarloError, None),
+    }
+}
+
+/// Diagnostic detail for [`FormationDesignError`] variants.
+fn formation_design_error_detail(
+    inner: &FormationDesignError,
+) -> (ErrorCode, Option<serde_json::Value>) {
+    match inner {
+        FormationDesignError::SingularGeometry { mean_arg_lat_rad } => (
+            ErrorCode::FormationDesignError,
+            Some(serde_json::json!({
+                "reason": "singular_geometry",
+                "mean_arg_lat_rad": mean_arg_lat_rad,
+            })),
+        ),
+        FormationDesignError::SeparationUnachievable {
+            requested_km,
+            achievable_km,
+        } => (
+            ErrorCode::FormationDesignError,
+            Some(serde_json::json!({
+                "reason": "separation_unachievable",
+                "requested_km": requested_km,
+                "achievable_km": achievable_km,
+            })),
+        ),
+        FormationDesignError::InsufficientSampling {
+            total_samples,
+            required_per_orbit,
+        } => (
+            ErrorCode::FormationDesignError,
+            Some(serde_json::json!({
+                "reason": "insufficient_sampling",
+                "total_samples": total_samples,
+                "required_per_orbit": required_per_orbit,
+            })),
+        ),
+        _ => (ErrorCode::FormationDesignError, None),
+    }
+}
+
+/// Diagnostic detail for [`InvalidInputError`] variants.
+fn invalid_input_error_detail(
+    inner: &InvalidInputError,
+) -> (ErrorCode, Option<serde_json::Value>) {
+    match inner {
+        InvalidInputError::MalformedJson { detail } => (
+            ErrorCode::InvalidInput,
+            Some(serde_json::json!({ "reason": "malformed_json", "detail": detail })),
+        ),
+        InvalidInputError::MissingField { field, context } => (
+            ErrorCode::InvalidInput,
+            Some(serde_json::json!({ "reason": "missing_field", "field": field, "context": context })),
+        ),
+        InvalidInputError::EmptyTrajectory => (
+            ErrorCode::InvalidInput,
+            Some(serde_json::json!({ "reason": "empty_trajectory" })),
+        ),
+        InvalidInputError::MissingSessionState { missing, context } => (
+            ErrorCode::MissingSessionState,
+            Some(serde_json::json!({ "missing": missing, "context": context })),
+        ),
     }
 }

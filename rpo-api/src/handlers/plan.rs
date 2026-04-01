@@ -5,6 +5,7 @@
 use serde::Serialize;
 
 use rpo_core::mission::config::MissionConfig;
+use rpo_core::mission::formation::{FormationDesignReport, PerchEnrichmentResult};
 use rpo_core::mission::planning::compute_transfer_eclipse;
 use rpo_core::mission::types::{MissionPhase, WaypointMission};
 use rpo_core::mission::waypoints::{plan_waypoint_mission, replan_from_waypoint};
@@ -20,6 +21,7 @@ use rpo_core::propagation::covariance::{
 use rpo_core::types::eclipse::{MissionEclipseData, TransferEclipseData};
 use rpo_core::types::DepartureState;
 
+use super::formation::{build_formation_report, try_enrich_perch};
 use crate::error::ApiError;
 use crate::session::Session;
 
@@ -37,6 +39,14 @@ pub struct EclipseResponse {
     pub mission: Option<MissionEclipseData>,
 }
 
+/// Combined plan result with optional formation design report.
+pub struct PlanResponse {
+    /// Lean plan result for the frontend.
+    pub plan: LeanPlanResult,
+    /// Formation design report, present when `safety_requirements` is set.
+    pub formation_design: Option<FormationDesignReport>,
+}
+
 /// Plan (or replan) the waypoint mission from the session's stored transfer.
 ///
 /// If no transfer is stored, attempts auto-compute for proximity scenarios.
@@ -44,6 +54,10 @@ pub struct EclipseResponse {
 ///
 /// When `changed_from` is `Some(index)`, attempts incremental replan from that
 /// waypoint index, reusing earlier legs from the cached mission.
+///
+/// When `safety_requirements` is set, perch enrichment is enforced before
+/// planning (mutates stored transfer's `perch_roe`), and the formation design
+/// report is computed after planning.
 ///
 /// # Errors
 ///
@@ -53,7 +67,7 @@ pub fn handle_set_waypoints(
     session: &mut Session,
     changed_from: Option<usize>,
     cached_mission: Option<WaypointMission>,
-) -> Result<LeanPlanResult, ApiError> {
+) -> Result<PlanResponse, ApiError> {
     // Ensure we have a transfer. If none, try auto-compute.
     if session.transfer.is_none() {
         let phase = super::handle_classify(session)?;
@@ -74,6 +88,29 @@ pub fn handle_set_waypoints(
             }
         }
     }
+
+    // Formation design: perch enrichment (pre-targeting, enforced) then
+    // transit assessment (post-targeting, advisory). Enriched perch becomes
+    // the departure state for targeting, so it must be stored before planning.
+    let perch_result = if let (Some(reqs), Some(transfer)) =
+        (&session.safety_requirements, &session.transfer)
+    {
+        let result = try_enrich_perch(
+            &session.perch,
+            &transfer.plan.chief_at_arrival,
+            reqs,
+            transfer.plan.perch_roe,
+        );
+        // Store enriched ROE as departure state — targeting uses this
+        if let (PerchEnrichmentResult::Enriched(sp), Some(t)) =
+            (&result, session.transfer.as_mut())
+        {
+            t.plan.perch_roe = sp.roe;
+        }
+        Some(result)
+    } else {
+        None
+    };
 
     let transfer = session.require_transfer()?;
     let departure = departure_from_transfer(transfer);
@@ -98,8 +135,16 @@ pub fn handle_set_waypoints(
     };
 
     let lean = build_lean_result(transfer, &wp_mission, &session.waypoints);
+
+    // Post-targeting advisory: formation report (waypoint enrichment + transit safety)
+    let formation_design = perch_result.and_then(|perch| {
+        session.safety_requirements.as_ref().map(|reqs| {
+            build_formation_report(perch, reqs, &wp_mission.legs)
+        })
+    });
+
     session.store_mission(wp_mission);
-    Ok(lean)
+    Ok(PlanResponse { plan: lean, formation_design })
 }
 
 /// Configuration update fields for `handle_update_config`.
@@ -118,7 +163,7 @@ pub struct ConfigUpdate {
 
 /// Apply configuration updates to the session, replanning if mission-affecting fields changed.
 ///
-/// Returns `Some(LeanPlanResult)` if the mission was replanned, `None` if only overlays changed.
+/// Returns `Some(PlanResponse)` if the mission was replanned, `None` if only overlays changed.
 ///
 /// # Errors
 ///
@@ -126,7 +171,7 @@ pub struct ConfigUpdate {
 pub fn handle_update_config(
     session: &mut Session,
     update: ConfigUpdate,
-) -> Result<Option<LeanPlanResult>, ApiError> {
+) -> Result<Option<PlanResponse>, ApiError> {
     // Apply overlay-only fields (no invalidation)
     if let Some(nav) = update.navigation_accuracy {
         session.set_navigation_accuracy(nav);

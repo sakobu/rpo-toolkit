@@ -9,6 +9,7 @@
 use serde::Serialize;
 
 use rpo_core::mission::config::MissionConfig;
+use rpo_core::mission::formation::SafetyRequirements;
 use rpo_core::mission::monte_carlo::MonteCarloConfig;
 use rpo_core::mission::types::{PerchGeometry, WaypointMission};
 use rpo_core::mission::ProximityConfig;
@@ -77,6 +78,8 @@ pub struct Session {
     pub propagator: PropagatorChoice,
     /// Computed waypoint mission result.
     pub mission: Option<WaypointMission>,
+    /// Safety requirements for formation design enrichment.
+    pub safety_requirements: Option<SafetyRequirements>,
 
     // ---- Tier 4: Analysis overlays ----
     /// Navigation accuracy for covariance propagation.
@@ -110,6 +113,7 @@ impl Default for Session {
             config: MissionConfig::default(),
             propagator: PropagatorChoice::default(),
             mission: None,
+            safety_requirements: None,
             // Tier 4
             navigation_accuracy: None,
             maneuver_uncertainty: None,
@@ -215,6 +219,16 @@ impl Session {
     pub fn set_propagator(&mut self, choice: PropagatorChoice) {
         self.propagator = choice;
         // Invalidate: mission
+        self.mission = None;
+    }
+
+    /// Set or clear safety requirements for formation design enrichment.
+    ///
+    /// Invalidates the mission: enriched perch changes the departure state,
+    /// which requires retargeting.
+    pub fn set_safety_requirements(&mut self, requirements: Option<SafetyRequirements>) {
+        self.safety_requirements = requirements;
+        // Invalidate: mission (enriched perch changes departure state)
         self.mission = None;
     }
 
@@ -339,6 +353,19 @@ impl Session {
             },
         ))
     }
+    /// Require safety requirements for formation design.
+    ///
+    /// # Errors
+    /// Returns [`ApiError::InvalidInput`] with [`InvalidInputError::MissingSessionState`]
+    /// when safety requirements have not been set.
+    pub fn require_safety_requirements(&self) -> Result<&SafetyRequirements, ApiError> {
+        self.safety_requirements.as_ref().ok_or(ApiError::InvalidInput(
+            InvalidInputError::MissingSessionState {
+                missing: "safety_requirements",
+                context: "set safety requirements via SetSafetyRequirements before this operation",
+            },
+        ))
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -373,7 +400,7 @@ impl Session {
             maneuver_uncertainty: self.maneuver_uncertainty,
             monte_carlo: self.monte_carlo_config.clone(),
             cola: None,
-            safety_requirements: None,
+            safety_requirements: self.safety_requirements,
         })
     }
 
@@ -408,6 +435,8 @@ pub struct SessionSummary {
     pub has_maneuver_uncertainty: bool,
     /// Whether Monte Carlo config is set.
     pub has_monte_carlo_config: bool,
+    /// Whether safety requirements are configured.
+    pub has_safety_requirements: bool,
     /// Number of waypoints defined.
     pub waypoint_count: usize,
     /// Current chief spacecraft choice.
@@ -433,6 +462,7 @@ impl Session {
             has_navigation_accuracy: self.navigation_accuracy.is_some(),
             has_maneuver_uncertainty: self.maneuver_uncertainty.is_some(),
             has_monte_carlo_config: self.monte_carlo_config.is_some(),
+            has_safety_requirements: self.safety_requirements.is_some(),
             waypoint_count: self.waypoints.len(),
             chief_config: self.chief_config,
             deputy_config: self.deputy_config,
@@ -634,6 +664,53 @@ mod tests {
         assert!(session.mission.is_none(), "mission should be cleared");
     }
 
+    // 6d. set_safety_requirements clears mission
+    #[test]
+    fn test_set_safety_requirements_invalidation() {
+        use rpo_core::mission::formation::{EiAlignment, SafetyRequirements};
+
+        let mut session = Session::default();
+        session.mission = Some(dummy_mission());
+
+        session.set_safety_requirements(Some(SafetyRequirements {
+            min_separation_km: 0.15,
+            alignment: EiAlignment::Parallel,
+        }));
+
+        assert!(session.safety_requirements.is_some());
+        assert!(session.mission.is_none(), "mission should be cleared");
+    }
+
+    // 6e. set_safety_requirements(None) clears both
+    #[test]
+    fn test_clear_safety_requirements() {
+        use rpo_core::mission::formation::{EiAlignment, SafetyRequirements};
+
+        let mut session = Session::default();
+        session.mission = Some(dummy_mission());
+        session.safety_requirements = Some(SafetyRequirements {
+            min_separation_km: 0.15,
+            alignment: EiAlignment::Parallel,
+        });
+
+        session.set_safety_requirements(None);
+
+        assert!(session.safety_requirements.is_none());
+        assert!(session.mission.is_none(), "mission should be cleared");
+    }
+
+    // 6f. require_safety_requirements returns error when None
+    #[test]
+    fn test_require_safety_requirements_none() {
+        let session = Session::default();
+        let err = session.require_safety_requirements().unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("safety_requirements"),
+            "error should mention 'safety_requirements': {msg}"
+        );
+    }
+
     // 7. overlay setters do not clear mission
     #[test]
     fn test_overlay_no_invalidation() {
@@ -722,6 +799,28 @@ mod tests {
         assert!((input.lambert_tof_s - DEFAULT_LAMBERT_TOF_S).abs() < 1e-10);
     }
 
+    // 10a. assemble_pipeline_input propagates safety_requirements
+    #[test]
+    fn test_assemble_pipeline_input_safety_requirements() {
+        use rpo_core::mission::formation::{EiAlignment, SafetyRequirements};
+
+        let mut session = Session::default();
+        session.set_states(test_state(6878.0), test_state(6883.0));
+
+        // Without safety requirements
+        let input = session.assemble_pipeline_input().expect("should succeed");
+        assert!(input.safety_requirements.is_none());
+
+        // With safety requirements
+        session.set_safety_requirements(Some(SafetyRequirements {
+            min_separation_km: 0.15,
+            alignment: EiAlignment::Auto,
+        }));
+        let input = session.assemble_pipeline_input().expect("should succeed");
+        let reqs = input.safety_requirements.expect("should propagate safety_requirements");
+        assert!((reqs.min_separation_km - 0.15).abs() < 1e-10);
+    }
+
     // 10b. assemble_pipeline_input fails without states
     #[test]
     fn test_assemble_pipeline_input_no_states() {
@@ -734,6 +833,8 @@ mod tests {
     // 11. reset clears everything
     #[test]
     fn test_reset() {
+        use rpo_core::mission::formation::{EiAlignment, SafetyRequirements};
+
         let mut session = Session::default();
         session.set_states(test_state(6878.0), test_state(6883.0));
         session.transfer = Some(dummy_transfer());
@@ -742,6 +843,10 @@ mod tests {
         session.set_navigation_accuracy(NavigationAccuracy::default());
         session.set_maneuver_uncertainty(ManeuverUncertainty::default());
         session.set_monte_carlo_config(test_mc_config());
+        session.safety_requirements = Some(SafetyRequirements {
+            min_separation_km: 0.15,
+            alignment: EiAlignment::Parallel,
+        });
         session.set_waypoints(vec![WaypointInput {
             position_ric_km: [0.0, 1.0, 0.0],
             velocity_ric_km_s: None,
@@ -759,6 +864,7 @@ mod tests {
         assert!(session.navigation_accuracy.is_none());
         assert!(session.maneuver_uncertainty.is_none());
         assert!(session.monte_carlo_config.is_none());
+        assert!(session.safety_requirements.is_none());
         assert!(session.waypoints.is_empty());
     }
 
@@ -783,13 +889,20 @@ mod tests {
     // Additional: to_summary reflects session state
     #[test]
     fn test_to_summary() {
+        use rpo_core::mission::formation::{EiAlignment, SafetyRequirements};
+
         let mut session = Session::default();
         let summary = session.to_summary();
         assert!(!summary.has_chief);
         assert!(!summary.has_transfer);
+        assert!(!summary.has_safety_requirements);
         assert_eq!(summary.waypoint_count, 0);
 
         session.set_states(test_state(6878.0), test_state(6883.0));
+        session.safety_requirements = Some(SafetyRequirements {
+            min_separation_km: 0.15,
+            alignment: EiAlignment::Auto,
+        });
         session.set_waypoints(vec![
             WaypointInput {
                 position_ric_km: [0.0, 1.0, 0.0],
@@ -809,6 +922,7 @@ mod tests {
         assert!(summary.has_chief);
         assert!(summary.has_deputy);
         assert!(!summary.has_transfer);
+        assert!(summary.has_safety_requirements);
         assert_eq!(summary.waypoint_count, 2);
         assert_eq!(summary.chief_config, SpacecraftChoice::Cubesat6U);
     }

@@ -8,6 +8,9 @@
 use serde::{Deserialize, Serialize};
 
 use rpo_core::mission::config::MissionConfig;
+use rpo_core::mission::formation::{
+    EnrichedWaypoint, FormationDesignReport, SafetyRequirements,
+};
 use rpo_core::mission::monte_carlo::MonteCarloConfig;
 use rpo_core::mission::types::PerchGeometry;
 use rpo_core::mission::{
@@ -214,6 +217,28 @@ pub enum ClientMessage {
         #[serde(default)]
         auto_drag: bool,
     },
+    /// Set or clear safety requirements for formation design enrichment.
+    /// Setting invalidates the current mission (enriched perch changes departure state).
+    SetSafetyRequirements {
+        /// Client-assigned correlation ID.
+        request_id: u64,
+        /// Safety requirements, or `None` to clear.
+        requirements: Option<SafetyRequirements>,
+    },
+    /// Request formation design analysis for the current mission.
+    /// Reads `safety_requirements` from session state (set via `SetSafetyRequirements`).
+    GetFormationDesign {
+        /// Client-assigned correlation ID.
+        request_id: u64,
+    },
+    /// Request a safe alternative ROE for a specific waypoint.
+    /// Stateless query — computes on the fly from current session state.
+    GetSafeAlternative {
+        /// Client-assigned correlation ID.
+        request_id: u64,
+        /// Index of the waypoint/leg to enrich.
+        waypoint_index: usize,
+    },
     /// Get a snapshot of current session state.
     GetSession {
         /// Client-assigned correlation ID.
@@ -268,6 +293,9 @@ pub enum ServerMessage {
         request_id: u64,
         /// Lean plan result (boxed to reduce enum size).
         result: Box<LeanPlanResult>,
+        /// Formation design report, present when `safety_requirements` is set.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        formation_design: Option<Box<FormationDesignReport>>,
     },
     /// Extracted differential drag rates.
     DragResult {
@@ -329,6 +357,20 @@ pub enum ServerMessage {
         /// Mission-phase eclipse data (None if no mission planned).
         #[serde(skip_serializing_if = "Option::is_none")]
         mission: Option<MissionEclipseData>,
+    },
+    /// Formation design report (response to `GetFormationDesign`).
+    FormationDesignResult {
+        /// Correlation ID from the client request.
+        request_id: u64,
+        /// Full formation design report (boxed to reduce enum size).
+        report: Box<FormationDesignReport>,
+    },
+    /// Safe alternative for a single waypoint (response to `GetSafeAlternative`).
+    SafeAlternativeResult {
+        /// Correlation ID from the client request.
+        request_id: u64,
+        /// Enriched waypoint with safe ROE (boxed to reduce enum size).
+        enriched: Box<EnrichedWaypoint>,
     },
     /// Current session state snapshot.
     SessionState {
@@ -547,6 +589,8 @@ pub enum ErrorCode {
     InvalidInput,
     /// Mission planning error (general).
     MissionError,
+    /// Formation design error (singular geometry, unachievable separation, etc.).
+    FormationDesignError,
     /// Operation was cancelled.
     Cancelled,
     /// Required session state not available (call `set_states`, `compute_transfer`, etc. first).
