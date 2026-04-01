@@ -74,6 +74,10 @@
     "cola": {
       "$ref": "#/$defs/ColaConfig",
       "description": "Collision avoidance configuration. If omitted, COLA auto-computes when config.safety is present and POCA violations exist (using min_distance_3d_km as target, 10 m/s budget). Explicit config overrides auto-derived values."
+    },
+    "safety_requirements": {
+      "$ref": "#/$defs/SafetyRequirements",
+      "description": "Safety requirements for formation design enrichment. When set, perch ROE is enriched with safe e/i vectors before targeting (enforced), and waypoint enrichment + transit safety are computed (advisory)."
     }
   },
   "additionalProperties": false,
@@ -425,6 +429,30 @@
         }
       },
       "additionalProperties": false
+    },
+    "SafetyRequirements": {
+      "type": "object",
+      "description": "Safety requirements for formation design enrichment (D'Amico Eq. 2.22). Controls perch e/i vector enrichment and transit safety analysis.",
+      "required": ["min_separation_km"],
+      "properties": {
+        "min_separation_km": {
+          "type": "number",
+          "description": "Minimum R/C separation in km. Maps to d_min in D'Amico Eq. 2.22.",
+          "exclusiveMinimum": 0
+        },
+        "alignment": {
+          "$ref": "#/$defs/EiAlignment",
+          "description": "E/I vector alignment strategy. Defaults to \"parallel\" if omitted.",
+          "default": "parallel"
+        }
+      },
+      "additionalProperties": false
+    },
+    "EiAlignment": {
+      "description": "E/I vector alignment strategy for formation design. Both parallel and anti-parallel maximize the passive safety metric (D'Amico Eq. 2.23).",
+      "type": "string",
+      "enum": ["parallel", "anti_parallel", "auto"],
+      "default": "parallel"
     },
     "SpacecraftChoice": {
       "description": "Spacecraft configuration: a named preset or custom properties.",
