@@ -373,6 +373,7 @@ impl Session {
             maneuver_uncertainty: self.maneuver_uncertainty,
             monte_carlo: self.monte_carlo_config.clone(),
             cola: None,
+            safety_requirements: None,
         })
     }
 

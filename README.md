@@ -17,7 +17,7 @@ Astrodynamics toolkit for rendezvous and proximity operations (RPO) mission plan
 
 ```bash
 cargo build                     # build workspace
-cargo test                      # 434 tests across 3 crates (19 ignored: full-physics, require ANISE kernels)
+cargo test                      # 449 tests across 3 crates (19 ignored: full-physics, require ANISE kernels)
 ```
 
 Run an example mission (analytical):
@@ -93,8 +93,10 @@ Reproduce with:
 
 ## Reference Papers
 
-- **Koenig, Guffanti, D'Amico** -- "New State Transition Matrices for Spacecraft Relative Motion in Perturbed Orbits" ([PDF](docs/references/Koenig_Guffanti_Damico.pdf)), _Journal of Guidance, Control, and Dynamics_, 2017. Source for QNS ROE definition (Eq. 2), J2 perturbation parameters (Eqs. 13-16), J2 6x6 STM (Eq. A6), J2+drag 9x9 STM (Appendix D, Eq. D2), density-model-free drag (Sec. VIII, Eqs. 73-77), dimensionless separation norm (Sec. V). Validation data: Tables 2-4.
-- **D'Amico** -- "Autonomous Formation Flying in Low Earth Orbit" ([PDF](docs/references/Damico_PhD.pdf)), PhD thesis, TU Delft, 2010. Source for QNS ROE definition (Eq. 2.2), ROE-to-RIC mapping (Eq. 2.17), e/i vector separation (Eq. 2.22), minimum distance bound (Eq. 2.23), γ parameter (Eq. 2.25), secular ROE drift under J2 (Eq. 2.29), J2-perturbed relative velocity (Eq. 2.31), bounded-motion condition (Eq. 2.33), GVE B matrix (Eq. 2.38), inverse GVE collision avoidance maneuvers (Eqs. 2.41, 2.50-2.53), AFC mode logic (§4.3.4).
+- **Koenig, Guffanti, D'Amico** -- "New State Transition Matrices for Spacecraft Relative Motion in Perturbed Orbits" ([PDF](docs/references/Koenig_Guffanti_Damico.pdf)), _Journal of Guidance, Control, and Dynamics_, 2017. Source for QNS ROE definition (Eq. 2), J2 perturbation parameters (Eqs. 13-16), J2 6x6 STM (Eq. A6, Eqs. A1-A2), J2+drag 9x9 STM (Appendix D, Eq. D2), density-model-free drag (Sec. VIII, Eqs. 73-77), linearization regime (Sec. III), dimensionless separation norm (Sec. V), osculating-to-mean averaging (Fig. 4). Validation data: Tables 2-4.
+- **D'Amico** -- "Autonomous Formation Flying in Low Earth Orbit" ([PDF](docs/references/Damico_PhD.pdf)), PhD thesis, TU Delft, 2010. Source for QNS ROE definition (Eq. 2.2), e/i polar form (Eqs. 2.3-2.4), ROE-to-RIC mapping (Eq. 2.17), e/i vector separation metric (Eq. 2.22), minimum distance bound for parallel e/i (Eq. 2.23), γ parameter (Eq. 2.25), secular ROE drift under J2 (Eq. 2.29), perigee rotation rate (Eq. 2.30), J2-perturbed relative velocity (Eq. 2.31), nominal safe formation configuration (Eq. 2.32), bounded-motion condition (Eq. 2.33), ROE propagation dynamics (Eqs. 2.36-2.37), GVE B matrix (Eq. 2.38), inverse GVE collision avoidance maneuvers (Eqs. 2.41, 2.44, 2.50-2.56), AFC mode logic (§4.3.4). Validation data: Tables 2.1-2.2, Figs. 2.3, 2.8.
+- **Meeus** -- _Astronomical Algorithms_, 2nd ed. Source for mean obliquity (Eq. 22.2), Sun ephemeris (Eqs. 25.2-25.6), Moon ephemeris (Tables 47.A-47.B).
+- **Brent** -- _Algorithms for Minimization without Derivatives_, 1973. Ch. 4: root-bracketing algorithm used for closest-approach (POCA) refinement.
 
 **Every module in the codebase traces to specific equations in these papers.**
 
@@ -200,7 +202,7 @@ The CLI (`rpo-cli`) provides batch execution and shell-composable plumbing for s
 
 ## Testing
 
-434 tests across 3 crates (382 rpo-core, 37 rpo-api, 13 rpo-cli, 2 doc-tests), 19 ignored (full-physics tests requiring ANISE ephemeris kernels, ~50 MB cached download). Tests cover roundtrip transform invariants, STM identity at dt=0, energy/momentum conservation, regression against published data (Koenig Tables 2-3, D'Amico Sec. 2.1-2.2), Newton-Raphson convergence, POCA Brent-refinement invariants (refined distance <= grid-sampled), free-drift abort-case trajectories, COLA inverse GVE analytical solutions and post-avoidance verification, autonomous COLA evaluation with multi-leg secondary conjunction detection, deterministic Monte Carlo seeding, covariance symmetry preservation, session invalidation, WebSocket handler integration, error serialization, and CLI smoke tests.
+449 tests across 3 crates (397 rpo-core, 37 rpo-api, 13 rpo-cli, 2 doc-tests), 19 ignored (full-physics tests requiring ANISE ephemeris kernels, ~50 MB cached download). Tests cover roundtrip transform invariants, STM identity at dt=0, energy/momentum conservation, regression against published data (Koenig Tables 2-3, D'Amico Sec. 2.1-2.2), Newton-Raphson convergence, POCA Brent-refinement invariants (refined distance <= grid-sampled), free-drift abort-case trajectories, COLA inverse GVE analytical solutions and post-avoidance verification, autonomous COLA evaluation with multi-leg secondary conjunction detection, formation design null-space orthogonality and position preservation, e/i enrichment separation thresholds, transit safety monitoring, J2 drift compensation, deterministic Monte Carlo seeding, covariance symmetry preservation, session invalidation, WebSocket handler integration, error serialization, and CLI smoke tests.
 
 ```bash
 cargo test                  # full suite

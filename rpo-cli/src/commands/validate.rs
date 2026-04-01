@@ -85,6 +85,7 @@ pub fn run(
         &input,
         &prop,
         derived_drag,
+        None,
     );
 
     match mode {

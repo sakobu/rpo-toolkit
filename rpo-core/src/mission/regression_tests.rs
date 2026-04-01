@@ -25,8 +25,8 @@ use crate::test_helpers::{
     damico_table21_case1_roe, damico_table21_chief, deputy_from_roe, iss_like_elements,
     koenig_table2_case1, koenig_table2_case1_roe, koenig_table2_case2, koenig_table2_case2_roe,
     koenig_table2_case3, koenig_table2_case3_roe, leo_400km_elements, leo_800km_target_elements,
-    rk4_j2_propagate, test_drag_config, test_epoch, DMF_RATE_NONZERO_LOWER_BOUND,
-    DMF_RATE_UPPER_BOUND,
+    propagate_test_trajectory_at, rk4_j2_propagate, test_drag_config, test_epoch,
+    DMF_RATE_NONZERO_LOWER_BOUND, DMF_RATE_UPPER_BOUND,
 };
 use crate::types::{KeplerianElements, QuasiNonsingularROE, SpacecraftConfig, StateVector};
 
@@ -935,9 +935,7 @@ fn poca_refined_leq_grid_sampled_sweep() {
 
     for (label, chief, roe) in cases {
         let period_s = chief.period().expect("period should succeed");
-        let traj = PropagationModel::J2Stm
-            .propagate_with_steps(roe, chief, epoch, period_s, 200)
-            .unwrap_or_else(|e| panic!("{label}: propagation failed: {e}"));
+        let traj = propagate_test_trajectory_at(roe, chief, epoch, period_s, 200);
 
         let grid_min_km = analyze_trajectory_safety(&traj)
             .unwrap_or_else(|e| panic!("{label}: safety analysis failed: {e}"))

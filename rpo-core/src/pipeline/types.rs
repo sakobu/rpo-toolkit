@@ -10,6 +10,9 @@ use crate::mission::cola_assessment::{SecondaryViolation, SkippedLeg};
 use crate::mission::avoidance::{AvoidanceManeuver, ColaConfig};
 use crate::mission::closest_approach::ClosestApproach;
 use crate::mission::config::{MissionConfig, ProximityConfig};
+use crate::mission::formation::{
+    FormationDesignReport, PerchEnrichmentResult, SafetyRequirements,
+};
 use crate::mission::free_drift::FreeDriftAnalysis;
 use crate::mission::monte_carlo::{MonteCarloConfig, MonteCarloReport};
 use crate::mission::types::{MissionPhase, MissionPlan, PerchGeometry, WaypointMission};
@@ -159,6 +162,25 @@ pub struct PipelineInput {
     /// Collision avoidance (COLA) configuration.
     #[serde(default)]
     pub cola: Option<ColaConfig>,
+    /// Safety requirements for formation design enrichment.
+    /// When `Some`, perch ROE is enriched with safe e/i vectors before targeting
+    /// (enforced), and waypoint enrichment + transit safety are computed (advisory).
+    #[serde(default)]
+    pub safety_requirements: Option<SafetyRequirements>,
+}
+
+// ---- FormationContext ----
+
+/// Intermediate formation design state passed from perch enrichment to `build_output`.
+///
+/// Created by `enrich_pipeline_perch` (pre-targeting), consumed by
+/// `compute_formation_report` (post-targeting) via `build_output`.
+/// Not serialized — internal pipeline intermediate only.
+pub struct FormationContext {
+    /// Perch enrichment result (enriched or fallback).
+    pub perch: PerchEnrichmentResult,
+    /// Safety requirements used for enrichment.
+    pub requirements: SafetyRequirements,
 }
 
 // ---- TransferResult ----
@@ -234,4 +256,7 @@ pub struct PipelineOutput {
     /// Legs where COLA was attempted but failed (budget exceeded, degenerate geometry, etc.).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cola_skipped: Option<Vec<SkippedLeg>>,
+    /// Formation design report (perch enrichment, waypoint advisory, transit safety).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub formation_design: Option<FormationDesignReport>,
 }

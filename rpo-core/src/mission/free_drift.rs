@@ -223,7 +223,9 @@ mod tests {
     use super::*;
     use crate::propagation::j2_params::compute_j2_params;
     use crate::propagation::propagator::PropagationModel;
-    use crate::test_helpers::{damico_table21_case1_roe, damico_table21_chief};
+    use crate::test_helpers::{
+        damico_table21_case1_roe, damico_table21_chief, propagate_test_trajectory_at,
+    };
     use crate::types::QuasiNonsingularROE;
 
     use hifitime::Epoch;
@@ -261,9 +263,7 @@ mod tests {
         let num_steps = 100;
 
         // "Nominal" propagation (same ROE, same model)
-        let nominal = model
-            .propagate_with_steps(&roe, &chief, epoch, period_s, num_steps)
-            .expect("nominal propagation");
+        let nominal = propagate_test_trajectory_at(&roe, &chief, epoch, period_s, num_steps);
 
         // Free-drift propagation (same ROE — zero-burn case)
         let free = compute_free_drift(&roe, &chief, epoch, period_s, &model, num_steps)

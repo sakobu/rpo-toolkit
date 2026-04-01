@@ -115,7 +115,7 @@ pub fn run(
     );
 
     // Build canonical output with nominal safety context (free-drift, POCA).
-    let mut output = build_output(&transfer, wp_mission, &input, &prop, derived_drag);
+    let mut output = build_output(&transfer, wp_mission, &input, &prop, derived_drag, None);
     output.monte_carlo = Some(report);
 
     print_mc_output(mode, &output, &input, &baseline, &prop, derived_drag.as_ref())

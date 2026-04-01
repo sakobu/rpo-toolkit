@@ -518,7 +518,7 @@ mod tests {
     use crate::propagation::propagator::PropagationModel;
     use crate::test_helpers::{
         damico_table21_case1_roe, damico_table21_chief, koenig_table2_case1,
-        koenig_table2_case1_roe, test_epoch,
+        koenig_table2_case1_roe, propagate_test_trajectory_at, test_epoch,
     };
 
     // Named tolerance constants
@@ -528,19 +528,6 @@ mod tests {
     // - STM_LINEARIZATION: J2 STM linearization vs analytic Eq. 2.23 bound
     const RANGE_RATE_IDENTITY_TOL: f64 = 1e-14;
     const POCA_DISTANCE_TOL_KM: f64 = 1e-6;
-
-    /// Helper: propagate a trajectory for testing.
-    fn propagate_trajectory(
-        roe: &QuasiNonsingularROE,
-        chief: &KeplerianElements,
-        epoch: Epoch,
-        tof_s: f64,
-        n_steps: usize,
-    ) -> Vec<PropagatedState> {
-        PropagationModel::J2Stm
-            .propagate_with_steps(roe, chief, epoch, tof_s, n_steps)
-            .expect("propagation should succeed")
-    }
 
     // ── Test 1: Bounded circular motion (D'Amico Eq. 2.23) ──────────
 
@@ -565,7 +552,7 @@ mod tests {
         let period_s = chief.period().expect("period should succeed");
         let n_steps = 200;
 
-        let traj = propagate_trajectory(&roe, &chief, epoch, period_s, n_steps);
+        let traj = propagate_test_trajectory_at(&roe, &chief, epoch, period_s, n_steps);
 
         let pocas = find_closest_approaches(
             &traj, &chief, epoch, &PropagationModel::J2Stm, &roe, 0,
@@ -627,7 +614,7 @@ mod tests {
         let epoch = test_epoch();
         let period_s = chief.period().expect("period should succeed");
 
-        let traj = propagate_trajectory(&roe, &chief, epoch, period_s, 200);
+        let traj = propagate_test_trajectory_at(&roe, &chief, epoch, period_s, 200);
 
         let pocas = find_closest_approaches(
             &traj, &chief, epoch, &PropagationModel::J2Stm, &roe, 0,
@@ -659,7 +646,7 @@ mod tests {
         let tof_s = period_s * f64::from(n_orbits);
         let n_steps = 200 * n_orbits;
 
-        let traj = propagate_trajectory(
+        let traj = propagate_test_trajectory_at(
             &roe,
             &chief,
             epoch,
@@ -707,7 +694,7 @@ mod tests {
         let epoch = test_epoch();
         let period_s = chief.period().expect("period should succeed");
 
-        let traj = propagate_trajectory(&roe, &chief, epoch, period_s, 200);
+        let traj = propagate_test_trajectory_at(&roe, &chief, epoch, period_s, 200);
 
         let grid_safety =
             analyze_trajectory_safety(&traj).expect("safety analysis should succeed");
@@ -742,7 +729,7 @@ mod tests {
         let period_s = chief.period().expect("period should succeed");
 
         // Use enough steps that grid resolution captures the POCA region
-        let traj = propagate_trajectory(&roe, &chief, epoch, period_s, 1000);
+        let traj = propagate_test_trajectory_at(&roe, &chief, epoch, period_s, 1000);
 
         let pocas = find_closest_approaches(
             &traj, &chief, epoch, &PropagationModel::J2Stm, &roe, 0,
@@ -772,7 +759,7 @@ mod tests {
         let epoch = test_epoch();
         let period_s = chief.period().expect("period should succeed");
 
-        let traj = propagate_trajectory(&roe, &chief, epoch, period_s, 200);
+        let traj = propagate_test_trajectory_at(&roe, &chief, epoch, period_s, 200);
 
         // If Brent didn't converge, find_closest_approaches would return
         // Err(PocaError::NoConvergence). Success = convergence.
@@ -808,7 +795,7 @@ mod tests {
         let roe = damico_table21_case1_roe();
         let epoch = test_epoch();
 
-        let traj = propagate_trajectory(&roe, &chief, epoch, 100.0, 1);
+        let traj = propagate_test_trajectory_at(&roe, &chief, epoch, 100.0, 1);
         // propagate_with_steps(n_steps=1) returns 2 points (start + end),
         // but let's slice to 1 point to test the error path
         let result = find_closest_approaches(
@@ -831,7 +818,7 @@ mod tests {
         let period_s = chief.period().expect("period should succeed");
 
         // n_steps=1 → 2 points (t=0, t=tof)
-        let traj = propagate_trajectory(&roe, &chief, epoch, period_s, 1);
+        let traj = propagate_test_trajectory_at(&roe, &chief, epoch, period_s, 1);
         assert_eq!(traj.len(), 2, "should have exactly 2 points");
 
         // Should not panic — may find bracket or not depending on geometry
@@ -859,7 +846,7 @@ mod tests {
         let epoch = test_epoch();
         let period_s = chief.period().expect("period should succeed");
 
-        let traj = propagate_trajectory(&roe, &chief, epoch, period_s, 200);
+        let traj = propagate_test_trajectory_at(&roe, &chief, epoch, period_s, 200);
 
         // Should not panic or error
         let result = find_closest_approaches(

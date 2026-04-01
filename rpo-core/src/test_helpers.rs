@@ -234,6 +234,46 @@ pub fn deputy_from_roe(chief: &KeplerianElements, roe: &QuasiNonsingularROE) -> 
 }
 
 // =========================================================================
+// Trajectory propagation helper
+// =========================================================================
+
+/// Propagate ROE state with J2Stm for testing.
+///
+/// Wraps `PropagationModel::J2Stm.propagate_with_steps()` with a default
+/// epoch (2026-01-01 UTC) for tests that don't depend on epoch.
+///
+/// # Panics
+/// Panics if propagation fails — test-only function.
+pub fn propagate_test_trajectory(
+    roe: &QuasiNonsingularROE,
+    chief: &KeplerianElements,
+    dt_s: f64,
+    n_steps: usize,
+) -> Vec<crate::propagation::propagator::PropagatedState> {
+    let epoch = Epoch::from_gregorian_utc(2026, 1, 1, 0, 0, 0, 0);
+    propagate_test_trajectory_at(roe, chief, epoch, dt_s, n_steps)
+}
+
+/// Propagate ROE state with J2Stm for testing at a specific epoch.
+///
+/// Same as [`propagate_test_trajectory`] but with caller-specified epoch.
+/// Use when the test needs the epoch value (e.g., passing it to downstream functions).
+///
+/// # Panics
+/// Panics if propagation fails — test-only function.
+pub fn propagate_test_trajectory_at(
+    roe: &QuasiNonsingularROE,
+    chief: &KeplerianElements,
+    epoch: Epoch,
+    dt_s: f64,
+    n_steps: usize,
+) -> Vec<crate::propagation::propagator::PropagatedState> {
+    crate::propagation::propagator::PropagationModel::J2Stm
+        .propagate_with_steps(roe, chief, epoch, dt_s, n_steps)
+        .expect("propagation should succeed")
+}
+
+// =========================================================================
 // RK4 J2 Numerical Integrator (independent truth source for regression tests)
 // =========================================================================
 

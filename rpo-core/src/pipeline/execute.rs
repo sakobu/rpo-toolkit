@@ -7,8 +7,17 @@ use crate::constants::DEFAULT_COVARIANCE_SAMPLES_PER_LEG;
 use crate::mission::cola_assessment::{assess_cola, ColaAssessment};
 use crate::mission::avoidance::ColaConfig;
 use crate::mission::closest_approach::{find_closest_approaches, ClosestApproach};
+use crate::mission::formation::{
+    EnrichedWaypoint, FormationDesignReport, PerchEnrichmentResult,
+    SafetyRequirements, TransitSafetyReport,
+};
+use super::types::FormationContext;
+use crate::mission::formation::perch::enrich_perch;
+use crate::mission::formation::safety_envelope::enrich_waypoint;
+use crate::mission::formation::transit::assess_transit_safety;
 use crate::mission::free_drift::{compute_free_drift, FreeDriftAnalysis};
 use crate::mission::planning::{compute_transfer_eclipse, plan_mission};
+use crate::mission::types::PerchGeometry;
 use crate::mission::waypoints::{plan_waypoint_mission, replan_from_waypoint};
 use crate::propagation::covariance::{
     ric_accuracy_to_roe_covariance, CovarianceError, ManeuverUncertainty,
@@ -203,6 +212,7 @@ fn flag_global_minimum(results: &mut [Vec<ClosestApproach>]) {
 /// * `input` — Original pipeline input (for covariance/eclipse config)
 /// * `propagator` — Resolved propagation model
 /// * `auto_drag` — Auto-derived drag config, if any
+/// * `formation_context` — Perch enrichment result + requirements, if formation design was requested
 #[must_use]
 pub fn build_output(
     transfer: &TransferResult,
@@ -210,6 +220,7 @@ pub fn build_output(
     input: &PipelineInput,
     propagator: &PropagationModel,
     auto_drag: Option<crate::propagation::propagator::DragConfig>,
+    formation_context: Option<FormationContext>,
 ) -> PipelineOutput {
     let transfer_eclipse = transfer.plan.transfer.as_ref().and_then(|t| {
         compute_transfer_eclipse(t, &input.chief, DEFAULT_TRANSFER_ECLIPSE_SAMPLES).ok()
@@ -280,6 +291,10 @@ pub fn build_output(
             }
         });
 
+    let formation_design = formation_context.map(|ctx| {
+        compute_formation_report(ctx.perch, ctx.requirements, &wp_mission.legs)
+    });
+
     PipelineOutput {
         phase: transfer.plan.phase.clone(),
         transfer: transfer.plan.transfer.clone(),
@@ -297,6 +312,7 @@ pub fn build_output(
         cola,
         secondary_conjunctions,
         cola_skipped,
+        formation_design,
     }
 }
 
@@ -361,6 +377,81 @@ pub fn plan_waypoints_from_transfer(
     )?)
 }
 
+/// Attempt perch enrichment. On success, replaces `transfer.plan.perch_roe`
+/// with the enriched ROE (enforced). Returns the result for reporting.
+fn enrich_pipeline_perch(
+    transfer: &mut TransferResult,
+    perch: &PerchGeometry,
+    requirements: &SafetyRequirements,
+) -> PerchEnrichmentResult {
+    match enrich_perch(perch, &transfer.plan.chief_at_arrival, requirements) {
+        Ok(safe_perch) => {
+            transfer.plan.perch_roe = safe_perch.roe;
+            PerchEnrichmentResult::Enriched(safe_perch)
+        }
+        Err(e) => PerchEnrichmentResult::Fallback {
+            unenriched_roe: transfer.plan.perch_roe,
+            reason: e.into(),
+        },
+    }
+}
+
+/// Build the advisory formation design report from perch enrichment results.
+///
+/// Applies R2 (resolve alignment once at perch, propagate to all waypoints),
+/// then enriches each waypoint and assesses transit safety per leg.
+/// Uses per-leg chief mean elements (which evolve under J2) rather than a
+/// single chief epoch, so that the T-matrix and e/i geometry are evaluated
+/// at the correct epoch for each leg.
+fn compute_formation_report(
+    perch_result: PerchEnrichmentResult,
+    reqs: SafetyRequirements,
+    legs: &[crate::mission::types::ManeuverLeg],
+) -> FormationDesignReport {
+    // R2: resolve alignment once at perch, propagate to all waypoints.
+    // If perch enrichment succeeded, use the resolved concrete alignment
+    // (Auto → Parallel or AntiParallel). On fallback, use original reqs.
+    let resolved_reqs = match &perch_result {
+        PerchEnrichmentResult::Enriched(sp) => SafetyRequirements {
+            min_separation_km: reqs.min_separation_km,
+            alignment: sp.alignment,
+        },
+        PerchEnrichmentResult::Fallback { .. } => reqs,
+    };
+
+    // Advisory: enrich each waypoint (velocity-constrained path — all
+    // waypoints currently carry velocity via to_waypoints() zero-fill).
+    // Uses per-leg arrival chief mean so T-matrix matches J2-evolved epoch.
+    // Indexed by leg — None if enrichment failed for that waypoint.
+    let waypoints: Vec<Option<EnrichedWaypoint>> = legs.iter().map(|leg| {
+        enrich_waypoint(
+            &leg.to_position_ric_km,
+            Some(&leg.target_velocity_ric_km_s),
+            &leg.arrival_chief_mean,
+            &resolved_reqs,
+        ).ok()
+    }).collect();
+
+    // Advisory: transit e/i separation per leg.
+    // assess_transit_safety reads per-sample chief from trajectory internally.
+    // Indexed by leg — None if assessment failed for that leg.
+    let transit_safety: Vec<Option<TransitSafetyReport>> = legs.iter().map(|leg| {
+        assess_transit_safety(&leg.trajectory, &resolved_reqs).ok()
+    }).collect();
+
+    let mission_min_ei_separation_km = transit_safety.iter()
+        .filter_map(|t| t.as_ref())
+        .map(|t| t.min_ei_separation_km)
+        .fold(None, |acc, v| Some(acc.map_or(v, |a: f64| a.min(v))));
+
+    FormationDesignReport {
+        perch: perch_result,
+        waypoints,
+        transit_safety,
+        mission_min_ei_separation_km,
+    }
+}
+
 /// Execute the full mission pipeline: classify → Lambert → waypoints → covariance → eclipse.
 ///
 /// Single entry point for the CLI `mission` command and the API `PlanMission` handler.
@@ -369,11 +460,21 @@ pub fn plan_waypoints_from_transfer(
 ///
 /// Returns [`PipelineError`] if any pipeline phase fails.
 pub fn execute_mission(input: &PipelineInput) -> Result<PipelineOutput, PipelineError> {
-    let transfer = compute_transfer(input)?;
+    let mut transfer = compute_transfer(input)?;
     let propagator = to_propagation_model(&input.propagator);
+
+    // Formation design is split: perch enrichment (pre-targeting, enforced)
+    // and transit assessment (post-targeting, advisory).
+    let formation_context = input.safety_requirements.as_ref().map(|reqs| {
+        FormationContext {
+            perch: enrich_pipeline_perch(&mut transfer, &input.perch, reqs),
+            requirements: *reqs,
+        }
+    });
+
     let wp_mission = plan_waypoints_from_transfer(&transfer, input, &propagator)?;
 
-    Ok(build_output(&transfer, wp_mission, input, &propagator, None))
+    Ok(build_output(&transfer, wp_mission, input, &propagator, None, formation_context))
 }
 
 /// Incremental replan pipeline: classify → Lambert → replan from index.
@@ -392,8 +493,17 @@ pub fn replan_mission(
     modified_index: usize,
     cached_mission: Option<crate::mission::types::WaypointMission>,
 ) -> Result<PipelineOutput, PipelineError> {
-    let transfer = compute_transfer(input)?;
+    let mut transfer = compute_transfer(input)?;
     let propagator = to_propagation_model(&input.propagator);
+
+    // Formation design: perch enrichment (pre-targeting, enforced)
+    let formation_context = input.safety_requirements.as_ref().map(|reqs| {
+        FormationContext {
+            perch: enrich_pipeline_perch(&mut transfer, &input.perch, reqs),
+            requirements: *reqs,
+        }
+    });
+
     let waypoints = to_waypoints(&input.waypoints);
     let departure = departure_from_transfer(&transfer);
 
@@ -411,7 +521,7 @@ pub fn replan_mission(
         &propagator,
     )?;
 
-    Ok(build_output(&transfer, wp_mission, input, &propagator, None))
+    Ok(build_output(&transfer, wp_mission, input, &propagator, None, formation_context))
 }
 
 #[cfg(test)]
@@ -420,6 +530,19 @@ mod tests {
     use crate::propagation::lambert::LambertConfig;
 
     use super::*;
+
+    /// Tolerance for pure data-copy fidelity tests (no arithmetic, exact IEEE 754 roundtrip).
+    const COPY_FIDELITY_TOL: f64 = f64::EPSILON;
+
+    /// Minimum e/i magnitude expected after enrichment (dimensionless ROE).
+    /// For a 100m separation at a = 7000 km, d_min/a ~ 1.4e-5. 1e-10 provides
+    /// 5 orders of margin above floating-point noise.
+    const ENRICHMENT_NONZERO_TOL: f64 = 1e-10;
+
+    /// Exact-equality tolerance for ROE that should be bitwise identical.
+    /// The enriched ROE is assigned directly (no arithmetic), so the only
+    /// difference is f64 representation noise from serialization roundtrips.
+    const ROE_IDENTITY_TOL: f64 = 1e-15;
 
     /// Build a minimal `PipelineInput` from the standard far-field test scenario.
     fn far_field_input() -> PipelineInput {
@@ -468,6 +591,7 @@ mod tests {
             maneuver_uncertainty: None,
             monte_carlo: None,
             cola: None,
+            safety_requirements: None,
         }
     }
 
@@ -516,9 +640,6 @@ mod tests {
         assert!(output.total_dv_km_s > 0.0);
     }
 
-    /// Tolerance for pure data-copy fidelity tests (no arithmetic, exact IEEE 754 roundtrip).
-    const COPY_FIDELITY_TOL: f64 = f64::EPSILON;
-
     /// Build a proximity-regime `PipelineInput` (deputy 1 km higher than chief).
     fn proximity_input() -> PipelineInput {
         use crate::elements::keplerian_conversions::keplerian_to_state;
@@ -555,6 +676,7 @@ mod tests {
             maneuver_uncertainty: None,
             monte_carlo: None,
             cola: None,
+            safety_requirements: None,
         }
     }
 
@@ -644,5 +766,80 @@ mod tests {
             "default velocity should be zero"
         );
         assert!(waypoints[1].tof_s.is_none());
+    }
+
+    #[test]
+    fn test_execute_mission_with_formation_design() {
+        use crate::mission::formation::{
+            EiAlignment, PerchEnrichmentResult, SafetyRequirements,
+        };
+
+        let mut input = far_field_input();
+        input.safety_requirements = Some(SafetyRequirements {
+            min_separation_km: 0.1,
+            alignment: EiAlignment::Parallel,
+        });
+
+        let output = execute_mission(&input).expect("execute_mission should succeed");
+
+        // Formation design report must be present
+        let report = output.formation_design
+            .as_ref()
+            .expect("formation_design should be Some when safety_requirements is set");
+
+        // Perch should be enriched (V-bar perch has zero e/i → enrichment adds them)
+        assert!(
+            matches!(report.perch, PerchEnrichmentResult::Enriched(_)),
+            "V-bar perch should enrich successfully"
+        );
+
+        // Enriched perch ROE should have nonzero e/i vectors
+        let roe = &output.perch_roe;
+        let ei_magnitude = (roe.dex * roe.dex + roe.dey * roe.dey
+            + roe.dix * roe.dix + roe.diy * roe.diy).sqrt();
+
+        assert!(
+            ei_magnitude > ENRICHMENT_NONZERO_TOL,
+            "enriched perch should have nonzero e/i vectors, got {ei_magnitude}"
+        );
+
+        // Enforced enrichment must flow through: output.perch_roe == report enriched ROE
+        if let PerchEnrichmentResult::Enriched(ref sp) = report.perch {
+            let diff = (sp.roe.to_vector() - roe.to_vector()).norm();
+            assert!(
+                diff < ROE_IDENTITY_TOL,
+                "output.perch_roe must match enriched perch ROE, diff = {diff:.2e}"
+            );
+        }
+
+        // Vectors indexed by leg — same length as legs
+        assert_eq!(
+            report.waypoints.len(),
+            output.mission.legs.len(),
+            "waypoints should have one entry per leg"
+        );
+        assert_eq!(
+            report.transit_safety.len(),
+            output.mission.legs.len(),
+            "transit_safety should have one entry per leg"
+        );
+
+        // All entries should be Some (no failures in this scenario)
+        assert!(
+            report.waypoints.iter().all(Option::is_some),
+            "all waypoint enrichments should succeed"
+        );
+        assert!(
+            report.transit_safety.iter().all(Option::is_some),
+            "all transit assessments should succeed"
+        );
+
+        // Mission-wide minimum e/i separation should be present and positive
+        let mission_min = report.mission_min_ei_separation_km
+            .expect("mission_min should be Some when transit assessments succeed");
+        assert!(
+            mission_min > 0.0,
+            "mission min e/i separation should be positive, got {mission_min}"
+        );
     }
 }

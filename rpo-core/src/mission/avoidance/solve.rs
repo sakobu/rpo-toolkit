@@ -312,7 +312,9 @@ pub fn compute_avoidance(
 mod tests {
     use super::*;
     use crate::mission::closest_approach::{find_closest_approaches, ClosestApproach};
-    use crate::test_helpers::{damico_table21_chief, damico_table21_case1_roe, test_epoch};
+    use crate::test_helpers::{
+        damico_table21_case1_roe, damico_table21_chief, propagate_test_trajectory_at, test_epoch,
+    };
 
     /// Analytical formula tolerance: exact analytical inversion of B matrix.
     /// Operations are O(1e-16) precision; 1e-10 provides wide margin.
@@ -434,9 +436,7 @@ mod tests {
         let tof_s = chief.period().unwrap();
 
         // First compute the actual POCA
-        let traj = model
-            .propagate_with_steps(&roe, &chief, epoch, tof_s, 200)
-            .unwrap();
+        let traj = propagate_test_trajectory_at(&roe, &chief, epoch, tof_s, 200);
         let pocas = find_closest_approaches(&traj, &chief, epoch, &model, &roe, 0).unwrap();
 
         if pocas.is_empty() {
@@ -485,9 +485,7 @@ mod tests {
         let model = PropagationModel::J2Stm;
         let tof_s = chief.period().unwrap();
 
-        let traj = model
-            .propagate_with_steps(&roe, &chief, epoch, tof_s, 200)
-            .unwrap();
+        let traj = propagate_test_trajectory_at(&roe, &chief, epoch, tof_s, 200);
         let pocas = find_closest_approaches(&traj, &chief, epoch, &model, &roe, 0).unwrap();
 
         if pocas.is_empty() {

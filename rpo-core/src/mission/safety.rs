@@ -34,7 +34,7 @@ use super::types::{OperationalSafety, PassiveSafety, SafetyMetrics};
 
 /// Degenerate e/i vector guard for D'Amico Eq. 2.22 — below this magnitude,
 /// the e/i separation formula is undefined (division by zero).
-const ROE_MAG_EPSILON: f64 = 1e-15;
+pub(crate) const ROE_MAG_EPSILON: f64 = 1e-15;
 
 /// Minimum along-track distance (km) to qualify as along-track dominated.
 /// Prevents degenerate classification when both R/C and along-track are
@@ -584,12 +584,10 @@ mod tests {
     /// Higher sampling density should find a tighter (or equal) 3D minimum.
     #[test]
     fn sampling_density_convergence() {
-        use crate::propagation::propagator::PropagationModel;
-        use crate::test_helpers::test_epoch;
+        use crate::test_helpers::{propagate_test_trajectory_at, test_epoch};
 
         let chief = iss_like_elements();
         let epoch = test_epoch();
-        let propagator = PropagationModel::J2Stm;
         let period = std::f64::consts::TAU / chief.mean_motion().unwrap();
 
         // Formation with nonzero δe/δi so 3D distance oscillates
@@ -602,12 +600,8 @@ mod tests {
             diy: 0.001,
         };
 
-        let coarse = propagator
-            .propagate_with_steps(&roe, &chief, epoch, period, 20)
-            .expect("coarse propagation should succeed");
-        let fine = propagator
-            .propagate_with_steps(&roe, &chief, epoch, period, 200)
-            .expect("fine propagation should succeed");
+        let coarse = propagate_test_trajectory_at(&roe, &chief, epoch, period, 20);
+        let fine = propagate_test_trajectory_at(&roe, &chief, epoch, period, 200);
 
         let coarse_metrics = analyze_trajectory_safety(&coarse).unwrap();
         let fine_metrics = analyze_trajectory_safety(&fine).unwrap();
@@ -624,12 +618,10 @@ mod tests {
     /// Trajectory worst-case analysis.
     #[test]
     fn trajectory_worst_case() {
-        use crate::propagation::propagator::PropagationModel;
-        use crate::test_helpers::test_epoch;
+        use crate::test_helpers::{propagate_test_trajectory_at, test_epoch};
 
         let chief = iss_like_elements();
         let epoch = test_epoch();
-        let propagator = PropagationModel::J2Stm;
         let period = std::f64::consts::TAU / chief.mean_motion().unwrap();
 
         // Parallel e/i vectors (both along +y) so e/i separation is nonzero
@@ -642,9 +634,7 @@ mod tests {
             diy: 0.001,
         };
 
-        let trajectory = propagator
-            .propagate_with_steps(&roe, &chief, epoch, period, 20)
-            .expect("propagation should succeed");
+        let trajectory = propagate_test_trajectory_at(&roe, &chief, epoch, period, 20);
 
         let worst = analyze_trajectory_safety(&trajectory).unwrap();
 
@@ -658,12 +648,10 @@ mod tests {
     /// Provenance fields are populated by `analyze_trajectory_safety`.
     #[test]
     fn trajectory_provenance_populated() {
-        use crate::propagation::propagator::PropagationModel;
-        use crate::test_helpers::test_epoch;
+        use crate::test_helpers::{propagate_test_trajectory_at, test_epoch};
 
         let chief = iss_like_elements();
         let epoch = test_epoch();
-        let propagator = PropagationModel::J2Stm;
         let period = std::f64::consts::TAU / chief.mean_motion().unwrap();
 
         let roe = QuasiNonsingularROE {
@@ -675,9 +663,7 @@ mod tests {
             diy: 0.001,
         };
 
-        let trajectory = propagator
-            .propagate_with_steps(&roe, &chief, epoch, period, 200)
-            .expect("propagation should succeed");
+        let trajectory = propagate_test_trajectory_at(&roe, &chief, epoch, period, 200);
 
         let worst = analyze_trajectory_safety(&trajectory).unwrap();
 

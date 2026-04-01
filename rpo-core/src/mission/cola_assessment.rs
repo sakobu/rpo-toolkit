@@ -392,7 +392,9 @@ mod tests {
     use crate::mission::closest_approach::ClosestApproach;
     use crate::mission::types::{Maneuver, ManeuverLeg, WaypointMission};
     use crate::propagation::propagator::PropagationModel;
-    use crate::test_helpers::{damico_table21_case1_roe, damico_table21_chief};
+    use crate::test_helpers::{
+        damico_table21_case1_roe, damico_table21_chief, propagate_test_trajectory_at,
+    };
     use crate::types::{KeplerianElements, QuasiNonsingularROE};
     use hifitime::Epoch;
     use nalgebra::Vector3;
@@ -415,9 +417,7 @@ mod tests {
         let period_s = chief.period().unwrap();
         let tof_s = tof_periods * period_s;
 
-        let trajectory = model
-            .propagate_with_steps(roe, chief, epoch, tof_s, TEST_STEPS)
-            .unwrap();
+        let trajectory = propagate_test_trajectory_at(roe, chief, epoch, tof_s, TEST_STEPS);
 
         // Propagate to get arrival state
         let arrival_state = model.propagate(roe, chief, epoch, tof_s).unwrap();
