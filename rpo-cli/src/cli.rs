@@ -74,6 +74,15 @@ pub enum Command {
         /// Maximum delta-v budget for collision avoidance (km/s).
         #[arg(long, value_name = "KM_S", requires = "cola_threshold")]
         cola_budget: Option<f64>,
+        /// Enable formation design enrichment with default 0.1 km separation threshold.
+        /// Enriches perch ROE with safe e/i vectors (D'Amico Eq. 2.22) and computes
+        /// per-leg transit safety profiles.
+        #[arg(long)]
+        auto_enrich: bool,
+        /// Custom min separation threshold (km) for formation design enrichment.
+        /// Implies `--auto-enrich`. Overrides the default 0.1 km threshold.
+        #[arg(long, value_name = "KM")]
+        auto_enrich_threshold: Option<f64>,
     },
     /// End-to-end mission with Nyx high-fidelity validation (requires network on first run).
     Validate {
@@ -98,6 +107,13 @@ pub enum Command {
         /// Maximum delta-v budget for collision avoidance (km/s).
         #[arg(long, value_name = "KM_S", requires = "cola_threshold")]
         cola_budget: Option<f64>,
+        /// Enable formation design enrichment with default 0.1 km separation threshold.
+        #[arg(long)]
+        auto_enrich: bool,
+        /// Custom min separation threshold (km) for formation design enrichment.
+        /// Implies `--auto-enrich`.
+        #[arg(long, value_name = "KM")]
+        auto_enrich_threshold: Option<f64>,
     },
     /// Full-physics Monte Carlo ensemble analysis (requires network on first run).
     Mc {
@@ -119,6 +135,13 @@ pub enum Command {
         /// Maximum delta-v budget for collision avoidance (km/s).
         #[arg(long, value_name = "KM_S", requires = "cola_threshold")]
         cola_budget: Option<f64>,
+        /// Enable formation design enrichment with default 0.1 km separation threshold.
+        #[arg(long)]
+        auto_enrich: bool,
+        /// Custom min separation threshold (km) for formation design enrichment.
+        /// Implies `--auto-enrich`.
+        #[arg(long, value_name = "KM")]
+        auto_enrich_threshold: Option<f64>,
     },
 
     // ---- Plumbing ----

@@ -25,6 +25,9 @@ use super::common::{
     fmt_bounded_motion_residual, fmt_duration, fmt_m, fmt_m_s, fmt_roe_component, McBaseline,
     SafetyTier, ValidationTier, VerdictResult,
 };
+use super::formation_fmt::{
+    write_perch_enrichment_md, write_transit_safety_md, write_waypoint_enrichment_md,
+};
 use super::insights;
 
 /// Generate a complete markdown report for the `mission` command.
@@ -44,10 +47,23 @@ pub fn mission_to_markdown(
     write_summary_block_mission(&mut out, &vr, output, &sc, None);
 
     write_transfer_section(&mut out, output, input);
+
+    if let Some(ref fd) = output.formation_design {
+        write_perch_enrichment_md(&mut out, fd);
+    }
+
     write_waypoint_section(&mut out, output, input, propagator, auto_drag);
+
+    if let Some(ref fd) = output.formation_design {
+        write_waypoint_enrichment_md(&mut out, fd);
+    }
 
     if let Some(ref safety) = output.mission.safety {
         write_safety_section(&mut out, safety, &sc, SafetyTier::Governing);
+    }
+
+    if let Some(ref fd) = output.formation_design {
+        write_transit_safety_md(&mut out, fd);
     }
 
     if let Some(ref poca) = output.poca {
@@ -104,10 +120,23 @@ pub fn validation_to_markdown(
     );
 
     write_transfer_section(&mut out, output, input);
+
+    if let Some(ref fd) = output.formation_design {
+        write_perch_enrichment_md(&mut out, fd);
+    }
+
     write_waypoint_section(&mut out, output, input, ctx.propagator, ctx.auto_drag);
+
+    if let Some(ref fd) = output.formation_design {
+        write_waypoint_enrichment_md(&mut out, fd);
+    }
 
     if let Some(ref safety) = output.mission.safety {
         write_safety_section(&mut out, safety, &sc, SafetyTier::Baseline(ValidationTier::Nyx));
+    }
+
+    if let Some(ref fd) = output.formation_design {
+        write_transit_safety_md(&mut out, fd);
     }
 
     if let Some(ref poca) = output.poca {
@@ -167,6 +196,9 @@ pub fn mc_to_markdown(
     // Nominal safety context (free-drift, POCA)
     if let Some(ref safety) = output.mission.safety {
         write_safety_section(&mut out, safety, &sc, SafetyTier::Baseline(ValidationTier::MonteCarlo));
+    }
+    if let Some(ref fd) = output.formation_design {
+        write_transit_safety_md(&mut out, fd);
     }
     if let Some(ref poca) = output.poca {
         write_poca_section(&mut out, "Closest Approach (Brent-refined)", poca);

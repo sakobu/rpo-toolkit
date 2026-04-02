@@ -5,7 +5,7 @@ use std::path::Path;
 use rpo_core::mission::{run_monte_carlo, MissionPhase, MonteCarloInput};
 use rpo_core::pipeline::{
     build_output, compute_mission_covariance, compute_transfer, plan_waypoints_from_transfer,
-    PipelineInput, PipelineOutput,
+    prepare_formation_context, PipelineInput, PipelineOutput,
 };
 use rpo_core::propagation::{load_full_almanac, DragConfig};
 
@@ -13,8 +13,8 @@ use crate::cli::OutputMode;
 use crate::error::CliError;
 use crate::input::load_json;
 use crate::output::common::{
-    apply_cola_overlay, create_spinner, print_insights, resolve_drag_and_propagator, status,
-    write_json_report, write_report, McBaseline, SafetyTier, ValidationTier,
+    apply_overlays, create_spinner, print_insights, resolve_drag_and_propagator, status,
+    write_json_report, write_report, McBaseline, OverlayFlags, SafetyTier, ValidationTier,
 };
 use crate::output::markdown_fmt;
 use crate::output::mc_fmt::{print_mc_report, print_mc_summary};
@@ -25,11 +25,10 @@ pub fn run(
     input_path: &Path,
     mode: OutputMode,
     auto_drag: bool,
-    cola_threshold: Option<f64>,
-    cola_budget: Option<f64>,
+    flags: &OverlayFlags,
 ) -> Result<(), CliError> {
     let mut input: PipelineInput = load_json(input_path)?;
-    apply_cola_overlay(&mut input, cola_threshold, cola_budget);
+    apply_overlays(&mut input, flags);
 
     let chief_config = input
         .chief_config
@@ -47,7 +46,8 @@ pub fn run(
     let spinner = create_spinner(mode.suppress_interactive());
 
     status!(spinner, "Classification + Lambert transfer...");
-    let transfer = compute_transfer(&input)?;
+    let mut transfer = compute_transfer(&input)?;
+    let formation_context = prepare_formation_context(&mut transfer, &input);
 
     status!(spinner, "Loading almanac (may download on first run)...");
     let almanac = load_full_almanac()?;
@@ -115,7 +115,7 @@ pub fn run(
     );
 
     // Build canonical output with nominal safety context (free-drift, POCA).
-    let mut output = build_output(&transfer, wp_mission, &input, &prop, derived_drag, None);
+    let mut output = build_output(&transfer, wp_mission, &input, &prop, derived_drag, formation_context);
     output.monte_carlo = Some(report);
 
     print_mc_output(mode, &output, &input, &baseline, &prop, derived_drag.as_ref())

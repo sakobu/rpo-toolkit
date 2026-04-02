@@ -12,38 +12,46 @@ The `rpo-cli` crate provides batch execution and shell-composable commands for m
 
 End-to-end analytical mission: classification, Lambert transfer, perch handoff, waypoint targeting, safety, covariance, eclipse.
 
-| Flag               | Type | Default  | Description                                                                      |
-| ------------------ | ---- | -------- | -------------------------------------------------------------------------------- |
-| `-i, --input`      | path | required | JSON input file (PipelineInput)                                                  |
-| `--json`           | bool | false    | Write JSON report to `reports/json/mission.json` (conflicts with `--markdown`)   |
-| `--markdown`       | bool | false    | Write markdown report to `reports/markdown/mission.md` (conflicts with `--json`) |
-| `--cola-threshold` | f64  | none     | Target miss distance for collision avoidance (km). Enables COLA analysis         |
-| `--cola-budget`    | f64  | 0.01     | Maximum delta-v budget for COLA (km/s). Requires `--cola-threshold`              |
+| Flag                      | Type | Default  | Description                                                                      |
+| ------------------------- | ---- | -------- | -------------------------------------------------------------------------------- |
+| `-i, --input`             | path | required | JSON input file (PipelineInput)                                                  |
+| `--json`                  | bool | false    | Write JSON report to `reports/json/mission.json` (conflicts with `--markdown`)   |
+| `--markdown`              | bool | false    | Write markdown report to `reports/markdown/mission.md` (conflicts with `--json`) |
+| `--cola-threshold`        | f64  | none     | Target miss distance for collision avoidance (km). Enables COLA analysis         |
+| `--cola-budget`           | f64  | 0.01     | Maximum delta-v budget for COLA (km/s). Requires `--cola-threshold`              |
+| `--auto-enrich`           | bool | false    | Enable formation design enrichment with 0.1 km separation threshold              |
+| `--auto-enrich-threshold` | f64  | none     | Custom min separation (km) for formation design. Implies `--auto-enrich`         |
 
 Free-drift (abort-case) analysis and closest-approach refinement (Brent's method on range rate) are included automatically when `config.safety` is present in the input.
 
 **COLA auto-compute:** When `config.safety` is present and any POCA violates `min_distance_3d_km`, collision avoidance maneuvers are automatically computed using the safety threshold as the target distance and a default budget of 10 m/s. The `--cola-threshold` and `--cola-budget` flags override this auto-derived config. Post-avoidance multi-leg verification detects secondary conjunctions (where an avoidance maneuver on one leg creates a new violation on a downstream leg). Legs where COLA fails (budget exceeded, degenerate geometry) are reported as skipped.
+
+**Formation design:** When `--auto-enrich` is set, the perch ROE is enriched with safe e/i vectors (D'Amico Eq. 2.22) before waypoint targeting. Per-waypoint enrichment advisory and per-leg transit e/i separation profiles are computed and displayed alongside the standard mission output.
 
 ```bash
 cargo run -p rpo-cli -- mission --input examples/mission.json
 cargo run -p rpo-cli -- mission --input examples/mission.json --json
 cargo run -p rpo-cli -- mission --input examples/mission.json --markdown
 cargo run -p rpo-cli -- mission --input examples/mission.json --cola-threshold 0.3 --cola-budget 0.01
+cargo run -p rpo-cli -- mission --input examples/mission.json --auto-enrich
+cargo run -p rpo-cli -- mission --input examples/mission.json --auto-enrich-threshold 0.15 --json
 ```
 
 #### validate
 
 Mission planning + nyx high-fidelity validation. Compares analytical trajectories against full-physics propagation (J2, drag, SRP with eclipses, Sun/Moon third-body). Requires network on first run to download ANISE ephemeris kernels (~50 MB, cached).
 
-| Flag                | Type | Default  | Description                                                                       |
-| ------------------- | ---- | -------- | --------------------------------------------------------------------------------- |
-| `-i, --input`       | path | required | JSON input file (PipelineInput with spacecraft configs)                           |
-| `--json`            | bool | false    | Write JSON report to `reports/json/validate.json` (conflicts with `--markdown`)   |
-| `--markdown`        | bool | false    | Write markdown report to `reports/markdown/validate.md` (conflicts with `--json`) |
-| `--samples-per-leg` | u32  | 50       | Comparison points per leg                                                         |
-| `--auto-drag`       | bool | false    | Auto-derive differential drag rates from spacecraft properties via nyx            |
-| `--cola-threshold`  | f64  | none     | Target miss distance for collision avoidance (km). Enables COLA analysis          |
-| `--cola-budget`     | f64  | 0.01     | Maximum delta-v budget for COLA (km/s). Requires `--cola-threshold`               |
+| Flag                      | Type | Default  | Description                                                                       |
+| ------------------------- | ---- | -------- | --------------------------------------------------------------------------------- |
+| `-i, --input`             | path | required | JSON input file (PipelineInput with spacecraft configs)                           |
+| `--json`                  | bool | false    | Write JSON report to `reports/json/validate.json` (conflicts with `--markdown`)   |
+| `--markdown`              | bool | false    | Write markdown report to `reports/markdown/validate.md` (conflicts with `--json`) |
+| `--samples-per-leg`       | u32  | 50       | Comparison points per leg                                                         |
+| `--auto-drag`             | bool | false    | Auto-derive differential drag rates from spacecraft properties via nyx            |
+| `--cola-threshold`        | f64  | none     | Target miss distance for collision avoidance (km). Enables COLA analysis          |
+| `--cola-budget`           | f64  | 0.01     | Maximum delta-v budget for COLA (km/s). Requires `--cola-threshold`               |
+| `--auto-enrich`           | bool | false    | Enable formation design enrichment with 0.1 km separation threshold               |
+| `--auto-enrich-threshold` | f64  | none     | Custom min separation (km) for formation design. Implies `--auto-enrich`          |
 
 ```bash
 cargo run -p rpo-cli -- validate --input examples/validate.json
@@ -51,26 +59,32 @@ cargo run -p rpo-cli -- validate --input examples/validate.json --auto-drag
 cargo run -p rpo-cli -- validate --input examples/validate.json --json
 cargo run -p rpo-cli -- validate --input examples/validate.json --auto-drag --markdown
 cargo run -p rpo-cli -- validate --input examples/validate.json --cola-threshold 0.3 --cola-budget 0.01
+cargo run -p rpo-cli -- validate --input examples/validate.json --auto-enrich
+cargo run -p rpo-cli -- validate --input examples/validate.json --auto-enrich-threshold 0.15 --json
 ```
 
 #### mc
 
 Full-physics Monte Carlo ensemble analysis. Requires `monte_carlo` config in the input JSON. Uses rayon for parallel sample execution.
 
-| Flag               | Type | Default  | Description                                                                 |
-| ------------------ | ---- | -------- | --------------------------------------------------------------------------- |
-| `-i, --input`      | path | required | JSON input file (PipelineInput with spacecraft + MC configs)                |
-| `--json`           | bool | false    | Write JSON report to `reports/json/mc.json` (conflicts with `--markdown`)   |
-| `--markdown`       | bool | false    | Write markdown report to `reports/markdown/mc.md` (conflicts with `--json`) |
-| `--auto-drag`      | bool | false    | Auto-derive differential drag rates before MC                               |
-| `--cola-threshold` | f64  | none     | Target miss distance for collision avoidance (km). Enables COLA analysis    |
-| `--cola-budget`    | f64  | 0.01     | Maximum delta-v budget for COLA (km/s). Requires `--cola-threshold`         |
+| Flag                      | Type | Default  | Description                                                                 |
+| ------------------------- | ---- | -------- | --------------------------------------------------------------------------- |
+| `-i, --input`             | path | required | JSON input file (PipelineInput with spacecraft + MC configs)                |
+| `--json`                  | bool | false    | Write JSON report to `reports/json/mc.json` (conflicts with `--markdown`)   |
+| `--markdown`              | bool | false    | Write markdown report to `reports/markdown/mc.md` (conflicts with `--json`) |
+| `--auto-drag`             | bool | false    | Auto-derive differential drag rates before MC                               |
+| `--cola-threshold`        | f64  | none     | Target miss distance for collision avoidance (km). Enables COLA analysis    |
+| `--cola-budget`           | f64  | 0.01     | Maximum delta-v budget for COLA (km/s). Requires `--cola-threshold`         |
+| `--auto-enrich`           | bool | false    | Enable formation design enrichment with 0.1 km separation threshold         |
+| `--auto-enrich-threshold` | f64  | none     | Custom min separation (km) for formation design. Implies `--auto-enrich`    |
 
 ```bash
 cargo run -p rpo-cli -- mc --input examples/mc.json --auto-drag
 cargo run -p rpo-cli -- mc --input examples/mc.json --json
 cargo run -p rpo-cli -- mc --input examples/mc.json --auto-drag --markdown
 cargo run -p rpo-cli -- mc --input examples/mc.json --cola-threshold 0.3 --cola-budget 0.01
+cargo run -p rpo-cli -- mc --input examples/mc.json --auto-drag --auto-enrich
+cargo run -p rpo-cli -- mc --input examples/mc.json --auto-enrich-threshold 0.15 --json
 ```
 
 ### Plumbing

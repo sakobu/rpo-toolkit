@@ -15,6 +15,7 @@ use clap::{CommandFactory, Parser};
 use owo_colors::set_override;
 
 use cli::{Cli, Command, OutputMode};
+use output::common::OverlayFlags;
 
 fn main() -> ExitCode {
     let cli = Cli::parse();
@@ -36,7 +37,17 @@ fn main() -> ExitCode {
             markdown,
             cola_threshold,
             cola_budget,
-        }) => commands::mission::run(input, OutputMode::from_flags(json, markdown), cola_threshold, cola_budget),
+            auto_enrich,
+            auto_enrich_threshold,
+        }) => {
+            let flags = OverlayFlags {
+                cola_threshold,
+                cola_budget,
+                auto_enrich,
+                auto_enrich_threshold,
+            };
+            commands::mission::run(input, OutputMode::from_flags(json, markdown), &flags)
+        }
         Some(Command::Validate {
             ref input,
             json,
@@ -45,14 +56,23 @@ fn main() -> ExitCode {
             auto_drag,
             cola_threshold,
             cola_budget,
-        }) => commands::validate::run(
-            input,
-            OutputMode::from_flags(json, markdown),
-            samples_per_leg,
-            auto_drag,
-            cola_threshold,
-            cola_budget,
-        ),
+            auto_enrich,
+            auto_enrich_threshold,
+        }) => {
+            let flags = OverlayFlags {
+                cola_threshold,
+                cola_budget,
+                auto_enrich,
+                auto_enrich_threshold,
+            };
+            commands::validate::run(
+                input,
+                OutputMode::from_flags(json, markdown),
+                samples_per_leg,
+                auto_drag,
+                &flags,
+            )
+        }
         Some(Command::Mc {
             ref input,
             json,
@@ -60,7 +80,22 @@ fn main() -> ExitCode {
             auto_drag,
             cola_threshold,
             cola_budget,
-        }) => commands::mc::run(input, OutputMode::from_flags(json, markdown), auto_drag, cola_threshold, cola_budget),
+            auto_enrich,
+            auto_enrich_threshold,
+        }) => {
+            let flags = OverlayFlags {
+                cola_threshold,
+                cola_budget,
+                auto_enrich,
+                auto_enrich_threshold,
+            };
+            commands::mc::run(
+                input,
+                OutputMode::from_flags(json, markdown),
+                auto_drag,
+                &flags,
+            )
+        }
         Some(Command::Classify { ref input }) => commands::classify::run(input),
         Some(Command::Transfer { ref input }) => commands::transfer::run(input),
         Some(Command::Convert { ref input, ref to }) => commands::convert::run(input, to),

@@ -377,6 +377,23 @@ pub fn plan_waypoints_from_transfer(
     )?)
 }
 
+/// Prepare formation design context from a transfer result and safety requirements.
+///
+/// Enriches the perch ROE in-place (enforced) and returns a [`FormationContext`]
+/// for passing to [`build_output`]. Call this between [`compute_transfer`] and
+/// [`plan_waypoints_from_transfer`] so the enriched perch flows into targeting.
+///
+/// Returns `None` if `safety_requirements` is not set on the input.
+pub fn prepare_formation_context(
+    transfer: &mut TransferResult,
+    input: &PipelineInput,
+) -> Option<FormationContext> {
+    input.safety_requirements.as_ref().map(|reqs| FormationContext {
+        perch: enrich_pipeline_perch(transfer, &input.perch, reqs),
+        requirements: *reqs,
+    })
+}
+
 /// Attempt perch enrichment. On success, replaces `transfer.plan.perch_roe`
 /// with the enriched ROE (enforced). Returns the result for reporting.
 fn enrich_pipeline_perch(
@@ -463,14 +480,7 @@ pub fn execute_mission(input: &PipelineInput) -> Result<PipelineOutput, Pipeline
     let mut transfer = compute_transfer(input)?;
     let propagator = to_propagation_model(&input.propagator);
 
-    // Formation design is split: perch enrichment (pre-targeting, enforced)
-    // and transit assessment (post-targeting, advisory).
-    let formation_context = input.safety_requirements.as_ref().map(|reqs| {
-        FormationContext {
-            perch: enrich_pipeline_perch(&mut transfer, &input.perch, reqs),
-            requirements: *reqs,
-        }
-    });
+    let formation_context = prepare_formation_context(&mut transfer, input);
 
     let wp_mission = plan_waypoints_from_transfer(&transfer, input, &propagator)?;
 
@@ -496,13 +506,7 @@ pub fn replan_mission(
     let mut transfer = compute_transfer(input)?;
     let propagator = to_propagation_model(&input.propagator);
 
-    // Formation design: perch enrichment (pre-targeting, enforced)
-    let formation_context = input.safety_requirements.as_ref().map(|reqs| {
-        FormationContext {
-            perch: enrich_pipeline_perch(&mut transfer, &input.perch, reqs),
-            requirements: *reqs,
-        }
-    });
+    let formation_context = prepare_formation_context(&mut transfer, input);
 
     let waypoints = to_waypoints(&input.waypoints);
     let departure = departure_from_transfer(&transfer);

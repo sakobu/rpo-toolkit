@@ -10,8 +10,8 @@ use owo_colors::{OwoColorize, Stream};
 use serde::Serialize;
 
 use rpo_core::mission::{
-    assess_safety, AvoidanceManeuver, ColaConfig, MonteCarloReport, PercentileStats, SafetyConfig,
-    ValidationReport,
+    assess_safety, AvoidanceManeuver, ColaConfig, EiAlignment, MonteCarloReport, PercentileStats,
+    SafetyConfig, SafetyRequirements, ValidationReport,
 };
 use rpo_core::pipeline::{
     resolve_propagator, to_propagation_model, PipelineInput, PipelineOutput, TransferResult,
@@ -45,19 +45,48 @@ pub enum ValidationTier {
 /// 10 m/s — matches the pipeline auto-COLA default in `execute.rs`.
 const DEFAULT_COLA_BUDGET_KM_S: f64 = 0.01;
 
-/// Apply CLI `--cola-threshold` / `--cola-budget` flags onto a `PipelineInput`.
+/// Default formation design enrichment threshold (km).
+/// 100 m — a reasonable passive safety margin for close proximity operations.
+const DEFAULT_ENRICHMENT_THRESHOLD_KM: f64 = 0.1;
+
+/// CLI overlay flags that mutate a [`PipelineInput`] before execution.
 ///
-/// When `threshold` is `Some`, creates a `ColaConfig` with the given target
-/// distance and budget (defaulting to 10 m/s if `budget` is `None`).
-pub fn apply_cola_overlay(
-    input: &mut PipelineInput,
-    threshold: Option<f64>,
-    budget: Option<f64>,
-) {
-    if let Some(threshold) = threshold {
+/// Groups COLA and formation design enrichment flags to avoid
+/// long argument lists in porcelain command `run()` functions.
+#[derive(Debug, Clone, Default)]
+pub struct OverlayFlags {
+    /// Target miss distance for collision avoidance (km).
+    pub cola_threshold: Option<f64>,
+    /// Maximum delta-v budget for COLA (km/s).
+    pub cola_budget: Option<f64>,
+    /// Enable formation design enrichment.
+    pub auto_enrich: bool,
+    /// Custom min separation threshold (km) for formation design.
+    pub auto_enrich_threshold: Option<f64>,
+}
+
+/// Apply all CLI overlay flags onto a [`PipelineInput`].
+///
+/// Handles COLA configuration and formation design enrichment in one call.
+pub fn apply_overlays(input: &mut PipelineInput, flags: &OverlayFlags) {
+    // COLA overlay
+    if let Some(threshold) = flags.cola_threshold {
         input.cola = Some(ColaConfig {
             target_distance_km: threshold,
-            max_dv_km_s: budget.unwrap_or(DEFAULT_COLA_BUDGET_KM_S),
+            max_dv_km_s: flags.cola_budget.unwrap_or(DEFAULT_COLA_BUDGET_KM_S),
+        });
+    }
+
+    // Formation design enrichment overlay
+    let separation_km = match (flags.auto_enrich_threshold, flags.auto_enrich) {
+        (Some(t), _) => Some(t),
+        (None, true) => Some(DEFAULT_ENRICHMENT_THRESHOLD_KM),
+        (None, false) => None,
+    };
+    if let Some(min_separation_km) = separation_km {
+        input.safety_requirements = Some(SafetyRequirements {
+            min_separation_km,
+            alignment: EiAlignment::default(),
         });
     }
 }

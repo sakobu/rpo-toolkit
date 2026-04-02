@@ -12,6 +12,7 @@ use super::common::{
 };
 use super::thresholds::fidelity;
 use super::eclipse_fmt::{print_eclipse_summary, print_eclipse_validation};
+use super::formation_fmt::{print_perch_enrichment, print_transit_safety, print_waypoint_enrichment};
 use super::safety_fmt::{print_cola_analysis, print_cola_skipped, print_free_drift_analysis, print_poca_analysis, print_safety_analysis, print_safety_comparison, print_safety_summary, print_secondary_conjunctions};
 
 /// Print the common Transfer + Waypoint Targeting output shared by mission/validate.
@@ -39,7 +40,17 @@ pub fn print_mission_human(
     println!();
     print_roe("Perch ROE", &output.perch_roe, chief_a);
 
+    // ── Formation Design: Perch Enrichment ────────────────────
+    if let Some(ref fd) = output.formation_design {
+        print_perch_enrichment(fd);
+    }
+
     print_waypoint_table(output, input, propagator, auto_drag);
+
+    // ── Formation Design: Waypoint Enrichment Advisory ────────
+    if let Some(ref fd) = output.formation_design {
+        print_waypoint_enrichment(fd);
+    }
 
     // ── Safety ────────────────────────────────────────────────
     if let Some(ref safety) = output.mission.safety {
@@ -49,6 +60,11 @@ pub fn print_mission_human(
             SafetyTier::Baseline(_) => print_subheader("Safety (Analytical Baseline)"),
         }
         print_safety_analysis(safety, &sc);
+    }
+
+    // ── Formation Design: Transit Safety ─────────────────────
+    if let Some(ref fd) = output.formation_design {
+        print_transit_safety(fd);
     }
 
     // ── POCA (nominal trajectory) ──────────────────────────

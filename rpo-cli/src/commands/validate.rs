@@ -3,15 +3,18 @@
 use std::path::Path;
 
 use rpo_core::mission::{validate_mission_nyx, ValidationConfig, ValidationReport};
-use rpo_core::pipeline::{compute_transfer, plan_waypoints_from_transfer, PipelineInput, PipelineOutput};
+use rpo_core::pipeline::{
+    compute_transfer, plan_waypoints_from_transfer, prepare_formation_context, PipelineInput,
+    PipelineOutput,
+};
 use rpo_core::propagation::load_full_almanac;
 
 use crate::cli::OutputMode;
 use crate::error::CliError;
 use crate::input::load_json;
 use crate::output::common::{
-    apply_cola_overlay, create_spinner, print_insights, resolve_drag_and_propagator, status,
-    write_json_report, write_report, SafetyTier, ValidationTier,
+    apply_overlays, create_spinner, print_insights, resolve_drag_and_propagator, status,
+    write_json_report, write_report, OverlayFlags, SafetyTier, ValidationTier,
 };
 use crate::output::markdown_fmt::{self, ValidationContext};
 use crate::output::mission_fmt::{
@@ -33,11 +36,10 @@ pub fn run(
     mode: OutputMode,
     samples_per_leg: u32,
     auto_drag: bool,
-    cola_threshold: Option<f64>,
-    cola_budget: Option<f64>,
+    flags: &OverlayFlags,
 ) -> Result<(), CliError> {
     let mut input: PipelineInput = load_json(input_path)?;
-    apply_cola_overlay(&mut input, cola_threshold, cola_budget);
+    apply_overlays(&mut input, flags);
 
     let chief_config = input.chief_config.unwrap_or_default().resolve();
     let deputy_config = input.deputy_config.unwrap_or_default().resolve();
@@ -45,7 +47,8 @@ pub fn run(
     let spinner = create_spinner(mode.suppress_interactive());
 
     status!(spinner, "Classification + Lambert transfer...");
-    let transfer = compute_transfer(&input)?;
+    let mut transfer = compute_transfer(&input)?;
+    let formation_context = prepare_formation_context(&mut transfer, &input);
 
     status!(spinner, "Loading almanac (may download on first run)...");
     let almanac = load_full_almanac()?;
@@ -85,7 +88,7 @@ pub fn run(
         &input,
         &prop,
         derived_drag,
-        None,
+        formation_context,
     );
 
     match mode {

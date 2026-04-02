@@ -7,7 +7,7 @@ use rpo_core::pipeline::{execute_mission, to_propagation_model, PipelineInput};
 use crate::cli::OutputMode;
 use crate::error::CliError;
 use crate::input::load_json;
-use crate::output::common::{apply_cola_overlay, write_json_report, write_report, SafetyTier};
+use crate::output::common::{apply_overlays, write_json_report, write_report, OverlayFlags, SafetyTier};
 use crate::output::markdown_fmt;
 use crate::output::mission_fmt::{print_mission_human, print_mission_verdict};
 
@@ -15,11 +15,10 @@ use crate::output::mission_fmt::{print_mission_human, print_mission_verdict};
 pub fn run(
     input_path: &Path,
     mode: OutputMode,
-    cola_threshold: Option<f64>,
-    cola_budget: Option<f64>,
+    flags: &OverlayFlags,
 ) -> Result<(), CliError> {
     let mut input: PipelineInput = load_json(input_path)?;
-    apply_cola_overlay(&mut input, cola_threshold, cola_budget);
+    apply_overlays(&mut input, flags);
 
     let output = execute_mission(&input)?;
 

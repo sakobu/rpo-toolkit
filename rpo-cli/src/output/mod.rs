@@ -2,6 +2,7 @@
 
 pub mod common;
 pub mod eclipse_fmt;
+pub mod formation_fmt;
 pub mod insights;
 pub mod markdown_fmt;
 pub mod mc_fmt;

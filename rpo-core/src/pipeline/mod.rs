@@ -21,12 +21,13 @@ pub use errors::PipelineError;
 pub use execute::{
     build_output, compute_free_drift_analysis, compute_free_drift_poca,
     compute_mission_covariance, compute_poca_analysis, compute_transfer, execute_mission,
-    plan_waypoints_from_transfer, replan_mission,
+    plan_waypoints_from_transfer, prepare_formation_context, replan_mission,
 };
 pub use projections::{
     LeanPlanResult, LegSummary, LegTrajectory, TrajectoryPoint, TransferSummary,
     propagated_to_point, resample_propagated,
 };
 pub use types::{
-    PipelineInput, PipelineOutput, PropagatorChoice, SpacecraftChoice, TransferResult, WaypointInput,
+    FormationContext, PipelineInput, PipelineOutput, PropagatorChoice, SpacecraftChoice,
+    TransferResult, WaypointInput,
 };
