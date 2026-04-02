@@ -155,7 +155,7 @@ async fn send_classify(ws: &mut WsStream, request_id: u64) -> Value {
     resp
 }
 
-/// Send `compute_transfer` and expect `transfer_result` response.
+/// Send `compute_transfer` and expect `transfer_computed` response.
 async fn send_compute_transfer(ws: &mut WsStream, request_id: u64) -> Value {
     let resp = send_recv(
         ws,
@@ -165,7 +165,7 @@ async fn send_compute_transfer(ws: &mut WsStream, request_id: u64) -> Value {
         }),
     )
     .await;
-    assert_eq!(resp["type"], "transfer_result", "expected transfer_result, got: {resp}");
+    assert_eq!(resp["type"], "transfer_computed", "expected transfer_computed, got: {resp}");
     assert_eq!(resp["request_id"], request_id);
     resp
 }
@@ -231,7 +231,7 @@ async fn far_field_full_flow() {
         4,
     )
     .await;
-    let plan = &plan_resp["result"];
+    let plan = &plan_resp["baseline"];
     assert!(plan["legs"].is_array());
     let legs = plan["legs"].as_array().unwrap();
     assert_eq!(legs.len(), 1, "expected 1 leg for 1 waypoint");
@@ -266,7 +266,7 @@ async fn proximity_full_flow() {
         3,
     )
     .await;
-    let plan = &plan_resp["result"];
+    let plan = &plan_resp["baseline"];
     assert!(plan["legs"].is_array());
     let legs = plan["legs"].as_array().unwrap();
     assert_eq!(legs.len(), 1, "expected 1 leg for 1 waypoint");
@@ -415,7 +415,7 @@ async fn update_config_replan() {
     .await;
     assert_eq!(resp["type"], "plan_result", "mission-affecting update_config should trigger replan, got: {resp}");
     assert_eq!(resp["request_id"], 3);
-    assert!(resp["result"]["legs"].is_array());
+    assert!(resp["baseline"]["legs"].is_array());
 }
 
 // ---------------------------------------------------------------------------
@@ -634,7 +634,7 @@ async fn get_session_summary() {
     assert_eq!(summary["has_chief"], false);
     assert_eq!(summary["has_deputy"], false);
     assert_eq!(summary["has_transfer"], false);
-    assert_eq!(summary["has_mission"], false);
+    assert_eq!(summary["has_baseline_mission"], false);
     assert_eq!(summary["waypoint_count"], 0);
 
     // Set states and check again
@@ -649,7 +649,7 @@ async fn get_session_summary() {
     assert_eq!(summary["has_chief"], true);
     assert_eq!(summary["has_deputy"], true);
     assert_eq!(summary["has_transfer"], false);
-    assert_eq!(summary["has_mission"], false);
+    assert_eq!(summary["has_baseline_mission"], false);
 }
 
 // ---------------------------------------------------------------------------

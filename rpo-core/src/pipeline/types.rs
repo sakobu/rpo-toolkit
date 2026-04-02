@@ -169,14 +169,36 @@ pub struct PipelineInput {
     pub safety_requirements: Option<SafetyRequirements>,
 }
 
-// ---- FormationContext ----
+// ---- PlanVariant ----
 
-/// Intermediate formation design state passed from perch enrichment to `build_output`.
+/// Identifies which plan variant the client wants active.
 ///
-/// Created by `enrich_pipeline_perch` (pre-targeting), consumed by
-/// `compute_formation_report` (post-targeting) via `build_output`.
-/// Not serialized — internal pipeline intermediate only.
-pub struct FormationContext {
+/// After `set_waypoints`, both a baseline (unenriched) and an enriched plan
+/// may be available. `PlanVariant` selects which is active for downstream
+/// operations (validation, Monte Carlo, COLA, etc.).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PlanVariant {
+    /// Unenriched geometric perch targeting.
+    Baseline,
+    /// Enriched perch targeting with safe e/i vectors.
+    Enriched,
+}
+
+impl Default for PlanVariant {
+    fn default() -> Self {
+        Self::Baseline
+    }
+}
+
+// ---- EnrichmentSuggestion ----
+
+/// Read-only enrichment suggestion computed by `suggest_enrichment()`.
+///
+/// Contains the perch enrichment result and requirements.
+/// Does NOT imply mutation — call `apply_perch_enrichment()` to apply.
+#[derive(Debug, Clone)]
+pub struct EnrichmentSuggestion {
     /// Perch enrichment result (enriched or fallback).
     pub perch: PerchEnrichmentResult,
     /// Safety requirements used for enrichment.

@@ -26,7 +26,7 @@ Free-drift (abort-case) analysis and closest-approach refinement (Brent's method
 
 **COLA auto-compute:** When `config.safety` is present and any POCA violates `min_distance_3d_km`, collision avoidance maneuvers are automatically computed using the safety threshold as the target distance and a default budget of 10 m/s. The `--cola-threshold` and `--cola-budget` flags override this auto-derived config. Post-avoidance multi-leg verification detects secondary conjunctions (where an avoidance maneuver on one leg creates a new violation on a downstream leg). Legs where COLA fails (budget exceeded, degenerate geometry) are reported as skipped.
 
-**Formation design:** When `--auto-enrich` is set, the perch ROE is enriched with safe e/i vectors (D'Amico Eq. 2.22) before waypoint targeting. Per-waypoint enrichment advisory and per-leg transit e/i separation profiles are computed and displayed alongside the standard mission output.
+**Formation design:** When `--auto-enrich` is set, the pipeline computes an enrichment suggestion (safe e/i vectors per D'Amico Eq. 2.22) and applies it to the perch ROE before waypoint targeting. Per-waypoint enrichment advisory and per-leg transit e/i separation profiles are computed and displayed alongside the standard mission output. The API equivalent returns both baseline and enriched plans for instant toggling.
 
 ```bash
 cargo run -p rpo-cli -- mission --input examples/mission.json

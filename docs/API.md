@@ -12,7 +12,7 @@ Each WebSocket connection has a server-side session. The client sets state incre
 Tier 0 - Base inputs:     chief, deputy
 Tier 1 - Spacecraft:      chief_config, deputy_config (default: cubesat_6u)
 Tier 2 - Transfer design: transfer, perch, lambert_tof_s, lambert_config, proximity, drag_config
-Tier 3 - Mission plan:    waypoints, config, propagator, safety_requirements, mission (WaypointMission)
+Tier 3 - Mission plan:    waypoints, config, propagator, safety_requirements, baseline/enriched missions, selected_variant
 Tier 4 - Overlays:        navigation_accuracy, maneuver_uncertainty, monte_carlo_config
 ```
 
@@ -22,13 +22,13 @@ Changing an upstream tier clears downstream computed results so that stale data 
 
 | Setter                                        | Clears                                           |
 | --------------------------------------------- | ------------------------------------------------ |
-| `set_states(chief, deputy)`                   | transfer, drag_config, mission                   |
+| `set_states(chief, deputy)`                   | transfer, drag_config, missions                  |
 | `set_spacecraft(chief_config, deputy_config)` | drag_config only                                 |
-| `compute_transfer(perch, tof, config)`        | mission (via store_transfer)                     |
+| `compute_transfer(perch, tof, config)`        | missions (via store_transfer)                    |
 | `store_drag(drag)`                            | nothing (propagator toggle is explicit)          |
-| `set_waypoints(waypoints)`                    | mission                                          |
-| `set_safety_requirements(requirements)`       | mission                                          |
-| `update_config(config)`                       | mission (if config/propagator/proximity changed) |
+| `set_waypoints(waypoints)`                    | missions, selected_variant                       |
+| `set_safety_requirements(requirements)`       | missions, selected_variant                       |
+| `update_config(config)`                       | missions (if config/propagator/proximity changed)|
 | `reset()`                                     | everything                                       |
 
 Tier 4 overlays (`navigation_accuracy`, `maneuver_uncertainty`, `monte_carlo_config`) never trigger invalidation or replan.
@@ -114,7 +114,7 @@ Compute Lambert transfer and store result in session. Optional fields override s
 
 Requires: `set_states` must have been called.
 
-Response: `transfer_result`
+Response: `transfer_computed`
 
 ### extract_drag
 
@@ -251,7 +251,7 @@ Response: `cola_result`
 
 ### set_safety_requirements
 
-Set or clear safety requirements for formation design enrichment. Invalidates the mission (enriched perch changes the departure state, requiring retargeting). When set, `set_waypoints` will enforce perch enrichment before planning and include a `formation_design` report in the `plan_result`.
+Set or clear safety requirements for formation design enrichment. Invalidates the mission (enriched perch changes the departure state, requiring retargeting). When set, `set_waypoints` returns both a baseline plan (unenriched) and an enriched plan with safe e/i vectors. Use `select_plan` to choose which is active for downstream operations.
 
 | Field          | Type                           | Required | Description                    |
 | -------------- | ------------------------------ | -------- | ------------------------------ |
@@ -267,6 +267,20 @@ Set or clear safety requirements for formation design enrichment. Invalidates th
 | `alignment`         | `string` | no       | `"parallel"` | `"parallel"`, `"anti_parallel"`, or `"auto"`  |
 
 Response: `state_updated`
+
+### select_plan
+
+Select which plan variant (baseline or enriched) is active for downstream operations (validate, MC, COLA, etc.). Default after `set_waypoints` is `baseline`.
+
+| Field        | Type            | Required | Description                              |
+| ------------ | --------------- | -------- | ---------------------------------------- |
+| `type`       | `"select_plan"` | yes      | Message discriminator                    |
+| `request_id` | `u64`           | yes      | Client-assigned correlation ID           |
+| `variant`    | `string`        | yes      | `"baseline"` or `"enriched"`             |
+
+Response: `plan_selected`
+
+Returns an error if `"enriched"` is requested but no enriched plan is available (safety requirements not set or enrichment failed).
 
 ### get_formation_design
 
@@ -381,24 +395,26 @@ Acknowledgement of a state-setting message. Reports what was set and what was in
 | `request_id` | `u64`               | Correlation ID from the client request                          |
 | `phase`      | `MissionPhase`      | `proximity { roe, chief_elements, ... }` or `far_field { ... }` |
 
-### transfer_result
+### transfer_computed
 
 | Field        | Type                | Description                                                   |
 | ------------ | ------------------- | ------------------------------------------------------------- |
-| `type`       | `"transfer_result"` | Message discriminator                                         |
+| `type`       | `"transfer_computed"` | Message discriminator                                         |
 | `request_id` | `u64`               | Correlation ID from the client request                        |
 | `result`     | `TransferResult`    | Classification, Lambert transfer, perch states, arrival epoch |
 
 ### plan_result
 
-Lean mission plan result (~10-30 KB instead of 350-500 KB). Contains per-leg summaries without trajectory arrays. When `safety_requirements` is set, includes a `formation_design` report with perch enrichment, per-waypoint enrichment (advisory), and per-leg transit e/i separation.
+Returns both a baseline plan (unenriched perch) and an optional enriched plan (safe e/i vectors). When `safety_requirements` is not set, only `baseline` is present. When set and enrichment succeeds, both plans are returned with their respective formation design reports.
 
-| Field              | Type                     | Description                                                        |
-| ------------------ | ------------------------ | ------------------------------------------------------------------ |
-| `type`             | `"plan_result"`          | Message discriminator                                              |
-| `request_id`       | `u64`                    | Correlation ID from the client request                             |
-| `result`           | `LeanPlanResult`         | Lean plan: phase, legs, safety, totals                             |
-| `formation_design` | `FormationDesignReport?` | Formation design report (omitted when safety_requirements not set) |
+| Field                | Type                     | Description                                                     |
+| -------------------- | ------------------------ | --------------------------------------------------------------- |
+| `type`               | `"plan_result"`          | Message discriminator                                           |
+| `request_id`         | `u64`                    | Correlation ID from the client request                          |
+| `baseline`           | `LeanPlanResult`         | Baseline plan (unenriched geometric perch)                      |
+| `enriched`           | `LeanPlanResult?`        | Enriched plan (safe e/i vectors, omitted when not available)    |
+| `baseline_formation` | `FormationDesignReport?` | Baseline formation report (omitted when no safety_requirements) |
+| `enriched_formation` | `FormationDesignReport?` | Enriched formation report (omitted when enrichment unavailable) |
 
 `LeanPlanResult` fields:
 
@@ -515,9 +531,19 @@ Each `SkippedLegSummary` contains:
 | `leg_index`     | `usize`  | Leg with the unaddressed POCA violation             |
 | `error_message` | `string` | Why COLA failed (e.g., budget exceeded, degenerate) |
 
+### plan_selected
+
+Confirmation that the active plan variant was changed (response to `select_plan`).
+
+| Field        | Type              | Description                            |
+| ------------ | ----------------- | -------------------------------------- |
+| `type`       | `"plan_selected"` | Message discriminator                  |
+| `request_id` | `u64`             | Correlation ID from the client request |
+| `variant`    | `string`          | The now-active variant (`"baseline"` or `"enriched"`) |
+
 ### formation_design_result
 
-Full formation design report (response to `get_formation_design`).
+Full formation design report for the currently selected plan variant (response to `get_formation_design`).
 
 | Field        | Type                        | Description                            |
 | ------------ | --------------------------- | -------------------------------------- |
@@ -743,10 +769,11 @@ The `detail` field carries per-error diagnostic data. Examples:
 set_states -> state_updated
 set_spacecraft -> state_updated                          (optional; defaults to cubesat_6u)
 classify -> classify_result (far_field)
-compute_transfer -> transfer_result
+compute_transfer -> transfer_computed
 extract_drag -> drag_result (~3s async)                  (skip if spacecraft configs identical)
-set_safety_requirements -> state_updated                  (optional; enables formation design)
-set_waypoints -> plan_result (~10-30KB, +formation_design if safety_requirements set)
+set_safety_requirements -> state_updated                  (optional; enables dual-plan)
+set_waypoints -> plan_result (baseline + enriched if safety_requirements set)
+select_plan -> plan_selected                              (optional; default is baseline)
 |- get_trajectory -> trajectory_data (~20KB, on-demand)              |
 |- get_eclipse -> eclipse_data (on-demand)                           |
 |- get_covariance -> covariance_data (~70KB, on-demand)              | parallel on-demand fetches
@@ -756,8 +783,8 @@ set_waypoints -> plan_result (~10-30KB, +formation_design if safety_requirements
 |- get_formation_design -> formation_design_result (on-demand)       |
 |- get_safe_alternative -> safe_alternative_result (on-demand)       |
 update_config(j2_drag) -> plan_result                    (when drag_result arrives)
-validate -> progress* + validation_result
-run_mc -> progress* + monte_carlo_result
+validate -> progress* + validation_result                 (operates on selected plan)
+run_mc -> progress* + monte_carlo_result                  (operates on selected plan)
 ```
 
 ### Proximity
@@ -766,15 +793,16 @@ run_mc -> progress* + monte_carlo_result
 set_states -> state_updated
 |- classify -> classify_result (proximity)               |
 |- extract_drag -> drag_result (~3s async)               | parallel (both read session states)
-set_safety_requirements -> state_updated                  (optional)
-set_waypoints -> plan_result (auto-computes transfer, +formation_design if safety_requirements set)
+set_safety_requirements -> state_updated                  (optional; enables dual-plan)
+set_waypoints -> plan_result (auto-computes transfer, baseline + enriched)
+select_plan -> plan_selected                              (optional; default is baseline)
 |- get_trajectory -> trajectory_data                             |
 |- get_eclipse -> eclipse_data                                   |
 |- get_covariance -> covariance_data                             | parallel on-demand fetches
 |- get_free_drift_trajectory -> free_drift_data                  |
 |- run_cola -> cola_result (on-demand, requires safety config)   |
 |- get_formation_design -> formation_design_result (on-demand)   |
-validate -> validation_result
+validate -> validation_result                             (operates on selected plan)
 ```
 
 ### Parallelism Notes

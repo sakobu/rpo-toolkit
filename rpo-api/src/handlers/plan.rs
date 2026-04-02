@@ -5,15 +5,18 @@
 use serde::Serialize;
 
 use rpo_core::mission::config::MissionConfig;
-use rpo_core::mission::formation::{FormationDesignReport, PerchEnrichmentResult};
+use rpo_core::mission::formation::{
+    FormationDesignReport, PerchEnrichmentResult, SafetyRequirements,
+};
 use rpo_core::mission::planning::compute_transfer_eclipse;
-use rpo_core::mission::types::{MissionPhase, WaypointMission};
+use rpo_core::mission::types::{MissionPhase, Waypoint, WaypointMission};
 use rpo_core::mission::waypoints::{plan_waypoint_mission, replan_from_waypoint};
 use rpo_core::mission::ProximityConfig;
 use rpo_core::pipeline::convert::to_waypoints;
 use rpo_core::pipeline::{
-    compute_mission_covariance, compute_transfer, LeanPlanResult, LegTrajectory, TransferResult,
-    TransferSummary, WaypointInput,
+    build_lean_plan_result, compute_formation_report, compute_mission_covariance, compute_transfer,
+    suggest_enrichment_from_parts, EnrichmentSuggestion, LeanPlanResult, LegTrajectory,
+    PlanVariant, TransferResult, WaypointInput,
 };
 use rpo_core::propagation::covariance::{
     ManeuverUncertainty, MissionCovarianceReport, NavigationAccuracy,
@@ -21,8 +24,7 @@ use rpo_core::propagation::covariance::{
 use rpo_core::types::eclipse::{MissionEclipseData, TransferEclipseData};
 use rpo_core::types::DepartureState;
 
-use super::formation::{build_formation_report, try_enrich_perch};
-use crate::error::ApiError;
+use crate::error::{ApiError, InvalidInputError};
 use crate::session::Session;
 
 /// Number of eclipse evaluation points along the Lambert transfer arc.
@@ -39,25 +41,23 @@ pub struct EclipseResponse {
     pub mission: Option<MissionEclipseData>,
 }
 
-/// Combined plan result with optional formation design report.
+/// Combined plan result with baseline and optional enriched plan.
 pub struct PlanResponse {
-    /// Lean plan result for the frontend.
-    pub plan: LeanPlanResult,
-    /// Formation design report, present when `safety_requirements` is set.
-    pub formation_design: Option<FormationDesignReport>,
+    /// Baseline plan (unenriched geometric perch).
+    pub baseline: LeanPlanResult,
+    /// Enriched plan (safe e/i vectors). Present when enrichment succeeded.
+    pub enriched: Option<LeanPlanResult>,
+    /// Baseline formation design report.
+    pub baseline_formation: Option<FormationDesignReport>,
+    /// Enriched formation design report.
+    pub enriched_formation: Option<FormationDesignReport>,
 }
 
 /// Plan (or replan) the waypoint mission from the session's stored transfer.
 ///
-/// If no transfer is stored, attempts auto-compute for proximity scenarios.
-/// For far-field without a stored transfer, returns a `MissingSessionState` error.
-///
-/// When `changed_from` is `Some(index)`, attempts incremental replan from that
-/// waypoint index, reusing earlier legs from the cached mission.
-///
-/// When `safety_requirements` is set, perch enrichment is enforced before
-/// planning (mutates stored transfer's `perch_roe`), and the formation design
-/// report is computed after planning.
+/// Produces both a baseline plan (unenriched) and an enriched plan (if
+/// `safety_requirements` is set and enrichment succeeds). Both plans support
+/// incremental replan via `changed_from`.
 ///
 /// # Errors
 ///
@@ -66,21 +66,21 @@ pub struct PlanResponse {
 pub fn handle_set_waypoints(
     session: &mut Session,
     changed_from: Option<usize>,
-    cached_mission: Option<WaypointMission>,
+    cached_baseline: Option<WaypointMission>,
+    cached_enriched: Option<WaypointMission>,
 ) -> Result<PlanResponse, ApiError> {
-    // Ensure we have a transfer. If none, try auto-compute.
+    // 1. Ensure we have a transfer. If none, try auto-compute.
     if session.transfer.is_none() {
         let phase = super::handle_classify(session)?;
         match phase {
             MissionPhase::Proximity { .. } => {
-                // Auto-compute transfer for proximity regime
                 let input = session.assemble_pipeline_input()?;
                 let transfer = compute_transfer(&input)?;
                 session.store_transfer(transfer);
             }
             MissionPhase::FarField { .. } => {
                 return Err(ApiError::InvalidInput(
-                    crate::error::InvalidInputError::MissingSessionState {
+                    InvalidInputError::MissingSessionState {
                         missing: "transfer",
                         context: "far-field scenario requires compute_transfer before planning",
                     },
@@ -89,62 +89,86 @@ pub fn handle_set_waypoints(
         }
     }
 
-    // Formation design: perch enrichment (pre-targeting, enforced) then
-    // transit assessment (post-targeting, advisory). Enriched perch becomes
-    // the departure state for targeting, so it must be stored before planning.
-    let perch_result = if let (Some(reqs), Some(transfer)) =
-        (&session.safety_requirements, &session.transfer)
-    {
-        let result = try_enrich_perch(
-            &session.perch,
-            &transfer.plan.chief_at_arrival,
-            reqs,
-            transfer.plan.perch_roe,
-        );
-        // Store enriched ROE as departure state — targeting uses this
-        if let (PerchEnrichmentResult::Enriched(sp), Some(t)) =
-            (&result, session.transfer.as_mut())
-        {
-            t.plan.perch_roe = sp.roe;
-        }
-        Some(result)
-    } else {
-        None
-    };
-
-    let transfer = session.require_transfer()?;
-    let departure = departure_from_transfer(transfer);
-    let waypoints = to_waypoints(&session.waypoints);
-    let propagator = session.resolve_propagation_model();
-
-    let wp_mission = if let Some(index) = changed_from {
-        if let Some(cached) = cached_mission {
-            replan_from_waypoint(
-                cached,
-                index,
-                &waypoints,
-                &departure,
-                &session.config,
-                &propagator,
-            )?
-        } else {
-            plan_waypoint_mission(&departure, &waypoints, &session.config, &propagator)?
-        }
-    } else {
-        plan_waypoint_mission(&departure, &waypoints, &session.config, &propagator)?
-    };
-
-    let lean = build_lean_result(transfer, &wp_mission, &session.waypoints);
-
-    // Post-targeting advisory: formation report (waypoint enrichment + transit safety)
-    let formation_design = perch_result.and_then(|perch| {
-        session.safety_requirements.as_ref().map(|reqs| {
-            build_formation_report(perch, reqs, &wp_mission.legs)
+    // 2. Compute enrichment suggestion via shared pipeline kernel (read-only)
+    let suggestion = session.safety_requirements.as_ref().and_then(|reqs| {
+        session.transfer.as_ref().map(|t| {
+            suggest_enrichment_from_parts(
+                &session.perch,
+                &t.plan.chief_at_arrival,
+                t.plan.perch_roe,
+                reqs,
+            )
         })
     });
 
-    session.store_mission(wp_mission);
-    Ok(PlanResponse { plan: lean, formation_design })
+    // 3. Shared targeting inputs
+    let transfer = session.require_transfer()?;
+    let waypoints = to_waypoints(&session.waypoints);
+    let propagator = session.resolve_propagation_model();
+    let ctx = PlanContext {
+        waypoints: &waypoints,
+        config: &session.config,
+        propagator: &propagator,
+        waypoint_inputs: &session.waypoints,
+        changed_from,
+    };
+
+    // 4. Build BASELINE plan
+    let baseline_formation_ctx = suggestion.as_ref().map(|s| {
+        (PerchEnrichmentResult::Baseline(transfer.plan.perch_roe), s.requirements)
+    });
+    let (baseline_mission, baseline_plan, baseline_formation) =
+        build_plan_variant(transfer, cached_baseline, &ctx, baseline_formation_ctx)?;
+
+    // 5. Build ENRICHED plan (if enrichment succeeded)
+    let (enriched_mission, enriched_plan, enriched_formation) =
+        if let Some(EnrichmentSuggestion {
+            perch: PerchEnrichmentResult::Enriched(ref safe_perch),
+            ref requirements,
+        }) = suggestion
+        {
+            let mut enriched_transfer = session.require_transfer()?.clone();
+            enriched_transfer.plan.perch_roe = safe_perch.roe;
+
+            let formation_ctx = Some((
+                PerchEnrichmentResult::Enriched(safe_perch.clone()),
+                *requirements,
+            ));
+            let (mission, plan, formation) =
+                build_plan_variant(&enriched_transfer, cached_enriched, &ctx, formation_ctx)?;
+            (Some(mission), Some(plan), formation)
+        } else {
+            (None, None, None)
+        };
+
+    // 6. Store both missions in session
+    session.store_missions(baseline_mission, enriched_mission, suggestion);
+
+    Ok(PlanResponse {
+        baseline: baseline_plan,
+        enriched: enriched_plan,
+        baseline_formation,
+        enriched_formation,
+    })
+}
+
+/// Select which plan variant (baseline or enriched) is active for downstream ops.
+///
+/// # Errors
+///
+/// Returns [`ApiError`] if `Enriched` is requested but no enriched plan is available.
+pub fn handle_select_plan(
+    session: &mut Session,
+    variant: PlanVariant,
+) -> Result<PlanVariant, ApiError> {
+    if variant == PlanVariant::Enriched && !session.has_enriched_plan() {
+        return Err(ApiError::InvalidInput(InvalidInputError::MissingSessionState {
+            missing: "enriched_mission",
+            context: "no enriched plan available — set safety_requirements and call set_waypoints first",
+        }));
+    }
+    session.select_plan(variant);
+    Ok(variant)
 }
 
 /// Configuration update fields for `handle_update_config`.
@@ -186,9 +210,9 @@ pub fn handle_update_config(
         || update.proximity.is_some();
 
     // Check mission existence BEFORE applying setters that clear it
-    let had_mission = session.mission.is_some();
+    let had_mission = session.has_baseline_mission();
 
-    // Apply mission-affecting fields (these may clear session.mission)
+    // Apply mission-affecting fields (these may clear session missions)
     if let Some(config) = update.config {
         session.set_config(config);
     }
@@ -198,11 +222,46 @@ pub fn handle_update_config(
 
     // Replan if mission-affecting fields changed AND a mission existed
     if needs_replan && had_mission {
-        let result = handle_set_waypoints(session, None, None)?;
+        let result = handle_set_waypoints(session, None, None, None)?;
         Ok(Some(result))
     } else {
         Ok(None)
     }
+}
+
+/// Inputs shared across baseline and enriched plan construction.
+struct PlanContext<'a> {
+    /// Resolved waypoint positions (from session waypoint inputs).
+    waypoints: &'a [Waypoint],
+    /// Solver configuration.
+    config: &'a MissionConfig,
+    /// Resolved propagation model.
+    propagator: &'a rpo_core::propagation::propagator::PropagationModel,
+    /// Original waypoint inputs (for labels in lean plan result).
+    waypoint_inputs: &'a [WaypointInput],
+    /// Incremental replan start index (if any).
+    changed_from: Option<usize>,
+}
+
+/// Plan a single variant and produce its lean result + optional formation report.
+///
+/// Shared by baseline and enriched plan construction in [`handle_set_waypoints()`].
+fn build_plan_variant(
+    transfer: &TransferResult,
+    cached: Option<WaypointMission>,
+    ctx: &PlanContext<'_>,
+    formation: Option<(PerchEnrichmentResult, SafetyRequirements)>,
+) -> Result<(WaypointMission, LeanPlanResult, Option<FormationDesignReport>), ApiError> {
+    let departure = departure_from_transfer(transfer);
+    let mission = match (cached, ctx.changed_from) {
+        (Some(cached_mission), Some(from)) => replan_from_waypoint(
+            cached_mission, from, ctx.waypoints, &departure, ctx.config, ctx.propagator,
+        )?,
+        _ => plan_waypoint_mission(&departure, ctx.waypoints, ctx.config, ctx.propagator)?,
+    };
+    let plan = build_lean_plan_result(transfer, &mission, ctx.waypoint_inputs);
+    let report = formation.map(|(perch, reqs)| compute_formation_report(perch, reqs, &mission.legs));
+    Ok((mission, plan, report))
 }
 
 /// Fetch trajectory data for visualization.
@@ -217,7 +276,7 @@ pub fn handle_get_trajectory(
     legs: Option<&[usize]>,
     max_points: Option<u32>,
 ) -> Result<Vec<LegTrajectory>, ApiError> {
-    let mission = session.require_mission()?;
+    let mission = session.require_active_mission()?;
 
     let leg_indices: Vec<usize> = match legs {
         Some(indices) => indices
@@ -253,7 +312,7 @@ pub fn handle_get_trajectory(
 /// Returns [`ApiError`] if mission, transfer, or navigation accuracy is missing,
 /// or if covariance computation fails.
 pub fn handle_get_covariance(session: &Session) -> Result<MissionCovarianceReport, ApiError> {
-    let mission = session.require_mission()?;
+    let mission = session.require_active_mission()?;
     let transfer = session.require_transfer()?;
     let nav = session.require_navigation_accuracy()?;
     let propagator = session.resolve_propagation_model();
@@ -292,8 +351,7 @@ pub fn handle_get_eclipse(session: &Session) -> Result<EclipseResponse, ApiError
 
     // Mission eclipse: pre-computed on the WaypointMission
     let mission_eclipse = session
-        .mission
-        .as_ref()
+        .mission()
         .and_then(|m| m.eclipse.clone());
 
     if transfer_eclipse.is_none() && mission_eclipse.is_none() {
@@ -320,46 +378,3 @@ fn departure_from_transfer(transfer: &TransferResult) -> DepartureState {
     }
 }
 
-/// Build a lean plan result from the full mission and transfer.
-fn build_lean_result(
-    transfer: &TransferResult,
-    wp_mission: &WaypointMission,
-    waypoint_inputs: &[WaypointInput],
-) -> LeanPlanResult {
-    let transfer_summary = transfer.plan.transfer.as_ref().map(|lambert| TransferSummary {
-        total_dv_km_s: transfer.lambert_dv_km_s,
-        tof_s: lambert.tof_s,
-        direction: lambert.direction,
-        arrival_epoch: transfer.arrival_epoch,
-    });
-
-    let total_dv_km_s = transfer.lambert_dv_km_s + wp_mission.total_dv_km_s;
-    let total_duration_s = transfer
-        .plan
-        .transfer
-        .as_ref()
-        .map_or(0.0, |t| t.tof_s)
-        + wp_mission.total_duration_s;
-
-    let legs = wp_mission
-        .legs
-        .iter()
-        .enumerate()
-        .map(|(i, leg)| {
-            let label = waypoint_inputs
-                .get(i)
-                .and_then(|wp| wp.label.clone());
-            leg.to_summary(label)
-        })
-        .collect();
-
-    LeanPlanResult {
-        phase: transfer.plan.phase.clone(),
-        transfer_summary,
-        perch_roe: transfer.plan.perch_roe,
-        legs,
-        total_dv_km_s,
-        total_duration_s,
-        safety: wp_mission.safety,
-    }
-}

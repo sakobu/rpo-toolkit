@@ -31,7 +31,7 @@ pub fn handle_get_free_drift(
     legs: Option<&[usize]>,
     max_points: Option<u32>,
 ) -> Result<FreeDriftResponse, ApiError> {
-    let mission = session.require_mission()?;
+    let mission = session.require_active_mission()?;
     let propagator = session.resolve_propagation_model();
 
     let all_analyses = compute_free_drift_analysis(mission, &propagator)

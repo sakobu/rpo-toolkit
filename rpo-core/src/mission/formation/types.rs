@@ -81,6 +81,8 @@ pub struct EnrichedWaypoint {
 /// Result of enriching a perch geometry with safe e/i vectors.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SafePerch {
+    /// Geometric perch ROE before enrichment.
+    pub baseline_roe: QuasiNonsingularROE,
     /// The enriched ROE (geometric perch + safe e/i vectors).
     pub roe: QuasiNonsingularROE,
     /// E-vector magnitude added (km, dimensional = a * |δe|).
@@ -99,6 +101,8 @@ pub struct SafePerch {
 pub enum PerchEnrichmentResult {
     /// Enrichment succeeded — enriched ROE replaces geometric perch as departure state.
     Enriched(SafePerch),
+    /// Baseline: geometric perch ROE, no enrichment applied.
+    Baseline(QuasiNonsingularROE),
     /// Enrichment failed — pipeline continued with un-enriched geometric perch.
     Fallback {
         /// The un-enriched geometric perch ROE (used as-is for targeting).
@@ -106,6 +110,24 @@ pub enum PerchEnrichmentResult {
         /// Why enrichment failed.
         reason: PerchFallbackReason,
     },
+}
+
+impl PerchEnrichmentResult {
+    /// Resolve dynamic alignment from enrichment, falling back to original requirements.
+    ///
+    /// When perch enrichment succeeded and resolved `EiAlignment::Auto` to a
+    /// concrete alignment, returns requirements with that resolved alignment.
+    /// On `Baseline` or `Fallback`, returns the original requirements unchanged.
+    #[must_use]
+    pub fn resolve_requirements(&self, base: &SafetyRequirements) -> SafetyRequirements {
+        match self {
+            Self::Enriched(sp) => SafetyRequirements {
+                min_separation_km: base.min_separation_km,
+                alignment: sp.alignment,
+            },
+            Self::Baseline(_) | Self::Fallback { .. } => *base,
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------

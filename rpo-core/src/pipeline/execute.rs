@@ -11,7 +11,7 @@ use crate::mission::formation::{
     EnrichedWaypoint, FormationDesignReport, PerchEnrichmentResult,
     SafetyRequirements, TransitSafetyReport,
 };
-use super::types::FormationContext;
+use super::types::EnrichmentSuggestion;
 use crate::mission::formation::perch::enrich_perch;
 use crate::mission::formation::safety_envelope::enrich_waypoint;
 use crate::mission::formation::transit::assess_transit_safety;
@@ -26,11 +26,13 @@ use crate::propagation::covariance::{
 use crate::propagation::keplerian::propagate_keplerian;
 use crate::propagation::propagator::PropagationModel;
 use crate::types::elements::KeplerianElements;
+use crate::types::roe::QuasiNonsingularROE;
 use crate::types::{DepartureState, StateVector};
 
 use super::convert::{to_propagation_model, to_waypoints};
 use super::errors::PipelineError;
-use super::types::{PipelineInput, PipelineOutput, TransferResult};
+use super::projections::{LeanPlanResult, TransferSummary};
+use super::types::{PipelineInput, PipelineOutput, TransferResult, WaypointInput};
 
 /// Number of eclipse evaluation points along the Lambert transfer arc.
 const DEFAULT_TRANSFER_ECLIPSE_SAMPLES: u32 = 200;
@@ -212,7 +214,7 @@ fn flag_global_minimum(results: &mut [Vec<ClosestApproach>]) {
 /// * `input` — Original pipeline input (for covariance/eclipse config)
 /// * `propagator` — Resolved propagation model
 /// * `auto_drag` — Auto-derived drag config, if any
-/// * `formation_context` — Perch enrichment result + requirements, if formation design was requested
+/// * `suggestion` — Enrichment suggestion, if formation design was requested
 #[must_use]
 pub fn build_output(
     transfer: &TransferResult,
@@ -220,7 +222,7 @@ pub fn build_output(
     input: &PipelineInput,
     propagator: &PropagationModel,
     auto_drag: Option<crate::propagation::propagator::DragConfig>,
-    formation_context: Option<FormationContext>,
+    suggestion: Option<EnrichmentSuggestion>,
 ) -> PipelineOutput {
     let transfer_eclipse = transfer.plan.transfer.as_ref().and_then(|t| {
         compute_transfer_eclipse(t, &input.chief, DEFAULT_TRANSFER_ECLIPSE_SAMPLES).ok()
@@ -291,8 +293,8 @@ pub fn build_output(
             }
         });
 
-    let formation_design = formation_context.map(|ctx| {
-        compute_formation_report(ctx.perch, ctx.requirements, &wp_mission.legs)
+    let formation_design = suggestion.map(|s| {
+        compute_formation_report(s.perch, s.requirements, &wp_mission.legs)
     });
 
     PipelineOutput {
@@ -377,50 +379,80 @@ pub fn plan_waypoints_from_transfer(
     )?)
 }
 
-/// Prepare formation design context from a transfer result and safety requirements.
+/// Core enrichment computation shared by CLI pipeline and API handler.
 ///
-/// Enriches the perch ROE in-place (enforced) and returns a [`FormationContext`]
-/// for passing to [`build_output`]. Call this between [`compute_transfer`] and
-/// [`plan_waypoints_from_transfer`] so the enriched perch flows into targeting.
-///
-/// Returns `None` if `safety_requirements` is not set on the input.
-pub fn prepare_formation_context(
-    transfer: &mut TransferResult,
-    input: &PipelineInput,
-) -> Option<FormationContext> {
-    input.safety_requirements.as_ref().map(|reqs| FormationContext {
-        perch: enrich_pipeline_perch(transfer, &input.perch, reqs),
-        requirements: *reqs,
-    })
-}
-
-/// Attempt perch enrichment. On success, replaces `transfer.plan.perch_roe`
-/// with the enriched ROE (enforced). Returns the result for reporting.
-fn enrich_pipeline_perch(
-    transfer: &mut TransferResult,
+/// Attempts [`enrich_perch()`]; on failure, falls back to unenriched ROE.
+/// Both [`suggest_enrichment()`] and the API handler delegate to this.
+#[must_use]
+pub fn suggest_enrichment_from_parts(
     perch: &PerchGeometry,
+    chief_at_arrival: &KeplerianElements,
+    unenriched_roe: QuasiNonsingularROE,
     requirements: &SafetyRequirements,
-) -> PerchEnrichmentResult {
-    match enrich_perch(perch, &transfer.plan.chief_at_arrival, requirements) {
-        Ok(safe_perch) => {
-            transfer.plan.perch_roe = safe_perch.roe;
-            PerchEnrichmentResult::Enriched(safe_perch)
-        }
+) -> EnrichmentSuggestion {
+    let perch_result = match enrich_perch(perch, chief_at_arrival, requirements) {
+        Ok(safe_perch) => PerchEnrichmentResult::Enriched(safe_perch),
         Err(e) => PerchEnrichmentResult::Fallback {
-            unenriched_roe: transfer.plan.perch_roe,
+            unenriched_roe,
             reason: e.into(),
         },
+    };
+    EnrichmentSuggestion {
+        perch: perch_result,
+        requirements: *requirements,
     }
 }
 
-/// Build the advisory formation design report from perch enrichment results.
+/// Compute enrichment suggestion from a [`PipelineInput`] without mutating the transfer.
+///
+/// Returns `None` if `safety_requirements` is not set on the input.
+/// Delegates to [`suggest_enrichment_from_parts()`].
+#[must_use]
+pub fn suggest_enrichment(
+    transfer: &TransferResult,
+    input: &PipelineInput,
+) -> Option<EnrichmentSuggestion> {
+    input.safety_requirements.as_ref().map(|reqs| {
+        suggest_enrichment_from_parts(
+            &input.perch,
+            &transfer.plan.chief_at_arrival,
+            transfer.plan.perch_roe,
+            reqs,
+        )
+    })
+}
+
+/// Apply accepted perch enrichment to the transfer result.
+///
+/// If the suggestion contains an `Enriched` perch, replaces
+/// `transfer.plan.perch_roe` with the enriched ROE.
+/// Must be called before [`plan_waypoints_from_transfer()`].
+pub fn apply_perch_enrichment(
+    transfer: &mut TransferResult,
+    suggestion: &EnrichmentSuggestion,
+) {
+    if let PerchEnrichmentResult::Enriched(ref safe_perch) = suggestion.perch {
+        transfer.plan.perch_roe = safe_perch.roe;
+    }
+}
+
+/// Build a [`FormationDesignReport`] from a perch enrichment result, safety
+/// requirements, and completed maneuver legs.
+///
+/// Computes transit e/i monitoring for each leg and aggregates into a
+/// report suitable for serialization to CLI or API clients.
 ///
 /// Applies R2 (resolve alignment once at perch, propagate to all waypoints),
 /// then enriches each waypoint and assesses transit safety per leg.
 /// Uses per-leg chief mean elements (which evolve under J2) rather than a
 /// single chief epoch, so that the T-matrix and e/i geometry are evaluated
 /// at the correct epoch for each leg.
-fn compute_formation_report(
+///
+/// # Invariants
+/// - `legs` must be non-empty (post-targeting output).
+/// - `reqs.min_separation_km > 0`.
+#[must_use]
+pub fn compute_formation_report(
     perch_result: PerchEnrichmentResult,
     reqs: SafetyRequirements,
     legs: &[crate::mission::types::ManeuverLeg],
@@ -428,13 +460,7 @@ fn compute_formation_report(
     // R2: resolve alignment once at perch, propagate to all waypoints.
     // If perch enrichment succeeded, use the resolved concrete alignment
     // (Auto → Parallel or AntiParallel). On fallback, use original reqs.
-    let resolved_reqs = match &perch_result {
-        PerchEnrichmentResult::Enriched(sp) => SafetyRequirements {
-            min_separation_km: reqs.min_separation_km,
-            alignment: sp.alignment,
-        },
-        PerchEnrichmentResult::Fallback { .. } => reqs,
-    };
+    let resolved_reqs = perch_result.resolve_requirements(&reqs);
 
     // Advisory: enrich each waypoint (velocity-constrained path — all
     // waypoints currently carry velocity via to_waypoints() zero-fill).
@@ -469,6 +495,53 @@ fn compute_formation_report(
     }
 }
 
+/// Construct a [`LeanPlanResult`] summary from a completed transfer, mission,
+/// and waypoint inputs.
+///
+/// Used by both CLI `build_output()` and API handlers to produce the lean
+/// projection sent to frontends.
+#[must_use]
+pub fn build_lean_plan_result(
+    transfer: &TransferResult,
+    wp_mission: &crate::mission::types::WaypointMission,
+    waypoint_inputs: &[WaypointInput],
+) -> LeanPlanResult {
+    let transfer_summary = transfer.plan.transfer.as_ref().map(|lambert| TransferSummary {
+        total_dv_km_s: transfer.lambert_dv_km_s,
+        tof_s: lambert.tof_s,
+        direction: lambert.direction,
+        arrival_epoch: transfer.arrival_epoch,
+    });
+
+    let total_dv_km_s = transfer.lambert_dv_km_s + wp_mission.total_dv_km_s;
+    let total_duration_s = transfer
+        .plan
+        .transfer
+        .as_ref()
+        .map_or(0.0, |t| t.tof_s)
+        + wp_mission.total_duration_s;
+
+    let legs = wp_mission
+        .legs
+        .iter()
+        .enumerate()
+        .map(|(i, leg)| {
+            let label = waypoint_inputs.get(i).and_then(|wp| wp.label.clone());
+            leg.to_summary(label)
+        })
+        .collect();
+
+    LeanPlanResult {
+        phase: transfer.plan.phase.clone(),
+        transfer_summary,
+        perch_roe: transfer.plan.perch_roe,
+        legs,
+        total_dv_km_s,
+        total_duration_s,
+        safety: wp_mission.safety,
+    }
+}
+
 /// Execute the full mission pipeline: classify → Lambert → waypoints → covariance → eclipse.
 ///
 /// Single entry point for the CLI `mission` command and the API `PlanMission` handler.
@@ -480,11 +553,14 @@ pub fn execute_mission(input: &PipelineInput) -> Result<PipelineOutput, Pipeline
     let mut transfer = compute_transfer(input)?;
     let propagator = to_propagation_model(&input.propagator);
 
-    let formation_context = prepare_formation_context(&mut transfer, input);
+    let suggestion = suggest_enrichment(&transfer, input);
+    if let Some(ref s) = suggestion {
+        apply_perch_enrichment(&mut transfer, s);
+    }
 
     let wp_mission = plan_waypoints_from_transfer(&transfer, input, &propagator)?;
 
-    Ok(build_output(&transfer, wp_mission, input, &propagator, None, formation_context))
+    Ok(build_output(&transfer, wp_mission, input, &propagator, None, suggestion))
 }
 
 /// Incremental replan pipeline: classify → Lambert → replan from index.
@@ -506,7 +582,10 @@ pub fn replan_mission(
     let mut transfer = compute_transfer(input)?;
     let propagator = to_propagation_model(&input.propagator);
 
-    let formation_context = prepare_formation_context(&mut transfer, input);
+    let suggestion = suggest_enrichment(&transfer, input);
+    if let Some(ref s) = suggestion {
+        apply_perch_enrichment(&mut transfer, s);
+    }
 
     let waypoints = to_waypoints(&input.waypoints);
     let departure = departure_from_transfer(&transfer);
@@ -525,7 +604,7 @@ pub fn replan_mission(
         &propagator,
     )?;
 
-    Ok(build_output(&transfer, wp_mission, input, &propagator, None, formation_context))
+    Ok(build_output(&transfer, wp_mission, input, &propagator, None, suggestion))
 }
 
 #[cfg(test)]
@@ -844,6 +923,91 @@ mod tests {
         assert!(
             mission_min > 0.0,
             "mission min e/i separation should be positive, got {mission_min}"
+        );
+    }
+
+    // ---- suggest + apply tests ----
+
+    fn proximity_input_with_enrichment() -> PipelineInput {
+        use crate::mission::formation::{EiAlignment, SafetyRequirements};
+
+        let mut input = proximity_input();
+        input.safety_requirements = Some(SafetyRequirements {
+            min_separation_km: 0.15,
+            alignment: EiAlignment::Parallel,
+        });
+        input
+    }
+
+    #[test]
+    fn test_suggest_enrichment_does_not_mutate() {
+        let input = proximity_input_with_enrichment();
+        let transfer = compute_transfer(&input).expect("transfer");
+
+        let original_perch_roe = transfer.plan.perch_roe;
+        let suggestion = suggest_enrichment(&transfer, &input);
+
+        assert!(suggestion.is_some(), "should produce suggestion when safety_requirements set");
+        assert!(
+            (transfer.plan.perch_roe.to_vector() - original_perch_roe.to_vector()).norm()
+                < COPY_FIDELITY_TOL,
+            "suggest_enrichment must not mutate transfer"
+        );
+    }
+
+    #[test]
+    fn test_suggest_enrichment_none_without_requirements() {
+        let input = far_field_input();
+        let transfer = compute_transfer(&input).expect("transfer");
+        let suggestion = suggest_enrichment(&transfer, &input);
+        assert!(suggestion.is_none());
+    }
+
+    #[test]
+    fn test_apply_perch_enrichment_mutates() {
+        let input = proximity_input_with_enrichment();
+        let mut transfer = compute_transfer(&input).expect("transfer");
+
+        let original_perch_roe = transfer.plan.perch_roe;
+        let suggestion = suggest_enrichment(&transfer, &input).expect("suggestion");
+
+        apply_perch_enrichment(&mut transfer, &suggestion);
+
+        assert!(
+            (transfer.plan.perch_roe.dey - original_perch_roe.dey).abs()
+                > ENRICHMENT_NONZERO_TOL,
+            "apply should mutate perch_roe dey"
+        );
+    }
+
+    #[test]
+    fn test_apply_perch_enrichment_fallback_no_mutate() {
+        use crate::mission::formation::{EiAlignment, PerchFallbackReason, SafetyRequirements};
+
+        let input = proximity_input_with_enrichment();
+        let mut transfer = compute_transfer(&input).expect("transfer");
+
+        let original_perch_roe = transfer.plan.perch_roe;
+
+        let suggestion = EnrichmentSuggestion {
+            perch: PerchEnrichmentResult::Fallback {
+                unenriched_roe: original_perch_roe,
+                reason: PerchFallbackReason::SingularGeometry {
+                    mean_arg_lat_rad: 0.0,
+                },
+            },
+            requirements: SafetyRequirements {
+                min_separation_km: 0.15,
+                alignment: EiAlignment::Parallel,
+            },
+        };
+
+        apply_perch_enrichment(&mut transfer, &suggestion);
+
+        assert!(
+            (transfer.plan.perch_roe.to_vector() - original_perch_roe.to_vector()).norm()
+                < COPY_FIDELITY_TOL,
+            "fallback should not mutate perch_roe"
         );
     }
 }

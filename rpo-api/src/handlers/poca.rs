@@ -20,7 +20,7 @@ pub fn handle_get_poca(
     session: &Session,
     legs: Option<&[usize]>,
 ) -> Result<Vec<PocaPoint>, ApiError> {
-    let mission = session.require_mission()?;
+    let mission = session.require_active_mission()?;
     let propagator = session.resolve_propagation_model();
 
     let all_poca = compute_poca_analysis(mission, &propagator).ok_or(

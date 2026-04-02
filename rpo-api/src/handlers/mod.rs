@@ -26,8 +26,8 @@ pub use free_drift::handle_get_free_drift;
 pub use poca::handle_get_poca;
 pub use mc::{handle_mc, McRequest};
 pub use plan::{
-    handle_get_covariance, handle_get_eclipse, handle_get_trajectory, handle_set_waypoints,
-    handle_update_config, ConfigUpdate, EclipseResponse, PlanResponse,
+    handle_get_covariance, handle_get_eclipse, handle_get_trajectory, handle_select_plan,
+    handle_set_waypoints, handle_update_config, ConfigUpdate, EclipseResponse, PlanResponse,
 };
 pub use transfer::handle_compute_transfer;
 pub use validate::{handle_validate, ValidateRequest};

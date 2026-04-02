@@ -283,7 +283,7 @@ async fn handle_text_message(
                 Ok(result) => {
                     send_message(
                         ws,
-                        &ServerMessage::TransferResult {
+                        &ServerMessage::TransferComputed {
                             request_id,
                             result: Box::new(result),
                         },
@@ -301,17 +301,24 @@ async fn handle_text_message(
             waypoints,
             changed_from,
         } => {
-            // Extract cached mission before set_waypoints clears it
-            let cached_mission = session.mission.take();
+            // Extract cached missions before set_waypoints clears them
+            let (cached_baseline, cached_enriched) = session.take_cached_missions();
             session.set_waypoints(waypoints);
-            match handlers::handle_set_waypoints(session, changed_from, cached_mission) {
+            match handlers::handle_set_waypoints(
+                session,
+                changed_from,
+                cached_baseline,
+                cached_enriched,
+            ) {
                 Ok(response) => {
                     send_message(
                         ws,
                         &ServerMessage::PlanResult {
                             request_id,
-                            result: Box::new(response.plan),
-                            formation_design: response.formation_design.map(Box::new),
+                            baseline: Box::new(response.baseline),
+                            enriched: response.enriched.map(Box::new),
+                            baseline_formation: response.baseline_formation.map(Box::new),
+                            enriched_formation: response.enriched_formation.map(Box::new),
                         },
                     )
                     .await;
@@ -359,8 +366,10 @@ async fn handle_text_message(
                         ws,
                         &ServerMessage::PlanResult {
                             request_id,
-                            result: Box::new(response.plan),
-                            formation_design: response.formation_design.map(Box::new),
+                            baseline: Box::new(response.baseline),
+                            enriched: response.enriched.map(Box::new),
+                            baseline_formation: response.baseline_formation.map(Box::new),
+                            enriched_formation: response.enriched_formation.map(Box::new),
                         },
                     )
                     .await;
@@ -458,6 +467,27 @@ async fn handle_text_message(
                             maneuvers: eval.maneuvers,
                             secondary_conjunctions: eval.secondary_conjunctions,
                             skipped: eval.skipped,
+                        },
+                    )
+                    .await;
+                }
+                Err(e) => {
+                    send_message(ws, &e.to_server_message(Some(request_id))).await;
+                }
+            }
+        }
+
+        ClientMessage::SelectPlan {
+            request_id,
+            variant,
+        } => {
+            match handlers::handle_select_plan(session, variant) {
+                Ok(selected) => {
+                    send_message(
+                        ws,
+                        &ServerMessage::PlanSelected {
+                            request_id,
+                            variant: selected,
                         },
                     )
                     .await;
@@ -682,7 +712,7 @@ fn build_validate_request(
     samples_per_leg: Option<u32>,
     auto_drag: bool,
 ) -> Result<handlers::ValidateRequest, ApiError> {
-    let mission = session.require_mission()?.clone();
+    let mission = session.require_active_mission()?.clone();
     let transfer = session.require_transfer()?.clone();
 
     Ok(handlers::ValidateRequest {
@@ -705,7 +735,7 @@ fn build_mc_request(
     session: &Session,
     auto_drag: bool,
 ) -> Result<handlers::McRequest, ApiError> {
-    let mission = session.require_mission()?.clone();
+    let mission = session.require_active_mission()?.clone();
     let transfer = session.require_transfer()?.clone();
     let mc_config = session.require_monte_carlo_config()?.clone();
 

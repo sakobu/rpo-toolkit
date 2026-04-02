@@ -4,8 +4,8 @@ use std::path::Path;
 
 use rpo_core::mission::{run_monte_carlo, MissionPhase, MonteCarloInput};
 use rpo_core::pipeline::{
-    build_output, compute_mission_covariance, compute_transfer, plan_waypoints_from_transfer,
-    prepare_formation_context, PipelineInput, PipelineOutput,
+    apply_perch_enrichment, build_output, compute_mission_covariance, compute_transfer,
+    plan_waypoints_from_transfer, suggest_enrichment, PipelineInput, PipelineOutput,
 };
 use rpo_core::propagation::{load_full_almanac, DragConfig};
 
@@ -47,7 +47,10 @@ pub fn run(
 
     status!(spinner, "Classification + Lambert transfer...");
     let mut transfer = compute_transfer(&input)?;
-    let formation_context = prepare_formation_context(&mut transfer, &input);
+    let suggestion = suggest_enrichment(&transfer, &input);
+    if let Some(ref s) = suggestion {
+        apply_perch_enrichment(&mut transfer, s);
+    }
 
     status!(spinner, "Loading almanac (may download on first run)...");
     let almanac = load_full_almanac()?;
@@ -115,7 +118,7 @@ pub fn run(
     );
 
     // Build canonical output with nominal safety context (free-drift, POCA).
-    let mut output = build_output(&transfer, wp_mission, &input, &prop, derived_drag, formation_context);
+    let mut output = build_output(&transfer, wp_mission, &input, &prop, derived_drag, suggestion);
     output.monte_carlo = Some(report);
 
     print_mc_output(mode, &output, &input, &baseline, &prop, derived_drag.as_ref())

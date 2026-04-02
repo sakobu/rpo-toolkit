@@ -15,7 +15,10 @@ use rpo_core::mission::types::{PerchGeometry, WaypointMission};
 use rpo_core::mission::ProximityConfig;
 use rpo_core::pipeline::convert::to_propagation_model;
 use rpo_core::pipeline::types::DEFAULT_LAMBERT_TOF_S;
-use rpo_core::pipeline::{PipelineInput, PropagatorChoice, SpacecraftChoice, TransferResult, WaypointInput};
+use rpo_core::pipeline::{
+    EnrichmentSuggestion, PipelineInput, PlanVariant, PropagatorChoice, SpacecraftChoice,
+    TransferResult, WaypointInput,
+};
 use rpo_core::propagation::covariance::{ManeuverUncertainty, NavigationAccuracy};
 use rpo_core::propagation::lambert::LambertConfig;
 use rpo_core::propagation::propagator::{DragConfig, PropagationModel};
@@ -76,10 +79,16 @@ pub struct Session {
     pub config: MissionConfig,
     /// Propagator selection: J2 or J2+Drag.
     pub propagator: PropagatorChoice,
-    /// Computed waypoint mission result.
-    pub mission: Option<WaypointMission>,
     /// Safety requirements for formation design enrichment.
     pub safety_requirements: Option<SafetyRequirements>,
+    /// Baseline mission (unenriched perch).
+    baseline_mission: Option<WaypointMission>,
+    /// Enriched mission (enriched perch). None when no enrichment available.
+    enriched_mission: Option<WaypointMission>,
+    /// Enrichment suggestion from last `set_waypoints`.
+    enrichment_suggestion: Option<EnrichmentSuggestion>,
+    /// Which plan variant is currently active for downstream ops.
+    selected_variant: PlanVariant,
 
     // ---- Tier 4: Analysis overlays ----
     /// Navigation accuracy for covariance propagation.
@@ -112,8 +121,11 @@ impl Default for Session {
             waypoints: Vec::new(),
             config: MissionConfig::default(),
             propagator: PropagatorChoice::default(),
-            mission: None,
             safety_requirements: None,
+            baseline_mission: None,
+            enriched_mission: None,
+            enrichment_suggestion: None,
+            selected_variant: PlanVariant::Baseline,
             // Tier 4
             navigation_accuracy: None,
             maneuver_uncertainty: None,
@@ -127,6 +139,14 @@ impl Default for Session {
 // ---------------------------------------------------------------------------
 
 impl Session {
+    /// Clear all dual-plan mission state (both missions, suggestion, variant).
+    fn clear_mission_state(&mut self) {
+        self.baseline_mission = None;
+        self.enriched_mission = None;
+        self.enrichment_suggestion = None;
+        self.selected_variant = PlanVariant::Baseline;
+    }
+
     /// Set chief and deputy ECI states, clearing downstream transfer and mission.
     pub fn set_states(&mut self, chief: StateVector, deputy: StateVector) {
         self.chief = Some(chief);
@@ -134,7 +154,7 @@ impl Session {
         // Invalidate: transfer, drag_config, mission
         self.transfer = None;
         self.drag_config = None;
-        self.mission = None;
+        self.clear_mission_state();
     }
 
     /// Set spacecraft configurations, clearing drag config.
@@ -181,14 +201,14 @@ impl Session {
         self.lambert_config = lambert_config;
         // Invalidate: transfer, mission
         self.transfer = None;
-        self.mission = None;
+        self.clear_mission_state();
     }
 
     /// Store a computed transfer result, clearing the mission.
     pub fn store_transfer(&mut self, result: TransferResult) {
         self.transfer = Some(result);
         // Invalidate: mission
-        self.mission = None;
+        self.clear_mission_state();
     }
 
     /// Store a drag configuration. Does not invalidate anything.
@@ -196,30 +216,37 @@ impl Session {
         self.drag_config = Some(drag);
     }
 
-    /// Store a computed waypoint mission. Does not invalidate anything.
-    pub fn store_mission(&mut self, mission: WaypointMission) {
-        self.mission = Some(mission);
+    /// Store both plan variants from `set_waypoints`.
+    ///
+    /// Resets the selected variant to [`PlanVariant::Baseline`].
+    pub fn store_missions(
+        &mut self,
+        baseline: WaypointMission,
+        enriched: Option<WaypointMission>,
+        suggestion: Option<EnrichmentSuggestion>,
+    ) {
+        self.baseline_mission = Some(baseline);
+        self.enriched_mission = enriched;
+        self.enrichment_suggestion = suggestion;
+        self.selected_variant = PlanVariant::Baseline;
     }
 
-    /// Set waypoint targets, clearing the mission.
+    /// Set waypoint targets, clearing all mission state.
     pub fn set_waypoints(&mut self, waypoints: Vec<WaypointInput>) {
         self.waypoints = waypoints;
-        // Invalidate: mission
-        self.mission = None;
+        self.clear_mission_state();
     }
 
     /// Set solver configuration, clearing the mission.
     pub fn set_config(&mut self, config: MissionConfig) {
         self.config = config;
-        // Invalidate: mission
-        self.mission = None;
+        self.clear_mission_state();
     }
 
     /// Set the propagator choice, clearing the mission.
     pub fn set_propagator(&mut self, choice: PropagatorChoice) {
         self.propagator = choice;
-        // Invalidate: mission
-        self.mission = None;
+        self.clear_mission_state();
     }
 
     /// Set or clear safety requirements for formation design enrichment.
@@ -228,8 +255,7 @@ impl Session {
     /// which requires retargeting.
     pub fn set_safety_requirements(&mut self, requirements: Option<SafetyRequirements>) {
         self.safety_requirements = requirements;
-        // Invalidate: mission (enriched perch changes departure state)
-        self.mission = None;
+        self.clear_mission_state();
     }
 
     /// Set navigation accuracy for covariance propagation. No invalidation.
@@ -300,18 +326,78 @@ impl Session {
         ))
     }
 
-    /// Require a computed waypoint mission.
+    /// Get the currently active mission (baseline or enriched).
+    ///
+    /// When `selected_variant` is `Enriched`, returns the enriched mission if
+    /// available, falling back to the baseline. When `Baseline`, returns the
+    /// baseline mission only.
+    #[must_use]
+    pub fn mission(&self) -> Option<&WaypointMission> {
+        match self.selected_variant {
+            PlanVariant::Enriched => self
+                .enriched_mission
+                .as_ref()
+                .or(self.baseline_mission.as_ref()),
+            PlanVariant::Baseline => self.baseline_mission.as_ref(),
+        }
+    }
+
+    /// Require the currently active mission, or a `MissingSessionState` error.
     ///
     /// # Errors
     /// Returns [`ApiError::InvalidInput`] with [`InvalidInputError::MissingSessionState`]
     /// when no mission has been planned.
-    pub fn require_mission(&self) -> Result<&WaypointMission, ApiError> {
-        self.mission.as_ref().ok_or(ApiError::InvalidInput(
+    pub fn require_active_mission(&self) -> Result<&WaypointMission, ApiError> {
+        self.mission().ok_or(ApiError::InvalidInput(
             InvalidInputError::MissingSessionState {
                 missing: "mission",
-                context: "call plan_mission before this operation",
+                context: "call set_waypoints first",
             },
         ))
+    }
+
+    /// Select which plan is active for downstream operations.
+    ///
+    /// Infallible — the handler validates that the requested variant is
+    /// available before calling this.
+    pub fn select_plan(&mut self, variant: PlanVariant) {
+        self.selected_variant = variant;
+    }
+
+    /// Which plan variant is currently active.
+    #[must_use]
+    pub fn selected_variant(&self) -> PlanVariant {
+        self.selected_variant
+    }
+
+    /// Whether a baseline mission has been planned.
+    #[must_use]
+    pub fn has_baseline_mission(&self) -> bool {
+        self.baseline_mission.is_some()
+    }
+
+    /// Whether an enriched plan is available.
+    #[must_use]
+    pub fn has_enriched_plan(&self) -> bool {
+        self.enriched_mission.is_some()
+    }
+
+    /// Read-only access to the stored enrichment suggestion.
+    #[must_use]
+    pub fn enrichment_suggestion(&self) -> Option<&EnrichmentSuggestion> {
+        self.enrichment_suggestion.as_ref()
+    }
+
+    /// Extract both cached missions for incremental replan.
+    ///
+    /// Called by `ws.rs` before `set_waypoints` clears mission state.
+    pub fn take_cached_missions(
+        &mut self,
+    ) -> (Option<WaypointMission>, Option<WaypointMission>) {
+        (
+            self.baseline_mission.take(),
+            self.enriched_mission.take(),
+        )
     }
 
     /// Get the chief spacecraft configuration (infallible, always has a default).
@@ -425,8 +511,12 @@ pub struct SessionSummary {
     pub has_deputy: bool,
     /// Whether a transfer result has been computed.
     pub has_transfer: bool,
-    /// Whether a waypoint mission has been planned.
-    pub has_mission: bool,
+    /// Whether a baseline mission has been planned.
+    pub has_baseline_mission: bool,
+    /// Whether an enriched mission has been planned.
+    pub has_enriched_mission: bool,
+    /// Currently selected plan variant.
+    pub selected_variant: PlanVariant,
     /// Whether a drag configuration is available.
     pub has_drag_config: bool,
     /// Whether navigation accuracy is configured.
@@ -457,7 +547,9 @@ impl Session {
             has_chief: self.chief.is_some(),
             has_deputy: self.deputy.is_some(),
             has_transfer: self.transfer.is_some(),
-            has_mission: self.mission.is_some(),
+            has_baseline_mission: self.baseline_mission.is_some(),
+            has_enriched_mission: self.enriched_mission.is_some(),
+            selected_variant: self.selected_variant,
             has_drag_config: self.drag_config.is_some(),
             has_navigation_accuracy: self.navigation_accuracy.is_some(),
             has_maneuver_uncertainty: self.maneuver_uncertainty.is_some(),
@@ -560,7 +652,7 @@ mod tests {
         session.deputy = Some(test_state(6883.0));
         session.transfer = Some(dummy_transfer());
         session.drag_config = Some(DragConfig::zero());
-        session.mission = Some(dummy_mission());
+        session.baseline_mission = Some(dummy_mission());
 
         session.set_states(test_state(7000.0), test_state(7005.0));
 
@@ -568,7 +660,7 @@ mod tests {
         assert!(session.deputy.is_some());
         assert!(session.transfer.is_none(), "transfer should be cleared");
         assert!(session.drag_config.is_none(), "drag_config should be cleared");
-        assert!(session.mission.is_none(), "mission should be cleared");
+        assert!(session.baseline_mission.is_none(), "mission should be cleared");
     }
 
     // 2. set_spacecraft clears drag_config, preserves transfer
@@ -589,7 +681,7 @@ mod tests {
     fn test_set_transfer_params_invalidation() {
         let mut session = Session::default();
         session.transfer = Some(dummy_transfer());
-        session.mission = Some(dummy_mission());
+        session.baseline_mission = Some(dummy_mission());
 
         session.set_transfer_params(
             PerchGeometry::RBar { radial_km: 2.0 },
@@ -598,38 +690,38 @@ mod tests {
         );
 
         assert!(session.transfer.is_none(), "transfer should be cleared");
-        assert!(session.mission.is_none(), "mission should be cleared");
+        assert!(session.baseline_mission.is_none(), "mission should be cleared");
     }
 
     // 4. store_transfer clears mission
     #[test]
     fn test_store_transfer_invalidation() {
         let mut session = Session::default();
-        session.mission = Some(dummy_mission());
+        session.baseline_mission = Some(dummy_mission());
 
         session.store_transfer(dummy_transfer());
 
         assert!(session.transfer.is_some());
-        assert!(session.mission.is_none(), "mission should be cleared");
+        assert!(session.baseline_mission.is_none(), "mission should be cleared");
     }
 
     // 5. store_drag does not clear mission
     #[test]
     fn test_store_drag_no_invalidation() {
         let mut session = Session::default();
-        session.mission = Some(dummy_mission());
+        session.baseline_mission = Some(dummy_mission());
 
         session.store_drag(DragConfig::zero());
 
         assert!(session.drag_config.is_some());
-        assert!(session.mission.is_some(), "mission should be preserved");
+        assert!(session.baseline_mission.is_some(), "mission should be preserved");
     }
 
     // 6. set_waypoints clears mission
     #[test]
     fn test_set_waypoints_invalidation() {
         let mut session = Session::default();
-        session.mission = Some(dummy_mission());
+        session.baseline_mission = Some(dummy_mission());
 
         session.set_waypoints(vec![WaypointInput {
             position_ric_km: [0.0, 1.0, 0.0],
@@ -639,29 +731,29 @@ mod tests {
         }]);
 
         assert_eq!(session.waypoints.len(), 1);
-        assert!(session.mission.is_none(), "mission should be cleared");
+        assert!(session.baseline_mission.is_none(), "mission should be cleared");
     }
 
     // 6b. set_config clears mission
     #[test]
     fn test_set_config_invalidation() {
         let mut session = Session::default();
-        session.mission = Some(dummy_mission());
+        session.baseline_mission = Some(dummy_mission());
 
         session.set_config(MissionConfig::default());
 
-        assert!(session.mission.is_none(), "mission should be cleared");
+        assert!(session.baseline_mission.is_none(), "mission should be cleared");
     }
 
     // 6c. set_propagator clears mission
     #[test]
     fn test_set_propagator_invalidation() {
         let mut session = Session::default();
-        session.mission = Some(dummy_mission());
+        session.baseline_mission = Some(dummy_mission());
 
         session.set_propagator(PropagatorChoice::J2);
 
-        assert!(session.mission.is_none(), "mission should be cleared");
+        assert!(session.baseline_mission.is_none(), "mission should be cleared");
     }
 
     // 6d. set_safety_requirements clears mission
@@ -670,7 +762,7 @@ mod tests {
         use rpo_core::mission::formation::{EiAlignment, SafetyRequirements};
 
         let mut session = Session::default();
-        session.mission = Some(dummy_mission());
+        session.baseline_mission = Some(dummy_mission());
 
         session.set_safety_requirements(Some(SafetyRequirements {
             min_separation_km: 0.15,
@@ -678,7 +770,7 @@ mod tests {
         }));
 
         assert!(session.safety_requirements.is_some());
-        assert!(session.mission.is_none(), "mission should be cleared");
+        assert!(session.baseline_mission.is_none(), "mission should be cleared");
     }
 
     // 6e. set_safety_requirements(None) clears both
@@ -687,7 +779,7 @@ mod tests {
         use rpo_core::mission::formation::{EiAlignment, SafetyRequirements};
 
         let mut session = Session::default();
-        session.mission = Some(dummy_mission());
+        session.baseline_mission = Some(dummy_mission());
         session.safety_requirements = Some(SafetyRequirements {
             min_separation_km: 0.15,
             alignment: EiAlignment::Parallel,
@@ -696,7 +788,7 @@ mod tests {
         session.set_safety_requirements(None);
 
         assert!(session.safety_requirements.is_none());
-        assert!(session.mission.is_none(), "mission should be cleared");
+        assert!(session.baseline_mission.is_none(), "mission should be cleared");
     }
 
     // 6f. require_safety_requirements returns error when None
@@ -715,12 +807,12 @@ mod tests {
     #[test]
     fn test_overlay_no_invalidation() {
         let mut session = Session::default();
-        session.mission = Some(dummy_mission());
+        session.baseline_mission = Some(dummy_mission());
 
         session.set_navigation_accuracy(NavigationAccuracy::default());
         session.set_maneuver_uncertainty(ManeuverUncertainty::default());
 
-        assert!(session.mission.is_some(), "mission should be preserved");
+        assert!(session.baseline_mission.is_some(), "mission should be preserved");
         assert!(session.navigation_accuracy.is_some());
         assert!(session.maneuver_uncertainty.is_some());
     }
@@ -729,12 +821,12 @@ mod tests {
     #[test]
     fn test_mc_config_stored_and_no_invalidation() {
         let mut session = Session::default();
-        session.mission = Some(dummy_mission());
+        session.baseline_mission = Some(dummy_mission());
 
         let mc_config = test_mc_config();
         session.set_monte_carlo_config(mc_config.clone());
 
-        assert!(session.mission.is_some(), "mission should be preserved");
+        assert!(session.baseline_mission.is_some(), "mission should be preserved");
         assert!(session.monte_carlo_config.is_some());
         // Verify we can retrieve it
         let retrieved = session.require_monte_carlo_config().expect("should be Some");
@@ -838,7 +930,7 @@ mod tests {
         let mut session = Session::default();
         session.set_states(test_state(6878.0), test_state(6883.0));
         session.transfer = Some(dummy_transfer());
-        session.mission = Some(dummy_mission());
+        session.baseline_mission = Some(dummy_mission());
         session.drag_config = Some(DragConfig::zero());
         session.set_navigation_accuracy(NavigationAccuracy::default());
         session.set_maneuver_uncertainty(ManeuverUncertainty::default());
@@ -859,7 +951,7 @@ mod tests {
         assert!(session.chief.is_none());
         assert!(session.deputy.is_none());
         assert!(session.transfer.is_none());
-        assert!(session.mission.is_none());
+        assert!(session.baseline_mission.is_none());
         assert!(session.drag_config.is_none());
         assert!(session.navigation_accuracy.is_none());
         assert!(session.maneuver_uncertainty.is_none());

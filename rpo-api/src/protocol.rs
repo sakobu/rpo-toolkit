@@ -20,8 +20,7 @@ use rpo_core::mission::{
 use rpo_core::mission::closest_approach::ClosestApproach;
 use rpo_core::mission::free_drift::FreeDriftAnalysis;
 use rpo_core::pipeline::{
-    LeanPlanResult, LegTrajectory, SpacecraftChoice, TransferResult as CoreTransferResult,
-    WaypointInput,
+    LeanPlanResult, LegTrajectory, PlanVariant, SpacecraftChoice, TransferResult, WaypointInput,
 };
 use rpo_core::propagation::covariance::{ManeuverUncertainty, MissionCovarianceReport, NavigationAccuracy};
 use rpo_core::propagation::lambert::LambertConfig;
@@ -55,10 +54,6 @@ pub struct ProgressUpdate {
     pub fraction: Option<f64>,
 }
 
-/// Payload for transfer result responses.
-///
-/// Type alias to the intermediate transfer result type in rpo-core.
-pub type TransferResultPayload = CoreTransferResult;
 
 // ---------------------------------------------------------------------------
 // PropagatorToggle
@@ -249,6 +244,13 @@ pub enum ClientMessage {
         /// Client-assigned correlation ID.
         request_id: u64,
     },
+    /// Select which plan variant (baseline or enriched) is active for downstream ops.
+    SelectPlan {
+        /// Client-assigned correlation ID.
+        request_id: u64,
+        /// Which plan variant to activate.
+        variant: PlanVariant,
+    },
     /// Cancel a running background operation.
     Cancel {
         /// ID of the operation to cancel (or current if None).
@@ -281,21 +283,28 @@ pub enum ServerMessage {
         phase: MissionPhase,
     },
     /// Lambert transfer result.
-    TransferResult {
+    TransferComputed {
         /// Correlation ID from the client request.
         request_id: u64,
         /// Transfer result payload (boxed to reduce enum size).
-        result: Box<TransferResultPayload>,
+        result: Box<TransferResult>,
     },
-    /// Mission plan result (lean projection).
+    /// Mission plan result with baseline and optional enriched plan.
     PlanResult {
         /// Correlation ID from the client request.
         request_id: u64,
-        /// Lean plan result (boxed to reduce enum size).
-        result: Box<LeanPlanResult>,
-        /// Formation design report, present when `safety_requirements` is set.
+        /// Baseline plan (unenriched geometric perch, boxed to reduce enum size).
+        baseline: Box<LeanPlanResult>,
+        /// Enriched plan (safe e/i vectors). Present when `safety_requirements` is set
+        /// and enrichment succeeded.
         #[serde(skip_serializing_if = "Option::is_none")]
-        formation_design: Option<Box<FormationDesignReport>>,
+        enriched: Option<Box<LeanPlanResult>>,
+        /// Baseline formation design report.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        baseline_formation: Option<Box<FormationDesignReport>>,
+        /// Enriched formation design report.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        enriched_formation: Option<Box<FormationDesignReport>>,
     },
     /// Extracted differential drag rates.
     DragResult {
@@ -403,6 +412,13 @@ pub enum ServerMessage {
         request_id: u64,
         /// Full MC report (boxed to reduce enum size).
         report: Box<MonteCarloReport>,
+    },
+    /// Confirmation that the active plan variant was changed.
+    PlanSelected {
+        /// Correlation ID from the client request.
+        request_id: u64,
+        /// The now-active plan variant.
+        variant: PlanVariant,
     },
     /// Operation was cancelled.
     Cancelled {

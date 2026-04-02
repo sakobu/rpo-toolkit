@@ -93,35 +93,33 @@ fn enrich_simple_perch(
     requirements: &SafetyRequirements,
 ) -> Result<SafePerch, FormationDesignError> {
     // 1. Geometric baseline ROE
-    let mut roe =
+    let baseline_roe =
         perch_to_roe(perch, chief_mean).map_err(|e| map_mission_error(e, chief_mean))?;
+    let mut roe = baseline_roe;
 
     // 2. Dimensionless target magnitude
     let de_nom = requirements.min_separation_km / chief_mean.a_km;
 
-    // 3. Resolve alignment: Auto → Parallel for zero-baseline e/i
+    // 3. Resolve alignment and set dey, diy (D'Amico Eq. 2.32)
+    //    Auto → Parallel for zero-baseline e/i (simple perch has no prior e/i to compare).
     let resolved = match requirements.alignment {
-        EiAlignment::Auto | EiAlignment::Parallel => EiAlignment::Parallel,
-        EiAlignment::AntiParallel => EiAlignment::AntiParallel,
-    };
-
-    // 4. Set dey, diy based on alignment (D'Amico Eq. 2.32)
-    match resolved {
-        EiAlignment::Parallel => {
+        EiAlignment::Auto | EiAlignment::Parallel => {
             roe.dey = de_nom;
             roe.diy = de_nom;
+            EiAlignment::Parallel
         }
         EiAlignment::AntiParallel => {
             roe.dey = de_nom;
             roe.diy = -de_nom;
+            EiAlignment::AntiParallel
         }
-        EiAlignment::Auto => unreachable!("Auto resolved before this point"),
-    }
+    };
 
     // 5. Compute separation (D'Amico Eq. 2.23 with equal magnitudes)
     let magnitude_km = chief_mean.a_km * de_nom;
 
     Ok(SafePerch {
+        baseline_roe,
         roe,
         de_magnitude_km: magnitude_km,
         di_magnitude_km: magnitude_km,
@@ -147,6 +145,7 @@ fn enrich_custom_perch(
 
     // 3. Map EnrichedWaypoint → SafePerch (enriched_ei already computed by enrich_waypoint)
     Ok(SafePerch {
+        baseline_roe: *custom_roe,
         roe: enriched.roe,
         de_magnitude_km: chief_mean.a_km * enriched.roe.de_magnitude(),
         di_magnitude_km: chief_mean.a_km * enriched.roe.di_magnitude(),
@@ -335,5 +334,17 @@ mod tests {
         // dey and diy are nonzero
         assert!(result.roe.dey.abs() > ROE_PRESERVATION_TOL, "dey should be nonzero");
         assert!(result.roe.diy.abs() > ROE_PRESERVATION_TOL, "diy should be nonzero");
+
+        // Baseline ROE should have zero e/i components (geometric V-bar)
+        assert!(
+            result.baseline_roe.dey.abs() < ROE_PRESERVATION_TOL,
+            "baseline dey should be zero (geometric V-bar): {}",
+            result.baseline_roe.dey
+        );
+        assert!(
+            result.baseline_roe.diy.abs() < ROE_PRESERVATION_TOL,
+            "baseline diy should be zero (geometric V-bar): {}",
+            result.baseline_roe.diy
+        );
     }
 }

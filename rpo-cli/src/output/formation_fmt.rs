@@ -32,6 +32,13 @@ pub fn print_perch_enrichment(report: &FormationDesignReport) {
             println!("  \u{03b4}i magnitude:       {}", fmt_m(safe_perch.di_magnitude_km, 1));
             println!("  Min R/C separation: {}", fmt_m(safe_perch.min_rc_separation_km, 1));
         }
+        PerchEnrichmentResult::Baseline(_) => {
+            println!(
+                "  Status:             {}",
+                "NOT APPLIED (baseline)"
+                    .if_supports_color(Stream::Stdout, |v| v.dimmed()),
+            );
+        }
         PerchEnrichmentResult::Fallback { reason, .. } => {
             println!(
                 "  Status:             {}",
@@ -168,6 +175,11 @@ pub fn write_perch_enrichment_md(out: &mut String, report: &FormationDesignRepor
                 "| Min R/C separation | {} |",
                 fmt_m(safe_perch.min_rc_separation_km, 1),
             );
+        }
+        PerchEnrichmentResult::Baseline(_) => {
+            let _ = writeln!(out, "| Parameter | Value |");
+            let _ = writeln!(out, "| --- | --- |");
+            let _ = writeln!(out, "| Status | NOT APPLIED (baseline) |");
         }
         PerchEnrichmentResult::Fallback { reason, .. } => {
             let _ = writeln!(out, "| Parameter | Value |");

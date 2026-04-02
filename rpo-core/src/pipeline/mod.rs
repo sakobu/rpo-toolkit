@@ -19,15 +19,16 @@ pub mod types;
 pub use convert::{resolve_propagator, to_propagation_model, to_waypoints};
 pub use errors::PipelineError;
 pub use execute::{
-    build_output, compute_free_drift_analysis, compute_free_drift_poca,
-    compute_mission_covariance, compute_poca_analysis, compute_transfer, execute_mission,
-    plan_waypoints_from_transfer, prepare_formation_context, replan_mission,
+    apply_perch_enrichment, build_lean_plan_result, build_output, compute_formation_report,
+    compute_free_drift_analysis, compute_free_drift_poca, compute_mission_covariance,
+    compute_poca_analysis, compute_transfer, execute_mission, plan_waypoints_from_transfer,
+    replan_mission, suggest_enrichment, suggest_enrichment_from_parts,
 };
 pub use projections::{
     LeanPlanResult, LegSummary, LegTrajectory, TrajectoryPoint, TransferSummary,
     propagated_to_point, resample_propagated,
 };
 pub use types::{
-    FormationContext, PipelineInput, PipelineOutput, PropagatorChoice, SpacecraftChoice,
-    TransferResult, WaypointInput,
+    EnrichmentSuggestion, PipelineInput, PipelineOutput, PlanVariant, PropagatorChoice,
+    SpacecraftChoice, TransferResult, WaypointInput,
 };

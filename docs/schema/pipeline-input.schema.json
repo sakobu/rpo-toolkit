@@ -77,7 +77,7 @@
     },
     "safety_requirements": {
       "$ref": "#/$defs/SafetyRequirements",
-      "description": "Safety requirements for formation design enrichment. When set, perch ROE is enriched with safe e/i vectors before targeting (enforced), and waypoint enrichment + transit safety are computed (advisory)."
+      "description": "Safety requirements for formation design enrichment. When set, an enriched plan with safe e/i vectors is computed alongside the baseline plan, and waypoint enrichment + transit safety are computed (advisory)."
     }
   },
   "additionalProperties": false,
