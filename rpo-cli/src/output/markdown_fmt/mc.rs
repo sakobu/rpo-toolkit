@@ -219,8 +219,8 @@ fn write_mc_baseline_section(
 
     let _ = writeln!(
         out,
-        "> Analytical safety baseline (3D distance, e/i, POCA, free-drift, COLA) \
-         is identical to the `validate` tier. Run `validate` for full details.",
+        "> Analytical baseline and formation-design sections match the `validate` tier. \
+         Run `validate` for full-physics Nyx results.",
     );
     if !figures.is_empty() {
         let _ = writeln!(out, "> Key figures: {}.", figures.join(", "));

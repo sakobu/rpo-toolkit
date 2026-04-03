@@ -238,9 +238,14 @@ fn write_summary_block_mission(
         } else {
             status_emoji(false)
         };
+        let ei_label = if output.formation_design.is_some() {
+            "Min guided-trajectory e/i"
+        } else {
+            "Min e/i separation"
+        };
         let _ = writeln!(
             out,
-            "| Min e/i separation{tier} | {} | {} | {} |",
+            "| {ei_label}{tier} | {} | {} | {} |",
             fmt_m(safety.passive.min_ei_separation_km, 0),
             fmt_m(config.min_ei_separation_km, 0),
             ei_status,
@@ -263,7 +268,7 @@ fn write_summary_block_mission(
                     {
                         let _ = writeln!(
                             out,
-                            "| Analytical bias | +{delta_pct:.0}% (non-conservative) | \u{2014} | \u{26a0}\u{fe0f} |",
+                            "| Analytical bias | overestimated by {delta_pct:.0}% | \u{2014} | \u{26a0}\u{fe0f} |",
                         );
                     }
                 }
@@ -1089,7 +1094,7 @@ fn write_safety_comparison(
         };
         let _ = writeln!(
             out,
-            "\n> Analytical 3D distance is non-conservative by {delta_pct:.0}%. \
+            "\n> Analytical overestimated min 3D distance by {delta_pct:.0}% relative to Nyx. \
              Numerical margin ({margin_ratio:.1}\u{00d7} threshold) governs.\n",
         );
     }

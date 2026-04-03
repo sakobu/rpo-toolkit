@@ -77,7 +77,7 @@ pub fn validation_insights(
                 insights.push(Insight {
                     severity: Severity::Warning,
                     message: format!(
-                        "Analytical overestimates 3D distance by {delta_pct:.0}% \
+                        "Analytical overestimates 3D distance by {delta_pct:.0}% relative to Nyx \
                          ({:.0}m \u{2192} {:.0}m). \
                          Numerical 3D margin is {d3d_ratio:.1}\u{00d7} threshold; {ei_part}.",
                         ana_3d * 1000.0,
