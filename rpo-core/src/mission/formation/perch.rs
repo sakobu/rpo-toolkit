@@ -5,21 +5,21 @@
 //! `perch_to_roe()` — this module adds sized, aligned e/i components
 //! to ensure passive safety (D'Amico Eq. 2.23).
 //!
-//! Custom perches delegate to `enrich_waypoint()` from the null-space
-//! safety projection.
+//! Custom perches apply `compute_safety_projection()` directly to the
+//! original ROE, preserving e/i structure when already above threshold.
 //!
 //! # References
 //!
 //! - D'Amico Eq. 2.23: `d_min = a · min(|δe|, |δi|)` for parallel e/i
 //! - D'Amico Eq. 2.32: nominal safe formation configuration
 
-use crate::elements::roe_to_ric::roe_to_ric;
 use crate::mission::errors::MissionError;
 use crate::mission::planning::perch_to_roe;
+use crate::mission::safety::compute_ei_separation;
 use crate::mission::types::PerchGeometry;
 use crate::types::{KeplerianElements, QuasiNonsingularROE};
 
-use super::safety_envelope::enrich_waypoint;
+use super::safety_envelope::compute_safety_projection;
 use super::{EiAlignment, FormationDesignError, SafePerch, SafetyRequirements};
 
 // ---------------------------------------------------------------------------
@@ -37,9 +37,8 @@ use super::{EiAlignment, FormationDesignError, SafePerch, SafetyRequirements};
 /// 4. `min_rc_separation_km = a · de_nom` (D'Amico Eq. 2.23, equal magnitudes)
 ///
 /// **Custom** (arbitrary ROE baseline):
-/// 1. Convert ROE to RIC position via `roe_to_ric()`
-/// 2. Delegate to `enrich_waypoint()` (null-space projection, 3 DOF free)
-/// 3. Map `EnrichedWaypoint` to `SafePerch`
+/// 1. Apply `compute_safety_projection()` directly to the original custom ROE
+/// 2. Preserves existing e/i structure when already above threshold
 ///
 /// # Invariants
 ///
@@ -128,29 +127,28 @@ fn enrich_simple_perch(
     })
 }
 
-/// Enrich Custom perch via null-space projection.
+/// Enrich Custom perch via direct safety projection on original ROE.
 ///
-/// Converts the custom ROE to RIC position, then delegates to
-/// `enrich_waypoint()` with `velocity = None` (position-only, 3 DOF free).
+/// Applies `compute_safety_projection` directly to the user's custom ROE,
+/// preserving the original e/i structure when it already meets the safety
+/// threshold. This avoids the lossy ROE→RIC→minimum-norm roundtrip that
+/// would discard the original ROE's e/i information.
 fn enrich_custom_perch(
     custom_roe: &QuasiNonsingularROE,
     chief_mean: &KeplerianElements,
     requirements: &SafetyRequirements,
 ) -> Result<SafePerch, FormationDesignError> {
-    // 1. Convert custom ROE to RIC position
-    let ric = roe_to_ric(custom_roe, chief_mean)?;
+    let (enriched_roe, resolved) =
+        compute_safety_projection(custom_roe, chief_mean, requirements)?;
+    let enriched_ei = compute_ei_separation(&enriched_roe, chief_mean);
 
-    // 2. Enrich via null-space projection (position-only, 3 DOF free)
-    let enriched = enrich_waypoint(&ric.position_ric_km, None, chief_mean, requirements)?;
-
-    // 3. Map EnrichedWaypoint → SafePerch (enriched_ei already computed by enrich_waypoint)
     Ok(SafePerch {
         baseline_roe: *custom_roe,
-        roe: enriched.roe,
-        de_magnitude_km: chief_mean.a_km * enriched.roe.de_magnitude(),
-        di_magnitude_km: chief_mean.a_km * enriched.roe.di_magnitude(),
-        min_rc_separation_km: enriched.enriched_ei.min_separation_km,
-        alignment: enriched.resolved_alignment,
+        roe: enriched_roe,
+        de_magnitude_km: chief_mean.a_km * enriched_roe.de_magnitude(),
+        di_magnitude_km: chief_mean.a_km * enriched_roe.di_magnitude(),
+        min_rc_separation_km: enriched_ei.min_separation_km,
+        alignment: resolved,
     })
 }
 
@@ -282,6 +280,135 @@ mod tests {
             result.roe.dey.signum(),
             result.roe.diy.signum(),
             "dey and diy should have same sign for Parallel"
+        );
+    }
+
+    /// Custom perch with e/i already above threshold → enrichment is near-no-op.
+    ///
+    /// Regression test for the bug where `enrich_custom_perch` converted custom ROE
+    /// to RIC position, then recomputed minimum-norm ROE via pseudo-inverse, discarding
+    /// the original ROE's e/i structure. With the fix, `compute_safety_projection` sees
+    /// the original ROE's |δe| = 209m and |δi| = 313m (both above 100m threshold) and
+    /// preserves them with minimal adjustment.
+    ///
+    /// Tolerance: `CUSTOM_PERCH_NOOP_TOL` = 1e-6 dimensionless ROE. The safety
+    /// projection adjusts e/i phase alignment (rotating e-vector to match i-vector),
+    /// which can shift individual components while preserving magnitudes. The norm
+    /// change should be small but not exactly zero.
+    #[test]
+    fn custom_perch_above_threshold_is_near_noop() {
+        let chief = damico_table21_chief();
+        // Custom ROE from bug report reproduction: |δe| ≈ 209m, |δi| ≈ 313m
+        let custom_roe = QuasiNonsingularROE {
+            da: 0.0,
+            dlambda: 4.42e-4,
+            dex: 0.0,
+            dey: 2.95e-5,
+            dix: 0.0,
+            diy: 4.42e-5,
+        };
+        let reqs = SafetyRequirements {
+            min_separation_km: 0.1, // 100m threshold
+            alignment: EiAlignment::Auto,
+        };
+
+        let result = enrich_perch(
+            &PerchGeometry::Custom(custom_roe),
+            &chief,
+            &reqs,
+        )
+        .expect("enrichment should succeed");
+
+        // Enriched magnitudes should preserve originals (both above threshold)
+        let original_de_km = chief.a_km * custom_roe.de_magnitude();
+        let original_di_km = chief.a_km * custom_roe.di_magnitude();
+        assert!(
+            (result.de_magnitude_km - original_de_km).abs() < 0.001,
+            "de should be preserved: enriched={:.4} km, original={:.4} km",
+            result.de_magnitude_km,
+            original_de_km,
+        );
+        assert!(
+            (result.di_magnitude_km - original_di_km).abs() < 0.001,
+            "di should be preserved: enriched={:.4} km, original={:.4} km",
+            result.di_magnitude_km,
+            original_di_km,
+        );
+
+        // ROE vector change should be small (near-no-op)
+        let norm_change = ((result.roe.da - custom_roe.da).powi(2)
+            + (result.roe.dlambda - custom_roe.dlambda).powi(2)
+            + (result.roe.dex - custom_roe.dex).powi(2)
+            + (result.roe.dey - custom_roe.dey).powi(2)
+            + (result.roe.dix - custom_roe.dix).powi(2)
+            + (result.roe.diy - custom_roe.diy).powi(2))
+        .sqrt();
+        assert!(
+            norm_change < 1e-6,
+            "enrichment should be near-no-op for ROE already above threshold, norm_change={}",
+            norm_change,
+        );
+
+        // Baseline ROE should be the original custom ROE
+        assert!(
+            (result.baseline_roe.dlambda - custom_roe.dlambda).abs() < 1e-15,
+            "baseline should preserve original dlambda",
+        );
+    }
+
+    /// Custom perch with e/i below threshold → enrichment inflates to meet threshold.
+    ///
+    /// The custom ROE has |δe| ≈ 35m and |δi| ≈ 35m, both below the 100m threshold.
+    /// Enrichment should increase both to at least 100m. Note: `compute_safety_projection`
+    /// applies null-space adjustments to `da`/`dlambda` to preserve the RIC position
+    /// when inflating e/i, so those components may shift.
+    #[test]
+    fn custom_perch_below_threshold_inflates_to_meet() {
+        let chief = damico_table21_chief();
+        // Small e/i: a * 5e-6 ≈ 35m (below 100m threshold)
+        let custom_roe = QuasiNonsingularROE {
+            da: 0.0,
+            dlambda: 4.42e-4,
+            dex: 0.0,
+            dey: 5e-6,
+            dix: 0.0,
+            diy: 5e-6,
+        };
+        let reqs = SafetyRequirements {
+            min_separation_km: 0.1, // 100m threshold
+            alignment: EiAlignment::Parallel,
+        };
+
+        let result = enrich_perch(
+            &PerchGeometry::Custom(custom_roe),
+            &chief,
+            &reqs,
+        )
+        .expect("enrichment should succeed");
+
+        // Both magnitudes should meet threshold
+        assert!(
+            result.de_magnitude_km >= 0.1 - ENRICHMENT_SEPARATION_TOL,
+            "de should meet threshold: {:.4} km",
+            result.de_magnitude_km,
+        );
+        assert!(
+            result.di_magnitude_km >= 0.1 - ENRICHMENT_SEPARATION_TOL,
+            "di should meet threshold: {:.4} km",
+            result.di_magnitude_km,
+        );
+
+        // min_rc_separation should meet threshold
+        assert!(
+            result.min_rc_separation_km >= 0.1 - ENRICHMENT_SEPARATION_TOL,
+            "min_rc should meet threshold: {:.4} km",
+            result.min_rc_separation_km,
+        );
+
+        // Baseline should be the original custom ROE
+        assert!(
+            (result.baseline_roe.dey - custom_roe.dey).abs() < ROE_PRESERVATION_TOL,
+            "baseline should preserve original dey",
         );
     }
 

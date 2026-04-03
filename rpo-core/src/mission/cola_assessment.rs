@@ -19,7 +19,7 @@
 //!
 //! - **Nominal**: all POCAs satisfy the alert threshold.
 //! - **Avoidance**: avoidance maneuvers computed for violating legs via
-//!   [`compute_avoidance`](crate::mission::avoidance::compute_avoidance).
+//!   [`compute_avoidance`].
 //! - **Recovery**: post-maneuver state propagated through ALL remaining legs,
 //!   checking for secondary conjunctions created by the avoidance burns.
 //!
