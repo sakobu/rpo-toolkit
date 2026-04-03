@@ -163,7 +163,6 @@ pub async fn handle_ws(mut ws: WebSocket, almanac: Arc<Almanac>) {
 }
 
 /// Process a text WebSocket message.
-#[allow(clippy::too_many_lines)]
 async fn handle_text_message(
     text: &str,
     ws: &mut WebSocket,
@@ -185,8 +184,70 @@ async fn handle_text_message(
     };
 
     match client_msg {
-        // ---- State-setting messages ----
+        // State-setting messages
+        ClientMessage::SetStates { .. }
+        | ClientMessage::SetSpacecraft { .. }
+        | ClientMessage::SetSafetyRequirements { .. }
+        | ClientMessage::Reset { .. } => {
+            handle_state_msg(ws, session, active_job, client_msg).await;
+        }
 
+        // Planning messages
+        ClientMessage::Classify { .. }
+        | ClientMessage::ComputeTransfer { .. }
+        | ClientMessage::SetWaypoints { .. }
+        | ClientMessage::SelectPlan { .. } => {
+            handle_plan_msg(ws, session, client_msg).await;
+        }
+
+        // Config update (large arm, separate function)
+        ClientMessage::UpdateConfig { .. } => {
+            handle_update_config_msg(ws, session, client_msg).await;
+        }
+
+        // Trajectory and safety query messages
+        ClientMessage::GetTrajectory { .. }
+        | ClientMessage::GetFreeDriftTrajectory { .. }
+        | ClientMessage::GetPoca { .. }
+        | ClientMessage::RunCola { .. } => {
+            handle_trajectory_query_msg(ws, session, client_msg).await;
+        }
+
+        // Analysis query messages (formation, covariance, eclipse, session)
+        ClientMessage::GetFormationDesign { .. }
+        | ClientMessage::GetSafeAlternative { .. }
+        | ClientMessage::GetCovariance { .. }
+        | ClientMessage::GetEclipse { .. }
+        | ClientMessage::GetSession { .. } => {
+            handle_analysis_query_msg(ws, session, client_msg).await;
+        }
+
+        // Background job: drag extraction
+        ClientMessage::ExtractDrag { .. } => {
+            handle_extract_drag_msg(ws, session, active_job, almanac, result_tx, client_msg)
+                .await;
+        }
+
+        // Background jobs: validation, Monte Carlo, cancel
+        ClientMessage::Validate { .. }
+        | ClientMessage::RunMc { .. }
+        | ClientMessage::Cancel { .. } => {
+            handle_background_msg(
+                ws, session, active_job, almanac, progress_tx, result_tx, client_msg,
+            )
+            .await;
+        }
+    }
+}
+
+/// Handle state-setting messages.
+async fn handle_state_msg(
+    ws: &mut WebSocket,
+    session: &mut Session,
+    active_job: &mut Option<ActiveJob>,
+    msg: ClientMessage,
+) {
+    match msg {
         ClientMessage::SetStates {
             request_id,
             chief,
@@ -248,8 +309,17 @@ async fn handle_text_message(
             send_message(ws, &msg).await;
         }
 
-        // ---- Inline compute handlers ----
+        _ => unreachable!(),
+    }
+}
 
+/// Handle planning messages.
+async fn handle_plan_msg(
+    ws: &mut WebSocket,
+    session: &mut Session,
+    msg: ClientMessage,
+) {
+    match msg {
         ClientMessage::Classify { request_id } => {
             match handlers::handle_classify(session) {
                 Ok(phase) => {
@@ -267,8 +337,6 @@ async fn handle_text_message(
             lambert_tof_s,
             lambert_config,
         } => {
-            // Apply optional overrides to session (transfer/mission invalidation
-            // is handled by store_transfer inside handle_compute_transfer)
             if let Some(p) = perch {
                 session.perch = p;
             }
@@ -301,7 +369,6 @@ async fn handle_text_message(
             waypoints,
             changed_from,
         } => {
-            // Extract cached missions before set_waypoints clears them
             let (cached_baseline, cached_enriched) = session.take_cached_missions();
             session.set_waypoints(waypoints);
             match handlers::handle_set_waypoints(
@@ -329,58 +396,17 @@ async fn handle_text_message(
             }
         }
 
-        ClientMessage::UpdateConfig {
+        ClientMessage::SelectPlan {
             request_id,
-            config,
-            propagator,
-            proximity,
-            navigation_accuracy,
-            maneuver_uncertainty,
+            variant,
         } => {
-            // Resolve propagator toggle if present
-            let mut propagator_changed = false;
-            if let Some(toggle) = propagator {
-                match handlers::resolve_propagator_toggle(toggle, session.drag_config) {
-                    Ok(choice) => {
-                        session.set_propagator(choice);
-                        propagator_changed = true;
-                    }
-                    Err(e) => {
-                        send_message(ws, &e.to_server_message(Some(request_id))).await;
-                        return;
-                    }
-                }
-            }
-
-            let update = handlers::ConfigUpdate {
-                config,
-                propagator_changed,
-                proximity,
-                navigation_accuracy,
-                maneuver_uncertainty,
-            };
-
-            match handlers::handle_update_config(session, update) {
-                Ok(Some(response)) => {
+            match handlers::handle_select_plan(session, variant) {
+                Ok(selected) => {
                     send_message(
                         ws,
-                        &ServerMessage::PlanResult {
+                        &ServerMessage::PlanSelected {
                             request_id,
-                            baseline: Box::new(response.baseline),
-                            enriched: response.enriched.map(Box::new),
-                            baseline_formation: response.baseline_formation.map(Box::new),
-                            enriched_formation: response.enriched_formation.map(Box::new),
-                        },
-                    )
-                    .await;
-                }
-                Ok(None) => {
-                    send_message(
-                        ws,
-                        &ServerMessage::StateUpdated {
-                            request_id,
-                            updated: vec!["config".into()],
-                            invalidated: vec![],
+                            variant: selected,
                         },
                     )
                     .await;
@@ -391,6 +417,88 @@ async fn handle_text_message(
             }
         }
 
+        _ => unreachable!(),
+    }
+}
+
+/// Handle config update message (propagator toggle + config replan).
+async fn handle_update_config_msg(
+    ws: &mut WebSocket,
+    session: &mut Session,
+    msg: ClientMessage,
+) {
+    let ClientMessage::UpdateConfig {
+        request_id,
+        config,
+        propagator,
+        proximity,
+        navigation_accuracy,
+        maneuver_uncertainty,
+    } = msg
+    else {
+        unreachable!()
+    };
+
+    let mut propagator_changed = false;
+    if let Some(toggle) = propagator {
+        match handlers::resolve_propagator_toggle(toggle, session.drag_config) {
+            Ok(choice) => {
+                session.set_propagator(choice);
+                propagator_changed = true;
+            }
+            Err(e) => {
+                send_message(ws, &e.to_server_message(Some(request_id))).await;
+                return;
+            }
+        }
+    }
+
+    let update = handlers::ConfigUpdate {
+        config,
+        propagator_changed,
+        proximity,
+        navigation_accuracy,
+        maneuver_uncertainty,
+    };
+
+    match handlers::handle_update_config(session, update) {
+        Ok(Some(response)) => {
+            send_message(
+                ws,
+                &ServerMessage::PlanResult {
+                    request_id,
+                    baseline: Box::new(response.baseline),
+                    enriched: response.enriched.map(Box::new),
+                    baseline_formation: response.baseline_formation.map(Box::new),
+                    enriched_formation: response.enriched_formation.map(Box::new),
+                },
+            )
+            .await;
+        }
+        Ok(None) => {
+            send_message(
+                ws,
+                &ServerMessage::StateUpdated {
+                    request_id,
+                    updated: vec!["config".into()],
+                    invalidated: vec![],
+                },
+            )
+            .await;
+        }
+        Err(e) => {
+            send_message(ws, &e.to_server_message(Some(request_id))).await;
+        }
+    }
+}
+
+/// Handle trajectory and safety query messages.
+async fn handle_trajectory_query_msg(
+    ws: &mut WebSocket,
+    session: &mut Session,
+    msg: ClientMessage,
+) {
+    match msg {
         ClientMessage::GetTrajectory {
             request_id,
             legs,
@@ -477,27 +585,17 @@ async fn handle_text_message(
             }
         }
 
-        ClientMessage::SelectPlan {
-            request_id,
-            variant,
-        } => {
-            match handlers::handle_select_plan(session, variant) {
-                Ok(selected) => {
-                    send_message(
-                        ws,
-                        &ServerMessage::PlanSelected {
-                            request_id,
-                            variant: selected,
-                        },
-                    )
-                    .await;
-                }
-                Err(e) => {
-                    send_message(ws, &e.to_server_message(Some(request_id))).await;
-                }
-            }
-        }
+        _ => unreachable!(),
+    }
+}
 
+/// Handle analysis query messages (formation, covariance, eclipse, session).
+async fn handle_analysis_query_msg(
+    ws: &mut WebSocket,
+    session: &mut Session,
+    msg: ClientMessage,
+) {
+    match msg {
         ClientMessage::GetFormationDesign { request_id } => {
             match handlers::handle_get_formation_design(session) {
                 Ok(report) => {
@@ -586,40 +684,64 @@ async fn handle_text_message(
             .await;
         }
 
-        // ---- Background handlers ----
+        _ => unreachable!(),
+    }
+}
 
-        ClientMessage::ExtractDrag { request_id } => {
-            cancel_active_job(active_job);
+/// Handle drag extraction background job.
+async fn handle_extract_drag_msg(
+    ws: &mut WebSocket,
+    session: &mut Session,
+    active_job: &mut Option<ActiveJob>,
+    almanac: &Arc<Almanac>,
+    result_tx: &mpsc::Sender<JobResult>,
+    msg: ClientMessage,
+) {
+    let ClientMessage::ExtractDrag { request_id } = msg else {
+        unreachable!()
+    };
 
-            // Determine states: use perch states if transfer exists, else original
-            let (chief, deputy) = match session.transfer.as_ref() {
-                Some(t) => (t.perch_chief.clone(), t.perch_deputy.clone()),
-                None => match (session.require_chief(), session.require_deputy()) {
-                    (Ok(c), Ok(d)) => (c.clone(), d.clone()),
-                    (Err(e), _) | (_, Err(e)) => {
-                        send_message(ws, &e.to_server_message(Some(request_id))).await;
-                        return;
-                    }
-                },
-            };
-            let chief_config = session.chief_config().resolve();
-            let deputy_config = session.deputy_config().resolve();
+    cancel_active_job(active_job);
 
-            let cancel = Arc::new(AtomicBool::new(false));
-            let alm = almanac.clone();
-            let tx = result_tx.clone();
-            let handle = tokio::task::spawn_blocking(move || {
-                let result =
-                    handlers::handle_extract_drag(&chief, &deputy, &chief_config, &deputy_config, &alm);
-                let _ = tx.blocking_send(JobResult::Drag { request_id, result });
-            });
-            *active_job = Some(ActiveJob {
-                request_id,
-                cancel,
-                _handle: handle,
-            });
-        }
+    let (chief, deputy) = match session.transfer.as_ref() {
+        Some(t) => (t.perch_chief.clone(), t.perch_deputy.clone()),
+        None => match (session.require_chief(), session.require_deputy()) {
+            (Ok(c), Ok(d)) => (c.clone(), d.clone()),
+            (Err(e), _) | (_, Err(e)) => {
+                send_message(ws, &e.to_server_message(Some(request_id))).await;
+                return;
+            }
+        },
+    };
+    let chief_config = session.chief_config().resolve();
+    let deputy_config = session.deputy_config().resolve();
 
+    let cancel = Arc::new(AtomicBool::new(false));
+    let alm = almanac.clone();
+    let tx = result_tx.clone();
+    let handle = tokio::task::spawn_blocking(move || {
+        let result =
+            handlers::handle_extract_drag(&chief, &deputy, &chief_config, &deputy_config, &alm);
+        let _ = tx.blocking_send(JobResult::Drag { request_id, result });
+    });
+    *active_job = Some(ActiveJob {
+        request_id,
+        cancel,
+        _handle: handle,
+    });
+}
+
+/// Handle background job messages (validation, Monte Carlo, cancel).
+async fn handle_background_msg(
+    ws: &mut WebSocket,
+    session: &mut Session,
+    active_job: &mut Option<ActiveJob>,
+    almanac: &Arc<Almanac>,
+    progress_tx: &mpsc::Sender<ProgressUpdate>,
+    result_tx: &mpsc::Sender<JobResult>,
+    msg: ClientMessage,
+) {
+    match msg {
         ClientMessage::Validate {
             request_id,
             samples_per_leg,
@@ -659,7 +781,6 @@ async fn handle_text_message(
         } => {
             cancel_active_job(active_job);
 
-            // Store MC config override if provided
             if let Some(mc) = monte_carlo {
                 session.set_monte_carlo_config(mc);
             }
@@ -703,6 +824,8 @@ async fn handle_text_message(
                 *active_job = None;
             }
         }
+
+        _ => unreachable!(),
     }
 }
 
@@ -715,6 +838,7 @@ fn build_validate_request(
     let mission = session.require_active_mission()?.clone();
     let transfer = session.require_transfer()?.clone();
 
+    let safety = session.config.safety;
     Ok(handlers::ValidateRequest {
         mission,
         perch_chief: transfer.perch_chief.clone(),
@@ -727,6 +851,8 @@ fn build_validate_request(
         config: session.config.clone(),
         propagator: session.resolve_propagation_model(),
         transfer,
+        safety,
+        cola: None,
     })
 }
 
@@ -737,7 +863,7 @@ fn build_mc_request(
 ) -> Result<handlers::McRequest, ApiError> {
     let mission = session.require_active_mission()?.clone();
     let transfer = session.require_transfer()?.clone();
-    let mc_config = session.require_monte_carlo_config()?.clone();
+    let mc_config = *session.require_monte_carlo_config()?;
 
     Ok(handlers::McRequest {
         mission,

@@ -108,11 +108,17 @@ pub fn handle_mc(
         )
     }).transpose()?;
 
+    // Resolve MC dispersions: derive from top-level nav/maneuver if not explicitly set
+    let resolved_mc = request.mc_config.with_resolved_dispersions(
+        request.navigation_accuracy.as_ref(),
+        request.maneuver_uncertainty.as_ref(),
+    );
+
     // Run Monte Carlo
     send_progress(
         progress_tx,
         ProgressPhase::Mc,
-        &format!("Running {} MC samples...", request.mc_config.num_samples),
+        &format!("Running {} MC samples...", resolved_mc.num_samples),
         0.1,
     );
 
@@ -125,7 +131,7 @@ pub fn handle_mc(
         nominal_mission: &mission,
         initial_chief: &request.perch_chief,
         initial_deputy: &request.perch_deputy,
-        config: &request.mc_config,
+        config: &resolved_mc,
         mission_config: &request.mission_config,
         chief_config: &request.chief_config,
         deputy_config: &request.deputy_config,

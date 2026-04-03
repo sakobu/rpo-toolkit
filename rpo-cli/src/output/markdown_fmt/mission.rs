@@ -80,15 +80,15 @@ pub fn mission_to_markdown(
         write_formation_design_md(&mut out, fd);
     }
 
-    if let Some(ref poca) = output.poca {
+    if let Some(ref poca) = output.safety.poca {
         write_poca_section(&mut out, "Closest Approach (Brent-refined)", poca);
     }
 
-    if let Some(ref fd) = output.free_drift {
+    if let Some(ref fd) = output.safety.free_drift {
         write_free_drift_section(&mut out, fd, &sc);
     }
 
-    if let Some(ref fd_poca) = output.free_drift_poca {
+    if let Some(ref fd_poca) = output.safety.free_drift_poca {
         write_poca_section(
             &mut out,
             "Free-Drift Closest Approach (Brent-refined)",
@@ -153,15 +153,15 @@ pub fn validation_to_markdown(
         write_formation_design_md(&mut out, fd);
     }
 
-    if let Some(ref poca) = output.poca {
+    if let Some(ref poca) = output.safety.poca {
         write_poca_section(&mut out, "Closest Approach (Brent-refined)", poca);
     }
 
-    if let Some(ref fd) = output.free_drift {
+    if let Some(ref fd) = output.safety.free_drift {
         write_free_drift_section(&mut out, fd, &sc);
     }
 
-    if let Some(ref fd_poca) = output.free_drift_poca {
+    if let Some(ref fd_poca) = output.safety.free_drift_poca {
         write_poca_section(
             &mut out,
             "Free-Drift Closest Approach (Brent-refined)",
@@ -734,13 +734,13 @@ fn write_poca_section(
 }
 
 fn write_cola_sections(out: &mut String, output: &PipelineOutput) {
-    if let Some(ref cola) = output.cola {
+    if let Some(ref cola) = output.safety.cola {
         write_cola_section(out, cola);
     }
-    if let Some(ref secondary) = output.secondary_conjunctions {
+    if let Some(ref secondary) = output.safety.secondary_conjunctions {
         write_secondary_conjunction_section(out, secondary);
     }
-    if let Some(ref skipped) = output.cola_skipped {
+    if let Some(ref skipped) = output.safety.cola_skipped {
         write_cola_skipped_section(out, skipped);
     }
 }
@@ -952,6 +952,9 @@ fn write_validation_section(
     // Safety comparison
     write_safety_comparison(out, report, &input.config);
 
+    // COLA validation detail (post-validation section, before eclipse)
+    write_cola_validation_detail(out, output, report);
+
     // Eclipse validation
     if let Some(ref ev) = report.eclipse_validation {
         write_eclipse_validation(out, ev, output);
@@ -963,12 +966,62 @@ fn write_validation_section(
     }
 }
 
+fn write_cola_validation_detail(
+    out: &mut String,
+    output: &PipelineOutput,
+    report: &ValidationReport,
+) {
+    let maneuvers = match output.safety.cola.as_deref() {
+        Some(m) if !m.is_empty() && report.cola_validated() => m,
+        _ => return,
+    };
+
+    let _ = writeln!(out, "### COLA Burns Injected into Nyx Propagation\n");
+    let _ = writeln!(
+        out,
+        "| Leg | \u{0394}v (m/s) | Type | Analytical Post-COLA POCA |",
+    );
+    let _ = writeln!(out, "| --- | -------- | ---- | ------------------------- |");
+    for m in maneuvers {
+        let correction = match m.correction_type {
+            rpo_core::mission::CorrectionType::InPlane => "in-plane",
+            rpo_core::mission::CorrectionType::CrossTrack => "cross-track",
+            rpo_core::mission::CorrectionType::Combined => "combined",
+        };
+        let _ = writeln!(
+            out,
+            "| {} | {:.2} | {} | {:.1} m |",
+            m.leg_index + 1,
+            m.fuel_cost_km_s * 1000.0,
+            correction,
+            m.post_avoidance_poca_km * 1000.0,
+        );
+    }
+    let _ = writeln!(out);
+    let _ = writeln!(
+        out,
+        "> Nyx propagated the post-COLA trajectory. \
+         Safety comparison above reflects these burns.\n",
+    );
+}
+
 fn write_safety_comparison(
     out: &mut String,
     report: &ValidationReport,
     config: &rpo_core::mission::MissionConfig,
 ) {
-    let _ = writeln!(out, "### Safety Comparison (Analytical vs Numerical)\n");
+    if report.cola_validated() {
+        let _ = writeln!(
+            out,
+            "### Safety Comparison (Analytical vs Numerical + COLA)\n",
+        );
+        let _ = writeln!(
+            out,
+            "> Numerical safety reflects the post-COLA trajectory.\n",
+        );
+    } else {
+        let _ = writeln!(out, "### Safety Comparison (Analytical vs Numerical)\n");
+    }
     let _ = writeln!(out, "| Metric | Analytical | Numerical | Threshold |");
     let _ = writeln!(out, "| --- | --- | --- | --- |");
 

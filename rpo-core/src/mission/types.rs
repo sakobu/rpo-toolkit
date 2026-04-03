@@ -9,6 +9,13 @@ use crate::propagation::propagator::PropagatedState;
 use crate::propagation::covariance::types::MissionCovarianceReport;
 use crate::types::{KeplerianElements, MissionEclipseData, QuasiNonsingularROE, RICState, SpacecraftConfig};
 
+/// Serde helper: skip serialization when a `bool` is `false`.
+///
+/// Serde requires `&T` signature for `skip_serializing_if` predicates.
+#[allow(clippy::trivially_copy_pass_by_ref)]
+fn is_false(v: &bool) -> bool {
+    !*v
+}
 
 /// Result of analyzing the separation between two spacecraft.
 ///
@@ -255,6 +262,10 @@ pub struct ValidationPoint {
     pub position_error_km: f64,
     /// Velocity difference magnitude (km/s)
     pub velocity_error_km_s: f64,
+    /// Whether this sample follows a COLA burn in nyx propagation.
+    /// Excluded from fidelity statistics (conflates model error with COLA perturbation).
+    #[serde(skip_serializing_if = "is_false", default)]
+    pub post_cola: bool,
 }
 
 /// Aggregate validation results for a mission.
@@ -282,6 +293,16 @@ pub struct ValidationReport {
     /// Present when the mission includes eclipse data.
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub eclipse_validation: Option<EclipseValidation>,
+}
+
+impl ValidationReport {
+    /// Whether any COLA burns were injected during nyx validation.
+    ///
+    /// Derived from the presence of `post_cola` samples — no stored field needed.
+    #[must_use]
+    pub fn cola_validated(&self) -> bool {
+        self.leg_points.iter().flatten().any(|p| p.post_cola)
+    }
 }
 
 /// Per-sample eclipse comparison (analytical vs ANISE).

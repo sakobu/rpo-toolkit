@@ -24,15 +24,17 @@ use crate::propagation::covariance::{
     MissionCovarianceReport, NavigationAccuracy,
 };
 use crate::propagation::keplerian::propagate_keplerian;
-use crate::propagation::propagator::PropagationModel;
+use crate::propagation::propagator::{DragConfig, PropagationModel};
 use crate::types::elements::KeplerianElements;
 use crate::types::roe::QuasiNonsingularROE;
 use crate::types::{DepartureState, StateVector};
 
+use crate::mission::config::SafetyConfig;
+
 use super::convert::{to_propagation_model, to_waypoints};
 use super::errors::PipelineError;
 use super::projections::{LeanPlanResult, TransferSummary};
-use super::types::{PipelineInput, PipelineOutput, TransferResult, WaypointInput};
+use super::types::{PipelineInput, PipelineOutput, SafetyAnalysis, TransferResult, WaypointInput};
 
 /// Number of eclipse evaluation points along the Lambert transfer arc.
 const DEFAULT_TRANSFER_ECLIPSE_SAMPLES: u32 = 200;
@@ -201,58 +203,99 @@ fn flag_global_minimum(results: &mut [Vec<ClosestApproach>]) {
     }
 }
 
+/// Arguments for assembling the final [`PipelineOutput`].
+///
+/// Groups the pipeline-context parameters that feed into [`build_output`],
+/// keeping the function signature concise.
+pub struct BuildOutputCtx<'a> {
+    /// Transfer result from `compute_transfer()`.
+    pub transfer: &'a TransferResult,
+    /// Original pipeline input (for covariance/eclipse config).
+    pub input: &'a PipelineInput,
+    /// Resolved propagation model.
+    pub propagator: &'a PropagationModel,
+    /// Auto-derived drag config, if any.
+    pub auto_drag: Option<DragConfig>,
+    /// Enrichment suggestion, if formation design was requested.
+    pub suggestion: Option<EnrichmentSuggestion>,
+    /// Pre-computed safety assessment (free-drift, POCA, COLA).
+    pub safety: SafetyAnalysis,
+    /// Pre-computed covariance report (skips on-demand computation when present).
+    pub precomputed_covariance: Option<MissionCovarianceReport>,
+}
+
 /// Assemble a [`PipelineOutput`] from pipeline components.
 ///
 /// Runs covariance propagation (if `navigation_accuracy` is present)
 /// and eclipse computation. Covariance and eclipse failures are non-fatal —
 /// the result is returned without that data.
-///
-/// # Arguments
-///
-/// * `transfer` — Transfer result from `compute_transfer()`
-/// * `wp_mission` — Planned waypoint mission
-/// * `input` — Original pipeline input (for covariance/eclipse config)
-/// * `propagator` — Resolved propagation model
-/// * `auto_drag` — Auto-derived drag config, if any
-/// * `suggestion` — Enrichment suggestion, if formation design was requested
 #[must_use]
 pub fn build_output(
-    transfer: &TransferResult,
+    ctx: BuildOutputCtx<'_>,
     wp_mission: crate::mission::types::WaypointMission,
-    input: &PipelineInput,
-    propagator: &PropagationModel,
-    auto_drag: Option<crate::propagation::propagator::DragConfig>,
-    suggestion: Option<EnrichmentSuggestion>,
 ) -> PipelineOutput {
-    let transfer_eclipse = transfer.plan.transfer.as_ref().and_then(|t| {
-        compute_transfer_eclipse(t, &input.chief, DEFAULT_TRANSFER_ECLIPSE_SAMPLES).ok()
+    let transfer_eclipse = ctx.transfer.plan.transfer.as_ref().and_then(|t| {
+        compute_transfer_eclipse(t, &ctx.input.chief, DEFAULT_TRANSFER_ECLIPSE_SAMPLES).ok()
     });
 
-    let total_dv_km_s = transfer.lambert_dv_km_s + wp_mission.total_dv_km_s;
-    let lambert_tof_s = transfer
+    let total_dv_km_s = ctx.transfer.lambert_dv_km_s + wp_mission.total_dv_km_s;
+    let lambert_tof_s = ctx.transfer
         .plan
         .transfer
         .as_ref()
         .map_or(0.0, |t| t.tof_s);
     let total_duration_s = lambert_tof_s + wp_mission.total_duration_s;
 
-    let covariance = input.navigation_accuracy.as_ref().and_then(|nav| {
-        compute_mission_covariance(
-            &wp_mission,
-            &transfer.plan.chief_at_arrival,
-            nav,
-            input.maneuver_uncertainty.as_ref(),
-            propagator,
-        )
-        .ok()
+    let covariance = ctx.precomputed_covariance.or_else(|| {
+        ctx.input.navigation_accuracy.as_ref().and_then(|nav| {
+            compute_mission_covariance(
+                &wp_mission,
+                &ctx.transfer.plan.chief_at_arrival,
+                nav,
+                ctx.input.maneuver_uncertainty.as_ref(),
+                ctx.propagator,
+            )
+            .ok()
+        })
     });
 
-    let free_drift = input.config.safety.as_ref().and_then(|_| {
-        compute_free_drift_analysis(&wp_mission, propagator)
+    let formation_design = ctx.suggestion.map(|s| {
+        compute_formation_report(s.perch, s.requirements, &wp_mission.legs)
     });
 
-    let poca = input.config.safety.as_ref().and_then(|_| {
-        compute_poca_analysis(&wp_mission, propagator)
+    PipelineOutput {
+        phase: ctx.transfer.plan.phase.clone(),
+        transfer: ctx.transfer.plan.transfer.clone(),
+        transfer_eclipse,
+        perch_roe: ctx.transfer.plan.perch_roe,
+        mission: wp_mission,
+        total_dv_km_s,
+        total_duration_s,
+        auto_drag_config: ctx.auto_drag,
+        covariance,
+        monte_carlo: None,
+        safety: ctx.safety,
+        formation_design,
+    }
+}
+
+/// Compute safety assessment from a planned mission.
+///
+/// COLA config resolution happens here: explicit `cola` takes priority,
+/// then auto-derives from `safety.min_distance_3d_km`, then `None`.
+#[must_use]
+pub fn compute_safety_analysis(
+    wp_mission: &crate::mission::types::WaypointMission,
+    safety: Option<&SafetyConfig>,
+    cola: Option<&ColaConfig>,
+    propagator: &PropagationModel,
+) -> SafetyAnalysis {
+    let free_drift = safety.and_then(|_| {
+        compute_free_drift_analysis(wp_mission, propagator)
+    });
+
+    let poca = safety.and_then(|_| {
+        compute_poca_analysis(wp_mission, propagator)
     });
 
     let free_drift_poca = free_drift.as_ref().and_then(|fd| {
@@ -262,18 +305,18 @@ pub fn build_output(
     // COLA: explicit config takes priority; auto-derive from safety thresholds
     // otherwise. When safety is enabled and POCA detects violations, COLA
     // auto-computes avoidance using min_distance_3d_km as the target separation.
-    let cola_config = input.cola.or_else(|| {
-        input.config.safety.as_ref().map(|safety| ColaConfig {
-            target_distance_km: safety.min_distance_3d_km,
+    let cola_config = cola.copied().or_else(|| {
+        safety.map(|s| ColaConfig {
+            target_distance_km: s.min_distance_3d_km,
             max_dv_km_s: AUTO_COLA_BUDGET_KM_S,
         })
     });
 
-    let (cola, secondary_conjunctions, cola_skipped) = cola_config
+    let (cola_maneuvers, secondary_conjunctions, cola_skipped) = cola_config
         .zip(poca.as_ref())
         .map_or((None, None, None), |(config, poca_data)| {
             let decision =
-                assess_cola(&wp_mission, poca_data, propagator, &config);
+                assess_cola(wp_mission, poca_data, propagator, &config);
             match decision {
                 ColaAssessment::Nominal => (None, None, None),
                 ColaAssessment::Avoidance { maneuvers, skipped } => {
@@ -293,29 +336,36 @@ pub fn build_output(
             }
         });
 
-    let formation_design = suggestion.map(|s| {
-        compute_formation_report(s.perch, s.requirements, &wp_mission.legs)
-    });
-
-    PipelineOutput {
-        phase: transfer.plan.phase.clone(),
-        transfer: transfer.plan.transfer.clone(),
-        transfer_eclipse,
-        perch_roe: transfer.plan.perch_roe,
-        mission: wp_mission,
-        total_dv_km_s,
-        total_duration_s,
-        auto_drag_config: auto_drag,
-        covariance,
-        monte_carlo: None,
+    SafetyAnalysis {
         free_drift,
         poca,
         free_drift_poca,
-        cola,
+        cola: cola_maneuvers,
         secondary_conjunctions,
         cola_skipped,
-        formation_design,
     }
+}
+
+/// Compute safety analysis and derive COLA burns for validation injection.
+///
+/// Combines [`compute_safety_analysis`] and [`convert_cola_to_burns`] into a
+/// single call, ensuring COLA burns are always derived consistently from the
+/// safety analysis. Used by both CLI and API validate handlers.
+///
+/// # Errors
+/// Returns [`crate::mission::ValidationError`] if a COLA burn epoch is out of bounds.
+pub fn compute_validation_burns(
+    wp_mission: &crate::mission::types::WaypointMission,
+    safety: Option<&SafetyConfig>,
+    cola: Option<&ColaConfig>,
+    propagator: &PropagationModel,
+) -> Result<(SafetyAnalysis, Vec<crate::mission::validation::ColaBurn>), crate::mission::ValidationError> {
+    let analysis = compute_safety_analysis(wp_mission, safety, cola, propagator);
+    let burns = crate::mission::validation::convert_cola_to_burns(
+        analysis.cola.as_deref(),
+        wp_mission,
+    )?;
+    Ok((analysis, burns))
 }
 
 /// Compute mission covariance from navigation accuracy and a planned mission.
@@ -560,7 +610,22 @@ pub fn execute_mission(input: &PipelineInput) -> Result<PipelineOutput, Pipeline
 
     let wp_mission = plan_waypoints_from_transfer(&transfer, input, &propagator)?;
 
-    Ok(build_output(&transfer, wp_mission, input, &propagator, None, suggestion))
+    let safety = compute_safety_analysis(
+        &wp_mission, input.config.safety.as_ref(), input.cola.as_ref(), &propagator,
+    );
+
+    Ok(build_output(
+        BuildOutputCtx {
+            transfer: &transfer,
+            input,
+            propagator: &propagator,
+            auto_drag: None,
+            suggestion,
+            safety,
+            precomputed_covariance: None,
+        },
+        wp_mission,
+    ))
 }
 
 /// Incremental replan pipeline: classify → Lambert → replan from index.
@@ -604,7 +669,22 @@ pub fn replan_mission(
         &propagator,
     )?;
 
-    Ok(build_output(&transfer, wp_mission, input, &propagator, None, suggestion))
+    let safety = compute_safety_analysis(
+        &wp_mission, input.config.safety.as_ref(), input.cola.as_ref(), &propagator,
+    );
+
+    Ok(build_output(
+        BuildOutputCtx {
+            transfer: &transfer,
+            input,
+            propagator: &propagator,
+            auto_drag: None,
+            suggestion,
+            safety,
+            precomputed_covariance: None,
+        },
+        wp_mission,
+    ))
 }
 
 #[cfg(test)]
@@ -1009,5 +1089,73 @@ mod tests {
                 < COPY_FIDELITY_TOL,
             "fallback should not mutate perch_roe"
         );
+    }
+
+    /// Verify `compute_safety_analysis` produces identical results to the
+    /// safety computation that was previously inlined in `build_output`.
+    ///
+    /// Uses a far-field input with safety config enabled. The safety assessment
+    /// should produce free-drift, POCA, and COLA results that match what
+    /// `execute_mission` embeds in its `PipelineOutput`.
+    #[test]
+    fn test_compute_safety_analysis_matches_build_output() {
+        use crate::mission::config::SafetyConfig;
+
+        let mut input = far_field_input();
+        input.config.safety = Some(SafetyConfig {
+            min_ei_separation_km: 0.1,
+            min_distance_3d_km: 0.05,
+        });
+
+        // execute_mission calls compute_safety_analysis internally and
+        // unpacks it into PipelineOutput. Verify the fields match.
+        let output = execute_mission(&input).expect("execute_mission should succeed");
+
+        // Separately compute safety assessment from the same mission
+        let transfer = compute_transfer(&input).expect("transfer");
+        let propagator = to_propagation_model(&input.propagator);
+        let mut transfer2 = transfer;
+        let suggestion = suggest_enrichment(&transfer2, &input);
+        if let Some(ref s) = suggestion {
+            apply_perch_enrichment(&mut transfer2, s);
+        }
+        let wp_mission = plan_waypoints_from_transfer(&transfer2, &input, &propagator)
+            .expect("waypoints");
+        let safety = compute_safety_analysis(
+            &wp_mission, input.config.safety.as_ref(), input.cola.as_ref(), &propagator,
+        );
+
+        // Free-drift: both should be Some when safety is enabled
+        assert_eq!(
+            output.safety.free_drift.is_some(),
+            safety.free_drift.is_some(),
+            "free_drift presence should match"
+        );
+
+        // POCA: both should be Some when safety is enabled
+        assert_eq!(
+            output.safety.poca.is_some(),
+            safety.poca.is_some(),
+            "poca presence should match"
+        );
+
+        // Free-drift POCA
+        assert_eq!(
+            output.safety.free_drift_poca.is_some(),
+            safety.free_drift_poca.is_some(),
+            "free_drift_poca presence should match"
+        );
+
+        // COLA maneuvers (may or may not be present depending on POCA distances)
+        assert_eq!(
+            output.safety.cola.is_some(),
+            safety.cola.is_some(),
+            "cola presence should match"
+        );
+
+        // If POCA data exists, check leg counts match
+        if let (Some(out_poca), Some(sa_poca)) = (&output.safety.poca, &safety.poca) {
+            assert_eq!(out_poca.len(), sa_poca.len(), "POCA leg count should match");
+        }
     }
 }

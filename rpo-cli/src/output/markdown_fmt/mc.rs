@@ -31,6 +31,14 @@ pub fn mc_to_markdown(
 
     write_cola_callout(&mut out, output);
 
+    if output.safety.cola.as_ref().is_some_and(|c| !c.is_empty()) {
+        let _ = writeln!(
+            out,
+            "> **Note:** MC samples use the baseline (pre-COLA) trajectory. \
+             COLA burns are not injected into Monte Carlo dispersions.\n",
+        );
+    }
+
     write_mc_baseline_section(&mut out, baseline, output, &sc);
     if derived_drag.is_some() {
         let _ = writeln!(
@@ -201,7 +209,7 @@ fn write_mc_baseline_section(
         ));
     }
 
-    if let Some((cola_dv, num_burns)) = cola_dv_summary(output.cola.as_deref()) {
+    if let Some((cola_dv, num_burns)) = cola_dv_summary(output.safety.cola.as_deref()) {
         let burn_label = if num_burns == 1 { "burn" } else { "burns" };
         figures.push(format!(
             "COLA {} ({num_burns} {burn_label})",

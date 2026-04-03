@@ -368,17 +368,19 @@ pub struct LegErrorStats {
 pub fn compute_leg_error_stats(
     points: &[rpo_core::mission::ValidationPoint],
 ) -> Option<LegErrorStats> {
-    if points.is_empty() {
-        return None;
-    }
-    let n = f64::from(u32::try_from(points.len()).unwrap_or(u32::MAX));
-    let (max, sum, sum_sq) = points.iter().fold(
-        (0.0_f64, 0.0_f64, 0.0_f64),
-        |(mx, s, sq), p| {
+    // Filter post-COLA points: their "error" reflects intentional trajectory change,
+    // not model fidelity. Consistent with core's compute_report_statistics.
+    let (count, max, sum, sum_sq) = points.iter().filter(|p| !p.post_cola).fold(
+        (0u32, 0.0_f64, 0.0_f64, 0.0_f64),
+        |(n, mx, s, sq), p| {
             let e = p.position_error_km;
-            (mx.max(e), s + e, sq + e * e)
+            (n + 1, mx.max(e), s + e, sq + e * e)
         },
     );
+    if count == 0 {
+        return None;
+    }
+    let n = f64::from(count);
     Some(LegErrorStats {
         max_km: max,
         mean_km: sum / n,

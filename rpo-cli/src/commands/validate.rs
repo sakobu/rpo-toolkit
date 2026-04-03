@@ -3,7 +3,7 @@
 use std::path::Path;
 
 use rpo_core::mission::{validate_mission_nyx, ValidationConfig, ValidationReport};
-use rpo_core::pipeline::PipelineOutput;
+use rpo_core::pipeline::{compute_validation_burns, PipelineOutput};
 
 use crate::cli::OutputMode;
 use crate::error::CliError;
@@ -41,6 +41,11 @@ pub fn run(
 
     let plan = plan_with_physics(&input, auto_drag, &chief_config, &deputy_config)?;
 
+    // Compute safety analysis and derive COLA burns for nyx injection.
+    let (safety, cola_burns) = compute_validation_burns(
+        &plan.wp_mission, input.config.safety.as_ref(), input.cola.as_ref(), &plan.propagator,
+    )?;
+
     status!(
         plan.spinner,
         "Nyx validation ({samples_per_leg} samples/leg)..."
@@ -55,6 +60,7 @@ pub fn run(
         &plan.transfer.perch_chief,
         &plan.transfer.perch_deputy,
         &val_config,
+        &cola_burns,
         &plan.almanac,
     )?;
 
@@ -64,12 +70,16 @@ pub fn run(
     eprintln!("Validation complete.");
 
     let result = rpo_core::pipeline::build_output(
-        &plan.transfer,
+        rpo_core::pipeline::BuildOutputCtx {
+            transfer: &plan.transfer,
+            input: &input,
+            propagator: &plan.propagator,
+            auto_drag: plan.derived_drag,
+            suggestion: plan.suggestion,
+            safety,
+            precomputed_covariance: None,
+        },
         plan.wp_mission,
-        &input,
-        &plan.propagator,
-        plan.derived_drag,
-        plan.suggestion,
     );
 
     match mode {

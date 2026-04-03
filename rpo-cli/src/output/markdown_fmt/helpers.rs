@@ -24,7 +24,7 @@ pub(super) fn status_emoji(pass: bool) -> &'static str {
 
 /// Write a one-line COLA dv callout (blockquote) if COLA maneuvers exist.
 pub(super) fn write_cola_callout(out: &mut String, output: &PipelineOutput) {
-    if let Some((cola_dv, num_burns)) = cola_dv_summary(output.cola.as_deref()) {
+    if let Some((cola_dv, num_burns)) = cola_dv_summary(output.safety.cola.as_deref()) {
         let burn_label = if num_burns == 1 { "burn" } else { "burns" };
         let total_with_cola = output.total_dv_km_s + cola_dv;
         let _ = writeln!(

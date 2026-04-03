@@ -16,6 +16,7 @@ use crate::propagation::nyx_bridge::{
 use crate::propagation::propagator::PropagatedState;
 use crate::types::{SpacecraftConfig, StateVector};
 
+use crate::mission::avoidance::AvoidanceManeuver;
 use crate::mission::types::{
     ManeuverLeg, ValidationPoint, ValidationReport, WaypointMission,
 };
@@ -35,6 +36,65 @@ pub struct ValidationConfig {
     pub chief_config: SpacecraftConfig,
     /// Deputy spacecraft properties.
     pub deputy_config: SpacecraftConfig,
+}
+
+/// A mid-coast COLA impulse for nyx validation.
+///
+/// # Invariants
+/// - `elapsed_s` must be in `(0, leg.tof_s)` — burn cannot be at leg boundaries
+/// - `dv_ric_km_s` must be finite
+#[derive(Debug, Clone, Copy)]
+pub struct ColaBurn {
+    /// Index of the mission leg this burn applies to.
+    pub leg_index: usize,
+    /// Time from leg departure to COLA burn (seconds).
+    pub elapsed_s: f64,
+    /// Delta-v in RIC frame (km/s).
+    pub dv_ric_km_s: Vector3<f64>,
+}
+
+/// Convert COLA avoidance maneuvers to validation burn commands.
+///
+/// Uses each maneuver's epoch minus the leg departure epoch to compute `elapsed_s`.
+///
+/// Uses strict rejection (`elapsed_s <= 0 || >= tof_s`) because this function
+/// consumes externally-specified burn times that must be exactly within the leg.
+/// This differs from the avoidance module's lenient clamping
+/// (`BURN_TIME_CLAMP_FRACTION`), which generates burns and can safely nudge
+/// near-boundary solutions inward.
+///
+/// # Errors
+/// Returns [`ValidationError::ColaEpochOutOfBounds`] if a maneuver's epoch
+/// falls outside `(0, leg.tof_s)` for the corresponding leg.
+pub fn convert_cola_to_burns(
+    maneuvers: Option<&[AvoidanceManeuver]>,
+    mission: &WaypointMission,
+) -> Result<Vec<ColaBurn>, ValidationError> {
+    let Some(maneuvers) = maneuvers else {
+        return Ok(Vec::new());
+    };
+
+    let mut burns = Vec::with_capacity(maneuvers.len());
+    for m in maneuvers {
+        let leg = &mission.legs[m.leg_index];
+        let leg_departure_epoch = leg.departure_maneuver.epoch;
+        let elapsed_s = (m.epoch - leg_departure_epoch).to_seconds();
+
+        if elapsed_s <= 0.0 || elapsed_s >= leg.tof_s {
+            return Err(ValidationError::ColaEpochOutOfBounds {
+                elapsed_s,
+                tof_s: leg.tof_s,
+                leg_index: m.leg_index,
+            });
+        }
+
+        burns.push(ColaBurn {
+            leg_index: m.leg_index,
+            elapsed_s,
+            dv_ric_km_s: m.dv_ric_km_s,
+        });
+    }
+    Ok(burns)
 }
 
 /// Output from validating a single mission leg against nyx full-physics.
@@ -115,17 +175,17 @@ pub fn validate_leg_nyx(
     almanac: &Arc<Almanac>,
     cumulative_time_s: f64,
 ) -> Result<LegValidationOutput, ValidationError> {
-    let (chief_results, deputy_results) = propagate_leg_parallel(
-        chief_state,
-        deputy_state,
-        leg,
-        config.samples_per_leg,
-        &config.chief_config,
-        &config.deputy_config,
+    let ctx = LegPropagationCtx {
+        samples_per_leg: config.samples_per_leg,
+        chief_config: &config.chief_config,
+        deputy_config: &config.deputy_config,
         almanac,
+    };
+    let (chief_results, deputy_results) = propagate_leg_parallel(
+        chief_state, deputy_state, leg, &ctx,
     )?;
 
-    // Build comparison points (no eclipse — that stays in validate_mission_nyx)
+    // Build comparison points (no eclipse or COLA — those stay in validate_mission_nyx)
     let leg_output = build_leg_comparison_points(
         &chief_results,
         &deputy_results,
@@ -133,6 +193,7 @@ pub fn validate_leg_nyx(
         cumulative_time_s,
         None, // no eclipse frame for per-leg API
         almanac,
+        None, // no COLA for per-leg API
     )?;
 
     let (chief_after, deputy_after) =
@@ -150,6 +211,10 @@ pub fn validate_leg_nyx(
 ///
 /// Compares nyx-propagated chief/deputy states against analytical trajectory,
 /// collects safety pairs and eclipse samples for downstream analysis.
+///
+/// When `cola_split_index` is `Some(n)`, points at index `>= n` are tagged
+/// `post_cola = true` — they follow a COLA burn and should be excluded from
+/// fidelity statistics.
 fn build_leg_comparison_points(
     chief_results: &[TimedState],
     deputy_results: &[TimedState],
@@ -157,6 +222,7 @@ fn build_leg_comparison_points(
     cumulative_time_s: f64,
     earth_frame: Option<anise::prelude::Frame>,
     almanac: &Arc<Almanac>,
+    cola_split_index: Option<usize>,
 ) -> Result<LegComparisonOutput, ValidationError> {
     let mut points = Vec::with_capacity(chief_results.len());
     let mut safety_pairs = Vec::with_capacity(chief_results.len());
@@ -183,12 +249,14 @@ fn build_leg_comparison_points(
                 deputy: deputy_sample.state.clone(),
             });
         }
+        let post_cola = cola_split_index.is_some_and(|split| idx >= split);
         points.push(ValidationPoint {
             elapsed_s: elapsed,
             analytical_ric,
             numerical_ric,
             position_error_km: pos_err,
             velocity_error_km_s: vel_err,
+            post_cola,
         });
 
         // Collect eclipse samples for validation
@@ -227,23 +295,20 @@ fn propagate_leg_parallel(
     chief_state: &StateVector,
     deputy_state: &StateVector,
     leg: &ManeuverLeg,
-    samples_per_leg: u32,
-    chief_config: &SpacecraftConfig,
-    deputy_config: &SpacecraftConfig,
-    almanac: &Arc<Almanac>,
+    ctx: &LegPropagationCtx<'_>,
 ) -> Result<(Vec<TimedState>, Vec<TimedState>), ValidationError> {
     // Build dynamics once; clone is cheap (Arc ref-count bumps).
-    let dynamics = build_full_physics_dynamics(almanac)?;
+    let dynamics = build_full_physics_dynamics(ctx.almanac)?;
 
     let (chief_result, deputy_result) = rayon::join(
         || -> Result<Vec<TimedState>, ValidationError> {
             Ok(nyx_propagate_segment(
                 chief_state,
                 leg.tof_s,
-                samples_per_leg,
-                chief_config,
+                ctx.samples_per_leg,
+                ctx.chief_config,
                 dynamics.clone(),
-                almanac,
+                ctx.almanac,
             )?)
         },
         || -> Result<Vec<TimedState>, ValidationError> {
@@ -252,14 +317,176 @@ fn propagate_leg_parallel(
             Ok(nyx_propagate_segment(
                 &deputy_post_burn,
                 leg.tof_s,
-                samples_per_leg,
-                deputy_config,
+                ctx.samples_per_leg,
+                ctx.deputy_config,
                 dynamics.clone(),
-                almanac,
+                ctx.almanac,
             )?)
         },
     );
     Ok((chief_result?, deputy_result?))
+}
+
+/// Shared context for per-leg nyx propagation.
+///
+/// Groups the sampling density, spacecraft properties, and almanac that
+/// are threaded through both [`propagate_leg_parallel`] and
+/// [`propagate_leg_with_cola`], avoiding parameter sprawl.
+struct LegPropagationCtx<'a> {
+    /// Number of intermediate comparison samples per leg.
+    samples_per_leg: u32,
+    /// Chief spacecraft properties.
+    chief_config: &'a SpacecraftConfig,
+    /// Deputy spacecraft properties.
+    deputy_config: &'a SpacecraftConfig,
+    /// ANISE almanac with ephemeris and frame data.
+    almanac: &'a Arc<Almanac>,
+}
+
+/// Output from propagating a single leg with a mid-coast COLA impulse.
+struct ColaLegOutput {
+    /// Chief ECI states sampled across both segments.
+    chief_results: Vec<TimedState>,
+    /// Deputy ECI states sampled across both segments.
+    deputy_results: Vec<TimedState>,
+    /// Index in results where post-COLA samples begin.
+    cola_split_index: usize,
+}
+
+/// Propagate a single leg with a mid-coast COLA impulse.
+///
+/// Two-segment approach: propagate chief and deputy to COLA time, apply
+/// impulse using exact chief state for RIC→ECI conversion, propagate
+/// remainder. Chief/deputy within each segment run in parallel via
+/// [`rayon::join`]; segments are sequential (segment 2 depends on
+/// segment 1's terminal state for the COLA impulse).
+///
+/// # Errors
+/// Returns [`ValidationError`] if dynamics setup, propagation, or impulse application fails.
+fn propagate_leg_with_cola(
+    chief_state: &StateVector,
+    deputy_state: &StateVector,
+    leg: &ManeuverLeg,
+    cola: &ColaBurn,
+    ctx: &LegPropagationCtx<'_>,
+) -> Result<ColaLegOutput, ValidationError> {
+    let dynamics = build_full_physics_dynamics(ctx.almanac)?;
+
+    // Find the first uniform sample step at or beyond the COLA epoch.
+    // Stays in u32 domain — no f64→integer cast needed.
+    let step_s = leg.tof_s / f64::from(ctx.samples_per_leg);
+    let n1 = (1..=ctx.samples_per_leg)
+        .find(|&k| f64::from(k) * step_s >= cola.elapsed_s)
+        .unwrap_or(ctx.samples_per_leg);
+    let n2 = ctx.samples_per_leg.saturating_sub(n1).max(1);
+
+    // Apply departure maneuver to deputy
+    let deputy_post_burn =
+        apply_impulse(deputy_state, chief_state, &leg.departure_maneuver.dv_ric_km_s)?;
+
+    // Segment 1: [0, cola.elapsed_s] — chief/deputy in parallel
+    let (chief_seg1, deputy_seg1) = rayon::join(
+        || nyx_propagate_segment(
+            chief_state, cola.elapsed_s, n1,
+            ctx.chief_config, dynamics.clone(), ctx.almanac,
+        ),
+        || nyx_propagate_segment(
+            &deputy_post_burn, cola.elapsed_s, n1,
+            ctx.deputy_config, dynamics.clone(), ctx.almanac,
+        ),
+    );
+    let chief_seg1 = chief_seg1?;
+    let deputy_seg1 = deputy_seg1?;
+
+    // Extract states at COLA time
+    let chief_at_cola = chief_seg1.last()
+        .ok_or(ValidationError::EmptyTrajectory)?.state.clone();
+    let deputy_at_cola = deputy_seg1.last()
+        .ok_or(ValidationError::EmptyTrajectory)?.state.clone();
+
+    // Apply COLA impulse
+    let deputy_post_cola = apply_impulse(&deputy_at_cola, &chief_at_cola, &cola.dv_ric_km_s)?;
+
+    // Segment 2: [cola.elapsed_s, tof_s] — chief/deputy in parallel
+    let remaining_s = leg.tof_s - cola.elapsed_s;
+    let (chief_seg2, deputy_seg2) = rayon::join(
+        || nyx_propagate_segment(
+            &chief_at_cola, remaining_s, n2,
+            ctx.chief_config, dynamics.clone(), ctx.almanac,
+        ),
+        || nyx_propagate_segment(
+            &deputy_post_cola, remaining_s, n2,
+            ctx.deputy_config, dynamics.clone(), ctx.almanac,
+        ),
+    );
+    let chief_seg2 = chief_seg2?;
+    let deputy_seg2 = deputy_seg2?;
+
+    // Merge segments: adjust segment 2 elapsed times
+    let cola_split_index = chief_seg1.len();
+    let mut chief_results = chief_seg1;
+    chief_results.reserve(chief_seg2.len());
+    for mut s in chief_seg2 {
+        s.elapsed_s += cola.elapsed_s;
+        chief_results.push(s);
+    }
+    let mut deputy_results = deputy_seg1;
+    deputy_results.reserve(deputy_seg2.len());
+    for mut s in deputy_seg2 {
+        s.elapsed_s += cola.elapsed_s;
+        deputy_results.push(s);
+    }
+
+    Ok(ColaLegOutput {
+        chief_results,
+        deputy_results,
+        cola_split_index,
+    })
+}
+
+/// Look up the ANISE Earth frame for eclipse queries, if eclipse data is present.
+fn lookup_earth_frame(
+    almanac: &Arc<Almanac>,
+    eclipse_enabled: bool,
+) -> Result<Option<anise::prelude::Frame>, ValidationError> {
+    if eclipse_enabled {
+        almanac
+            .frame_info(ANISE_EARTH_J2000)
+            .map(Some)
+            .map_err(|e| {
+                ValidationError::NyxBridge(Box::new(NyxBridgeError::FrameLookup { source: e }))
+            })
+    } else {
+        Ok(None)
+    }
+}
+
+/// Assign correct leg indices to the safety minimum-distance fields.
+///
+/// `analyze_trajectory_safety` processes a flat trajectory and always leaves
+/// leg indices at 0. This function derives the correct leg index from elapsed
+/// time and the per-leg durations.
+fn assign_safety_leg_indices(
+    safety: &mut crate::mission::types::SafetyMetrics,
+    legs: &[ManeuverLeg],
+) {
+    let mut found_3d = false;
+    let mut found_rc = false;
+    let mut cumulative = 0.0_f64;
+    for (i, leg) in legs.iter().enumerate() {
+        cumulative += leg.tof_s;
+        if !found_3d && safety.operational.min_3d_elapsed_s <= cumulative {
+            safety.operational.min_3d_leg_index = i;
+            found_3d = true;
+        }
+        if !found_rc && safety.operational.min_rc_elapsed_s <= cumulative {
+            safety.operational.min_rc_leg_index = i;
+            found_rc = true;
+        }
+        if found_3d && found_rc {
+            break;
+        }
+    }
 }
 
 /// Validate a waypoint mission against nyx full-physics propagation.
@@ -296,6 +523,7 @@ pub fn validate_mission_nyx(
     chief_initial: &StateVector,
     deputy_initial: &StateVector,
     config: &ValidationConfig,
+    cola_burns: &[ColaBurn],
     almanac: &Arc<Almanac>,
 ) -> Result<ValidationReport, ValidationError> {
     if mission.legs.is_empty() {
@@ -306,7 +534,7 @@ pub fn validate_mission_nyx(
     let mut deputy_state = deputy_initial.clone();
     let mut cumulative_time = 0.0_f64;
     let mut leg_points = Vec::with_capacity(mission.legs.len());
-    let estimated_total_samples = usize::try_from(config.samples_per_leg).unwrap_or(50)
+    let estimated_total_samples = config.samples_per_leg as usize // u32 → usize: always safe
         * mission.legs.len();
     let mut safety_pairs: Vec<ChiefDeputySnapshot> =
         Vec::with_capacity(estimated_total_samples);
@@ -317,31 +545,29 @@ pub fn validate_mission_nyx(
         Vec::new()
     };
 
-    // Get Earth frame with radius info for ANISE eclipse queries
-    let earth_frame = if eclipse_enabled {
-        Some(
-            almanac
-                .frame_info(ANISE_EARTH_J2000)
-                .map_err(|e| {
-                    ValidationError::NyxBridge(Box::new(NyxBridgeError::FrameLookup {
-                        source: e,
-                    }))
-                })?,
-        )
-    } else {
-        None
+    let earth_frame = lookup_earth_frame(almanac, eclipse_enabled)?;
+
+    let ctx = LegPropagationCtx {
+        samples_per_leg: config.samples_per_leg,
+        chief_config: &config.chief_config,
+        deputy_config: &config.deputy_config,
+        almanac,
     };
 
-    for leg in &mission.legs {
-        let (chief_results, deputy_results) = propagate_leg_parallel(
-            &chief_state,
-            &deputy_state,
-            leg,
-            config.samples_per_leg,
-            &config.chief_config,
-            &config.deputy_config,
-            almanac,
-        )?;
+    for (leg_idx, leg) in mission.legs.iter().enumerate() {
+        let primary_cola = cola_burns.iter().find(|c| c.leg_index == leg_idx);
+
+        let (chief_results, deputy_results, cola_split) = if let Some(cola) = primary_cola {
+            let out = propagate_leg_with_cola(
+                &chief_state, &deputy_state, leg, cola, &ctx,
+            )?;
+            (out.chief_results, out.deputy_results, Some(out.cola_split_index))
+        } else {
+            let (c, d) = propagate_leg_parallel(
+                &chief_state, &deputy_state, leg, &ctx,
+            )?;
+            (c, d, None)
+        };
 
         // Build comparison points for this leg
         let leg_output = build_leg_comparison_points(
@@ -351,6 +577,7 @@ pub fn validate_mission_nyx(
             cumulative_time,
             earth_frame,
             almanac,
+            cola_split,
         )?;
         safety_pairs.extend(leg_output.safety_pairs);
         eclipse_samples.extend(leg_output.eclipse_samples);
@@ -361,31 +588,10 @@ pub fn validate_mission_nyx(
         cumulative_time += leg.tof_s;
     }
 
-    // Compute safety from nyx trajectory.
-    // analyze_trajectory_safety processes a flat trajectory and always leaves
-    // leg indices at 0. Derive the correct leg indices from elapsed time.
+    // Compute safety from nyx trajectory and assign correct leg indices.
     let nyx_safety_states = build_nyx_safety_states(&safety_pairs)?;
-    let numerical_safety = {
-        let mut s = analyze_trajectory_safety(&nyx_safety_states)?;
-        let mut found_3d = false;
-        let mut found_rc = false;
-        let mut cumulative = 0.0_f64;
-        for (i, leg) in mission.legs.iter().enumerate() {
-            cumulative += leg.tof_s;
-            if !found_3d && s.operational.min_3d_elapsed_s <= cumulative {
-                s.operational.min_3d_leg_index = i;
-                found_3d = true;
-            }
-            if !found_rc && s.operational.min_rc_elapsed_s <= cumulative {
-                s.operational.min_rc_leg_index = i;
-                found_rc = true;
-            }
-            if found_3d && found_rc {
-                break;
-            }
-        }
-        s
-    };
+    let mut numerical_safety = analyze_trajectory_safety(&nyx_safety_states)?;
+    assign_safety_leg_indices(&mut numerical_safety, &mission.legs);
 
     // Compute eclipse validation if eclipse data is present
     let eclipse_validation = mission.eclipse.as_ref().and_then(|eclipse_data| {
@@ -420,6 +626,106 @@ mod tests {
         iss_like_elements, test_epoch, DMF_RATE_NONZERO_LOWER_BOUND, DMF_RATE_UPPER_BOUND,
     };
     use crate::types::SpacecraftConfig;
+
+    // =========================================================================
+    // COLA Burn Conversion Tests (pure logic, no nyx)
+    // =========================================================================
+
+    /// Build a minimal `AvoidanceManeuver` at the given epoch and leg index.
+    fn make_avoidance(epoch: hifitime::Epoch, leg_index: usize) -> crate::mission::avoidance::AvoidanceManeuver {
+        crate::mission::avoidance::AvoidanceManeuver {
+            epoch,
+            dv_ric_km_s: Vector3::new(0.0, 0.001, 0.0),
+            maneuver_location_rad: 0.0,
+            post_avoidance_poca_km: 0.5,
+            fuel_cost_km_s: 0.001,
+            correction_type: crate::mission::avoidance::CorrectionType::InPlane,
+            leg_index,
+        }
+    }
+
+    /// Build a minimal `WaypointMission` with one leg of given TOF starting at `dep_epoch`.
+    fn make_one_leg_mission(dep_epoch: hifitime::Epoch, tof_s: f64) -> crate::mission::types::WaypointMission {
+        use crate::mission::types::{Maneuver, ManeuverLeg};
+        let zero_dv = Vector3::zeros();
+        let arr_epoch = dep_epoch + hifitime::Duration::from_seconds(tof_s);
+
+        crate::mission::types::WaypointMission {
+            legs: vec![ManeuverLeg {
+                departure_maneuver: Maneuver { dv_ric_km_s: zero_dv, epoch: dep_epoch },
+                arrival_maneuver: Maneuver { dv_ric_km_s: zero_dv, epoch: arr_epoch },
+                tof_s,
+                total_dv_km_s: 0.0,
+                pre_departure_roe: Default::default(),
+                post_departure_roe: Default::default(),
+                departure_chief_mean: crate::test_helpers::iss_like_elements(),
+                pre_arrival_roe: Default::default(),
+                post_arrival_roe: Default::default(),
+                arrival_chief_mean: crate::test_helpers::iss_like_elements(),
+                trajectory: vec![],
+                from_position_ric_km: Vector3::zeros(),
+                to_position_ric_km: Vector3::zeros(),
+                target_velocity_ric_km_s: Vector3::zeros(),
+                iterations: 0,
+                position_error_km: 0.0,
+            }],
+            total_dv_km_s: 0.0,
+            total_duration_s: tof_s,
+            safety: None,
+            covariance: None,
+            eclipse: None,
+        }
+    }
+
+    /// Verify `convert_cola_to_burns` computes correct elapsed_s from epoch delta.
+    #[test]
+    fn test_convert_cola_to_burns_epoch_to_elapsed() {
+        let dep_epoch = test_epoch();
+        let tof_s = 4200.0;
+        let mission = make_one_leg_mission(dep_epoch, tof_s);
+
+        // COLA maneuver at 2000s into the leg
+        let cola_epoch = dep_epoch + hifitime::Duration::from_seconds(2000.0);
+        let maneuvers = vec![make_avoidance(cola_epoch, 0)];
+
+        let burns = super::convert_cola_to_burns(Some(&maneuvers), &mission)
+            .expect("conversion should succeed");
+
+        assert_eq!(burns.len(), 1);
+        assert!((burns[0].elapsed_s - 2000.0).abs() < 1e-6, "elapsed_s should be ~2000");
+        assert_eq!(burns[0].leg_index, 0);
+    }
+
+    /// Verify `convert_cola_to_burns` returns error for out-of-bounds epochs.
+    #[test]
+    fn test_convert_cola_to_burns_out_of_bounds() {
+        let dep_epoch = test_epoch();
+        let tof_s = 4200.0;
+        let mission = make_one_leg_mission(dep_epoch, tof_s);
+
+        // Epoch before leg start → elapsed_s <= 0
+        let before = dep_epoch - hifitime::Duration::from_seconds(100.0);
+        let result = super::convert_cola_to_burns(Some(&[make_avoidance(before, 0)]), &mission);
+        assert!(result.is_err(), "epoch before leg start should fail");
+
+        // Epoch after leg end → elapsed_s >= tof_s
+        let after = dep_epoch + hifitime::Duration::from_seconds(tof_s + 100.0);
+        let result = super::convert_cola_to_burns(Some(&[make_avoidance(after, 0)]), &mission);
+        assert!(result.is_err(), "epoch after leg end should fail");
+
+        // Epoch exactly at departure → elapsed_s = 0 (boundary, should fail)
+        let result = super::convert_cola_to_burns(Some(&[make_avoidance(dep_epoch, 0)]), &mission);
+        assert!(result.is_err(), "epoch at exact departure should fail");
+    }
+
+    /// Verify `convert_cola_to_burns` returns empty vec for None input.
+    #[test]
+    fn test_convert_cola_to_burns_none_returns_empty() {
+        let mission = make_one_leg_mission(test_epoch(), 4200.0);
+        let burns = super::convert_cola_to_burns(None, &mission)
+            .expect("None input should succeed");
+        assert!(burns.is_empty());
+    }
 
     // =========================================================================
     // Full-Physics Integration Tests
@@ -520,6 +826,8 @@ mod tests {
             samples_per_leg: 50,
             chief_config: SpacecraftConfig::SERVICER_500KG,
             deputy_config: SpacecraftConfig::SERVICER_500KG,
+
+
         };
 
         let report = crate::mission::validation::validate_mission_nyx(
@@ -527,6 +835,7 @@ mod tests {
             &chief_sv,
             &deputy_sv,
             &val_config,
+            &[],
             &almanac,
         )
         .expect("validation should succeed");
@@ -632,6 +941,8 @@ mod tests {
             samples_per_leg: 50,
             chief_config: SpacecraftConfig::SERVICER_500KG,
             deputy_config: SpacecraftConfig::SERVICER_500KG,
+
+
         };
 
         let report = crate::mission::validation::validate_mission_nyx(
@@ -639,6 +950,7 @@ mod tests {
             &chief_sv,
             &deputy_sv,
             &val_config,
+            &[],
             &almanac,
         )
         .expect("validation should succeed");
@@ -759,12 +1071,15 @@ mod tests {
             samples_per_leg: 50,
             chief_config,
             deputy_config,
+
+
         };
         let drag_report = crate::mission::validation::validate_mission_nyx(
             &drag_mission,
             &chief_sv,
             &deputy_sv,
             &val_config,
+            &[],
             &almanac,
         )
         .expect("drag validation should succeed");
@@ -774,6 +1089,7 @@ mod tests {
             &chief_sv,
             &deputy_sv,
             &val_config,
+            &[],
             &almanac,
         )
         .expect("J2 validation should succeed");
@@ -885,6 +1201,8 @@ mod tests {
             samples_per_leg: 50,
             chief_config: SpacecraftConfig::SERVICER_500KG,
             deputy_config: SpacecraftConfig::SERVICER_500KG,
+
+
         };
 
         let report = crate::mission::validation::validate_mission_nyx(
@@ -892,6 +1210,7 @@ mod tests {
             &chief_sv,
             &deputy_sv,
             &val_config,
+            &[],
             &almanac,
         )
         .expect("validation should succeed");
@@ -967,5 +1286,189 @@ mod tests {
                 "e/i separation relative error = {ei_rel_err:.2} (expected < {SAFETY_EI_RELATIVE_TOL})",
             );
         }
+    }
+
+    // =========================================================================
+    // COLA Two-Segment Propagation Tests (require nyx)
+    // =========================================================================
+
+    /// Two-segment propagation with zero COLA Δv should produce the same
+    /// trajectory as single-segment `propagate_leg_parallel` within tolerance.
+    ///
+    /// This is the fundamental invariant of `propagate_leg_with_cola`: when
+    /// the COLA impulse is zero, splitting the leg into two segments and
+    /// re-joining should not alter the trajectory beyond floating-point noise.
+    #[test]
+    #[ignore] // Requires MetaAlmanac (network on first run)
+    fn propagate_leg_with_cola_zero_dv_matches_single_segment() {
+        use crate::mission::waypoints::plan_waypoint_mission;
+        use crate::test_helpers::deputy_from_roe;
+        use crate::mission::config::MissionConfig;
+        use crate::mission::types::Waypoint;
+        use crate::types::{DepartureState, QuasiNonsingularROE};
+
+        let epoch = test_epoch();
+        let chief_ke = iss_like_elements();
+        let a = chief_ke.a_km;
+
+        let formation_roe = QuasiNonsingularROE {
+            da: 0.0, dlambda: 0.0,
+            dex: 0.3 / a, dey: -0.2 / a,
+            dix: 0.2 / a, diy: 0.0,
+        };
+        let deputy_ke = deputy_from_roe(&chief_ke, &formation_roe);
+
+        let chief_sv = keplerian_to_state(&chief_ke, epoch).unwrap();
+        let deputy_sv = keplerian_to_state(&deputy_ke, epoch).unwrap();
+
+        let period = chief_ke.period().unwrap();
+        let waypoint = Waypoint {
+            position_ric_km: Vector3::new(0.5, 3.0, 1.0),
+            velocity_ric_km_s: Vector3::zeros(),
+            tof_s: Some(0.8 * period),
+        };
+
+        let departure = DepartureState { roe: formation_roe, chief: chief_ke, epoch };
+        let config = MissionConfig::default();
+        let propagator = PropagationModel::J2Stm;
+        let mission = plan_waypoint_mission(&departure, &[waypoint], &config, &propagator)
+            .expect("mission planning should succeed");
+
+        let almanac = nyx_bridge::load_full_almanac().expect("full almanac should load");
+        let samples: u32 = 50;
+        let leg = &mission.legs[0];
+
+        let ctx = super::LegPropagationCtx {
+            samples_per_leg: samples,
+            chief_config: &SpacecraftConfig::SERVICER_500KG,
+            deputy_config: &SpacecraftConfig::SERVICER_500KG,
+            almanac: &almanac,
+        };
+
+        // Single-segment baseline (no COLA)
+        let (chief_baseline, deputy_baseline) = super::propagate_leg_parallel(
+            &chief_sv, &deputy_sv, leg, &ctx,
+        ).expect("baseline propagation should succeed");
+
+        // Two-segment with zero COLA Δv at mid-leg
+        let zero_cola = super::ColaBurn {
+            leg_index: 0,
+            elapsed_s: leg.tof_s * 0.5,
+            dv_ric_km_s: Vector3::zeros(),
+        };
+        let cola_out = super::propagate_leg_with_cola(
+            &chief_sv, &deputy_sv, leg, &zero_cola, &ctx,
+        ).expect("COLA propagation should succeed");
+
+        // Compare final states — should match within nyx integrator tolerance.
+        // The two-segment approach re-initializes the integrator at the split point,
+        // so we allow a small tolerance for integrator restart transients.
+        let chief_final_baseline = &chief_baseline.last().unwrap().state;
+        let chief_final_cola = &cola_out.chief_results.last().unwrap().state;
+        let deputy_final_baseline = &deputy_baseline.last().unwrap().state;
+        let deputy_final_cola = &cola_out.deputy_results.last().unwrap().state;
+
+        /// Integrator restart tolerance: two independent nyx segment propagations
+        /// vs one continuous propagation accumulate different rounding. 1m is
+        /// well within operational significance.
+        const RESTART_TOL_KM: f64 = 0.001;
+
+        let chief_pos_diff = (chief_final_baseline.position_eci_km - chief_final_cola.position_eci_km).norm();
+        let deputy_pos_diff = (deputy_final_baseline.position_eci_km - deputy_final_cola.position_eci_km).norm();
+
+        eprintln!("Zero-COLA vs baseline: chief Δpos={chief_pos_diff:.6} km, deputy Δpos={deputy_pos_diff:.6} km");
+
+        assert!(
+            chief_pos_diff < RESTART_TOL_KM,
+            "chief final position diverged: {chief_pos_diff:.6} km (expected < {RESTART_TOL_KM})"
+        );
+        assert!(
+            deputy_pos_diff < RESTART_TOL_KM,
+            "deputy final position diverged: {deputy_pos_diff:.6} km (expected < {RESTART_TOL_KM})"
+        );
+    }
+
+    /// Verify sample allocation in `propagate_leg_with_cola` produces
+    /// approximately `samples_per_leg` total samples split proportionally
+    /// across the two segments.
+    #[test]
+    #[ignore] // Requires MetaAlmanac (network on first run)
+    fn propagate_leg_with_cola_sample_split() {
+        use crate::mission::waypoints::plan_waypoint_mission;
+        use crate::test_helpers::deputy_from_roe;
+        use crate::mission::config::MissionConfig;
+        use crate::mission::types::Waypoint;
+        use crate::types::{DepartureState, QuasiNonsingularROE};
+
+        let epoch = test_epoch();
+        let chief_ke = iss_like_elements();
+        let a = chief_ke.a_km;
+
+        let formation_roe = QuasiNonsingularROE {
+            da: 0.0, dlambda: 0.0,
+            dex: 0.3 / a, dey: -0.2 / a,
+            dix: 0.2 / a, diy: 0.0,
+        };
+        let deputy_ke = deputy_from_roe(&chief_ke, &formation_roe);
+
+        let chief_sv = keplerian_to_state(&chief_ke, epoch).unwrap();
+        let deputy_sv = keplerian_to_state(&deputy_ke, epoch).unwrap();
+
+        let period = chief_ke.period().unwrap();
+        let waypoint = Waypoint {
+            position_ric_km: Vector3::new(0.5, 3.0, 1.0),
+            velocity_ric_km_s: Vector3::zeros(),
+            tof_s: Some(0.8 * period),
+        };
+
+        let departure = DepartureState { roe: formation_roe, chief: chief_ke, epoch };
+        let config = MissionConfig::default();
+        let propagator = PropagationModel::J2Stm;
+        let mission = plan_waypoint_mission(&departure, &[waypoint], &config, &propagator)
+            .expect("mission planning should succeed");
+
+        let almanac = nyx_bridge::load_full_almanac().expect("full almanac should load");
+        let samples: u32 = 50;
+        let leg = &mission.legs[0];
+
+        let ctx = super::LegPropagationCtx {
+            samples_per_leg: samples,
+            chief_config: &SpacecraftConfig::SERVICER_500KG,
+            deputy_config: &SpacecraftConfig::SERVICER_500KG,
+            almanac: &almanac,
+        };
+
+        // COLA at 30% of the leg
+        let cola = super::ColaBurn {
+            leg_index: 0,
+            elapsed_s: leg.tof_s * 0.3,
+            dv_ric_km_s: Vector3::new(0.0, 0.001, 0.0),
+        };
+        let out = super::propagate_leg_with_cola(
+            &chief_sv, &deputy_sv, leg, &cola, &ctx,
+        ).expect("COLA propagation should succeed");
+
+        // cola_split_index marks where segment 2 begins
+        let n1 = out.cola_split_index;
+        let n_total = out.chief_results.len();
+        let n2 = n_total - n1;
+
+        eprintln!("Sample split: n1={n1}, n2={n2}, total={n_total}, cola_split_index={}", out.cola_split_index);
+
+        // n1 + n2 should be close to samples_per_leg (nyx may return +1 for
+        // endpoint inclusion, so allow some margin)
+        let samples_usize = usize::try_from(samples).unwrap();
+        assert!(
+            n_total >= samples_usize && n_total <= samples_usize + 4,
+            "total samples {n_total} should be approximately {samples} (±4)"
+        );
+
+        // n1 should be roughly 30% of samples (COLA at 30% of leg)
+        // Allow ±5 samples for discrete step rounding
+        let expected_n1 = (f64::from(samples) * 0.3).round() as usize;
+        assert!(
+            n1.abs_diff(expected_n1) <= 5,
+            "n1={n1} should be approximately {expected_n1} (COLA at 30% of leg)"
+        );
     }
 }

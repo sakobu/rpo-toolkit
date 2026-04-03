@@ -15,7 +15,9 @@ use crate::constants::{
 
 use crate::mission::config::MissionConfig;
 use crate::mission::types::{SafetyMetrics, WaypointMission};
-use crate::propagation::covariance::types::{ManeuverUncertainty, MissionCovarianceReport};
+use crate::propagation::covariance::types::{
+    ManeuverUncertainty, MissionCovarianceReport, NavigationAccuracy,
+};
 use crate::propagation::propagator::PropagationModel;
 use crate::types::{SpacecraftConfig, StateVector};
 
@@ -114,6 +116,31 @@ impl From<ManeuverUncertainty> for ManeuverDispersion {
     }
 }
 
+impl From<NavigationAccuracy> for StateDispersion {
+    fn from(nav: NavigationAccuracy) -> Self {
+        Self {
+            position_radial_km: Distribution::Gaussian {
+                sigma: nav.position_sigma_ric_km[0],
+            },
+            position_intrack_km: Distribution::Gaussian {
+                sigma: nav.position_sigma_ric_km[1],
+            },
+            position_crosstrack_km: Distribution::Gaussian {
+                sigma: nav.position_sigma_ric_km[2],
+            },
+            velocity_radial_km_s: Distribution::Gaussian {
+                sigma: nav.velocity_sigma_ric_km_s[0],
+            },
+            velocity_intrack_km_s: Distribution::Gaussian {
+                sigma: nav.velocity_sigma_ric_km_s[1],
+            },
+            velocity_crosstrack_km_s: Distribution::Gaussian {
+                sigma: nav.velocity_sigma_ric_km_s[2],
+            },
+        }
+    }
+}
+
 /// Spacecraft property uncertainty (deputy only, full-physics MC).
 ///
 /// No `Default` impl — spacecraft dispersions are always explicitly specified
@@ -137,6 +164,31 @@ pub struct DispersionConfig {
     pub maneuver: Option<ManeuverDispersion>,
     /// Spacecraft property uncertainty (deputy only).
     pub spacecraft: Option<SpacecraftDispersion>,
+}
+
+impl DispersionConfig {
+    /// Fill `None` fields from top-level covariance types.
+    ///
+    /// When MC dispersion fields are not explicitly set, derive them from
+    /// the top-level `NavigationAccuracy` and `ManeuverUncertainty` to avoid
+    /// duplicating identical sigma values in the input JSON.
+    /// Explicit dispersions are never overwritten.
+    #[must_use]
+    pub fn resolved(
+        &self,
+        nav: Option<&NavigationAccuracy>,
+        maneuver_unc: Option<&ManeuverUncertainty>,
+    ) -> Self {
+        Self {
+            state: self
+                .state
+                .or_else(|| nav.map(|n| StateDispersion::from(*n))),
+            maneuver: self
+                .maneuver
+                .or_else(|| maneuver_unc.map(|m| ManeuverDispersion::from(*m))),
+            spacecraft: self.spacecraft,
+        }
+    }
 }
 
 /// Monte Carlo execution mode.
@@ -164,7 +216,7 @@ impl std::fmt::Display for MonteCarloMode {
 /// All MC runs use nyx full-physics propagation.
 /// Must be explicitly constructed — no `Default` impl because `num_samples`
 /// and `dispersions` have no meaningful defaults.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct MonteCarloConfig {
     /// Number of Monte Carlo samples to run.
     pub num_samples: u32,
@@ -176,6 +228,26 @@ pub struct MonteCarloConfig {
     pub seed: Option<u64>,
     /// Number of trajectory sample points per leg for dispersion envelope.
     pub trajectory_steps: u32,
+}
+
+impl MonteCarloConfig {
+    /// Return a copy with dispersions resolved from top-level covariance types.
+    ///
+    /// When MC-specific dispersion fields are `None`, derives them from the
+    /// top-level [`NavigationAccuracy`] and [`ManeuverUncertainty`] to avoid
+    /// duplicating identical sigma values in input JSON. Explicit dispersions
+    /// are never overwritten.
+    #[must_use]
+    pub fn with_resolved_dispersions(
+        self,
+        nav: Option<&NavigationAccuracy>,
+        maneuver_unc: Option<&ManeuverUncertainty>,
+    ) -> Self {
+        Self {
+            dispersions: self.dispersions.resolved(nav, maneuver_unc),
+            ..self
+        }
+    }
 }
 
 /// Optional progress/cancel hooks for external callers (e.g., API server).
@@ -367,4 +439,101 @@ pub struct MonteCarloReport {
     pub elapsed_wall_s: f64,
     /// Covariance cross-check against MC ensemble (if covariance report provided).
     pub covariance_cross_check: Option<CovarianceCrossCheck>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::propagation::covariance::types::{ManeuverUncertainty, NavigationAccuracy};
+    use nalgebra::Vector3;
+
+    #[test]
+    fn test_from_nav_accuracy_for_state_dispersion() {
+        let nav = NavigationAccuracy {
+            position_sigma_ric_km: Vector3::new(0.1, 0.2, 0.3),
+            velocity_sigma_ric_km_s: Vector3::new(0.001, 0.002, 0.003),
+        };
+        let sd = StateDispersion::from(nav);
+        assert_eq!(sd.position_radial_km, Distribution::Gaussian { sigma: 0.1 });
+        assert_eq!(
+            sd.position_intrack_km,
+            Distribution::Gaussian { sigma: 0.2 }
+        );
+        assert_eq!(
+            sd.position_crosstrack_km,
+            Distribution::Gaussian { sigma: 0.3 }
+        );
+        assert_eq!(
+            sd.velocity_radial_km_s,
+            Distribution::Gaussian { sigma: 0.001 }
+        );
+        assert_eq!(
+            sd.velocity_intrack_km_s,
+            Distribution::Gaussian { sigma: 0.002 }
+        );
+        assert_eq!(
+            sd.velocity_crosstrack_km_s,
+            Distribution::Gaussian { sigma: 0.003 }
+        );
+    }
+
+    #[test]
+    fn test_dispersion_config_resolved_derives_from_nav() {
+        let nav = NavigationAccuracy {
+            position_sigma_ric_km: Vector3::new(0.1, 0.1, 0.1),
+            velocity_sigma_ric_km_s: Vector3::new(0.0001, 0.0001, 0.0001),
+        };
+        let mu = ManeuverUncertainty {
+            magnitude_sigma: 0.01,
+            pointing_sigma_rad: 0.01745,
+        };
+        let config = DispersionConfig::default(); // all None
+        let resolved = config.resolved(Some(&nav), Some(&mu));
+        assert!(resolved.state.is_some(), "state should be derived from nav");
+        assert!(
+            resolved.maneuver.is_some(),
+            "maneuver should be derived from uncertainty"
+        );
+    }
+
+    #[test]
+    fn test_dispersion_config_resolved_explicit_overrides() {
+        let nav = NavigationAccuracy {
+            position_sigma_ric_km: Vector3::new(0.1, 0.1, 0.1),
+            velocity_sigma_ric_km_s: Vector3::new(0.0001, 0.0001, 0.0001),
+        };
+        let explicit_state = StateDispersion {
+            position_radial_km: Distribution::Uniform { half_width: 0.5 },
+            position_intrack_km: Distribution::Uniform { half_width: 0.5 },
+            position_crosstrack_km: Distribution::Uniform { half_width: 0.5 },
+            velocity_radial_km_s: Distribution::Uniform {
+                half_width: 0.005,
+            },
+            velocity_intrack_km_s: Distribution::Uniform {
+                half_width: 0.005,
+            },
+            velocity_crosstrack_km_s: Distribution::Uniform {
+                half_width: 0.005,
+            },
+        };
+        let config = DispersionConfig {
+            state: Some(explicit_state),
+            maneuver: None,
+            spacecraft: None,
+        };
+        let resolved = config.resolved(Some(&nav), None);
+        // Explicit state should NOT be overwritten
+        assert_eq!(
+            resolved.state.unwrap().position_radial_km,
+            Distribution::Uniform { half_width: 0.5 }
+        );
+    }
+
+    #[test]
+    fn test_dispersion_config_resolved_none_stays_none() {
+        let config = DispersionConfig::default();
+        let resolved = config.resolved(None, None);
+        assert!(resolved.state.is_none());
+        assert!(resolved.maneuver.is_none());
+    }
 }

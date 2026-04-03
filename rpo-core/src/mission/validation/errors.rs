@@ -27,6 +27,15 @@ pub enum ValidationError {
         /// The underlying error message.
         message: String,
     },
+    /// COLA burn epoch falls outside the valid range for its leg.
+    ColaEpochOutOfBounds {
+        /// Computed elapsed time from leg departure (seconds).
+        elapsed_s: f64,
+        /// Leg time-of-flight (seconds).
+        tof_s: f64,
+        /// Index of the leg.
+        leg_index: usize,
+    },
 }
 
 impl std::fmt::Display for ValidationError {
@@ -43,6 +52,12 @@ impl std::fmt::Display for ValidationError {
             Self::EclipseQuery { epoch, message } => {
                 write!(f, "eclipse query at {epoch} failed: {message}")
             }
+            Self::ColaEpochOutOfBounds { elapsed_s, tof_s, leg_index } => {
+                write!(
+                    f,
+                    "COLA burn elapsed_s={elapsed_s:.3} outside (0, {tof_s:.3}) on leg {leg_index}"
+                )
+            }
         }
     }
 }
@@ -53,7 +68,9 @@ impl std::error::Error for ValidationError {
             Self::NyxBridge(e) => Some(e.as_ref()),
             Self::Safety { source } => Some(source),
             Self::DcmFailure(e) => Some(e),
-            Self::EmptyTrajectory | Self::EclipseQuery { .. } => None,
+            Self::EmptyTrajectory
+            | Self::EclipseQuery { .. }
+            | Self::ColaEpochOutOfBounds { .. } => None,
         }
     }
 }

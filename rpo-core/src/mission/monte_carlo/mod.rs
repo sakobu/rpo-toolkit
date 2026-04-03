@@ -268,7 +268,7 @@ pub fn run_monte_carlo(input: &MonteCarloInput<'_>) -> Result<MonteCarloReport, 
         .transpose()?;
 
     Ok(MonteCarloReport {
-        config: config.clone(),
+        config: *config,
         nominal_dv_km_s: nominal_mission.total_dv_km_s,
         nominal_safety: nominal_mission.safety,
         statistics,

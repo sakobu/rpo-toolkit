@@ -9,10 +9,11 @@ use std::sync::Arc;
 use anise::prelude::Almanac;
 use tokio::sync::mpsc;
 
-use rpo_core::mission::config::MissionConfig;
+use rpo_core::mission::avoidance::ColaConfig;
+use rpo_core::mission::config::{MissionConfig, SafetyConfig};
 use rpo_core::mission::types::WaypointMission;
 use rpo_core::mission::{validate_mission_nyx, ValidationConfig, ValidationReport};
-use rpo_core::pipeline::{TransferResult, WaypointInput};
+use rpo_core::pipeline::{compute_validation_burns, TransferResult, WaypointInput};
 use rpo_core::propagation::PropagationModel;
 use rpo_core::types::{SpacecraftConfig, StateVector};
 
@@ -47,6 +48,10 @@ pub struct ValidateRequest {
     pub propagator: PropagationModel,
     /// Transfer result (needed for departure state in replan).
     pub transfer: TransferResult,
+    /// Safety configuration (for COLA auto-derivation).
+    pub safety: Option<SafetyConfig>,
+    /// Explicit COLA configuration (overrides safety-based auto-derivation).
+    pub cola: Option<ColaConfig>,
 }
 
 /// Run per-leg nyx validation with progress streaming and cancellation.
@@ -96,6 +101,11 @@ pub fn handle_validate(
 
     send_progress(progress_tx, ProgressPhase::Validate, "Running nyx validation...", 0.1);
 
+    // Compute safety analysis and derive COLA burns for nyx injection.
+    let (_safety, cola_burns) = compute_validation_burns(
+        &mission, request.safety.as_ref(), request.cola.as_ref(), &propagator,
+    )?;
+
     let val_config = ValidationConfig {
         samples_per_leg: request.samples_per_leg,
         chief_config: request.chief_config,
@@ -106,6 +116,7 @@ pub fn handle_validate(
         &request.perch_chief,
         &request.perch_deputy,
         &val_config,
+        &cola_burns,
         almanac,
     )?;
 

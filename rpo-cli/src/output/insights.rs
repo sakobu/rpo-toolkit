@@ -134,14 +134,20 @@ fn leg_error_growth_insight(
         return None;
     }
 
+    // Filter post-COLA points: their "error" reflects intentional trajectory change,
+    // not model fidelity. Consistent with core's compute_report_statistics.
     let leg_rms: Vec<f64> = leg_points
         .iter()
         .map(|points| {
-            if points.is_empty() {
+            let n = points.iter().filter(|p| !p.post_cola).count();
+            if n == 0 {
                 return 0.0;
             }
-            let n = points.len();
-            let sum_sq: f64 = points.iter().map(|p| p.position_error_km.powi(2)).sum();
+            let sum_sq: f64 = points
+                .iter()
+                .filter(|p| !p.post_cola)
+                .map(|p| p.position_error_km.powi(2))
+                .sum();
             (sum_sq / f64::from(u32::try_from(n).unwrap_or(u32::MAX))).sqrt()
         })
         .collect();

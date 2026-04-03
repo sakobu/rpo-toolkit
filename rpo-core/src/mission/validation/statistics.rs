@@ -65,6 +65,7 @@ pub(super) fn compute_report_statistics(leg_points: &[Vec<ValidationPoint>]) -> 
 
     for points in leg_points {
         for p in points {
+            if p.post_cola { continue; }
             max_pos = max_pos.max(p.position_error_km);
             max_vel = max_vel.max(p.velocity_error_km_s);
             sum_pos += p.position_error_km;
@@ -128,6 +129,7 @@ mod tests {
             },
             position_error_km: pos_err,
             velocity_error_km_s: vel_err,
+            post_cola: false,
         };
 
         let leg = vec![
@@ -162,5 +164,45 @@ mod tests {
         assert_eq!(empty.mean_position_error_km, 0.0, "empty mean_pos");
         assert_eq!(empty.rms_position_error_km, 0.0, "empty rms_pos");
         assert_eq!(empty.max_velocity_error_km_s, 0.0, "empty max_vel");
+    }
+
+    /// Verify `post_cola` points are excluded from fidelity statistics.
+    ///
+    /// Two normal points (errors 1.0, 2.0) and one post_cola point (error 10.0).
+    /// Stats should reflect only the two normal points: max=2.0, mean=1.5.
+    #[test]
+    fn post_cola_excluded_from_stats() {
+        let make = |pos_err: f64, post_cola: bool| ValidationPoint {
+            elapsed_s: 0.0,
+            analytical_ric: RICState {
+                position_ric_km: Vector3::zeros(),
+                velocity_ric_km_s: Vector3::zeros(),
+            },
+            numerical_ric: RICState {
+                position_ric_km: Vector3::zeros(),
+                velocity_ric_km_s: Vector3::zeros(),
+            },
+            position_error_km: pos_err,
+            velocity_error_km_s: 0.0,
+            post_cola,
+        };
+
+        let leg = vec![
+            make(1.0, false),
+            make(2.0, false),
+            make(10.0, true), // should be excluded
+        ];
+        let stats = super::compute_report_statistics(&[leg]);
+
+        assert!(
+            (stats.max_position_error_km - 2.0).abs() < EXACT_ARITHMETIC_TOL,
+            "max should be 2.0 (post_cola excluded), got {}",
+            stats.max_position_error_km
+        );
+        assert!(
+            (stats.mean_position_error_km - 1.5).abs() < EXACT_ARITHMETIC_TOL,
+            "mean should be 1.5, got {}",
+            stats.mean_position_error_km
+        );
     }
 }

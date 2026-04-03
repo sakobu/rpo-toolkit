@@ -259,6 +259,21 @@ pub struct PipelineOutput {
     /// Monte Carlo report (included only when MC is run through pipeline).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub monte_carlo: Option<MonteCarloReport>,
+    /// Safety analysis: free-drift, POCA, COLA (computed once, nested for JSON flattening).
+    #[serde(flatten)]
+    pub safety: SafetyAnalysis,
+    /// Formation design report (perch enrichment, waypoint advisory, transit safety).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub formation_design: Option<FormationDesignReport>,
+}
+
+/// Complete safety analysis: free-drift, POCA, COLA.
+///
+/// Computed once, consumed by both validation (for COLA injection) and
+/// `build_output` (for report assembly). Flattened into [`PipelineOutput`]
+/// via `#[serde(flatten)]` so the JSON shape is unchanged.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SafetyAnalysis {
     /// Free-drift (abort-case) analysis per leg.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub free_drift: Option<Vec<FreeDriftAnalysis>>,
@@ -278,7 +293,4 @@ pub struct PipelineOutput {
     /// Legs where COLA was attempted but failed (budget exceeded, degenerate geometry, etc.).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cola_skipped: Option<Vec<SkippedLeg>>,
-    /// Formation design report (perch enrichment, waypoint advisory, transit safety).
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub formation_design: Option<FormationDesignReport>,
 }

@@ -6,4 +6,7 @@ mod statistics;
 mod trajectory;
 
 pub use errors::ValidationError;
-pub use trajectory::{validate_leg_nyx, validate_mission_nyx, LegValidationOutput, ValidationConfig};
+pub use trajectory::{
+    validate_leg_nyx, validate_mission_nyx, ColaBurn, LegValidationOutput, ValidationConfig,
+    convert_cola_to_burns,
+};

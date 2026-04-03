@@ -484,7 +484,7 @@ impl Session {
             deputy_config: Some(self.deputy_config),
             navigation_accuracy: self.navigation_accuracy,
             maneuver_uncertainty: self.maneuver_uncertainty,
-            monte_carlo: self.monte_carlo_config.clone(),
+            monte_carlo: self.monte_carlo_config,
             cola: None,
             safety_requirements: self.safety_requirements,
         })
