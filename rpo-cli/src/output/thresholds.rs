@@ -2,34 +2,27 @@
 //!
 //! Presentation-layer thresholds only. Core algorithm tolerances live in rpo-core.
 
-/// Fidelity assessment thresholds.
-pub mod fidelity {
-    /// Position error (km) below which model is suitable for close-proximity.
-    pub const CLOSE_PROXIMITY_KM: f64 = 0.05;
-    /// Position error (km) below which model is suitable for safety screening.
-    pub const SAFETY_SCREENING_KM: f64 = 0.2;
-    /// Δv percentage above which Lambert transfer is the dominant cost driver.
-    pub const FAR_FIELD_DV_DRIVER_PCT: f64 = 90.0;
-    /// Ratio below which numerical safety is flagged as non-conservative vs analytical.
-    pub const NONCONSERVATIVE_RATIO: f64 = 0.9;
-}
-
-/// Monte Carlo convergence and safety coloring thresholds.
+/// Monte Carlo convergence thresholds for verdict determination.
 pub mod mc {
     /// Tolerance for treating convergence rate as exactly 1.0 (all samples converged).
     pub const CONVERGENCE_EXACT_TOL: f64 = f64::EPSILON;
     /// Convergence rate below which the verdict degrades to CAUTION.
     pub const CONVERGENCE_ALERT: f64 = 0.95;
-    /// Convergence rate below which we color yellow.
-    pub const CONVERGENCE_WARN: f64 = 0.99;
-    /// Collision probability above which we color red.
-    pub const COLLISION_PROB_ALERT: f64 = 0.05;
-    /// e/i violation rate above which we color red.
-    pub const EI_VIOLATION_RATE_ALERT: f64 = 0.10;
-    /// Mahalanobis distance below which we color red.
-    pub const MAHALANOBIS_ALERT: f64 = 0.5;
-    /// Mahalanobis distance below which we color yellow.
-    pub const MAHALANOBIS_WARN: f64 = 1.0;
+}
+
+/// Safety comparison thresholds.
+pub mod fidelity {
+    use super::insight;
+    /// Ratio below which numerical safety is flagged as non-conservative vs analytical.
+    /// Derived from [`insight::SIGNIFICANT_DELTA_PCT`] to keep both in sync.
+    pub const NONCONSERVATIVE_RATIO: f64 = 1.0 - insight::SIGNIFICANT_DELTA_PCT / 100.0;
+}
+
+/// Rate-comparison thresholds for verdict zero-checks.
+pub mod rate {
+    /// Rate at or below which "no violations" is reported.
+    /// Used for collision probability, e/i violation rate, keep-out violation rate.
+    pub const ZERO_VIOLATIONS: f64 = 0.0;
 }
 
 /// Insight generation trigger thresholds.

@@ -1,11 +1,7 @@
-//! Human-readable output formatting.
+//! Output formatting — markdown reports and shared helpers.
 
 pub mod common;
-pub mod eclipse_fmt;
 pub mod formation_fmt;
 pub mod insights;
 pub mod markdown_fmt;
-pub mod mc_fmt;
-pub mod mission_fmt;
-pub mod safety_fmt;
 pub mod thresholds;

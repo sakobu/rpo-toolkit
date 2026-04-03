@@ -12,90 +12,44 @@ mod output;
 use std::process::ExitCode;
 
 use clap::{CommandFactory, Parser};
-use owo_colors::set_override;
 
-use cli::{Cli, Command, OutputMode};
-use output::common::OverlayFlags;
+use cli::{Cli, Command};
 
 fn main() -> ExitCode {
     let cli = Cli::parse();
-
-    match cli.color {
-        clap::ColorChoice::Always => set_override(true),
-        clap::ColorChoice::Never => set_override(false),
-        clap::ColorChoice::Auto => {} // owo-colors auto-detects TTY
-    }
 
     let result = match cli.command {
         None => {
             Cli::parse_from(["rpo-cli", "--help"]);
             Ok(())
         }
-        Some(Command::Mission {
-            ref input,
-            json,
-            markdown,
-            cola_threshold,
-            cola_budget,
-            auto_enrich,
-            auto_enrich_threshold,
-        }) => {
-            let flags = OverlayFlags {
-                cola_threshold,
-                cola_budget,
-                auto_enrich,
-                auto_enrich_threshold,
-            };
-            commands::mission::run(input, OutputMode::from_flags(json, markdown), &flags)
+        Some(Command::Mission { ref input, ref args }) => {
+            commands::mission::run(input, args.mode(), args.output.as_deref(), &args.overlay_flags())
         }
         Some(Command::Validate {
             ref input,
-            json,
-            markdown,
+            ref args,
             samples_per_leg,
             auto_drag,
-            cola_threshold,
-            cola_budget,
-            auto_enrich,
-            auto_enrich_threshold,
-        }) => {
-            let flags = OverlayFlags {
-                cola_threshold,
-                cola_budget,
-                auto_enrich,
-                auto_enrich_threshold,
-            };
-            commands::validate::run(
-                input,
-                OutputMode::from_flags(json, markdown),
-                samples_per_leg,
-                auto_drag,
-                &flags,
-            )
-        }
+        }) => commands::validate::run(
+            input,
+            args.mode(),
+            args.output.as_deref(),
+            samples_per_leg,
+            auto_drag,
+            &args.overlay_flags(),
+        ),
         Some(Command::Mc {
             ref input,
-            json,
-            markdown,
+            ref args,
             auto_drag,
-            cola_threshold,
-            cola_budget,
-            auto_enrich,
-            auto_enrich_threshold,
-        }) => {
-            let flags = OverlayFlags {
-                cola_threshold,
-                cola_budget,
-                auto_enrich,
-                auto_enrich_threshold,
-            };
-            commands::mc::run(
-                input,
-                OutputMode::from_flags(json, markdown),
-                auto_drag,
-                &flags,
-            )
-        }
+        }) => commands::mc::run(
+            input,
+            args.mode(),
+            args.output.as_deref(),
+            auto_drag,
+            &args.overlay_flags(),
+        ),
         Some(Command::Classify { ref input }) => commands::classify::run(input),
         Some(Command::Transfer { ref input }) => commands::transfer::run(input),
         Some(Command::Convert { ref input, ref to }) => commands::convert::run(input, to),

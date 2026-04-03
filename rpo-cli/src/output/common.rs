@@ -6,39 +6,29 @@ use std::time::Duration;
 
 use anise::prelude::Almanac;
 use indicatif::{ProgressBar, ProgressStyle};
-use owo_colors::{OwoColorize, Stream};
 use serde::Serialize;
 
 use rpo_core::mission::{
-    assess_safety, AvoidanceManeuver, ColaConfig, EiAlignment, MonteCarloReport, PercentileStats,
-    SafetyConfig, SafetyRequirements, ValidationReport,
+    assess_safety, AvoidanceManeuver, ColaConfig, EiAlignment, MonteCarloReport, SafetyConfig,
+    SafetyRequirements, ValidationReport,
 };
 use rpo_core::pipeline::{
     resolve_propagator, to_propagation_model, PipelineInput, PipelineOutput, TransferResult,
 };
 use rpo_core::propagation::{extract_dmf_rates, DragConfig, PropagationModel};
-use rpo_core::types::{QuasiNonsingularROE, SpacecraftConfig};
+use rpo_core::types::SpacecraftConfig;
 
 use crate::error::CliError;
 
-use super::thresholds::mc as mc_thresh;
+use super::thresholds::{mc as mc_thresh, rate as rate_thresh};
 
 /// Whether analytical safety is the governing tier or a baseline for comparison.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SafetyTier {
     /// Analytical is the governing and only fidelity tier (mission command).
     Governing,
-    /// Analytical is a baseline; a higher-fidelity validation tier governs.
-    Baseline(ValidationTier),
-}
-
-/// The higher-fidelity validation source that governs safety margins.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ValidationTier {
-    /// Nyx full-physics propagation.
-    Nyx,
-    /// Monte Carlo ensemble statistics.
-    MonteCarlo,
+    /// Analytical is a baseline; Nyx full-physics validation governs.
+    Baseline,
 }
 
 /// Default delta-v budget for CLI COLA overlay (km/s).
@@ -96,14 +86,25 @@ pub fn apply_overlays(input: &mut PipelineInput, flags: &OverlayFlags) {
 pub enum Verdict {
     /// All safety margins satisfied.
     Feasible,
+    /// Operational safety passes; passive safety below threshold but non-governing.
+    OperationallyFeasible,
     /// Safety margins violated or insufficient data.
     Caution,
+}
+
+impl Verdict {
+    /// Whether the verdict indicates the mission is feasible (either fully or operationally).
+    #[must_use]
+    pub fn is_feasible(self) -> bool {
+        matches!(self, Self::Feasible | Self::OperationallyFeasible)
+    }
 }
 
 impl std::fmt::Display for Verdict {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Feasible => write!(f, "FEASIBLE"),
+            Self::OperationallyFeasible => write!(f, "OPERATIONALLY FEASIBLE"),
             Self::Caution => write!(f, "CAUTION"),
         }
     }
@@ -133,17 +134,18 @@ pub(crate) use status;
 
 /// Create an animated spinner for long-running CLI operations.
 ///
-/// Returns `None` if `suppress` is true (JSON and markdown modes suppress spinners).
+/// The spinner writes to stderr, so it does not interfere with stdout output.
+/// Returns `None` if stderr is not a terminal (piped/redirected).
 #[must_use]
-pub fn create_spinner(suppress: bool) -> Option<ProgressBar> {
-    if suppress {
+pub fn create_spinner() -> Option<ProgressBar> {
+    if !std::io::IsTerminal::is_terminal(&std::io::stderr()) {
         return None;
     }
     let s = ProgressBar::new_spinner();
     s.set_style(
         ProgressStyle::default_spinner()
             .template("{spinner:.green} {msg}")
-            .expect("valid spinner template"),
+            .unwrap_or_else(|_| ProgressStyle::default_spinner()),
     );
     s.enable_steady_tick(Duration::from_millis(120));
     Some(s)
@@ -170,11 +172,7 @@ pub fn resolve_drag_and_propagator(
     spinner: Option<&ProgressBar>,
 ) -> Result<(PropagationModel, Option<DragConfig>), CliError> {
     let auto_drag_config = if auto_drag {
-        if let Some(s) = spinner {
-            s.set_message("Extracting differential drag rates via Nyx...".to_string());
-        } else {
-            eprintln!("Extracting differential drag rates via Nyx...");
-        }
+        status!(spinner, "Extracting differential drag rates via Nyx...");
         let drag = extract_dmf_rates(
             &transfer.perch_chief,
             &transfer.perch_deputy,
@@ -196,62 +194,70 @@ pub fn resolve_drag_and_propagator(
     ))
 }
 
-// ── JSON output ─────────────────────────────────────────────────────────
+// ── Output helpers ─────────────────────────────────────────────────────
 
-/// Pretty-print a value as JSON to stdout.
+/// Create the output sink: a buffered file writer, or locked stdout.
+fn open_output(path: Option<&Path>) -> Result<Box<dyn std::io::Write>, CliError> {
+    if let Some(p) = path {
+        if let Some(parent) = p.parent() {
+            if !parent.as_os_str().is_empty() {
+                std::fs::create_dir_all(parent).map_err(|e| CliError::io(parent, e))?;
+            }
+        }
+        let file = std::fs::File::create(p).map_err(|e| CliError::io(p, e))?;
+        Ok(Box::new(std::io::BufWriter::new(file)))
+    } else {
+        Ok(Box::new(std::io::stdout().lock()))
+    }
+}
+
+/// Write text content to a file or stdout.
+///
+/// If `path` is `Some`, writes to that file (creating parent directories)
+/// and prints the path to stderr. If `None`, prints to stdout.
+///
+/// # Errors
+///
+/// Returns [`CliError::Io`] if directory creation or file write fails.
+pub fn output_text(content: &str, path: Option<&Path>) -> Result<(), CliError> {
+    use std::io::Write;
+    let mut out = open_output(path)?;
+    out.write_all(content.as_bytes())
+        .map_err(|e| CliError::io(path.unwrap_or(Path::new("<stdout>")), e))?;
+    if let Some(p) = path {
+        eprintln!("Written to {}", p.display());
+    }
+    Ok(())
+}
+
+/// Serialize a value as JSON directly to a file or stdout.
+///
+/// Writes directly to the output stream via [`serde_json::to_writer_pretty`],
+/// avoiding an intermediate `String` allocation.
+///
+/// # Errors
+///
+/// Returns [`CliError::Serialize`] if serialization fails, or [`CliError::Io`]
+/// if file write fails.
+pub fn output_json<T: Serialize>(data: &T, path: Option<&Path>) -> Result<(), CliError> {
+    use std::io::Write;
+    let mut out = open_output(path)?;
+    serde_json::to_writer_pretty(&mut out, data).map_err(CliError::Serialize)?;
+    out.write_all(b"\n")
+        .map_err(|e| CliError::io(path.unwrap_or(Path::new("<stdout>")), e))?;
+    if let Some(p) = path {
+        eprintln!("Written to {}", p.display());
+    }
+    Ok(())
+}
+
+/// Pretty-print a value as JSON to stdout (plumbing commands).
 ///
 /// # Errors
 ///
 /// Returns [`CliError::Serialize`] if serialization fails.
 pub fn print_json<T: Serialize>(value: &T) -> Result<(), CliError> {
-    let json = serde_json::to_string_pretty(value).map_err(CliError::Serialize)?;
-    println!("{json}");
-    Ok(())
-}
-
-// ── Report file output ─────────────────────────────────────────────────
-
-/// Write a file to `reports/{subdir}/{name}.{extension}`, creating directories if needed.
-///
-/// Prints the output path to stderr so the user knows where the file was written.
-fn write_file_report(subdir: &str, name: &str, extension: &str, content: &str) -> Result<(), CliError> {
-    let dir = Path::new("reports").join(subdir);
-    std::fs::create_dir_all(&dir).map_err(|e| CliError::Io {
-        path: dir.clone(),
-        source: e,
-    })?;
-    let path = dir.join(format!("{name}.{extension}"));
-    std::fs::write(&path, content).map_err(|e| CliError::Io {
-        path: path.clone(),
-        source: e,
-    })?;
-    eprintln!("Report written to {}", path.display());
-    Ok(())
-}
-
-/// Write a markdown report to `reports/markdown/{name}.md`, creating directories if needed.
-///
-/// Prints the output path to stderr so the user knows where the file was written.
-///
-/// # Errors
-///
-/// Returns [`CliError::Io`] if directory creation or file write fails.
-pub fn write_report(name: &str, content: &str) -> Result<(), CliError> {
-    write_file_report("markdown", name, "md", content)
-}
-
-/// Write a JSON report to `reports/json/{name}.json`, creating directories if needed.
-///
-/// Serializes the value as pretty-printed JSON and writes to file.
-/// Prints the output path to stderr.
-///
-/// # Errors
-///
-/// Returns [`CliError::Serialize`] if serialization fails, or [`CliError::Io`]
-/// if directory creation or file write fails.
-pub fn write_json_report<T: Serialize>(name: &str, value: &T) -> Result<(), CliError> {
-    let json = serde_json::to_string_pretty(value).map_err(CliError::Serialize)?;
-    write_file_report("json", name, "json", &json)
+    output_json(value, None)
 }
 
 // ── Unit formatting ─────────────────────────────────────────────────────
@@ -293,7 +299,7 @@ pub fn fmt_roe_component(value: f64) -> String {
 
 /// Bounded-motion residual below which the orbit is considered effectively bounded.
 /// Residuals below this are display-formatted as "bounded (residual ~ 0)".
-pub const BOUNDED_MOTION_DISPLAY_THRESHOLD: f64 = 1e-10;
+const BOUNDED_MOTION_DISPLAY_THRESHOLD: f64 = 1e-10;
 
 /// Format a bounded-motion residual for human display.
 #[must_use]
@@ -338,187 +344,8 @@ pub fn fmt_duration(s: f64) -> String {
     }
 }
 
-/// Format a float for display, showing "N/A" for NaN (no-data sentinel).
-pub fn fmt_or_na(v: f64, precision: usize) -> String {
-    if v.is_nan() {
-        "N/A".to_string()
-    } else {
-        format!("{v:.precision$}")
-    }
-}
 
-// ── Section headers ─────────────────────────────────────────────────────
-
-/// Print a top-level section header with bold cyan text and `===` underline.
-pub fn print_header(title: &str) {
-    println!(
-        "\n{}",
-        title.if_supports_color(Stream::Stdout, |v| v.cyan())
-    );
-    println!("{}", "=".repeat(title.len()));
-}
-
-/// Print a sub-section header with `---` underline.
-pub fn print_subheader(title: &str) {
-    println!("\n{title}");
-    println!("{}", "-".repeat(title.len()));
-}
-
-// ── Color helpers ───────────────────────────────────────────────────────
-
-/// Direction of threshold comparison for colored output.
-#[derive(Clone, Copy)]
-pub enum ThresholdDirection {
-    /// Higher values are better (e.g., convergence rate).
-    /// Green if `value >= warn`, yellow if `value >= alert`, red otherwise.
-    HigherIsBetter,
-    /// Lower values are better (e.g., shadow fraction).
-    /// Red if `value > alert`, yellow if `value > warn`, no color otherwise.
-    LowerIsBetter,
-}
-
-/// Print a line colored by threshold comparison.
-pub fn print_colored(
-    text: &str,
-    value: f64,
-    warn: f64,
-    alert: f64,
-    direction: ThresholdDirection,
-) {
-    match direction {
-        ThresholdDirection::HigherIsBetter => {
-            if value >= warn {
-                println!(
-                    "{}",
-                    text.if_supports_color(Stream::Stdout, |v| v.green())
-                );
-            } else if value >= alert {
-                println!(
-                    "{}",
-                    text.if_supports_color(Stream::Stdout, |v| v.yellow())
-                );
-            } else {
-                println!(
-                    "{}",
-                    text.if_supports_color(Stream::Stdout, |v| v.red())
-                );
-            }
-        }
-        ThresholdDirection::LowerIsBetter => {
-            if value > alert {
-                println!(
-                    "{}",
-                    text.if_supports_color(Stream::Stdout, |v| v.red())
-                );
-            } else if value > warn {
-                println!(
-                    "{}",
-                    text.if_supports_color(Stream::Stdout, |v| v.yellow())
-                );
-            } else {
-                println!("{text}");
-            }
-        }
-    }
-}
-
-// ── ROE display ─────────────────────────────────────────────────────────
-
-/// Print all 6 ROE components with physical meaning.
-pub fn print_roe(label: &str, roe: &QuasiNonsingularROE, chief_a: f64) {
-    println!("  {label}:");
-    let da_s = fmt_roe_component(roe.da);
-    if roe.da.abs() < ROE_DISPLAY_ZERO_THRESHOLD {
-        println!("    \u{03b4}a       = {da_s:>13}  (relative SMA)");
-    } else {
-        println!(
-            "    \u{03b4}a       = {:>13}  (relative SMA, \u{2248} {:.1} km)",
-            da_s,
-            roe.da * chief_a
-        );
-    }
-    println!(
-        "    \u{03b4}\u{03bb}       = {:>13}  (relative mean longitude)",
-        fmt_roe_component(roe.dlambda)
-    );
-    println!(
-        "    \u{03b4}ex      = {:>13}  (relative e\u{00b7}cos \u{03c9})",
-        fmt_roe_component(roe.dex)
-    );
-    println!(
-        "    \u{03b4}ey      = {:>13}  (relative e\u{00b7}sin \u{03c9})",
-        fmt_roe_component(roe.dey)
-    );
-    println!(
-        "    \u{03b4}ix      = {:>13}  (relative inclination)",
-        fmt_roe_component(roe.dix)
-    );
-    println!(
-        "    \u{03b4}iy      = {:>13}  (relative RAAN\u{00b7}sin i)",
-        fmt_roe_component(roe.diy)
-    );
-}
-
-// ── Percentile stats ────────────────────────────────────────────────────
-
-/// Print full percentile statistics (mean, std, p05/p95, min/max).
-///
-/// `scale` converts from stored unit to display unit (e.g., 1000.0 for km->m).
-pub fn print_percentile_stats(
-    indent: &str,
-    stats: &PercentileStats,
-    scale: f64,
-    decimals: usize,
-) {
-    let fmt = |v: f64| fmt_or_na(v * scale, decimals);
-    println!(
-        "{indent}Mean: {}    Std: {}",
-        fmt(stats.mean),
-        fmt(stats.std_dev),
-    );
-    println!(
-        "{indent}p05:  {}    p95: {}",
-        fmt(stats.p05),
-        fmt(stats.p95),
-    );
-    println!(
-        "{indent}Min:  {}    Max: {}",
-        fmt(stats.min),
-        fmt(stats.max),
-    );
-}
-
-/// Print compact percentile summary (p05/p50/p95 one-liner).
-pub fn print_percentile_summary(
-    indent: &str,
-    stats: &PercentileStats,
-    scale: f64,
-    decimals: usize,
-) {
-    let fmt = |v: f64| fmt_or_na(v * scale, decimals);
-    println!(
-        "{indent}p05: {}    p50: {}    p95: {}",
-        fmt(stats.p05),
-        fmt(stats.p50),
-        fmt(stats.p95),
-    );
-}
-
-/// Print compact percentile summary, or "N/A" if no data.
-pub fn print_optional_percentile_summary(
-    indent: &str,
-    stats: Option<&PercentileStats>,
-    scale: f64,
-    decimals: usize,
-) {
-    if let Some(s) = stats {
-        print_percentile_summary(indent, s, scale, decimals);
-    } else {
-        println!("{indent}N/A (no data)");
-    }
-}
-
-// ── Per-leg error table ─────────────────────────────────────────────────
+// ── Per-leg error stats ────────────────────────────────────────────────
 
 /// Per-leg position error statistics (km).
 // All fields carry the `_km` unit suffix per our naming rules.
@@ -559,139 +386,6 @@ pub fn compute_leg_error_stats(
     })
 }
 
-/// Print per-leg position error breakdown in meters.
-pub fn print_per_leg_errors(leg_points: &[Vec<rpo_core::mission::ValidationPoint>]) {
-    if leg_points.is_empty() {
-        return;
-    }
-    println!("\n  Per-leg position error (m):");
-    println!(
-        "    {:>4}  {:>8}  {:>8}  {:>8}",
-        "Leg", "Max", "Mean", "RMS"
-    );
-    println!(
-        "    {:->4}  {:->8}  {:->8}  {:->8}",
-        "", "", "", ""
-    );
-    for (i, points) in leg_points.iter().enumerate() {
-        if let Some(stats) = compute_leg_error_stats(points) {
-            println!(
-                "    {:>4}  {:>8.1}  {:>8.1}  {:>8.1}",
-                i + 1,
-                stats.max_km * 1000.0,
-                stats.mean_km * 1000.0,
-                stats.rms_km * 1000.0,
-            );
-        }
-    }
-}
-
-// ── Auto-derived drag ───────────────────────────────────────────────────
-
-/// Print auto-derived differential drag rates at the given indent level.
-pub fn print_derived_drag(drag: &DragConfig, indent: &str) {
-    println!("{indent}Auto-derived drag:");
-    println!("{indent}  da_dot:  {:+.6e}", drag.da_dot);
-    println!("{indent}  dex_dot: {:+.6e}", drag.dex_dot);
-    println!("{indent}  dey_dot: {:+.6e}", drag.dey_dot);
-}
-
-// ── Rate metric ─────────────────────────────────────────────────────────
-
-/// Whether to display a rate as a decimal probability or a percentage.
-#[derive(Clone, Copy)]
-pub enum RateFormat {
-    /// Display as `0` for zero, `0.0000` for non-zero (e.g., collision probability).
-    Probability,
-    /// Display as `0.0%` (e.g., violation rate).
-    Percentage,
-}
-
-/// Print a rate metric (probability or violation rate) with color.
-///
-/// Green if rate is 0.0, yellow if rate > 0 but below `alert_threshold`,
-/// red if rate >= `alert_threshold`. If `alert_threshold` is 0.0, any non-zero
-/// rate is red.
-pub fn print_rate_metric(
-    label: &str,
-    rate: f64,
-    n: f64,
-    total: u32,
-    format: RateFormat,
-    alert_threshold: f64,
-) {
-    let line = match format {
-        RateFormat::Probability => {
-            if rate <= 0.0 {
-                format!("{label}: 0 (0/{total})")
-            } else {
-                format!("{label}: {rate:.4} ({:.0}/{total})", (rate * n).round())
-            }
-        }
-        RateFormat::Percentage => {
-            format!(
-                "{label}: {:.1}% ({:.0}/{total})",
-                rate * 100.0,
-                (rate * n).round()
-            )
-        }
-    };
-
-    if rate <= 0.0 {
-        println!(
-            "{}",
-            line.if_supports_color(Stream::Stdout, |v| v.green())
-        );
-    } else if alert_threshold > 0.0 && rate < alert_threshold {
-        println!(
-            "{}",
-            line.if_supports_color(Stream::Stdout, |v| v.yellow())
-        );
-    } else {
-        println!(
-            "{}",
-            line.if_supports_color(Stream::Stdout, |v| v.red())
-        );
-    }
-}
-
-// ── Insight printing ────────────────────────────────────────────────────
-
-use super::insights::{Insight, Severity};
-
-/// Print cross-tier insights with severity-appropriate coloring.
-///
-/// - **Critical:** red `CRITICAL:` prefix
-/// - **Warning:** yellow `WARNING:` prefix
-/// - **Info:** cyan arrow prefix
-pub fn print_insights(insights: &[Insight]) {
-    for insight in insights {
-        match insight.severity {
-            Severity::Critical => {
-                println!(
-                    "{}",
-                    format!("  Critical: {}", insight.message)
-                        .if_supports_color(Stream::Stdout, |v| v.red())
-                );
-            }
-            Severity::Warning => {
-                println!(
-                    "{}",
-                    format!("  Warning: {}", insight.message)
-                        .if_supports_color(Stream::Stdout, |v| v.yellow())
-                );
-            }
-            Severity::Info => {
-                println!(
-                    "{}",
-                    format!("  Insight: {}", insight.message)
-                        .if_supports_color(Stream::Stdout, |v| v.cyan())
-                );
-            }
-        }
-    }
-}
-
 // ── COLA helpers ────────────────────────────────────────────────────────
 
 /// Compute total COLA Δv and burn count from avoidance maneuvers.
@@ -701,65 +395,6 @@ pub fn cola_dv_summary(cola: Option<&[AvoidanceManeuver]>) -> Option<(f64, usize
         let total: f64 = maneuvers.iter().map(|m| m.fuel_cost_km_s).sum();
         (total, maneuvers.len())
     })
-}
-
-// ── Δv budget ───────────────────────────────────────────────────────────
-
-/// Print the Δv budget block (Transfer / Targeting / Total) used by mission and MC summaries.
-///
-/// Flags when Lambert transfer dominates the budget (>90% of total) to highlight
-/// that far-field transfer is the primary cost driver.
-pub fn print_dv_budget(
-    lambert_dv_km_s: f64,
-    targeting_dv_km_s: f64,
-    drag_aware: bool,
-    cola_dv_km_s: Option<(f64, usize)>,
-) {
-    use super::thresholds::fidelity;
-
-    let total = lambert_dv_km_s + targeting_dv_km_s;
-    println!("\n  \u{0394}v Budget:");
-    if total > 0.0 {
-        let lambert_pct = lambert_dv_km_s / total * 100.0;
-        let wp_pct = targeting_dv_km_s / total * 100.0;
-        if lambert_pct > fidelity::FAR_FIELD_DV_DRIVER_PCT {
-            println!(
-                "    Transfer:        {}  ({lambert_pct:.1}%{})",
-                fmt_m_s(lambert_dv_km_s, 1),
-                " -- far-field driver".if_supports_color(Stream::Stdout, |v| v.red()),
-            );
-        } else {
-            println!(
-                "    Transfer:        {}  ({lambert_pct:.1}%)",
-                fmt_m_s(lambert_dv_km_s, 1),
-            );
-        }
-        println!(
-            "    Targeting:       {}  ({wp_pct:.1}%)",
-            fmt_m_s(targeting_dv_km_s, 1),
-        );
-    } else {
-        println!("    Transfer:        {}", fmt_m_s(lambert_dv_km_s, 1));
-        println!("    Targeting:       {}", fmt_m_s(targeting_dv_km_s, 1));
-    }
-    println!(
-        "    Total:           {}",
-        fmt_m_s(total, 1).if_supports_color(Stream::Stdout, |v| v.green()),
-    );
-    if let Some((cola_dv, num_burns)) = cola_dv_km_s {
-        let burn_label = if num_burns == 1 { "burn" } else { "burns" };
-        println!(
-            "    COLA:            +{}  ({num_burns} {burn_label})",
-            fmt_m_s(cola_dv, 2),
-        );
-        println!(
-            "    Total (w/ COLA): {}",
-            fmt_m_s(total + cola_dv, 1).if_supports_color(Stream::Stdout, |v| v.green()),
-        );
-    }
-    if drag_aware {
-        println!("    (drag-aware targeting; \u{0394}v differs slightly from analytical-only)");
-    }
 }
 
 // ── MC baseline ─────────────────────────────────────────────────────────
@@ -800,10 +435,17 @@ pub fn determine_verdict(
     config: &SafetyConfig,
     validation: Option<&ValidationReport>,
 ) -> VerdictResult {
+    let enrichment_active = output.formation_design.is_some();
+
     if let Some(report) = validation {
         let assessment = assess_safety(&report.numerical_safety, config);
         if assessment.overall_pass {
             VerdictResult { verdict: Verdict::Feasible, reason: "safety margins satisfied, Nyx full-physics" }
+        } else if enrichment_active && assessment.distance_3d_pass {
+            VerdictResult {
+                verdict: Verdict::OperationallyFeasible,
+                reason: "3D distance passes (Nyx); e/i below threshold (non-governing for guided ops)",
+            }
         } else {
             VerdictResult { verdict: Verdict::Caution, reason: "safety margins violated, Nyx full-physics" }
         }
@@ -811,6 +453,11 @@ pub fn determine_verdict(
         let assessment = assess_safety(safety, config);
         if assessment.overall_pass {
             VerdictResult { verdict: Verdict::Feasible, reason: "analytical safety margins satisfied" }
+        } else if enrichment_active && assessment.distance_3d_pass {
+            VerdictResult {
+                verdict: Verdict::OperationallyFeasible,
+                reason: "3D distance passes; e/i below threshold (non-governing for guided ops)",
+            }
         } else {
             VerdictResult { verdict: Verdict::Caution, reason: "analytical safety margins violated" }
         }
@@ -831,25 +478,25 @@ pub fn determine_verdict(
 pub fn determine_mc_verdict(report: &MonteCarloReport) -> VerdictResult {
     let stats = &report.statistics;
     let all_converged = (stats.convergence_rate - 1.0).abs() < mc_thresh::CONVERGENCE_EXACT_TOL;
-    let no_collisions = stats.collision_probability <= 0.0;
-    let no_keepout = stats.keepout_violation_rate <= 0.0;
+    let no_collisions = stats.collision_probability <= rate_thresh::ZERO_VIOLATIONS;
+    let no_keepout = stats.keepout_violation_rate <= rate_thresh::ZERO_VIOLATIONS;
 
-    let ei_degraded = stats.ei_violation_rate > 0.0;
+    let ei_degraded = stats.ei_violation_rate > rate_thresh::ZERO_VIOLATIONS;
 
     if all_converged && no_collisions && no_keepout {
         VerdictResult {
-            verdict: Verdict::Feasible,
+            verdict: if ei_degraded { Verdict::OperationallyFeasible } else { Verdict::Feasible },
             reason: if ei_degraded {
-                "operationally feasible, passive abort safety degraded under dispersion"
+                "operational safety holds; passive abort safety degraded under dispersion"
             } else {
-                "100% convergence, no collisions, operational safety holds"
+                "all safety margins satisfied"
             },
         }
     } else if stats.convergence_rate >= mc_thresh::CONVERGENCE_ALERT && no_collisions {
         VerdictResult {
-            verdict: Verdict::Feasible,
+            verdict: if ei_degraded { Verdict::OperationallyFeasible } else { Verdict::Feasible },
             reason: if ei_degraded {
-                "convergence acceptable, no collisions, passive abort safety degraded"
+                "convergence acceptable; passive abort safety degraded"
             } else {
                 "convergence acceptable, no collisions"
             },

@@ -1,7 +1,7 @@
 //! CLI error type and exit codes.
 
 use std::fmt;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use rpo_core::elements::keplerian_conversions::ConversionError;
@@ -136,6 +136,14 @@ impl From<MonteCarloError> for CliError {
 }
 
 impl CliError {
+    /// Create an I/O error with the given path context.
+    pub(crate) fn io(path: &Path, source: std::io::Error) -> Self {
+        Self::Io {
+            path: path.to_path_buf(),
+            source,
+        }
+    }
+
     /// Map this error to an exit code.
     pub fn exit_code(&self) -> ExitCode {
         match self {

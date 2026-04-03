@@ -1,37 +1,74 @@
 //! CLI definition: clap parser and command enum.
+//!
+//! Porcelain commands (Mission, Validate, MC) share identical flag sets for
+//! output mode, COLA, and formation enrichment via [`PorcelainArgs`] with
+//! `#[command(flatten)]`. Command-specific flags (e.g., `--auto-drag`,
+//! `--samples-per-leg`) live on the individual variants.
 
 use std::path::PathBuf;
 
-use clap::{ColorChoice, Parser, Subcommand};
+use clap::{Args, Parser, Subcommand};
+
+use crate::output::common::OverlayFlags;
 
 /// Output mode for porcelain commands.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OutputMode {
-    /// Colored human-readable terminal output (default).
-    Human,
-    /// Machine-readable JSON.
+    /// Markdown summary. Prints to stdout unless `-o` is given.
+    Summary,
+    /// Machine-readable JSON. Prints to stdout unless `-o` is given.
     Json,
-    /// Self-contained markdown report.
-    Markdown,
 }
 
-impl OutputMode {
-    /// Resolve from the `--json` and `--markdown` flags.
+/// Shared flags for all porcelain commands.
+///
+/// Groups output mode, file destination, COLA, and formation enrichment
+/// flags to avoid duplication across Mission / Validate / MC variants.
+#[derive(Args, Debug)]
+pub struct PorcelainArgs {
+    /// Output as JSON instead of markdown summary.
+    #[arg(long)]
+    pub json: bool,
+    /// Write output to file instead of stdout.
+    #[arg(short, long, value_name = "PATH")]
+    pub output: Option<PathBuf>,
+    /// Target miss distance for collision avoidance (km). Enables COLA.
+    #[arg(long, value_name = "KM")]
+    pub cola_threshold: Option<f64>,
+    /// Maximum delta-v budget for collision avoidance (km/s).
+    #[arg(long, value_name = "KM_S", requires = "cola_threshold")]
+    pub cola_budget: Option<f64>,
+    /// Enable formation design enrichment with default 0.1 km separation threshold.
+    /// Enriches perch ROE with safe e/i vectors (D'Amico Eq. 2.22) and computes
+    /// per-leg transit safety profiles.
+    #[arg(long)]
+    pub auto_enrich: bool,
+    /// Custom min separation threshold (km) for formation design enrichment.
+    /// Implies `--auto-enrich`. Overrides the default 0.1 km threshold.
+    #[arg(long, value_name = "KM")]
+    pub auto_enrich_threshold: Option<f64>,
+}
+
+impl PorcelainArgs {
+    /// Resolve output mode from the `--json` flag.
     #[must_use]
-    pub fn from_flags(json: bool, markdown: bool) -> Self {
-        if json {
-            Self::Json
-        } else if markdown {
-            Self::Markdown
+    pub fn mode(&self) -> OutputMode {
+        if self.json {
+            OutputMode::Json
         } else {
-            Self::Human
+            OutputMode::Summary
         }
     }
 
-    /// Whether output is machine-readable (suppress spinner, status messages).
+    /// Build overlay flags from COLA and enrichment CLI flags.
     #[must_use]
-    pub fn suppress_interactive(self) -> bool {
-        matches!(self, Self::Json | Self::Markdown)
+    pub fn overlay_flags(&self) -> OverlayFlags {
+        OverlayFlags {
+            cola_threshold: self.cola_threshold,
+            cola_budget: self.cola_budget,
+            auto_enrich: self.auto_enrich,
+            auto_enrich_threshold: self.auto_enrich_threshold,
+        }
     }
 }
 
@@ -40,14 +77,10 @@ impl OutputMode {
 #[command(
     name = "rpo-cli",
     about = "RPO mission planning tool",
-    after_help = "Porcelain commands produce human-readable output by default (use --json for machine output).\n\
+    after_help = "Porcelain commands produce a markdown summary by default (use --json for machine output).\n\
                   Plumbing commands always produce JSON."
 )]
 pub struct Cli {
-    /// Color output mode.
-    #[arg(long, global = true, default_value_t = ColorChoice::Auto)]
-    pub color: ColorChoice,
-
     /// Subcommand to run.
     #[command(subcommand)]
     pub command: Option<Command>,
@@ -62,86 +95,36 @@ pub enum Command {
         /// Path to JSON input file with chief/deputy states, perch, and waypoints.
         #[arg(short, long)]
         input: PathBuf,
-        /// Output as JSON instead of human-readable text.
-        #[arg(long)]
-        json: bool,
-        /// Output as self-contained markdown report.
-        #[arg(long, conflicts_with = "json")]
-        markdown: bool,
-        /// Target miss distance for collision avoidance (km). Enables COLA.
-        #[arg(long, value_name = "KM")]
-        cola_threshold: Option<f64>,
-        /// Maximum delta-v budget for collision avoidance (km/s).
-        #[arg(long, value_name = "KM_S", requires = "cola_threshold")]
-        cola_budget: Option<f64>,
-        /// Enable formation design enrichment with default 0.1 km separation threshold.
-        /// Enriches perch ROE with safe e/i vectors (D'Amico Eq. 2.22) and computes
-        /// per-leg transit safety profiles.
-        #[arg(long)]
-        auto_enrich: bool,
-        /// Custom min separation threshold (km) for formation design enrichment.
-        /// Implies `--auto-enrich`. Overrides the default 0.1 km threshold.
-        #[arg(long, value_name = "KM")]
-        auto_enrich_threshold: Option<f64>,
+        /// Shared porcelain flags (output mode, COLA, enrichment).
+        #[command(flatten)]
+        args: PorcelainArgs,
     },
     /// End-to-end mission with Nyx high-fidelity validation (requires network on first run).
     Validate {
         /// Path to JSON input file with chief/deputy states, perch, waypoints, and spacecraft configs.
         #[arg(short, long)]
         input: PathBuf,
-        /// Output as JSON instead of human-readable text.
-        #[arg(long)]
-        json: bool,
-        /// Output as self-contained markdown report.
-        #[arg(long, conflicts_with = "json")]
-        markdown: bool,
+        /// Shared porcelain flags (output mode, COLA, enrichment).
+        #[command(flatten)]
+        args: PorcelainArgs,
         /// Number of sample points per leg for validation comparison.
         #[arg(long, default_value_t = 50)]
         samples_per_leg: u32,
         /// Auto-derive differential drag config from spacecraft properties via Nyx.
         #[arg(long)]
         auto_drag: bool,
-        /// Target miss distance for collision avoidance (km). Enables COLA.
-        #[arg(long, value_name = "KM")]
-        cola_threshold: Option<f64>,
-        /// Maximum delta-v budget for collision avoidance (km/s).
-        #[arg(long, value_name = "KM_S", requires = "cola_threshold")]
-        cola_budget: Option<f64>,
-        /// Enable formation design enrichment with default 0.1 km separation threshold.
-        #[arg(long)]
-        auto_enrich: bool,
-        /// Custom min separation threshold (km) for formation design enrichment.
-        /// Implies `--auto-enrich`.
-        #[arg(long, value_name = "KM")]
-        auto_enrich_threshold: Option<f64>,
     },
     /// Full-physics Monte Carlo ensemble analysis (requires network on first run).
     Mc {
         /// Path to JSON input file.
         #[arg(short, long)]
         input: PathBuf,
-        /// Output as JSON instead of human-readable text.
-        #[arg(long)]
-        json: bool,
-        /// Output as self-contained markdown report.
-        #[arg(long, conflicts_with = "json")]
-        markdown: bool,
+        /// Shared porcelain flags (output mode, COLA, enrichment).
+        #[command(flatten)]
+        args: PorcelainArgs,
         /// Auto-derive differential drag config from spacecraft properties via Nyx.
         #[arg(long)]
         auto_drag: bool,
-        /// Target miss distance for collision avoidance (km). Enables COLA.
-        #[arg(long, value_name = "KM")]
-        cola_threshold: Option<f64>,
-        /// Maximum delta-v budget for collision avoidance (km/s).
-        #[arg(long, value_name = "KM_S", requires = "cola_threshold")]
-        cola_budget: Option<f64>,
-        /// Enable formation design enrichment with default 0.1 km separation threshold.
-        #[arg(long)]
-        auto_enrich: bool,
-        /// Custom min separation threshold (km) for formation design enrichment.
-        /// Implies `--auto-enrich`.
-        #[arg(long, value_name = "KM")]
-        auto_enrich_threshold: Option<f64>,
     },
 
     // ---- Plumbing ----

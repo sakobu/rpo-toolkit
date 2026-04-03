@@ -3,30 +3,24 @@
 use std::path::Path;
 
 use rpo_core::mission::{validate_mission_nyx, ValidationConfig, ValidationReport};
-use rpo_core::pipeline::{
-    apply_perch_enrichment, compute_transfer, plan_waypoints_from_transfer, suggest_enrichment,
-    PipelineInput, PipelineOutput,
-};
-use rpo_core::propagation::load_full_almanac;
+use rpo_core::pipeline::PipelineOutput;
 
 use crate::cli::OutputMode;
 use crate::error::CliError;
 use crate::input::load_json;
-use crate::output::common::{
-    apply_overlays, create_spinner, print_insights, resolve_drag_and_propagator, status,
-    write_json_report, write_report, OverlayFlags, SafetyTier, ValidationTier,
-};
+use crate::output::common::{apply_overlays, output_json, output_text, status, OverlayFlags};
 use crate::output::markdown_fmt::{self, ValidationContext};
-use crate::output::mission_fmt::{
-    print_mission_human, print_mission_verdict, print_validation_details,
-};
+
+use super::common::plan_with_physics;
 
 /// Combined mission + validation output for JSON serialization.
 ///
 /// Borrows both structs to avoid the deep clone that `serde_json::json!` would perform.
 #[derive(serde::Serialize)]
 struct ValidateReport<'a> {
+    /// Analytical mission pipeline output.
     mission: &'a PipelineOutput,
+    /// Nyx full-physics validation results.
     validation: &'a ValidationReport,
 }
 
@@ -34,37 +28,21 @@ struct ValidateReport<'a> {
 pub fn run(
     input_path: &Path,
     mode: OutputMode,
+    output: Option<&Path>,
     samples_per_leg: u32,
     auto_drag: bool,
     flags: &OverlayFlags,
 ) -> Result<(), CliError> {
-    let mut input: PipelineInput = load_json(input_path)?;
+    let mut input = load_json(input_path)?;
     apply_overlays(&mut input, flags);
 
     let chief_config = input.chief_config.unwrap_or_default().resolve();
     let deputy_config = input.deputy_config.unwrap_or_default().resolve();
 
-    let spinner = create_spinner(mode.suppress_interactive());
-
-    status!(spinner, "Classification + Lambert transfer...");
-    let mut transfer = compute_transfer(&input)?;
-    let suggestion = suggest_enrichment(&transfer, &input);
-    if let Some(ref s) = suggestion {
-        apply_perch_enrichment(&mut transfer, s);
-    }
-
-    status!(spinner, "Loading almanac (may download on first run)...");
-    let almanac = load_full_almanac()?;
-
-    let (prop, derived_drag) = resolve_drag_and_propagator(
-        auto_drag, &transfer, &chief_config, &deputy_config, &almanac, &input, spinner.as_ref(),
-    )?;
-
-    status!(spinner, "Waypoint targeting...");
-    let wp_mission = plan_waypoints_from_transfer(&transfer, &input, &prop)?;
+    let plan = plan_with_physics(&input, auto_drag, &chief_config, &deputy_config)?;
 
     status!(
-        spinner,
+        plan.spinner,
         "Nyx validation ({samples_per_leg} samples/leg)..."
     );
     let val_config = ValidationConfig {
@@ -73,67 +51,44 @@ pub fn run(
         deputy_config,
     };
     let report = validate_mission_nyx(
-        &wp_mission,
-        &transfer.perch_chief,
-        &transfer.perch_deputy,
+        &plan.wp_mission,
+        &plan.transfer.perch_chief,
+        &plan.transfer.perch_deputy,
         &val_config,
-        &almanac,
+        &plan.almanac,
     )?;
 
-    if let Some(s) = spinner {
+    if let Some(s) = plan.spinner {
         s.finish_and_clear();
     }
     eprintln!("Validation complete.");
 
-    let output = rpo_core::pipeline::build_output(
-        &transfer,
-        wp_mission,
+    let result = rpo_core::pipeline::build_output(
+        &plan.transfer,
+        plan.wp_mission,
         &input,
-        &prop,
-        derived_drag,
-        suggestion,
+        &plan.propagator,
+        plan.derived_drag,
+        plan.suggestion,
     );
 
     match mode {
         OutputMode::Json => {
             let combined = ValidateReport {
-                mission: &output,
+                mission: &result,
                 validation: &report,
             };
-            write_json_report("validate", &combined)
+            output_json(&combined, output)
         }
-        OutputMode::Markdown => {
+        OutputMode::Summary => {
             let ctx = ValidationContext {
-                propagator: &prop,
+                propagator: &plan.propagator,
                 auto_drag,
                 samples_per_leg,
-                derived_drag: derived_drag.as_ref(),
+                derived_drag: plan.derived_drag.as_ref(),
             };
-            let md = markdown_fmt::validation_to_markdown(
-                &output,
-                &input,
-                &report,
-                &ctx,
-            );
-            write_report("validate", &md)
-        }
-        OutputMode::Human => {
-            print_mission_human(&output, &input, &prop, auto_drag, "Mission + Validation", SafetyTier::Baseline(ValidationTier::Nyx));
-            print_validation_details(
-                &output,
-                &input,
-                &report,
-                samples_per_leg,
-                derived_drag.as_ref(),
-            );
-
-            let sc = input.config.safety.unwrap_or_default();
-            let insight_lines =
-                crate::output::insights::validation_insights(&report, &sc);
-            print_insights(&insight_lines);
-
-            print_mission_verdict(&output, &input, Some(&report));
-            Ok(())
+            let md = markdown_fmt::validation_to_markdown(&result, &input, &report, &ctx);
+            output_text(&md, output)
         }
     }
 }

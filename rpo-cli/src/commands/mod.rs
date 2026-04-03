@@ -1,6 +1,7 @@
 //! Command implementations: porcelain (human-readable) and plumbing (JSON-only).
 
 pub mod classify;
+pub mod common;
 pub mod convert;
 pub mod eclipse;
 pub mod mc;

@@ -49,7 +49,7 @@ pub fn validation_insights(
     if let Some(ref analytical) = report.analytical_safety {
         let ana_3d = analytical.operational.min_distance_3d_km;
         if ana_3d > 0.0 {
-            let delta_pct = (ana_3d - num_3d) / ana_3d * 100.0;
+            let delta_pct = (ana_3d - num_3d) / num_3d * 100.0;
             if delta_pct > insight_thresh::SIGNIFICANT_DELTA_PCT {
                 // Compute margin ratios: numerical value / threshold
                 let d3d_ratio = if config.min_distance_3d_km > 0.0 {
@@ -290,7 +290,7 @@ pub fn mc_insights(
     if miss_medians.len() >= 2 {
         let first = miss_medians[0];
         let last = miss_medians[miss_medians.len() - 1];
-        if first > 0.0 && last / first > 3.0 {
+        if first > 0.0 && last / first > insight_thresh::ERROR_GROWTH_RATIO_ALERT {
             insights.push(Insight {
                 severity: Severity::Info,
                 message: format!(

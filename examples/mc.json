@@ -56,7 +56,6 @@
       "min_distance_3d_km": 0.05
     }
   },
-  "propagator": "j2",
   "navigation_accuracy": {
     "position_sigma_ric_km": [0.1, 0.1, 0.1],
     "velocity_sigma_ric_km_s": [0.0001, 0.0001, 0.0001]

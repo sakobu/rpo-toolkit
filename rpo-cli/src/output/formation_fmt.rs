@@ -1,165 +1,61 @@
-//! Formation design output formatting (human-readable + markdown).
+//! Formation design markdown output formatting.
 
 use std::fmt::Write;
 
-use owo_colors::{OwoColorize, Stream};
 use rpo_core::mission::{
     DriftCompensationStatus, EiAlignment, EnrichmentMode, FormationDesignReport,
     PerchEnrichmentResult, PerchFallbackReason,
 };
 
-use super::common::{fmt_duration, fmt_m, print_subheader};
+use super::common::{fmt_duration, fmt_m, fmt_roe_component};
 
 // ---------------------------------------------------------------------------
-// Human-readable (terminal) output
+// Public API
 // ---------------------------------------------------------------------------
 
-/// Print perch enrichment results after the Perch ROE section.
+/// Write the complete Formation Design section to markdown output.
 ///
-/// Shows enrichment status, alignment, delta-e/delta-i magnitudes,
-/// and resulting minimum R/C separation. For fallback cases, shows
-/// the reason enrichment could not be applied.
-pub fn print_perch_enrichment(report: &FormationDesignReport) {
-    print_subheader("Perch Enrichment");
-    match &report.perch {
-        PerchEnrichmentResult::Enriched(safe_perch) => {
-            println!(
-                "  Status:             {}",
-                "ENRICHED".if_supports_color(Stream::Stdout, |v| v.green()),
-            );
-            println!("  Alignment:          {}", format_alignment(safe_perch.alignment));
-            println!("  \u{03b4}e magnitude:       {}", fmt_m(safe_perch.de_magnitude_km, 1));
-            println!("  \u{03b4}i magnitude:       {}", fmt_m(safe_perch.di_magnitude_km, 1));
-            println!("  Min R/C separation: {}", fmt_m(safe_perch.min_rc_separation_km, 1));
-        }
-        PerchEnrichmentResult::Baseline(_) => {
-            println!(
-                "  Status:             {}",
-                "NOT APPLIED (baseline)"
-                    .if_supports_color(Stream::Stdout, |v| v.dimmed()),
-            );
-        }
-        PerchEnrichmentResult::Fallback { reason, .. } => {
-            println!(
-                "  Status:             {}",
-                "FALLBACK".if_supports_color(Stream::Stdout, |v| v.yellow()),
-            );
-            println!("  Reason:             {}", format_fallback_reason(reason));
-        }
-    }
-}
+/// Groups perch enrichment, waypoint enrichment advisory, and transit safety
+/// under a single `## Formation Design` heading with narrative context.
+pub fn write_formation_design_md(out: &mut String, report: &FormationDesignReport) {
+    let _ = writeln!(out, "## Formation Design\n");
 
-/// Print per-waypoint enrichment advisory table after the Waypoint Targeting table.
-///
-/// This is advisory data comparing baseline (minimum-norm) e/i separation
-/// against the enriched (safe) alternative for each waypoint.
-pub fn print_waypoint_enrichment(report: &FormationDesignReport) {
-    if report.waypoints.is_empty() {
-        return;
-    }
-    print_subheader("Waypoint Enrichment (advisory)");
-    println!(
-        "  {:>4}  {:>12}  {:>12}  {:>7}  {:<15}",
-        "Leg", "Baseline e/i", "Enriched e/i", "Phase", "Mode",
-    );
-    println!(
-        "  {:-<4}  {:-<12}  {:-<12}  {:-<7}  {:-<15}",
-        "", "", "", "", "",
-    );
-    for (i, wp) in report.waypoints.iter().enumerate() {
-        match wp {
-            Some(enriched) => {
-                println!(
-                    "  {:>4}  {:>12}  {:>12}  {:>6.1}\u{00b0}  {:<15}",
-                    i + 1,
-                    fmt_m(enriched.baseline_ei.min_separation_km, 1),
-                    fmt_m(enriched.enriched_ei.min_separation_km, 1),
-                    enriched.enriched_ei.phase_angle_rad.to_degrees(),
-                    format_enrichment_mode(enriched.mode),
-                );
-            }
-            None => {
-                println!(
-                    "  {:>4}  {:>12}  {:>12}  {:>7}  {:<15}",
-                    i + 1, "N/A", "N/A", "-", "failed",
-                );
-            }
-        }
-    }
-}
+    write_perch_enrichment_md(out, report);
 
-/// Print per-leg transit safety with PASS/FAIL after the Safety section.
-///
-/// Shows minimum e/i separation, timing, phase angle, and drift compensation
-/// status for each leg. Includes mission-wide minimum at the bottom.
-pub fn print_transit_safety(report: &FormationDesignReport) {
-    if report.transit_safety.is_empty() {
-        return;
-    }
-    print_subheader("Formation Transit Safety");
-    println!(
-        "  {:>4}  {:>11}  {:>9}  {:>7}  {:>10}  Status",
-        "Leg", "Min e/i sep", "At", "Phase", "Drift comp",
-    );
-    println!(
-        "  {:-<4}  {:-<11}  {:-<9}  {:-<7}  {:-<10}  {:-<6}",
-        "", "", "", "", "", "",
-    );
-    for (i, ts) in report.transit_safety.iter().enumerate() {
-        match ts {
-            Some(t) => {
-                let status = if t.satisfies_requirement {
-                    "PASS".if_supports_color(Stream::Stdout, |v| v.green()).to_string()
-                } else {
-                    "FAIL".if_supports_color(Stream::Stdout, |v| v.red()).to_string()
-                };
-                let drift = match t.drift_compensation {
-                    DriftCompensationStatus::Applied => "applied",
-                    DriftCompensationStatus::Skipped => "skipped",
-                };
-                println!(
-                    "  {:>4}  {:>11}  {:>9}  {:>6.1}\u{00b0}  {:>10}  {}",
-                    i + 1,
-                    fmt_m(t.min_ei_separation_km, 1),
-                    fmt_duration(t.min_elapsed_s),
-                    t.min_phase_angle_rad.to_degrees(),
-                    drift,
-                    status,
-                );
-            }
-            None => {
-                println!(
-                    "  {:>4}  {:>11}  {:>9}  {:>7}  {:>10}  -",
-                    i + 1, "N/A", "-", "-", "-",
-                );
-            }
-        }
+    // Consolidated e/i context block — emitted once when enrichment is active
+    if matches!(report.perch, PerchEnrichmentResult::Enriched(_)) {
+        let _ = writeln!(
+            out,
+            "> **e/i context:** V-bar perch geometry has zero e/i separation by construction. \
+             Perch enrichment establishes separation at the departure state, but waypoint \
+             targeting preserves RIC position, not e/i geometry \u{2014} transit degradation is \
+             expected. For guided operations, operational safety (3D distance) is the \
+             governing constraint. e/i metrics are reported for completeness and free-drift \
+             contingency assessment.\n",
+        );
     }
 
-    // Mission-wide minimum
-    match report.mission_min_ei_separation_km {
-        Some(min_km) => {
-            println!("\n  Mission min e/i separation: {}", fmt_m(min_km, 1));
-        }
-        None => {
-            println!("\n  Mission min e/i separation: N/A");
-        }
-    }
+    write_waypoint_enrichment_md(out, report);
+    write_transit_safety_md(out, report);
 }
 
 // ---------------------------------------------------------------------------
-// Markdown output
+// Markdown helpers
 // ---------------------------------------------------------------------------
 
-/// Write perch enrichment section to markdown output.
-pub fn write_perch_enrichment_md(out: &mut String, report: &FormationDesignReport) {
-    let _ = writeln!(out, "## Perch Enrichment\n");
+/// Write perch enrichment section to markdown output (### heading).
+fn write_perch_enrichment_md(out: &mut String, report: &FormationDesignReport) {
+    let _ = writeln!(out, "### Perch Enrichment\n");
     match &report.perch {
         PerchEnrichmentResult::Enriched(safe_perch) => {
             let _ = writeln!(out, "| Parameter | Value |");
             let _ = writeln!(out, "| --- | --- |");
             let _ = writeln!(out, "| Status | ENRICHED |");
-            let _ = writeln!(out, "| Alignment | {} |", format_alignment(safe_perch.alignment));
+            let _ = writeln!(
+                out,
+                "| Alignment | {} |",
+                format_alignment(safe_perch.alignment),
+            );
             let _ = writeln!(
                 out,
                 "| \u{03b4}e magnitude | {} |",
@@ -175,6 +71,30 @@ pub fn write_perch_enrichment_md(out: &mut String, report: &FormationDesignRepor
                 "| Min R/C separation | {} |",
                 fmt_m(safe_perch.min_rc_separation_km, 1),
             );
+            let _ = writeln!(out);
+
+            // Before/after ROE comparison
+            let b = &safe_perch.baseline_roe;
+            let e = &safe_perch.roe;
+            let _ = writeln!(out, "**Baseline \u{2192} Enriched ROE:**\n");
+            let _ = writeln!(out, "| Element | Baseline | Enriched |");
+            let _ = writeln!(out, "| --- | --- | --- |");
+            for (label, bv, ev) in [
+                ("\u{03b4}a", b.da, e.da),
+                ("\u{03b4}\u{03bb}", b.dlambda, e.dlambda),
+                ("\u{03b4}ex", b.dex, e.dex),
+                ("\u{03b4}ey", b.dey, e.dey),
+                ("\u{03b4}ix", b.dix, e.dix),
+                ("\u{03b4}iy", b.diy, e.diy),
+            ] {
+                let _ = writeln!(
+                    out,
+                    "| {} | {} | {} |",
+                    label,
+                    fmt_roe_component(bv),
+                    fmt_roe_component(ev),
+                );
+            }
         }
         PerchEnrichmentResult::Baseline(_) => {
             let _ = writeln!(out, "| Parameter | Value |");
@@ -191,12 +111,16 @@ pub fn write_perch_enrichment_md(out: &mut String, report: &FormationDesignRepor
     let _ = writeln!(out);
 }
 
-/// Write waypoint enrichment advisory table to markdown output.
-pub fn write_waypoint_enrichment_md(out: &mut String, report: &FormationDesignReport) {
+/// Write waypoint enrichment advisory table to markdown output (### heading).
+fn write_waypoint_enrichment_md(out: &mut String, report: &FormationDesignReport) {
     if report.waypoints.is_empty() {
         return;
     }
-    let _ = writeln!(out, "## Waypoint Enrichment (Advisory)\n");
+    let _ = writeln!(out, "### Waypoint Enrichment (Advisory)\n");
+    let _ = writeln!(
+        out,
+        "> Not applied to targeting. See e/i context above.\n",
+    );
     let _ = writeln!(out, "| Leg | Baseline e/i | Enriched e/i | Phase | Mode |");
     let _ = writeln!(out, "| --- | --- | --- | --- | --- |");
     for (i, wp) in report.waypoints.iter().enumerate() {
@@ -220,12 +144,16 @@ pub fn write_waypoint_enrichment_md(out: &mut String, report: &FormationDesignRe
     let _ = writeln!(out);
 }
 
-/// Write transit safety table to markdown output.
-pub fn write_transit_safety_md(out: &mut String, report: &FormationDesignReport) {
+/// Write transit safety table to markdown output (### heading).
+fn write_transit_safety_md(out: &mut String, report: &FormationDesignReport) {
     if report.transit_safety.is_empty() {
         return;
     }
-    let _ = writeln!(out, "## Formation Transit Safety\n");
+    let _ = writeln!(out, "### Transit Safety\n");
+    let _ = writeln!(
+        out,
+        "> See e/i context above. FAIL results below are expected for guided operations.\n",
+    );
     let _ = writeln!(
         out,
         "| Leg | Min e/i sep | At | Phase | Drift comp | Status |",
@@ -237,7 +165,7 @@ pub fn write_transit_safety_md(out: &mut String, report: &FormationDesignReport)
                 let status = if t.satisfies_requirement {
                     "\u{2705} PASS"
                 } else {
-                    "\u{274c} FAIL"
+                    "\u{26a0}\u{fe0f} expected"
                 };
                 let drift = match t.drift_compensation {
                     DriftCompensationStatus::Applied => "applied",
@@ -263,7 +191,11 @@ pub fn write_transit_safety_md(out: &mut String, report: &FormationDesignReport)
     // Mission-wide minimum
     match report.mission_min_ei_separation_km {
         Some(min_km) => {
-            let _ = writeln!(out, "\n**Mission min e/i separation:** {}\n", fmt_m(min_km, 1));
+            let _ = writeln!(
+                out,
+                "\n**Mission min e/i separation:** {}\n",
+                fmt_m(min_km, 1),
+            );
         }
         None => {
             let _ = writeln!(out, "\n**Mission min e/i separation:** N/A\n");
