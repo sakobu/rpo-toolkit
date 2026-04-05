@@ -20,16 +20,16 @@ Tier 4 - Overlays:        navigation_accuracy, maneuver_uncertainty, monte_carlo
 
 Changing an upstream tier clears downstream computed results so that stale data is never served.
 
-| Setter                                        | Clears                                           |
-| --------------------------------------------- | ------------------------------------------------ |
-| `set_states(chief, deputy)`                   | transfer, drag_config, missions                  |
-| `set_spacecraft(chief_config, deputy_config)` | drag_config only                                 |
-| `compute_transfer(perch, tof, config)`        | missions (via store_transfer)                    |
-| `store_drag(drag)`                            | nothing (propagator toggle is explicit)          |
-| `set_waypoints(waypoints)`                    | missions, selected_variant                       |
-| `set_safety_requirements(requirements)`       | missions, selected_variant                       |
-| `update_config(config)`                       | missions (if config/propagator/proximity changed)|
-| `reset()`                                     | everything                                       |
+| Setter                                        | Clears                                            |
+| --------------------------------------------- | ------------------------------------------------- |
+| `set_states(chief, deputy)`                   | transfer, drag_config, missions                   |
+| `set_spacecraft(chief_config, deputy_config)` | drag_config only                                  |
+| `compute_transfer(perch, tof, config)`        | missions (via store_transfer)                     |
+| `store_drag(drag)`                            | nothing (propagator toggle is explicit)           |
+| `set_waypoints(waypoints)`                    | missions, selected_variant                        |
+| `set_safety_requirements(requirements)`       | missions, selected_variant                        |
+| `update_config(config)`                       | missions (if config/propagator/proximity changed) |
+| `reset()`                                     | everything                                        |
 
 Tier 4 overlays (`navigation_accuracy`, `maneuver_uncertainty`, `monte_carlo_config`) never trigger invalidation or replan.
 
@@ -272,11 +272,11 @@ Response: `state_updated`
 
 Select which plan variant (baseline or enriched) is active for downstream operations (validate, MC, COLA, etc.). Default after `set_waypoints` is `baseline`.
 
-| Field        | Type            | Required | Description                              |
-| ------------ | --------------- | -------- | ---------------------------------------- |
-| `type`       | `"select_plan"` | yes      | Message discriminator                    |
-| `request_id` | `u64`           | yes      | Client-assigned correlation ID           |
-| `variant`    | `string`        | yes      | `"baseline"` or `"enriched"`             |
+| Field        | Type            | Required | Description                    |
+| ------------ | --------------- | -------- | ------------------------------ |
+| `type`       | `"select_plan"` | yes      | Message discriminator          |
+| `request_id` | `u64`           | yes      | Client-assigned correlation ID |
+| `variant`    | `string`        | yes      | `"baseline"` or `"enriched"`   |
 
 Response: `plan_selected`
 
@@ -397,11 +397,11 @@ Acknowledgement of a state-setting message. Reports what was set and what was in
 
 ### transfer_computed
 
-| Field        | Type                | Description                                                   |
-| ------------ | ------------------- | ------------------------------------------------------------- |
+| Field        | Type                  | Description                                                   |
+| ------------ | --------------------- | ------------------------------------------------------------- |
 | `type`       | `"transfer_computed"` | Message discriminator                                         |
-| `request_id` | `u64`               | Correlation ID from the client request                        |
-| `result`     | `TransferResult`    | Classification, Lambert transfer, perch states, arrival epoch |
+| `request_id` | `u64`                 | Correlation ID from the client request                        |
+| `result`     | `TransferResult`      | Classification, Lambert transfer, perch states, arrival epoch |
 
 ### plan_result
 
@@ -535,10 +535,10 @@ Each `SkippedLegSummary` contains:
 
 Confirmation that the active plan variant was changed (response to `select_plan`).
 
-| Field        | Type              | Description                            |
-| ------------ | ----------------- | -------------------------------------- |
-| `type`       | `"plan_selected"` | Message discriminator                  |
-| `request_id` | `u64`             | Correlation ID from the client request |
+| Field        | Type              | Description                                           |
+| ------------ | ----------------- | ----------------------------------------------------- |
+| `type`       | `"plan_selected"` | Message discriminator                                 |
+| `request_id` | `u64`             | Correlation ID from the client request                |
 | `variant`    | `string`          | The now-active variant (`"baseline"` or `"enriched"`) |
 
 ### formation_design_result
@@ -559,6 +559,26 @@ Full formation design report for the currently selected plan variant (response t
 | `waypoints`                    | `(EnrichedWaypoint \| null)[]`    | Per-leg advisory enrichment (null if failed for that leg)  |
 | `transit_safety`               | `(TransitSafetyReport \| null)[]` | Per-leg e/i separation profile (null if failed)            |
 | `mission_min_ei_separation_km` | `f64?`                            | Mission-wide minimum e/i separation (omitted if no data)   |
+| `drift_prediction`             | `DriftPrediction?`                | Predicted mid-transit e/i for leg-1 coast arc (omitted if outside compensation regime). `{ predicted_min_ei_km: f64, predicted_phase_angle_rad: f64 }` |
+
+`TransitSafetyReport` fields:
+
+| Field                   | Type         | Description                                                       |
+| ----------------------- | ------------ | ----------------------------------------------------------------- |
+| `min_ei_separation_km`  | `f64`        | Minimum e/i separation across the arc (km)                        |
+| `min_elapsed_s`         | `f64`        | Elapsed time at minimum (seconds from leg departure)              |
+| `min_phase_angle_rad`   | `f64`        | E/I phase angle at minimum (rad). 0 = parallel, pi/2 = orthogonal |
+| `satisfies_requirement` | `bool`       | Whether the arc satisfies the safety requirement                  |
+| `threshold_km`          | `f64`        | The threshold used for `satisfies_requirement` (km)               |
+| `profile`               | `EiSample[]` | Per-sample e/i separation profile                                 |
+
+`EiSample` fields:
+
+| Field              | Type  | Description                               |
+| ------------------ | ----- | ----------------------------------------- |
+| `elapsed_s`        | `f64` | Elapsed time from leg departure (seconds) |
+| `ei_separation_km` | `f64` | E/I separation at this point (km)         |
+| `phase_angle_rad`  | `f64` | E/I phase angle at this point (rad)       |
 
 `PerchEnrichmentResult` is tagged by `status`:
 

@@ -114,7 +114,7 @@ fn enrich_simple_perch(
         }
     };
 
-    // 5. Compute separation (D'Amico Eq. 2.23 with equal magnitudes)
+    // 4. Compute separation (D'Amico Eq. 2.23 with equal magnitudes)
     let magnitude_km = chief_mean.a_km * de_nom;
 
     Ok(SafePerch {
@@ -474,4 +474,5 @@ mod tests {
             result.baseline_roe.diy
         );
     }
+
 }

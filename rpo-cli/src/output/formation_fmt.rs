@@ -3,7 +3,7 @@
 use std::fmt::Write;
 
 use rpo_core::mission::{
-    DriftCompensationStatus, EiAlignment, EnrichmentMode, FormationDesignReport,
+    EiAlignment, EnrichmentMode, FormationDesignReport,
     PerchEnrichmentResult, PerchFallbackReason,
 };
 
@@ -71,6 +71,14 @@ fn write_perch_enrichment_md(out: &mut String, report: &FormationDesignReport) {
                 "| Min R/C separation | {} |",
                 fmt_m(safe_perch.min_rc_separation_km, 1),
             );
+            if let Some(ref pred) = report.drift_prediction {
+                let _ = writeln!(
+                    out,
+                    "| Predicted mid-transit e/i | {} ({:.1}\u{00b0}) |",
+                    fmt_m(pred.predicted_min_ei_km, 1),
+                    pred.predicted_phase_angle_rad.to_degrees(),
+                );
+            }
             let _ = writeln!(out);
 
             // Before/after ROE comparison
@@ -156,34 +164,29 @@ fn write_transit_safety_md(out: &mut String, report: &FormationDesignReport) {
     );
     let _ = writeln!(
         out,
-        "| Leg | Min e/i sep | At | Phase | Drift comp | Status |",
+        "| Leg | Min e/i sep | At | Phase | Status |",
     );
-    let _ = writeln!(out, "| --- | --- | --- | --- | --- | --- |");
+    let _ = writeln!(out, "| --- | --- | --- | --- | --- |");
     for (i, ts) in report.transit_safety.iter().enumerate() {
         match ts {
             Some(t) => {
                 let status = if t.satisfies_requirement {
-                    "\u{2705} PASS"
+                    "\u{2705}"
                 } else {
-                    "\u{26a0}\u{fe0f} expected"
-                };
-                let drift = match t.drift_compensation {
-                    DriftCompensationStatus::Applied => "applied",
-                    DriftCompensationStatus::Skipped => "skipped",
+                    "\u{26a0}\u{fe0f}"
                 };
                 let _ = writeln!(
                     out,
-                    "| {} | {} | {} | {:.1}\u{00b0} | {} | {} |",
+                    "| {} | {} | {} | {:.1}\u{00b0} | {} |",
                     i + 1,
                     fmt_m(t.min_ei_separation_km, 1),
                     fmt_duration(t.min_elapsed_s),
                     t.min_phase_angle_rad.to_degrees(),
-                    drift,
                     status,
                 );
             }
             None => {
-                let _ = writeln!(out, "| {} | N/A | - | - | - | - |", i + 1);
+                let _ = writeln!(out, "| {} | N/A | - | - | - |", i + 1);
             }
         }
     }

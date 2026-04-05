@@ -27,7 +27,7 @@ pub mod types;
 
 pub use errors::{FormationDesignError, PerchFallbackReason};
 pub use types::{
-    DriftCompensationStatus, EiAlignment, EiSample, EnrichedWaypoint, EnrichmentMode,
-    FormationDesignReport, PerchEnrichmentResult, SafePerch, SafetyRequirements,
-    TransitSafetyReport,
+    DriftPrediction, EiAlignment, EiSample,
+    EnrichedWaypoint, EnrichmentMode, FormationDesignReport, PerchEnrichmentResult, SafePerch,
+    SafetyRequirements, TransitSafetyReport,
 };

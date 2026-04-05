@@ -78,6 +78,19 @@ pub struct EnrichedWaypoint {
     pub resolved_alignment: EiAlignment,
 }
 
+/// Drift-aware e/i prediction for the first coast arc.
+///
+/// Computed by [`compute_formation_report`](crate::pipeline::execute::compute_formation_report)
+/// using [`enrich_with_drift_compensation`](super::transit::enrich_with_drift_compensation)
+/// to predict mid-transit e/i separation under J2 perigee drift.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DriftPrediction {
+    /// Predicted minimum e/i separation at mid-transit (km).
+    pub predicted_min_ei_km: f64,
+    /// Predicted e/i phase angle at mid-transit (rad).
+    pub predicted_phase_angle_rad: f64,
+}
+
 /// Result of enriching a perch geometry with safe e/i vectors.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SafePerch {
@@ -168,8 +181,6 @@ pub struct TransitSafetyReport {
     pub satisfies_requirement: bool,
     /// The threshold used for `satisfies_requirement` (km). Makes the report self-documenting.
     pub threshold_km: f64,
-    /// Whether J2 drift compensation was applied or skipped for this arc.
-    pub drift_compensation: DriftCompensationStatus,
     /// Per-sample e/i separation profile.
     pub profile: Vec<EiSample>,
 }
@@ -197,4 +208,8 @@ pub struct FormationDesignReport {
     /// `None` when no transit assessments succeeded.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub mission_min_ei_separation_km: Option<f64>,
+    /// Drift-aware e/i prediction for the leg-1 coast arc.
+    /// Present when leg-1 TOF is within the J2 drift compensation regime.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub drift_prediction: Option<DriftPrediction>,
 }

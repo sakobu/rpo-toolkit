@@ -26,8 +26,9 @@ use crate::propagation::propagator::{PropagatedState, PropagationModel};
 use crate::types::KeplerianElements;
 
 use super::safety_envelope::enrich_waypoint;
+use super::types::DriftCompensationStatus;
 use super::{
-    DriftCompensationStatus, EiSample, EnrichedWaypoint, FormationDesignError,
+    EiSample, EnrichedWaypoint, FormationDesignError,
     SafetyRequirements, TransitSafetyReport,
 };
 
@@ -153,7 +154,6 @@ pub fn assess_transit_safety(
         min_phase_angle_rad: min_phase_rad,
         satisfies_requirement: min_sep >= requirements.min_separation_km,
         threshold_km: requirements.min_separation_km,
-        drift_compensation: DriftCompensationStatus::Skipped,
         profile,
     })
 }
@@ -263,12 +263,32 @@ pub fn enrich_with_drift_compensation(
 mod tests {
     use super::*;
     use crate::mission::formation::{EiAlignment, SafetyRequirements};
+    use crate::mission::safety::EiSeparation;
     use crate::propagation::propagator::PropagationModel;
+    use crate::propagation::stm::propagate_roe_stm;
     use crate::test_helpers::{
         damico_table21_chief, damico_table21_case1_roe, iss_like_elements,
         propagate_test_trajectory,
     };
     use crate::types::QuasiNonsingularROE;
+
+    /// Predict e/i separation at mid-transit for a drift-compensated ROE.
+    ///
+    /// Propagates the compensated ROE forward by `tof_s / 2` using the J2 STM,
+    /// then evaluates `compute_ei_separation`. Test-only helper for validating
+    /// drift compensation behavior.
+    fn predict_compensated_ei(
+        compensated_roe: &QuasiNonsingularROE,
+        departure_chief: &KeplerianElements,
+        tof_s: f64,
+    ) -> Result<EiSeparation, FormationDesignError> {
+        let (prop_roe, prop_chief) = propagate_roe_stm(
+            compensated_roe,
+            departure_chief,
+            tof_s / 2.0,
+        )?;
+        Ok(compute_ei_separation(&prop_roe, &prop_chief))
+    }
 
     /// E/I separation tolerance (km). The separation formula is exact when
     /// applied to exact ROE inputs; 1e-6 km = 1 mm covers f64 rounding
@@ -617,5 +637,88 @@ mod tests {
                 "{label}: |delta_phi| = {delta_phi:.4} rad exceeds linear regime ({LINEAR_REGIME_RAD} rad)"
             );
         }
+    }
+
+    // -----------------------------------------------------------------------
+    // predict_compensated_ei tests
+    // -----------------------------------------------------------------------
+
+    /// For a 2-orbit SSO arc, drift-compensated enrichment followed by
+    /// predict_compensated_ei should yield mid-transit e/i separation that
+    /// is at least as good as the uncompensated minimum from
+    /// assess_transit_safety.
+    ///
+    /// The compensated departure pre-rotates e/i so parallel alignment occurs
+    /// near mid-transit, which should improve the worst-case separation.
+    #[test]
+    fn predict_compensated_ei_improves_alignment() {
+        let chief = damico_table21_chief();
+        let period_s = chief.period().unwrap();
+        let tof_s = 2.0 * period_s;
+
+        let position = Vector3::new(0.0, 0.5, 0.0); // V-bar, 500m along-track
+        let requirements = default_requirements(0.10);
+        let propagator = j2_propagator();
+
+        // Get drift-compensated enrichment
+        let (enriched, status) = enrich_with_drift_compensation(
+            &position, &chief, tof_s, &propagator, &requirements,
+        )
+        .expect("enrichment should succeed");
+        assert!(matches!(status, DriftCompensationStatus::Applied));
+
+        // Predict mid-transit e/i from compensated ROE
+        let predicted = predict_compensated_ei(&enriched.roe, &chief, tof_s)
+            .expect("prediction should succeed");
+
+        // The predicted mid-transit separation should be positive
+        assert!(
+            predicted.min_separation_km > 0.0,
+            "predicted mid-transit e/i separation must be positive, got {:.6} km",
+            predicted.min_separation_km,
+        );
+
+        // Compare against uncompensated: propagate the *un*compensated enriched
+        // state and assess transit safety. The compensated prediction should be
+        // at least as good.
+        let uncomp_enriched = crate::mission::formation::safety_envelope::enrich_waypoint(
+            &position, None, &chief, &requirements,
+        )
+        .expect("baseline enrichment should succeed");
+        let trajectory = propagate_test_trajectory(
+            &uncomp_enriched.roe, &chief, tof_s, 200,
+        );
+        let uncomp_report = assess_transit_safety(&trajectory, &requirements)
+            .expect("transit assessment should succeed");
+
+        assert!(
+            predicted.min_separation_km >= uncomp_report.min_ei_separation_km - EI_SEPARATION_TOL,
+            "compensated prediction ({:.6} km) should be >= uncompensated minimum ({:.6} km)",
+            predicted.min_separation_km, uncomp_report.min_ei_separation_km,
+        );
+    }
+
+    /// At zero TOF, predict_compensated_ei returns the departure e/i separation
+    /// (no propagation effect).
+    #[test]
+    fn predict_compensated_ei_at_zero_tof() {
+        use crate::mission::safety::compute_ei_separation;
+
+        let chief = damico_table21_chief();
+        let roe = damico_table21_case1_roe();
+
+        let departure_ei = compute_ei_separation(&roe, &chief);
+        let predicted = predict_compensated_ei(&roe, &chief, 0.0)
+            .expect("zero-tof prediction should succeed");
+
+        assert!(
+            (predicted.min_separation_km - departure_ei.min_separation_km).abs() < EI_SEPARATION_TOL,
+            "at zero TOF, predicted ({:.6}) should equal departure ({:.6})",
+            predicted.min_separation_km, departure_ei.min_separation_km,
+        );
+        assert!(
+            (predicted.phase_angle_rad - departure_ei.phase_angle_rad).abs() < 1e-10,
+            "at zero TOF, phase angle should be unchanged",
+        );
     }
 }

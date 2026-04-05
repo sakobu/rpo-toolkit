@@ -8,9 +8,11 @@ use crate::mission::cola_assessment::{assess_cola, ColaAssessment};
 use crate::mission::avoidance::ColaConfig;
 use crate::mission::closest_approach::{find_closest_approaches, ClosestApproach};
 use crate::mission::formation::{
-    EnrichedWaypoint, FormationDesignReport, PerchEnrichmentResult,
-    SafetyRequirements, TransitSafetyReport,
+    DriftPrediction, EnrichedWaypoint, FormationDesignReport,
+    PerchEnrichmentResult, SafetyRequirements, TransitSafetyReport,
 };
+use crate::mission::formation::transit::enrich_with_drift_compensation;
+use crate::mission::formation::types::DriftCompensationStatus;
 use super::types::EnrichmentSuggestion;
 use crate::mission::formation::perch::enrich_perch;
 use crate::mission::formation::safety_envelope::enrich_waypoint;
@@ -537,11 +539,31 @@ pub fn compute_formation_report(
         .map(|t| t.min_ei_separation_km)
         .fold(None, |acc, v| Some(acc.map_or(v, |a: f64| a.min(v))));
 
+    // Drift prediction: predict mid-transit e/i for the leg-1 coast arc
+    // using J2 drift compensation. Computed here (orchestration layer) rather
+    // than inside perch enrichment to keep geometric and temporal concerns separate.
+    let drift_prediction = legs.first().and_then(|leg| {
+        match enrich_with_drift_compensation(
+            &leg.from_position_ric_km,
+            &leg.departure_chief_mean,
+            leg.tof_s,
+            &PropagationModel::J2Stm,
+            &resolved_reqs,
+        ) {
+            Ok((enriched, DriftCompensationStatus::Applied)) => Some(DriftPrediction {
+                predicted_min_ei_km: enriched.enriched_ei.min_separation_km,
+                predicted_phase_angle_rad: enriched.enriched_ei.phase_angle_rad,
+            }),
+            _ => None,
+        }
+    });
+
     FormationDesignReport {
         perch: perch_result,
         waypoints,
         transit_safety,
         mission_min_ei_separation_km,
+        drift_prediction,
     }
 }
 
@@ -1003,6 +1025,41 @@ mod tests {
         assert!(
             mission_min > 0.0,
             "mission min e/i separation should be positive, got {mission_min}"
+        );
+    }
+
+    /// Formation report includes drift prediction for leg-1 coast arc.
+    ///
+    /// proximity_input has tof_s = 4200s (~0.78 orbits of ISS-like chief),
+    /// well within the 10-orbit drift compensation regime, so a prediction
+    /// must be present.
+    #[test]
+    fn formation_report_has_drift_prediction() {
+        use crate::mission::formation::{EiAlignment, SafetyRequirements};
+
+        let mut input = proximity_input();
+        input.safety_requirements = Some(SafetyRequirements {
+            min_separation_km: 0.10,
+            alignment: EiAlignment::Parallel,
+        });
+
+        let output = execute_mission(&input).expect("execute_mission should succeed");
+        let report = output.formation_design
+            .as_ref()
+            .expect("formation_design should be present");
+
+        assert!(
+            report.drift_prediction.is_some(),
+            "drift prediction should be present for sub-orbit arc with non-critical inclination"
+        );
+        let pred = report.drift_prediction.as_ref().unwrap();
+        assert!(
+            pred.predicted_min_ei_km > 0.0,
+            "predicted min e/i must be positive"
+        );
+        assert!(
+            pred.predicted_phase_angle_rad >= 0.0,
+            "predicted phase angle must be non-negative"
         );
     }
 

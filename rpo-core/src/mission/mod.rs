@@ -23,9 +23,9 @@ pub use config::{MissionConfig, ProximityConfig, SafetyConfig, TargetingConfig, 
 pub use errors::{EclipseComputeError, MissionError};
 pub use closest_approach::{find_closest_approaches, ClosestApproach, PocaError};
 pub use formation::{
-    DriftCompensationStatus, EiAlignment, EiSample, EnrichedWaypoint, EnrichmentMode,
-    FormationDesignError, FormationDesignReport, PerchEnrichmentResult, PerchFallbackReason,
-    SafePerch, SafetyRequirements, TransitSafetyReport,
+    DriftPrediction, EiAlignment, EiSample, EnrichedWaypoint,
+    EnrichmentMode, FormationDesignError, FormationDesignReport, PerchEnrichmentResult,
+    PerchFallbackReason, SafePerch, SafetyRequirements, TransitSafetyReport,
 };
 pub use free_drift::{bounded_motion_residual, compute_free_drift, FreeDriftAnalysis, FreeDriftError};
 pub use planning::{

@@ -17,7 +17,7 @@ Astrodynamics toolkit for rendezvous and proximity operations (RPO) mission plan
 
 ```bash
 cargo build                     # build workspace
-cargo test                      # 468 tests across 3 crates (+ 21 ignored full-physics; 489 total with --include-ignored)
+cargo test                      # 471 tests across 3 crates (+ 21 ignored full-physics; 492 total with --include-ignored)
 ```
 
 Run an example mission (analytical):
@@ -59,22 +59,22 @@ flowchart TD
     G --> H["Monte Carlo\nensemble analysis\n(minutes)"]
 ```
 
-| Step                      | Function                              | Engine            | Speed                 |
-| ------------------------- | ------------------------------------- | ----------------- | --------------------- |
-| Configure spacecraft      | —                                     | UI only           | —                     |
-| Classify separation       | `classify_separation()`               | Analytical        | microseconds          |
-| Lambert transfer          | `solve_lambert()`                     | nyx-space         | ~100 ms               |
-| Drag estimation           | `extract_dmf_rates()`                 | nyx-space         | ~3 s                  |
-| Waypoint targeting        | `plan_waypoint_mission()`             | Analytical        | microseconds          |
+| Step                      | Function                                               | Engine            | Speed                 |
+| ------------------------- | ------------------------------------------------------ | ----------------- | --------------------- |
+| Configure spacecraft      | —                                                      | UI only           | —                     |
+| Classify separation       | `classify_separation()`                                | Analytical        | microseconds          |
+| Lambert transfer          | `solve_lambert()`                                      | nyx-space         | ~100 ms               |
+| Drag estimation           | `extract_dmf_rates()`                                  | nyx-space         | ~3 s                  |
+| Waypoint targeting        | `plan_waypoint_mission()`                              | Analytical        | microseconds          |
 | Formation design          | `suggest_enrichment_from_parts()`, `enrich_waypoint()` | Analytical        | microseconds          |
-| Safety analysis           | `assess_safety()`                     | Analytical        | microseconds          |
-| Free-drift abort analysis | `compute_free_drift_analysis()`       | Analytical        | microseconds          |
-| Closest approach (POCA)   | `compute_poca_analysis()`             | Analytical        | microseconds          |
-| Collision avoidance       | `assess_cola()`                       | Analytical        | microseconds          |
-| Covariance + Mahalanobis  | `propagate_mission_covariance()`      | Analytical        | microseconds          |
-| Eclipse computation       | inside `plan_waypoint_mission()`      | Analytical        | ~10 ms (full mission) |
-| Full-physics validation   | `validate_mission_nyx()`              | nyx-space         | seconds               |
-| Monte Carlo ensemble      | `run_monte_carlo()`                   | nyx-space + rayon | minutes               |
+| Safety analysis           | `assess_safety()`                                      | Analytical        | microseconds          |
+| Free-drift abort analysis | `compute_free_drift_analysis()`                        | Analytical        | microseconds          |
+| Closest approach (POCA)   | `compute_poca_analysis()`                              | Analytical        | microseconds          |
+| Collision avoidance       | `assess_cola()`                                        | Analytical        | microseconds          |
+| Covariance + Mahalanobis  | `propagate_mission_covariance()`                       | Analytical        | microseconds          |
+| Eclipse computation       | inside `plan_waypoint_mission()`                       | Analytical        | ~10 ms (full mission) |
+| Full-physics validation   | `validate_mission_nyx()`                               | nyx-space         | seconds               |
+| Monte Carlo ensemble      | `run_monte_carlo()`                                    | nyx-space + rayon | minutes               |
 
 ## Validated Accuracy
 
@@ -204,7 +204,7 @@ The CLI (`rpo-cli`) provides batch execution and shell-composable plumbing for s
 
 ## Testing
 
-489 tests across 3 crates (435 rpo-core, 43 rpo-api, 11 rpo-cli); 21 full-physics tests are `#[ignore]` by default (require ANISE kernels, ~50 MB cached download). Tests cover roundtrip transform invariants, STM identity at dt=0, energy/momentum conservation, regression against published data (Koenig Tables 2-3, D'Amico Sec. 2.1-2.2), Newton-Raphson convergence, POCA Brent-refinement invariants (refined distance <= grid-sampled), free-drift abort-case trajectories, COLA inverse GVE analytical solutions and post-avoidance verification, autonomous COLA evaluation with multi-leg secondary conjunction detection, COLA burn conversion and two-segment nyx propagation, MC dispersion inheritance from navigation accuracy, formation design null-space orthogonality and position preservation, e/i enrichment separation thresholds, perch enrichment with safe e/i vectors, transit safety monitoring, J2 drift compensation, deterministic Monte Carlo seeding, covariance symmetry preservation, dual-plan session state management, session invalidation and safety requirements propagation, WebSocket handler integration, error serialization, and CLI smoke tests.
+492 tests across 3 crates (438 rpo-core, 43 rpo-api, 11 rpo-cli); 21 full-physics tests are `#[ignore]` by default (require ANISE kernels, ~50 MB cached download). Tests cover roundtrip transform invariants, STM identity at dt=0, energy/momentum conservation, regression against published data (Koenig Tables 2-3, D'Amico Sec. 2.1-2.2), Newton-Raphson convergence, POCA Brent-refinement invariants (refined distance <= grid-sampled), free-drift abort-case trajectories, COLA inverse GVE analytical solutions and post-avoidance verification, autonomous COLA evaluation with multi-leg secondary conjunction detection, COLA burn conversion and two-segment nyx propagation, MC dispersion inheritance from navigation accuracy, formation design null-space orthogonality and position preservation, e/i enrichment separation thresholds, perch enrichment with safe e/i vectors, transit safety monitoring, J2 drift compensation, deterministic Monte Carlo seeding, covariance symmetry preservation, dual-plan session state management, session invalidation and safety requirements propagation, WebSocket handler integration, error serialization, and CLI smoke tests.
 
 ```bash
 cargo test                  # full suite
