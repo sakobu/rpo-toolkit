@@ -133,12 +133,13 @@ pub fn plan_waypoint_mission(
     let mut current = *initial;
 
     for wp in waypoints {
+        let target_velocity_ric_km_s = wp.velocity_ric_km_s.unwrap_or_else(Vector3::zeros);
         let leg = if let Some(tof) = wp.tof_s {
             // Fixed TOF
             solve_leg(
                 &current,
                 &wp.position_ric_km,
-                &wp.velocity_ric_km_s,
+                &target_velocity_ric_km_s,
                 tof,
                 targeting_config,
                 propagator,
@@ -148,7 +149,7 @@ pub fn plan_waypoint_mission(
             let (_, leg) = optimize_tof(
                 &current,
                 &wp.position_ric_km,
-                &wp.velocity_ric_km_s,
+                &target_velocity_ric_km_s,
                 targeting_config,
                 tof_config,
                 propagator,
@@ -315,7 +316,7 @@ mod tests {
 
         let waypoints = vec![Waypoint {
             position_ric_km: Vector3::new(0.0, 5.0, 0.0),
-            velocity_ric_km_s: Vector3::zeros(),
+            velocity_ric_km_s: Some(Vector3::zeros()),
             tof_s: Some(period),
         }];
 
@@ -340,17 +341,17 @@ mod tests {
         let waypoints = vec![
             Waypoint {
                 position_ric_km: Vector3::new(0.0, 5.0, 0.0),
-                velocity_ric_km_s: Vector3::zeros(),
+                velocity_ric_km_s: Some(Vector3::zeros()),
                 tof_s: Some(tof),
             },
             Waypoint {
                 position_ric_km: Vector3::new(2.0, 3.0, 0.0),
-                velocity_ric_km_s: Vector3::zeros(),
+                velocity_ric_km_s: Some(Vector3::zeros()),
                 tof_s: Some(tof),
             },
             Waypoint {
                 position_ric_km: Vector3::new(0.0, 1.0, 0.0),
-                velocity_ric_km_s: Vector3::zeros(),
+                velocity_ric_km_s: Some(Vector3::zeros()),
                 tof_s: Some(tof),
             },
         ];
@@ -381,12 +382,12 @@ mod tests {
         let waypoints = vec![
             Waypoint {
                 position_ric_km: Vector3::new(0.0, 5.0, 0.0),
-                velocity_ric_km_s: Vector3::zeros(),
+                velocity_ric_km_s: Some(Vector3::zeros()),
                 tof_s: Some(tof),
             },
             Waypoint {
                 position_ric_km: Vector3::new(0.0, 3.0, 0.0),
-                velocity_ric_km_s: Vector3::zeros(),
+                velocity_ric_km_s: Some(Vector3::zeros()),
                 tof_s: Some(tof),
             },
         ];
@@ -428,7 +429,7 @@ mod tests {
 
         let waypoints = vec![Waypoint {
             position_ric_km: Vector3::new(0.0, 5.0, 0.0),
-            velocity_ric_km_s: Vector3::zeros(),
+            velocity_ric_km_s: Some(Vector3::zeros()),
             tof_s: Some(period),
         }];
 
@@ -448,17 +449,17 @@ mod tests {
         vec![
             Waypoint {
                 position_ric_km: Vector3::new(0.0, 5.0, 0.0),
-                velocity_ric_km_s: Vector3::zeros(),
+                velocity_ric_km_s: Some(Vector3::zeros()),
                 tof_s: Some(tof),
             },
             Waypoint {
                 position_ric_km: Vector3::new(2.0, 3.0, 0.0),
-                velocity_ric_km_s: Vector3::zeros(),
+                velocity_ric_km_s: Some(Vector3::zeros()),
                 tof_s: Some(tof),
             },
             Waypoint {
                 position_ric_km: Vector3::new(0.0, 1.0, 0.0),
-                velocity_ric_km_s: Vector3::zeros(),
+                velocity_ric_km_s: Some(Vector3::zeros()),
                 tof_s: Some(tof),
             },
         ]
@@ -698,7 +699,7 @@ mod tests {
         let target_pos = Vector3::new(0.0, 5.0, 0.0);
         let waypoints = vec![Waypoint {
             position_ric_km: target_pos,
-            velocity_ric_km_s: Vector3::zeros(),
+            velocity_ric_km_s: Some(Vector3::zeros()),
             tof_s: Some(period),
         }];
 
@@ -739,7 +740,7 @@ mod tests {
 
         let waypoints = vec![Waypoint {
             position_ric_km: Vector3::new(0.0, 5.0, 0.0),
-            velocity_ric_km_s: Vector3::zeros(),
+            velocity_ric_km_s: Some(Vector3::zeros()),
             tof_s: Some(period),
         }];
 
@@ -783,17 +784,17 @@ mod tests {
         let waypoints = vec![
             Waypoint {
                 position_ric_km: Vector3::new(0.0, 5.0, 0.0),
-                velocity_ric_km_s: Vector3::zeros(),
+                velocity_ric_km_s: Some(Vector3::zeros()),
                 tof_s: Some(tof),
             },
             Waypoint {
                 position_ric_km: Vector3::new(2.0, 3.0, 0.0),
-                velocity_ric_km_s: Vector3::zeros(),
+                velocity_ric_km_s: Some(Vector3::zeros()),
                 tof_s: Some(tof),
             },
             Waypoint {
                 position_ric_km: Vector3::new(0.0, 1.0, 0.0),
-                velocity_ric_km_s: Vector3::zeros(),
+                velocity_ric_km_s: Some(Vector3::zeros()),
                 tof_s: Some(tof),
             },
         ];
@@ -862,7 +863,7 @@ mod tests {
 
         let waypoints = vec![Waypoint {
             position_ric_km: Vector3::new(0.0, 5.0, 0.0),
-            velocity_ric_km_s: Vector3::zeros(),
+            velocity_ric_km_s: Some(Vector3::zeros()),
             tof_s: Some(period),
         }];
 
@@ -888,7 +889,7 @@ mod tests {
 
         let waypoints = vec![Waypoint {
             position_ric_km: Vector3::new(0.0, 5.0, 0.0),
-            velocity_ric_km_s: Vector3::zeros(),
+            velocity_ric_km_s: Some(Vector3::zeros()),
             tof_s: Some(period),
         }];
 
@@ -924,12 +925,12 @@ mod tests {
         let waypoints = vec![
             Waypoint {
                 position_ric_km: Vector3::new(0.0, 5.0, 0.0),
-                velocity_ric_km_s: Vector3::zeros(),
+                velocity_ric_km_s: Some(Vector3::zeros()),
                 tof_s: Some(tof),
             },
             Waypoint {
                 position_ric_km: Vector3::new(2.0, 3.0, 0.0),
-                velocity_ric_km_s: Vector3::zeros(),
+                velocity_ric_km_s: Some(Vector3::zeros()),
                 tof_s: Some(tof),
             },
         ];
@@ -959,7 +960,7 @@ mod tests {
 
         let waypoints = vec![Waypoint {
             position_ric_km: Vector3::new(0.0, 5.0, 0.0),
-            velocity_ric_km_s: Vector3::zeros(),
+            velocity_ric_km_s: Some(Vector3::zeros()),
             tof_s: Some(period),
         }];
 
@@ -997,7 +998,7 @@ mod tests {
         let mut new_waypoints = waypoints.clone();
         new_waypoints[2] = Waypoint {
             position_ric_km: Vector3::new(0.0, 8.0, 0.0),
-            velocity_ric_km_s: Vector3::zeros(),
+            velocity_ric_km_s: Some(Vector3::zeros()),
             tof_s: Some(tof),
         };
 
@@ -1024,7 +1025,7 @@ mod tests {
 
         let waypoints = vec![Waypoint {
             position_ric_km: Vector3::new(0.0, 5.0, 0.0),
-            velocity_ric_km_s: Vector3::zeros(),
+            velocity_ric_km_s: Some(Vector3::zeros()),
             tof_s: Some(period),
         }];
 
@@ -1072,12 +1073,12 @@ mod tests {
         let waypoints = vec![
             Waypoint {
                 position_ric_km: Vector3::new(0.0, 5.0, 0.0),
-                velocity_ric_km_s: Vector3::zeros(),
+                velocity_ric_km_s: Some(Vector3::zeros()),
                 tof_s: Some(tof),
             },
             Waypoint {
                 position_ric_km: Vector3::new(2.0, 3.0, 0.0),
-                velocity_ric_km_s: Vector3::zeros(),
+                velocity_ric_km_s: Some(Vector3::zeros()),
                 tof_s: Some(tof),
             },
         ];

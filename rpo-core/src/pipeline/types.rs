@@ -101,7 +101,9 @@ impl SpacecraftChoice {
 pub struct WaypointInput {
     /// RIC position target \[R, I, C\] in km.
     pub position_ric_km: [f64; 3],
-    /// RIC velocity target \[R, I, C\] in km/s (defaults to zero).
+    /// RIC velocity target \[R, I, C\] in km/s. `None` = unspecified:
+    /// targeting defaults to zero-velocity hold; enrichment interprets
+    /// as 3-DOF null-space freedom.
     #[serde(default)]
     pub velocity_ric_km_s: Option<[f64; 3]>,
     /// Time-of-flight hint (seconds). If None, solver optimizes TOF.

@@ -949,17 +949,17 @@ mod tests {
             "position_ric_km.x copy mismatch"
         );
         assert!(
-            (waypoints[0].velocity_ric_km_s.y - 0.2).abs() < COPY_FIDELITY_TOL,
+            (waypoints[0].velocity_ric_km_s.unwrap().y - 0.2).abs() < COPY_FIDELITY_TOL,
             "velocity_ric_km_s.y copy mismatch"
         );
         assert!(
             (waypoints[0].tof_s.unwrap() - 100.0).abs() < COPY_FIDELITY_TOL,
             "tof_s copy mismatch"
         );
-        // Second waypoint should default velocity to zero
+        // Second waypoint has no velocity → None preserved (position-only)
         assert!(
-            waypoints[1].velocity_ric_km_s.x.abs() < COPY_FIDELITY_TOL,
-            "default velocity should be zero"
+            waypoints[1].velocity_ric_km_s.is_none(),
+            "None velocity should be preserved as position-only"
         );
         assert!(waypoints[1].tof_s.is_none());
     }

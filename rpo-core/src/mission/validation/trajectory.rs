@@ -806,7 +806,7 @@ mod tests {
         let period = chief_ke.period().unwrap();
         let waypoint = Waypoint {
             position_ric_km: Vector3::new(0.5, 3.0, 1.0),
-            velocity_ric_km_s: Vector3::zeros(),
+            velocity_ric_km_s: Some(Vector3::zeros()),
             tof_s: Some(0.8 * period),
         };
 
@@ -910,17 +910,17 @@ mod tests {
         let waypoints = vec![
             Waypoint {
                 position_ric_km: Vector3::new(0.5, 3.0, 0.5),
-                velocity_ric_km_s: Vector3::zeros(),
+                velocity_ric_km_s: Some(Vector3::zeros()),
                 tof_s: Some(tof),
             },
             Waypoint {
                 position_ric_km: Vector3::new(1.0, -2.0, 1.0),
-                velocity_ric_km_s: Vector3::zeros(),
+                velocity_ric_km_s: Some(Vector3::zeros()),
                 tof_s: Some(tof),
             },
             Waypoint {
                 position_ric_km: Vector3::new(0.0, 1.0, 0.0),
-                velocity_ric_km_s: Vector3::zeros(),
+                velocity_ric_km_s: Some(Vector3::zeros()),
                 tof_s: Some(tof),
             },
         ];
@@ -1043,7 +1043,7 @@ mod tests {
         let period = chief_ke.period().unwrap();
         let waypoint = Waypoint {
             position_ric_km: Vector3::new(0.0, 5.0, 0.0),
-            velocity_ric_km_s: Vector3::zeros(),
+            velocity_ric_km_s: Some(Vector3::zeros()),
             tof_s: Some(0.8 * period),
         };
 
@@ -1167,17 +1167,17 @@ mod tests {
         let waypoints = vec![
             Waypoint {
                 position_ric_km: Vector3::new(0.0, 3.0, 0.0),
-                velocity_ric_km_s: Vector3::zeros(),
+                velocity_ric_km_s: Some(Vector3::zeros()),
                 tof_s: Some(tof),
             },
             Waypoint {
                 position_ric_km: Vector3::new(0.5, 5.0, 0.5),
-                velocity_ric_km_s: Vector3::zeros(),
+                velocity_ric_km_s: Some(Vector3::zeros()),
                 tof_s: Some(tof),
             },
             Waypoint {
                 position_ric_km: Vector3::new(0.0, 2.0, 0.0),
-                velocity_ric_km_s: Vector3::zeros(),
+                velocity_ric_km_s: Some(Vector3::zeros()),
                 tof_s: Some(tof),
             },
         ];
@@ -1324,7 +1324,7 @@ mod tests {
         let period = chief_ke.period().unwrap();
         let waypoint = Waypoint {
             position_ric_km: Vector3::new(0.5, 3.0, 1.0),
-            velocity_ric_km_s: Vector3::zeros(),
+            velocity_ric_km_s: Some(Vector3::zeros()),
             tof_s: Some(0.8 * period),
         };
 
@@ -1417,7 +1417,7 @@ mod tests {
         let period = chief_ke.period().unwrap();
         let waypoint = Waypoint {
             position_ric_km: Vector3::new(0.5, 3.0, 1.0),
-            velocity_ric_km_s: Vector3::zeros(),
+            velocity_ric_km_s: Some(Vector3::zeros()),
             tof_s: Some(0.8 * period),
         };
 

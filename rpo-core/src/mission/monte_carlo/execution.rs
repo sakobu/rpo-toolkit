@@ -388,7 +388,7 @@ fn retarget_from_dispersed(
         .iter()
         .map(|leg| Waypoint {
             position_ric_km: leg.to_position_ric_km,
-            velocity_ric_km_s: leg.target_velocity_ric_km_s,
+            velocity_ric_km_s: Some(leg.target_velocity_ric_km_s),
             tof_s: Some(leg.tof_s),
         })
         .collect();

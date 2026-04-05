@@ -93,8 +93,18 @@ pub struct MissionPlan {
 pub struct Waypoint {
     /// Target position in RIC frame (km): [radial, in-track, cross-track]
     pub position_ric_km: Vector3<f64>,
-    /// Target velocity in RIC frame (km/s): [radial, in-track, cross-track]
-    pub velocity_ric_km_s: Vector3<f64>,
+    /// Target velocity in RIC frame (km/s): [radial, in-track, cross-track].
+    ///
+    /// Interpretation depends on the consuming layer:
+    ///
+    /// - **Targeting/planning** (`plan_waypoint_mission`): `None` defaults
+    ///   to zero-velocity station-keeping (hold at the RIC position).
+    /// - **Formation enrichment** (`safety_envelope::enrich_waypoint`):
+    ///   `None` means 3-DOF null-space freedom — velocity is selected to
+    ///   maximize e/i safety separation (D'Amico Eq. 2.17 pseudo-inverse).
+    ///
+    /// `Some(v)` = concrete velocity target; both layers solve for `v`.
+    pub velocity_ric_km_s: Option<Vector3<f64>>,
     /// Time of flight to this waypoint (seconds). If `None`, TOF will be optimized.
     pub tof_s: Option<f64>,
 }

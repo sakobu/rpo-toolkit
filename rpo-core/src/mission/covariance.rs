@@ -243,7 +243,7 @@ mod tests {
 
         let waypoints = vec![Waypoint {
             position_ric_km: Vector3::new(0.0, 5.0, 0.0),
-            velocity_ric_km_s: Vector3::zeros(),
+            velocity_ric_km_s: Some(Vector3::zeros()),
             tof_s: Some(tof),
         }];
 
@@ -261,12 +261,12 @@ mod tests {
         let waypoints = vec![
             Waypoint {
                 position_ric_km: Vector3::new(0.0, 5.0, 0.0),
-                velocity_ric_km_s: Vector3::zeros(),
+                velocity_ric_km_s: Some(Vector3::zeros()),
                 tof_s: Some(tof),
             },
             Waypoint {
                 position_ric_km: Vector3::new(2.0, 3.0, 0.0),
-                velocity_ric_km_s: Vector3::zeros(),
+                velocity_ric_km_s: Some(Vector3::zeros()),
                 tof_s: Some(tof),
             },
         ];
