@@ -78,16 +78,21 @@ pub struct EnrichedWaypoint {
     pub resolved_alignment: EiAlignment,
 }
 
-/// Drift-aware e/i prediction for the first coast arc.
+/// Drift-aware e/i prediction for the first coast arc, evaluated at the
+/// epoch of parallel alignment (mid-transit).
 ///
-/// Computed by [`compute_formation_report`](crate::pipeline::execute::compute_formation_report)
-/// using [`enrich_with_drift_compensation`](super::transit::enrich_with_drift_compensation)
-/// to predict mid-transit e/i separation under J2 perigee drift.
+/// Populated by [`compute_formation_report`](crate::pipeline::execute::compute_formation_report):
+/// [`enrich_with_drift_compensation`](super::transit::enrich_with_drift_compensation)
+/// produces a pre-rotated departure ROE, which is then propagated forward
+/// by `tof/2` under the J2 STM; the e/i separation is read at that epoch.
+/// Fields reflect the mid-transit state — NOT the departure epoch (which
+/// carries the pre-rotated, lagged phase by construction).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DriftPrediction {
     /// Predicted minimum e/i separation at mid-transit (km).
     pub predicted_min_ei_km: f64,
-    /// Predicted e/i phase angle at mid-transit (rad).
+    /// Predicted e/i phase angle at mid-transit (rad). Should be
+    /// approximately zero when compensation is working correctly.
     pub predicted_phase_angle_rad: f64,
 }
 

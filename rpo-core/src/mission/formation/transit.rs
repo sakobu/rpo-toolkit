@@ -20,12 +20,13 @@
 
 use nalgebra::Vector3;
 
-use crate::mission::safety::compute_ei_separation;
+use crate::mission::safety::{compute_ei_separation, EiSeparation};
 use crate::propagation::j2_params::compute_j2_params;
-use crate::propagation::propagator::{PropagatedState, PropagationModel};
-use crate::types::KeplerianElements;
+use crate::propagation::propagator::PropagatedState;
+use crate::propagation::stm::propagate_roe_stm;
+use crate::types::{KeplerianElements, QuasiNonsingularROE};
 
-use super::safety_envelope::enrich_waypoint;
+use super::safety_envelope::{enrich_waypoint, enrich_waypoint_with_pre_rotation};
 use super::types::DriftCompensationStatus;
 use super::{
     EiSample, EnrichedWaypoint, FormationDesignError,
@@ -158,6 +159,38 @@ pub fn assess_transit_safety(
     })
 }
 
+/// Propagate a ROE state forward by `dt_s` under the J2 STM and return
+/// the e/i separation at that epoch.
+///
+/// Shared by drift-prediction callers that need to look ahead to a future
+/// epoch (typically mid-transit, `dt_s = tof_s / 2`) without running the
+/// full trajectory assessment. Composes `propagate_roe_stm` with
+/// `compute_ei_separation` — both applied at the propagated (J2-evolved)
+/// chief elements so the e/i frame matches the epoch.
+///
+/// # Invariants
+///
+/// - `chief_mean.a_km > 0`, `chief_mean.e < 1`
+/// - `dt_s >= 0` (forward propagation)
+///
+/// # Errors
+///
+/// Propagates any error from [`propagate_roe_stm`] (invalid chief elements,
+/// period failure) wrapped into [`FormationDesignError`].
+///
+/// # References
+///
+/// - Koenig Eq. A6 (J2 STM)
+/// - D'Amico Eq. 2.22 (e/i separation)
+pub(crate) fn ei_separation_after(
+    roe: &QuasiNonsingularROE,
+    chief_mean: &KeplerianElements,
+    dt_s: f64,
+) -> Result<EiSeparation, FormationDesignError> {
+    let (prop_roe, prop_chief) = propagate_roe_stm(roe, chief_mean, dt_s)?;
+    Ok(compute_ei_separation(&prop_roe, &prop_chief))
+}
+
 // ---------------------------------------------------------------------------
 // Drift-compensated enrichment
 // ---------------------------------------------------------------------------
@@ -168,20 +201,16 @@ pub fn assess_transit_safety(
 /// near the midpoint of the coast arc, rather than at departure. Uses the
 /// perigee rotation rate phi' = d(omega)/dt from J2 secular perturbations.
 ///
-/// The `propagator` parameter is accepted for API stability. In this
-/// implementation only J2 perigee rotation is used. A future drag-aware
-/// path would use the STM to predict mid-transit e/i state and solve for
-/// null-space coefficients at departure.
-///
 /// # Algorithm
 ///
 /// 1. Compute J2 params from `chief_mean` -> extract `aop_dot_rad_s`
 /// 2. If TOF exceeds `MAX_DRIFT_COMPENSATION_PERIODS` orbits, skip compensation
 /// 3. If near-critical inclination (|Q| < threshold), skip compensation
 /// 4. Compute drift angle: `delta_phi = aop_dot * tof_s / 2` (half-arc heuristic)
-/// 5. Adjust chief: `aop_rad += delta_phi`, `mean_anomaly_rad -= delta_phi`
-///    (preserves u = omega + M, so RIC frame unchanged; only e/i phase rotates)
-/// 6. Delegate to [`enrich_waypoint`] with adjusted chief
+/// 5. Delegate to [`enrich_waypoint_with_pre_rotation`], which backward-rotates
+///    the target e-vector phase by `delta_phi` relative to the (fixed) i-vector.
+///    After propagation under J2 by `tof/2` the e-vector rotates forward by
+///    `delta_phi`, landing parallel to the i-vector at mid-transit.
 ///
 /// # Invariants
 ///
@@ -216,7 +245,6 @@ pub fn enrich_with_drift_compensation(
     position_ric_km: &Vector3<f64>,
     chief_mean: &KeplerianElements,
     tof_s: f64,
-    _propagator: &PropagationModel,
     requirements: &SafetyRequirements,
 ) -> Result<(EnrichedWaypoint, DriftCompensationStatus), FormationDesignError> {
     let j2p = compute_j2_params(chief_mean)?;
@@ -241,17 +269,15 @@ pub fn enrich_with_drift_compensation(
     // parallel alignment occurs near mid-transit rather than at departure.
     let delta_phi_rad = j2p.aop_dot_rad_s * tof_s * 0.5;
 
-    // Adjust chief elements: rotate aop by +delta_phi, rotate M by -delta_phi.
-    // This preserves the mean argument of latitude u = aop + M (so the RIC
-    // position mapping via T_pos is unchanged), while shifting the e/i vector
-    // phase reference by delta_phi.
-    let mut adjusted_chief = *chief_mean;
-    adjusted_chief.aop_rad = (chief_mean.aop_rad + delta_phi_rad)
-        .rem_euclid(std::f64::consts::TAU);
-    adjusted_chief.mean_anomaly_rad = (chief_mean.mean_anomaly_rad - delta_phi_rad)
-        .rem_euclid(std::f64::consts::TAU);
-
-    let enriched = enrich_waypoint(position_ric_km, None, &adjusted_chief, requirements)?;
+    // Forward the pre-rotation angle to the safety projection, which
+    // backward-rotates the target e-vector phase by `delta_phi_rad` relative
+    // to the (fixed) i-vector direction.
+    let enriched = enrich_waypoint_with_pre_rotation(
+        position_ric_km,
+        chief_mean,
+        requirements,
+        delta_phi_rad,
+    )?;
     Ok((enriched, DriftCompensationStatus::Applied))
 }
 
@@ -262,32 +288,24 @@ pub fn enrich_with_drift_compensation(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::elements::wrap_angle;
+    use crate::mission::formation::safety_envelope::enrich_waypoint;
     use crate::mission::formation::{EiAlignment, SafetyRequirements};
-    use crate::mission::safety::EiSeparation;
-    use crate::propagation::propagator::PropagationModel;
-    use crate::propagation::stm::propagate_roe_stm;
+    use crate::propagation::j2_params::compute_j2_params;
     use crate::test_helpers::{
         damico_table21_chief, damico_table21_case1_roe, iss_like_elements,
         propagate_test_trajectory,
     };
-    use crate::types::QuasiNonsingularROE;
 
     /// Predict e/i separation at mid-transit for a drift-compensated ROE.
-    ///
-    /// Propagates the compensated ROE forward by `tof_s / 2` using the J2 STM,
-    /// then evaluates `compute_ei_separation`. Test-only helper for validating
-    /// drift compensation behavior.
+    /// Thin wrapper around [`ei_separation_after`] that fixes `dt_s = tof_s/2`
+    /// to encode the mid-transit semantics.
     fn predict_compensated_ei(
         compensated_roe: &QuasiNonsingularROE,
         departure_chief: &KeplerianElements,
         tof_s: f64,
     ) -> Result<EiSeparation, FormationDesignError> {
-        let (prop_roe, prop_chief) = propagate_roe_stm(
-            compensated_roe,
-            departure_chief,
-            tof_s / 2.0,
-        )?;
-        Ok(compute_ei_separation(&prop_roe, &prop_chief))
+        ei_separation_after(compensated_roe, departure_chief, tof_s / 2.0)
     }
 
     /// E/I separation tolerance (km). The separation formula is exact when
@@ -305,15 +323,43 @@ mod tests {
     /// 0.05 rad ~ 2.9 deg; sin(0.05) / 0.05 = 0.9996 (< 0.04% error).
     const LINEAR_REGIME_RAD: f64 = 0.05;
 
+    /// Phase alignment residual after compensation + propagation (rad).
+    /// Sources: J2 STM second-order terms (~|Δφ|²/2 ≈ 6e-10 for SSO × 2 orbits)
+    /// and drift-rate quantization over tof/2. 1e-4 rad ≈ 0.006° covers both
+    /// with comfortable headroom.
+    const COMPENSATED_PHASE_TOL_RAD: f64 = 1.0e-4;
+
+    /// Bit-exact phase difference between compensated and uncompensated ROE (rad).
+    /// Compensation is a single rotation of the e-vector target, so the diff
+    /// must equal −Δφ within f64 rounding of the atan2 / cos / sin chain.
+    /// 1e-8 is generous for this arithmetic chain.
+    const COMPENSATED_PHASE_DIFF_TOL_RAD: f64 = 1.0e-8;
+
+    /// Signal floor on the expected rotation angle (rad). Below this, the
+    /// sign-sensitive phase-diff assertion is swamped by second-order STM
+    /// terms (~|Δφ|²) and cannot distinguish genuine rotation from noise.
+    /// This is a SIGNAL floor (detection bound), not an f64 noise floor —
+    /// well above machine precision, but small enough to catch degenerate
+    /// chief geometries where Δφ ≈ 0.
+    const ROTATION_SIGNAL_FLOOR_RAD: f64 = 1.0e-6;
+
+    /// Minimum detectable improvement in e/i separation from compensation (km).
+    /// Any improvement below this is indistinguishable from f64 rounding of
+    /// the separation formula. Unit: km — distinct from the rad-valued
+    /// tolerances above that happen to share the 1e-8 literal.
+    const COMPENSATION_IMPROVEMENT_MIN_KM: f64 = 1.0e-8;
+
+    /// Zero-TOF phase invariance tolerance (rad). At dt=0 the J2 STM reduces
+    /// to identity, so the e/i phase is preserved to f64 precision of the
+    /// atan2 chain. Separate from `DRIFT_RATE_TOL` (rad/s) and
+    /// `COMPENSATED_PHASE_DIFF_TOL_RAD` (f64 of a longer arithmetic chain).
+    const ZERO_TOF_PHASE_TOL_RAD: f64 = 1.0e-10;
+
     fn default_requirements(threshold_km: f64) -> SafetyRequirements {
         SafetyRequirements {
             min_separation_km: threshold_km,
             alignment: EiAlignment::Parallel,
         }
-    }
-
-    fn j2_propagator() -> PropagationModel {
-        PropagationModel::J2Stm
     }
 
     // -----------------------------------------------------------------------
@@ -462,10 +508,8 @@ mod tests {
 
         let position = Vector3::new(0.0, 0.5, 0.0); // V-bar, 500m along-track
         let requirements = default_requirements(0.10);
-        let propagator = j2_propagator();
-
         let (enriched, status) = enrich_with_drift_compensation(
-            &position, &chief, tof_s, &propagator, &requirements,
+            &position, &chief, tof_s, &requirements,
         )
         .expect("enrichment should succeed");
 
@@ -489,10 +533,8 @@ mod tests {
 
         let position = Vector3::new(0.0, 0.5, 0.0);
         let requirements = default_requirements(0.10);
-        let propagator = j2_propagator();
-
         let (_enriched, status) = enrich_with_drift_compensation(
-            &position, &chief, tof_s, &propagator, &requirements,
+            &position, &chief, tof_s, &requirements,
         )
         .expect("enrichment should succeed");
 
@@ -520,10 +562,8 @@ mod tests {
 
         let position = Vector3::new(0.0, 0.5, 0.0);
         let requirements = default_requirements(0.10);
-        let propagator = j2_propagator();
-
         let (_enriched, status) = enrich_with_drift_compensation(
-            &position, &chief, tof_s, &propagator, &requirements,
+            &position, &chief, tof_s, &requirements,
         )
         .expect("enrichment should succeed");
 
@@ -542,10 +582,8 @@ mod tests {
 
         let position = Vector3::new(0.1, 0.5, 0.05); // arbitrary RIC position
         let requirements = default_requirements(0.10);
-        let propagator = j2_propagator();
-
         let (enriched, status) = enrich_with_drift_compensation(
-            &position, &chief, tof_s, &propagator, &requirements,
+            &position, &chief, tof_s, &requirements,
         )
         .expect("enrichment should succeed");
 
@@ -571,8 +609,6 @@ mod tests {
     /// - D'Amico Eq. 2.30
     #[test]
     fn perigee_rotation_rate_regression_sso() {
-        use crate::propagation::j2_params::compute_j2_params;
-
         let chief = damico_table21_chief();
         let j2p = compute_j2_params(&chief).unwrap();
 
@@ -599,8 +635,6 @@ mod tests {
     /// At the critical inclination, aop_dot is near zero because Q = 0.
     #[test]
     fn near_critical_inclination_aop_dot_near_zero() {
-        use crate::propagation::j2_params::compute_j2_params;
-
         let critical_i_rad = (1.0_f64 / 5.0_f64.sqrt()).acos();
         let chief = KeplerianElements {
             a_km: 7078.135,
@@ -623,8 +657,6 @@ mod tests {
     /// stays within the linear regime for both SSO and ISS orbits.
     #[test]
     fn delta_phi_within_linear_regime() {
-        use crate::propagation::j2_params::compute_j2_params;
-
         for (label, chief) in [
             ("SSO", damico_table21_chief()),
             ("ISS", iss_like_elements()),
@@ -658,11 +690,9 @@ mod tests {
 
         let position = Vector3::new(0.0, 0.5, 0.0); // V-bar, 500m along-track
         let requirements = default_requirements(0.10);
-        let propagator = j2_propagator();
-
         // Get drift-compensated enrichment
         let (enriched, status) = enrich_with_drift_compensation(
-            &position, &chief, tof_s, &propagator, &requirements,
+            &position, &chief, tof_s, &requirements,
         )
         .expect("enrichment should succeed");
         assert!(matches!(status, DriftCompensationStatus::Applied));
@@ -681,19 +711,28 @@ mod tests {
         // Compare against uncompensated: propagate the *un*compensated enriched
         // state and assess transit safety. The compensated prediction should be
         // at least as good.
-        let uncomp_enriched = crate::mission::formation::safety_envelope::enrich_waypoint(
-            &position, None, &chief, &requirements,
-        )
-        .expect("baseline enrichment should succeed");
+        let uncomp_enriched = enrich_waypoint(&position, None, &chief, &requirements)
+            .expect("baseline enrichment should succeed");
         let trajectory = propagate_test_trajectory(
             &uncomp_enriched.roe, &chief, tof_s, 200,
         );
         let uncomp_report = assess_transit_safety(&trajectory, &requirements)
             .expect("transit assessment should succeed");
 
+        // With working compensation, predicted mid-transit phase should be
+        // near zero (e/i parallel by construction), and the predicted
+        // separation should strictly exceed the uncompensated minimum —
+        // otherwise compensation had no measurable effect.
         assert!(
-            predicted.min_separation_km >= uncomp_report.min_ei_separation_km - EI_SEPARATION_TOL,
-            "compensated prediction ({:.6} km) should be >= uncompensated minimum ({:.6} km)",
+            predicted.phase_angle_rad.abs() < COMPENSATED_PHASE_TOL_RAD,
+            "compensated mid-transit phase should be near zero, got {:.4e} rad",
+            predicted.phase_angle_rad,
+        );
+        assert!(
+            predicted.min_separation_km
+                > uncomp_report.min_ei_separation_km + COMPENSATION_IMPROVEMENT_MIN_KM,
+            "compensated prediction ({:.6} km) should strictly exceed uncompensated \
+             minimum ({:.6} km) — otherwise compensation had no effect",
             predicted.min_separation_km, uncomp_report.min_ei_separation_km,
         );
     }
@@ -702,8 +741,6 @@ mod tests {
     /// (no propagation effect).
     #[test]
     fn predict_compensated_ei_at_zero_tof() {
-        use crate::mission::safety::compute_ei_separation;
-
         let chief = damico_table21_chief();
         let roe = damico_table21_case1_roe();
 
@@ -717,8 +754,89 @@ mod tests {
             predicted.min_separation_km, departure_ei.min_separation_km,
         );
         assert!(
-            (predicted.phase_angle_rad - departure_ei.phase_angle_rad).abs() < 1e-10,
+            (predicted.phase_angle_rad - departure_ei.phase_angle_rad).abs()
+                < ZERO_TOF_PHASE_TOL_RAD,
             "at zero TOF, phase angle should be unchanged",
+        );
+    }
+
+    /// Asserts compensation produces a genuinely rotated e-vector phase,
+    /// not a bit-identical copy of the uncompensated result. Guards against
+    /// silent no-op compensation where rotation is wired through parameters
+    /// that downstream code ignores. The compensated phase must differ from
+    /// the uncompensated phase by approximately `-delta_phi_rad`, where
+    /// `delta_phi_rad = aop_dot_rad_s * tof_s / 2`.
+    #[test]
+    fn drift_compensation_actually_rotates_e_vector() {
+        let chief = damico_table21_chief();
+        let period_s = chief.period().unwrap();
+        let tof_s = 2.0 * period_s; // within cutoff → Applied
+        let position = Vector3::new(0.0, 0.5, 0.0); // V-bar perch
+        let requirements = default_requirements(0.10);
+        let (compensated, status) = enrich_with_drift_compensation(
+            &position, &chief, tof_s, &requirements,
+        )
+        .expect("compensation should succeed");
+        assert!(matches!(status, DriftCompensationStatus::Applied));
+
+        let uncompensated = enrich_waypoint(&position, None, &chief, &requirements)
+            .expect("uncompensated enrichment should succeed");
+
+        // Δφ = aop_dot * tof / 2. For SSO (i=98.19°) Q<0, so Δφ<0 and the
+        // e-vector drifts backward over the coast arc. Pre-rotating by
+        // -Δφ = +|Δφ| at departure makes it land parallel to the (fixed)
+        // i-vector at tof/2.
+        let j2p = compute_j2_params(&chief).unwrap();
+        let expected_delta_phi = j2p.aop_dot_rad_s * tof_s * 0.5;
+        assert!(
+            expected_delta_phi.abs() > ROTATION_SIGNAL_FLOOR_RAD,
+            "sanity: expected rotation must exceed the signal floor to be \
+             detectable above second-order STM residuals, got {expected_delta_phi:.4e}"
+        );
+
+        // e-vector phase difference between compensated and uncompensated
+        let phase_comp = compensated.roe.dey.atan2(compensated.roe.dex);
+        let phase_uncomp = uncompensated.roe.dey.atan2(uncompensated.roe.dex);
+        let phase_diff = wrap_angle(phase_comp - phase_uncomp);
+
+        // Compensated e-vector should be rotated by approximately -delta_phi
+        // relative to uncompensated (backward, since compensation anticipates
+        // forward drift over the coast arc).
+        assert!(
+            (phase_diff - (-expected_delta_phi)).abs() < COMPENSATED_PHASE_DIFF_TOL_RAD,
+            "compensated e-vector phase should differ by ~{:.4e} rad from uncompensated, \
+             got phase_diff = {:.4e} rad",
+            -expected_delta_phi, phase_diff,
+        );
+    }
+
+    /// After propagating the drift-compensated ROE forward by tof/2 under
+    /// the J2 STM, the e/i vectors should be (approximately) parallel —
+    /// i.e., the e/i phase angle reported by `compute_ei_separation`
+    /// should be near zero.
+    #[test]
+    fn drift_compensation_aligns_at_mid_transit() {
+        let chief = damico_table21_chief();
+        let period_s = chief.period().unwrap();
+        let tof_s = 2.0 * period_s;
+        let position = Vector3::new(0.0, 0.5, 0.0);
+        let requirements = default_requirements(0.10);
+        let (compensated, status) = enrich_with_drift_compensation(
+            &position, &chief, tof_s, &requirements,
+        )
+        .expect("compensation should succeed");
+        assert!(matches!(status, DriftCompensationStatus::Applied));
+
+        // Propagate compensated ROE forward by tof/2 — e/i phase at that epoch
+        // should be near zero (parallel aligned).
+        let (mid_roe, mid_chief) = propagate_roe_stm(&compensated.roe, &chief, tof_s / 2.0)
+            .expect("propagation");
+        let ei_mid = compute_ei_separation(&mid_roe, &mid_chief);
+
+        assert!(
+            ei_mid.phase_angle_rad.abs() < COMPENSATED_PHASE_TOL_RAD,
+            "compensated e/i phase at mid-transit should be ~0 rad, got {:.4e} rad",
+            ei_mid.phase_angle_rad,
         );
     }
 }

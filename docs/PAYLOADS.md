@@ -854,13 +854,6 @@ Recomputes the formation design report from current session state. Useful after 
         "min_phase_angle_rad": -1.51,
         "satisfies_requirement": false,
         "threshold_km": 0.1,
-        "drift_compensation": {
-          "compensated_waypoint": {
-            "...": "EnrichedWaypoint with pre-rotated e/i"
-          },
-          "predicted_min_ei_km": 0.135,
-          "predicted_phase_angle_rad": 0.04
-        },
         "profile": ["...per-sample EiSample entries..."]
       },
       {
@@ -869,16 +862,19 @@ Recomputes the formation design report from current session state. Useful after 
         "min_phase_angle_rad": 0.12,
         "satisfies_requirement": true,
         "threshold_km": 0.1,
-        "drift_compensation": null,
         "profile": ["..."]
       }
     ],
-    "mission_min_ei_separation_km": 0.089
+    "mission_min_ei_separation_km": 0.089,
+    "drift_prediction": {
+      "predicted_min_ei_km": 0.135,
+      "predicted_phase_angle_rad": 0.0
+    }
   }
 }
 ```
 
-`drift_compensation` is `null` when skipped (arc exceeds 10 orbital periods or near-critical inclination). When present, it shows the predicted mid-transit e/i separation if departure e/i phases were pre-rotated to compensate for J2 perigee drift.
+`drift_prediction` is a top-level field on the report (not per-leg) and predicts e/i separation for the **leg-1 coast arc only**. It is omitted when leg-1 TOF is outside the J2 drift compensation regime (arc exceeds 10 orbital periods or near-critical inclination). When present, it reports the predicted e/i state at **mid-transit** of leg 1, after pre-rotating departure e/i phases to compensate for J2 perigee drift; `predicted_phase_angle_rad` is approximately zero when compensation succeeds (parallel alignment at mid-transit).
 
 #### Send: get_safe_alternative (single waypoint)
 

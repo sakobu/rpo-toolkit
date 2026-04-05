@@ -109,6 +109,10 @@ fn resolve_alignment(
 ///
 /// - `requirements.min_separation_km > 0`
 /// - `chief_mean.a_km > 0`, `chief_mean.e < 1`
+/// - `ei_pre_rotation_rad` is applied as `θ_e := θ_i − ei_pre_rotation_rad`
+///   (subtracted from the target e-vector phase); pass `0.0` for no
+///   compensation. See [`enrich_waypoint_with_pre_rotation`] for the full
+///   sign convention.
 ///
 /// # Validity regime
 ///
@@ -132,6 +136,7 @@ pub(crate) fn compute_safety_projection(
     baseline: &QuasiNonsingularROE,
     chief_mean: &KeplerianElements,
     requirements: &SafetyRequirements,
+    ei_pre_rotation_rad: f64,
 ) -> Result<(QuasiNonsingularROE, EiAlignment), FormationDesignError> {
     let sma = chief_mean.a_km;
     let u = chief_mean.mean_arg_of_lat();
@@ -174,19 +179,26 @@ pub(crate) fn compute_safety_projection(
     let new_dix = baseline.dix + alpha_3 * cos_u;
     let new_diy = baseline.diy + alpha_3 * sin_u;
 
-    // 3. Align the e-vector to the (shifted) i-vector direction
+    // 3. Align the e-vector to the (shifted) i-vector direction.
+    //
+    // When `ei_pre_rotation_rad` is non-zero, pre-rotate the target e-vector
+    // backward by that amount so that after J2-induced forward rotation
+    // during the coast arc (phi' = aop_dot, D'Amico Eq. 2.28/2.30),
+    // e/i are parallel at the intended epoch (typically mid-transit of
+    // the next leg). A value of 0.0 means no compensation.
     let theta_i = new_diy.atan2(new_dix);
     let ecc_mag = baseline.de_magnitude();
     let d_target_e = d_min.max(ecc_mag);
 
-    let (tgt_ex, tgt_ey) = match resolved {
-        EiAlignment::Parallel => (d_target_e * theta_i.cos(), d_target_e * theta_i.sin()),
-        EiAlignment::AntiParallel => {
-            let theta_anti = theta_i + std::f64::consts::PI;
-            (d_target_e * theta_anti.cos(), d_target_e * theta_anti.sin())
-        }
+    // theta_e intentionally not wrapped to [-π, π]: only cos/sin are
+    // consumed below, so periodicity handles it. If theta_e ever becomes
+    // an output, wrap_angle() must be applied first.
+    let theta_e = match resolved {
+        EiAlignment::Parallel => theta_i - ei_pre_rotation_rad,
+        EiAlignment::AntiParallel => theta_i + std::f64::consts::PI - ei_pre_rotation_rad,
         EiAlignment::Auto => unreachable!("Auto resolved before this point"),
     };
+    let (tgt_ex, tgt_ey) = (d_target_e * theta_e.cos(), d_target_e * theta_e.sin());
 
     // 4. Null-space coefficients
     let coeff_1 = tgt_ex - baseline.dex;
@@ -262,8 +274,19 @@ pub fn enrich_waypoint(
     chief_mean: &KeplerianElements,
     requirements: &SafetyRequirements,
 ) -> Result<EnrichedWaypoint, FormationDesignError> {
+    // Velocity-constrained path has 0 DOF (T⁻¹·[r,v] uniquely determines
+    // ROE), so pre-rotation is ill-defined there. Only the None branch —
+    // which has 3 free DOF via the null-space projection — can absorb a
+    // phase rotation of the target e-vector. The None branch delegates
+    // to `enrich_waypoint_with_pre_rotation(..., 0.0)` to keep a single
+    // internal code path for position-only enrichment.
     match velocity_ric_km_s {
-        None => enrich_position_only(position_ric_km, chief_mean, requirements),
+        None => enrich_waypoint_with_pre_rotation(
+            position_ric_km,
+            chief_mean,
+            requirements,
+            0.0,
+        ),
         Some(vel) => {
             // TODO(wasm): activates when frontend sends velocity_ric_km_s: None
             // for position-only waypoints. Currently all waypoints carry velocity
@@ -282,9 +305,11 @@ fn build_enriched_result(
     chief_mean: &KeplerianElements,
     requirements: &SafetyRequirements,
     mode: EnrichmentMode,
+    ei_pre_rotation_rad: f64,
 ) -> Result<EnrichedWaypoint, FormationDesignError> {
     let baseline_ei = compute_ei_separation(baseline, chief_mean);
-    let (enriched, resolved) = compute_safety_projection(baseline, chief_mean, requirements)?;
+    let (enriched, resolved) =
+        compute_safety_projection(baseline, chief_mean, requirements, ei_pre_rotation_rad)?;
     let enriched_ei = compute_ei_separation(&enriched, chief_mean);
     let perturbation_norm = (enriched.to_vector() - baseline.to_vector()).norm();
 
@@ -298,23 +323,6 @@ fn build_enriched_result(
         mode,
         resolved_alignment: resolved,
     })
-}
-
-/// Position-only enrichment path (3 DOF free, null-space projection applied).
-fn enrich_position_only(
-    position_ric_km: &Vector3<f64>,
-    chief_mean: &KeplerianElements,
-    requirements: &SafetyRequirements,
-) -> Result<EnrichedWaypoint, FormationDesignError> {
-    // Minimum-norm ROE from position pseudo-inverse
-    let baseline = ric_position_to_roe(position_ric_km, chief_mean).map_err(|e| match e {
-        RicError::SingularPositionMatrix => FormationDesignError::SingularGeometry {
-            mean_arg_lat_rad: chief_mean.mean_arg_of_lat(),
-        },
-        RicError::InvalidChiefElements(ce) => FormationDesignError::InvalidChiefElements(ce),
-    })?;
-
-    build_enriched_result(&baseline, position_ric_km, chief_mean, requirements, EnrichmentMode::PositionOnly)
 }
 
 /// Velocity-constrained enrichment path (0 DOF free, advisory only).
@@ -340,7 +348,78 @@ fn enrich_velocity_constrained(
     );
     let baseline = QuasiNonsingularROE::from_vector(&(t_inv * ric_full));
 
-    build_enriched_result(&baseline, position_ric_km, chief_mean, requirements, EnrichmentMode::VelocityConstrained)
+    build_enriched_result(
+        &baseline,
+        position_ric_km,
+        chief_mean,
+        requirements,
+        EnrichmentMode::VelocityConstrained,
+        0.0,
+    )
+}
+
+/// Enrich a position-only waypoint's ROE with a pre-rotated target e-vector.
+///
+/// Same semantics as [`enrich_waypoint`] in the position-only branch
+/// (`velocity_ric_km_s: None`), but accepts an `ei_pre_rotation_rad` angle
+/// that pre-rotates the target e-vector phase relative to the (shifted)
+/// i-vector direction. Use this entry point when callers need compensation
+/// for J2 perigee drift over a coast arc.
+///
+/// When `ei_pre_rotation_rad == 0.0`, behavior is identical to
+/// [`enrich_waypoint`] with `velocity_ric_km_s = None`.
+///
+/// # Sign convention
+///
+/// The angle is applied as `θ_e := θ_i − ei_pre_rotation_rad` in the
+/// parallel branch (and `θ_e := θ_i + π − ei_pre_rotation_rad` in the
+/// anti-parallel branch). Pass `Δφ = aop_dot · tof/2` **directly** — the
+/// negative sign of `aop_dot` for retrograde / SSO orbits (Q < 0 in
+/// D'Amico Eq. 2.30) is handled automatically; do NOT pre-negate it.
+///
+/// A positive `ei_pre_rotation_rad` rotates the e-vector target clockwise
+/// in the (`δe_x`, `δe_y`) plane (lagging the i-vector), anticipating
+/// forward J2 drift of `+ei_pre_rotation_rad` over the coast arc.
+///
+/// # Invariants
+///
+/// - `chief_mean.a_km > 0`, `chief_mean.e < 1`
+/// - `requirements.min_separation_km > 0`
+/// - `|ei_pre_rotation_rad|` small enough that the linear drift model
+///   holds; exceeding ~0.05 rad (~3°) violates the half-arc heuristic
+///   that callers use to derive this angle.
+///
+/// # Errors
+///
+/// - [`FormationDesignError::SingularGeometry`] if the `T_pos` pseudo-inverse is singular.
+/// - [`FormationDesignError::InvalidChiefElements`] if chief elements are invalid.
+/// - [`FormationDesignError::SeparationUnachievable`] if the requested separation
+///   exceeds the linearization bound.
+///
+/// # References
+///
+/// - D'Amico Eq. 2.28 / 2.30 (relative e-vector rotation under J2)
+#[must_use = "enrichment result should be inspected"]
+pub fn enrich_waypoint_with_pre_rotation(
+    position_ric_km: &Vector3<f64>,
+    chief_mean: &KeplerianElements,
+    requirements: &SafetyRequirements,
+    ei_pre_rotation_rad: f64,
+) -> Result<EnrichedWaypoint, FormationDesignError> {
+    let baseline = ric_position_to_roe(position_ric_km, chief_mean).map_err(|e| match e {
+        RicError::SingularPositionMatrix => FormationDesignError::SingularGeometry {
+            mean_arg_lat_rad: chief_mean.mean_arg_of_lat(),
+        },
+        RicError::InvalidChiefElements(ce) => FormationDesignError::InvalidChiefElements(ce),
+    })?;
+    build_enriched_result(
+        &baseline,
+        position_ric_km,
+        chief_mean,
+        requirements,
+        EnrichmentMode::PositionOnly,
+        ei_pre_rotation_rad,
+    )
 }
 
 // ---------------------------------------------------------------------------
@@ -518,7 +597,7 @@ mod tests {
             alignment: EiAlignment::Parallel,
         };
 
-        let (enriched, resolved) = compute_safety_projection(&baseline, &chief, &reqs).unwrap();
+        let (enriched, resolved) = compute_safety_projection(&baseline, &chief, &reqs, 0.0).unwrap();
         assert!(matches!(resolved, EiAlignment::Parallel));
 
         let ei = compute_ei_separation(&enriched, &chief);
@@ -546,7 +625,7 @@ mod tests {
             alignment: EiAlignment::Parallel,
         };
 
-        let (enriched, _) = compute_safety_projection(&baseline, &chief, &reqs).unwrap();
+        let (enriched, _) = compute_safety_projection(&baseline, &chief, &reqs, 0.0).unwrap();
         let ei = compute_ei_separation(&enriched, &chief);
 
         assert!(
@@ -583,7 +662,7 @@ mod tests {
             alignment: EiAlignment::Parallel,
         };
 
-        let (enriched, _) = compute_safety_projection(&baseline, &chief, &reqs).unwrap();
+        let (enriched, _) = compute_safety_projection(&baseline, &chief, &reqs, 0.0).unwrap();
 
         // Both vectors should have magnitude ≈ d_min / a
         let de = enriched.de_magnitude();
@@ -703,7 +782,7 @@ mod tests {
             alignment: EiAlignment::AntiParallel,
         };
 
-        let (enriched, resolved) = compute_safety_projection(&baseline, &chief, &reqs).unwrap();
+        let (enriched, resolved) = compute_safety_projection(&baseline, &chief, &reqs, 0.0).unwrap();
         assert!(matches!(resolved, EiAlignment::AntiParallel));
 
         let ei = compute_ei_separation(&enriched, &chief);
@@ -817,7 +896,7 @@ mod tests {
             alignment: EiAlignment::Parallel,
         };
 
-        let (enriched, _) = compute_safety_projection(&baseline, &chief, &reqs).unwrap();
+        let (enriched, _) = compute_safety_projection(&baseline, &chief, &reqs, 0.0).unwrap();
         let perturbation = (enriched.to_vector() - baseline.to_vector()).norm();
         assert!(
             perturbation < LINEARIZATION_PERTURBATION_BOUND / 100.0,
@@ -885,7 +964,7 @@ mod tests {
             alignment: EiAlignment::Parallel,
         };
 
-        let (enriched, _) = compute_safety_projection(&baseline, &chief, &reqs).unwrap();
+        let (enriched, _) = compute_safety_projection(&baseline, &chief, &reqs, 0.0).unwrap();
 
         // At u₀ = 0: C = a·(dix·sin(0) - diy·cos(0)) = -a·diy ≈ 0
         // (since at u=0 the i-vector is along [1,0] → diy ≈ 0)

@@ -138,8 +138,12 @@ fn enrich_custom_perch(
     chief_mean: &KeplerianElements,
     requirements: &SafetyRequirements,
 ) -> Result<SafePerch, FormationDesignError> {
-    let (enriched_roe, resolved) =
-        compute_safety_projection(custom_roe, chief_mean, requirements)?;
+    let (enriched_roe, resolved) = compute_safety_projection(
+        custom_roe,
+        chief_mean,
+        requirements,
+        0.0, // no J2 pre-rotation: static perch geometry
+    )?;
     let enriched_ei = compute_ei_separation(&enriched_roe, chief_mean);
 
     Ok(SafePerch {

@@ -11,7 +11,7 @@ use crate::mission::formation::{
     DriftPrediction, EnrichedWaypoint, FormationDesignReport,
     PerchEnrichmentResult, SafetyRequirements, TransitSafetyReport,
 };
-use crate::mission::formation::transit::enrich_with_drift_compensation;
+use crate::mission::formation::transit::{ei_separation_after, enrich_with_drift_compensation};
 use crate::mission::formation::types::DriftCompensationStatus;
 use super::types::EnrichmentSuggestion;
 use crate::mission::formation::perch::enrich_perch;
@@ -539,21 +539,25 @@ pub fn compute_formation_report(
         .map(|t| t.min_ei_separation_km)
         .fold(None, |acc, v| Some(acc.map_or(v, |a: f64| a.min(v))));
 
-    // Drift prediction: predict mid-transit e/i for the leg-1 coast arc
-    // using J2 drift compensation. Computed here (orchestration layer) rather
-    // than inside perch enrichment to keep geometric and temporal concerns separate.
+    // Drift prediction: propagate the compensated ROE to mid-transit before
+    // reading e/i — the departure-epoch values stored on EnrichedWaypoint
+    // reflect the pre-rotated (lagged) phase, not the aligned phase that
+    // compensation targets.
     let drift_prediction = legs.first().and_then(|leg| {
         match enrich_with_drift_compensation(
             &leg.from_position_ric_km,
             &leg.departure_chief_mean,
             leg.tof_s,
-            &PropagationModel::J2Stm,
             &resolved_reqs,
         ) {
-            Ok((enriched, DriftCompensationStatus::Applied)) => Some(DriftPrediction {
-                predicted_min_ei_km: enriched.enriched_ei.min_separation_km,
-                predicted_phase_angle_rad: enriched.enriched_ei.phase_angle_rad,
-            }),
+            Ok((enriched, DriftCompensationStatus::Applied)) => {
+                ei_separation_after(&enriched.roe, &leg.departure_chief_mean, leg.tof_s * 0.5)
+                    .ok()
+                    .map(|ei_mid| DriftPrediction {
+                        predicted_min_ei_km: ei_mid.min_separation_km,
+                        predicted_phase_angle_rad: ei_mid.phase_angle_rad,
+                    })
+            }
             _ => None,
         }
     });
@@ -728,6 +732,13 @@ mod tests {
     /// The enriched ROE is assigned directly (no arithmetic), so the only
     /// difference is f64 representation noise from serialization roundtrips.
     const ROE_IDENTITY_TOL: f64 = 1e-15;
+
+    /// Upper bound on residual e/i phase at mid-transit after drift
+    /// compensation reaches the pipeline output (rad). Looser than the
+    /// `COMPENSATED_PHASE_TOL_RAD` used in transit.rs unit tests because
+    /// the pipeline path adds leg-chain arithmetic (`period()`, STM
+    /// composition). 1e-3 rad ≈ 0.06° is conservative for a sub-orbit arc.
+    const PIPELINE_DRIFT_PHASE_TOL_RAD: f64 = 1.0e-3;
 
     /// Build a minimal `PipelineInput` from the standard far-field test scenario.
     fn far_field_input() -> PipelineInput {
@@ -1057,9 +1068,13 @@ mod tests {
             pred.predicted_min_ei_km > 0.0,
             "predicted min e/i must be positive"
         );
+        // After compensation + propagation by tof/2, the e/i phase at
+        // mid-transit should be approximately zero (parallel aligned);
+        // the residual is bounded by higher-order J2 terms.
         assert!(
-            pred.predicted_phase_angle_rad >= 0.0,
-            "predicted phase angle must be non-negative"
+            pred.predicted_phase_angle_rad.abs() < PIPELINE_DRIFT_PHASE_TOL_RAD,
+            "compensated mid-transit phase should be near zero, got {:.4e} rad",
+            pred.predicted_phase_angle_rad,
         );
     }
 
