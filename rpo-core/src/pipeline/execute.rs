@@ -350,7 +350,7 @@ pub fn compute_safety_analysis(
 
 /// Compute safety analysis and derive COLA burns for validation injection.
 ///
-/// Combines [`compute_safety_analysis`] and [`convert_cola_to_burns`] into a
+/// Combines [`compute_safety_analysis`] and [`crate::mission::convert_cola_to_burns`] into a
 /// single call, ensuring COLA burns are always derived consistently from the
 /// safety analysis. Used by both CLI and API validate handlers.
 ///
