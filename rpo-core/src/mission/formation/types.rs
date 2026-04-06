@@ -44,7 +44,7 @@ pub enum EiAlignment {
 // ---------------------------------------------------------------------------
 
 /// How the enrichment was applied.
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum EnrichmentMode {
     /// Position-only waypoint: 3 DOF free, null-space projection applied.

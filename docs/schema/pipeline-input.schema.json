@@ -123,7 +123,7 @@
         },
         "velocity_ric_km_s": {
           "type": "array",
-          "description": "RIC velocity target [R, I, C] in km/s. Defaults to [0, 0, 0] if omitted.",
+          "description": "RIC velocity target [R, I, C] in km/s. If omitted, the waypoint is position-only: targeting defaults to zero-velocity hold, and formation enrichment has 3-DOF null-space freedom to propose a safe e/i-aligned alternative. If set, the waypoint is velocity-constrained: targeting hits the exact (position, velocity) pair, and enrichment is advisory-only.",
           "items": { "type": "number" },
           "minItems": 3,
           "maxItems": 3

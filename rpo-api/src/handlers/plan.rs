@@ -260,7 +260,9 @@ fn build_plan_variant(
         _ => plan_waypoint_mission(&departure, ctx.waypoints, ctx.config, ctx.propagator)?,
     };
     let plan = build_lean_plan_result(transfer, &mission, ctx.waypoint_inputs);
-    let report = formation.map(|(perch, reqs)| compute_formation_report(perch, reqs, &mission.legs));
+    let report = formation.map(|(perch, reqs)| {
+        compute_formation_report(perch, reqs, &mission.legs, ctx.waypoints)
+    });
     Ok((mission, plan, report))
 }
 

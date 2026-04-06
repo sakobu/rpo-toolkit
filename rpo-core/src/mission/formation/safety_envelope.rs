@@ -287,12 +287,7 @@ pub fn enrich_waypoint(
             requirements,
             0.0,
         ),
-        Some(vel) => {
-            // TODO(wasm): activates when frontend sends velocity_ric_km_s: None
-            // for position-only waypoints. Currently all waypoints carry velocity
-            // via to_waypoints() filling None → [0,0,0].
-            enrich_velocity_constrained(position_ric_km, vel, chief_mean, requirements)
-        }
+        Some(vel) => enrich_velocity_constrained(position_ric_km, vel, chief_mean, requirements),
     }
 }
 

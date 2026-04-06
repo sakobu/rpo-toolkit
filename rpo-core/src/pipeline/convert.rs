@@ -25,14 +25,8 @@ pub fn to_waypoints(inputs: &[super::types::WaypointInput]) -> Vec<Waypoint> {
     inputs
         .iter()
         .map(|wp| Waypoint {
-            position_ric_km: Vector3::new(
-                wp.position_ric_km[0],
-                wp.position_ric_km[1],
-                wp.position_ric_km[2],
-            ),
-            velocity_ric_km_s: wp
-                .velocity_ric_km_s
-                .map(|v| Vector3::new(v[0], v[1], v[2])),
+            position_ric_km: Vector3::from(wp.position_ric_km),
+            velocity_ric_km_s: wp.velocity_ric_km_s.map(Vector3::from),
             tof_s: wp.tof_s,
         })
         .collect()

@@ -140,6 +140,15 @@ Set waypoints and plan/replan the mission. For far-field, requires a stored tran
 | `waypoints`    | `WaypointInput[]` | yes      |         | Waypoint targets in RIC frame                           |
 | `changed_from` | `usize` or `null` | no       | `null`  | Index of first modified waypoint for incremental replan |
 
+`WaypointInput` fields:
+
+| Field               | Type         | Required | Default                | Description                                                                                                                                                                                              |
+| ------------------- | ------------ | -------- | ---------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `position_ric_km`   | `[R, I, C]`  | yes      | --                     | RIC position target (km)                                                                                                                                                                                  |
+| `velocity_ric_km_s` | `[R, I, C]?` | no       | `null` (position-only) | If omitted: position-only waypoint (zero-velocity hold for targeting, 3-DOF null-space freedom for formation enrichment). If set: velocity-constrained target; enrichment becomes advisory-only for that waypoint. |
+| `tof_s`             | `f64?`       | no       | `null` (auto-optimize) | Time of flight for this leg (seconds). Null triggers TOF optimization.                                                                                                                                    |
+| `label`             | `string?`    | no       | `null`                 | Human-readable label                                                                                                                                                                                      |
+
 Response: `plan_result`
 
 ### update_config
@@ -556,7 +565,7 @@ Full formation design report for the currently selected plan variant (response t
 | Field                          | Type                              | Description                                                |
 | ------------------------------ | --------------------------------- | ---------------------------------------------------------- |
 | `perch`                        | `PerchEnrichmentResult`           | Perch enrichment: `enriched` (with safe e/i) or `fallback` |
-| `waypoints`                    | `(EnrichedWaypoint \| null)[]`    | Per-leg advisory enrichment (null if failed for that leg)  |
+| `waypoints`                    | `(EnrichedWaypoint \| null)[]`    | Per-waypoint enrichment (null if failed). Position-only waypoints get actionable 3-DOF enrichment with drift compensation; velocity-constrained waypoints get advisory-only comparison. Check `mode` field. |
 | `transit_safety`               | `(TransitSafetyReport \| null)[]` | Per-leg e/i separation profile (null if failed)            |
 | `mission_min_ei_separation_km` | `f64?`                            | Mission-wide minimum e/i separation (omitted if no data)   |
 | `drift_prediction`             | `DriftPrediction?`                | Predicted mid-transit e/i for leg-1 coast arc (omitted if outside compensation regime). `{ predicted_min_ei_km: f64, predicted_phase_angle_rad: f64 }` |
@@ -880,12 +889,12 @@ Request:
     {
       "label": "Approach to 2 km",
       "position_ric_km": [0.5, 2.0, 0.5],
-      "velocity_ric_km_s": [0.0, 0.0, 0.0],
       "tof_s": 4200.0
     },
     {
       "label": "Close to 0.5 km",
       "position_ric_km": [0.5, 0.5, 0.5],
+      "velocity_ric_km_s": [0.0, 0.001, 0.0],
       "tof_s": 4200.0
     }
   ]

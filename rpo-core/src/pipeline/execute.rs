@@ -7,6 +7,8 @@ use crate::constants::DEFAULT_COVARIANCE_SAMPLES_PER_LEG;
 use crate::mission::cola_assessment::{assess_cola, ColaAssessment};
 use crate::mission::avoidance::ColaConfig;
 use crate::mission::closest_approach::{find_closest_approaches, ClosestApproach};
+use crate::mission::errors::MissionError;
+use crate::elements::roe_to_ric::roe_to_ric;
 use crate::mission::formation::{
     DriftPrediction, EnrichedWaypoint, FormationDesignReport,
     PerchEnrichmentResult, SafetyRequirements, TransitSafetyReport,
@@ -262,7 +264,8 @@ pub fn build_output(
     });
 
     let formation_design = ctx.suggestion.map(|s| {
-        compute_formation_report(s.perch, s.requirements, &wp_mission.legs)
+        let waypoints = to_waypoints(&ctx.input.waypoints);
+        compute_formation_report(s.perch, s.requirements, &wp_mission.legs, &waypoints)
     });
 
     PipelineOutput {
@@ -488,6 +491,57 @@ pub fn apply_perch_enrichment(
     }
 }
 
+/// Accept an enriched ROE at a specific waypoint and replan from there.
+///
+/// Converts the enriched ROE to a concrete RIC velocity via `roe_to_ric`
+/// (D'Amico Eq. 2.17), updates the waypoint's velocity target, and
+/// replans from that waypoint onward.
+///
+/// This is the waypoint-level analog of [`apply_perch_enrichment`] +
+/// [`replan_mission`]: the user sees the enriched suggestion, accepts it,
+/// and the system replans with the enriched target.
+///
+/// # Arguments
+/// * `input` — mutable pipeline input (waypoint velocity will be updated)
+/// * `waypoint_index` — which waypoint to enrich (0-indexed)
+/// * `enriched_roe` — the accepted enriched ROE from `enrich_waypoint`
+/// * `chief_at_waypoint` — chief mean elements at the waypoint epoch
+///
+/// # Invariants
+/// - `chief_at_waypoint` must be a valid mean Keplerian state
+///   (`a_km > 0`, `0 ≤ e < 1`).
+/// - ROE linearization assumes small relative separation
+///   (dimensionless ROE norm ≪ 1); see `roe_to_ric` (D'Amico Eq. 2.17).
+///
+/// # Errors
+/// Returns [`PipelineError`] if `waypoint_index` is out of bounds,
+/// if ROE-to-RIC conversion fails, or if replanning fails.
+pub fn accept_waypoint_enrichment(
+    input: &mut PipelineInput,
+    waypoint_index: usize,
+    enriched_roe: &QuasiNonsingularROE,
+    chief_at_waypoint: &KeplerianElements,
+) -> Result<PipelineOutput, PipelineError> {
+    // Bounds check using the existing mission-level error variant.
+    if waypoint_index >= input.waypoints.len() {
+        return Err(PipelineError::Mission(
+            MissionError::InvalidReplanIndex {
+                index: waypoint_index,
+                num_waypoints: input.waypoints.len(),
+            },
+        ));
+    }
+
+    // Convert enriched ROE → RIC state (position preserved by null-space, velocity derived).
+    let ric = roe_to_ric(enriched_roe, chief_at_waypoint)?;
+
+    // Update the waypoint's velocity: None → Some(enriched_velocity).
+    input.waypoints[waypoint_index].velocity_ric_km_s = Some(ric.velocity_ric_km_s.into());
+
+    // Replan from the modified waypoint.
+    replan_mission(input, waypoint_index, None)
+}
+
 /// Build a [`FormationDesignReport`] from a perch enrichment result, safety
 /// requirements, and completed maneuver legs.
 ///
@@ -500,32 +554,70 @@ pub fn apply_perch_enrichment(
 /// single chief epoch, so that the T-matrix and e/i geometry are evaluated
 /// at the correct epoch for each leg.
 ///
+/// # Arguments
+/// * `perch_result` — perch enrichment outcome (baseline or enriched ROE).
+/// * `reqs` — safety requirements (min separation, alignment preference).
+/// * `legs` — completed maneuver legs from targeting (1:1 with `waypoints`).
+/// * `waypoints` — domain waypoints with optional velocity constraints.
+///
 /// # Invariants
 /// - `legs` must be non-empty (post-targeting output).
+/// - `legs.len() == waypoints.len()` (structurally guaranteed by
+///   `plan_waypoint_mission`, which produces one leg per waypoint).
 /// - `reqs.min_separation_km > 0`.
 #[must_use]
 pub fn compute_formation_report(
     perch_result: PerchEnrichmentResult,
     reqs: SafetyRequirements,
     legs: &[crate::mission::types::ManeuverLeg],
+    waypoints: &[crate::mission::types::Waypoint],
 ) -> FormationDesignReport {
+    debug_assert_eq!(
+        legs.len(),
+        waypoints.len(),
+        "legs and waypoints must be 1:1 (plan_waypoint_mission guarantees this)"
+    );
+
     // R2: resolve alignment once at perch, propagate to all waypoints.
     // If perch enrichment succeeded, use the resolved concrete alignment
     // (Auto → Parallel or AntiParallel). On fallback, use original reqs.
     let resolved_reqs = perch_result.resolve_requirements(&reqs);
 
-    // Advisory: enrich each waypoint (velocity-constrained path — all
-    // waypoints currently carry velocity via to_waypoints() zero-fill).
+    // Enrich each waypoint using the correct mode per waypoint:
+    // - `None` velocity → position-only (3-DOF null-space, actionable suggestion).
+    //   Pre-rotate e/i phases by half the J2 perigee drift over the coast arc
+    //   that FOLLOWS this waypoint (legs[i+1].tof_s), so the aligned geometry
+    //   lands at mid-transit of the next leg (D'Amico Eq. 2.30). The last
+    //   waypoint has no following arc → fall back to uncompensated enrichment.
+    // - `Some(v)` velocity → velocity-constrained (0-DOF, advisory comparison).
     // Uses per-leg arrival chief mean so T-matrix matches J2-evolved epoch.
     // Indexed by leg — None if enrichment failed for that waypoint.
-    let waypoints: Vec<Option<EnrichedWaypoint>> = legs.iter().map(|leg| {
-        enrich_waypoint(
-            &leg.to_position_ric_km,
-            Some(&leg.target_velocity_ric_km_s),
-            &leg.arrival_chief_mean,
-            &resolved_reqs,
-        ).ok()
-    }).collect();
+    let enriched_waypoints: Vec<Option<EnrichedWaypoint>> = legs.iter().enumerate()
+        .zip(waypoints.iter())
+        .map(|((i, leg), wp)| match wp.velocity_ric_km_s {
+            None => legs.get(i + 1).map_or_else(
+                || enrich_waypoint(
+                    &leg.to_position_ric_km,
+                    None,
+                    &leg.arrival_chief_mean,
+                    &resolved_reqs,
+                ).ok(),
+                |next| enrich_with_drift_compensation(
+                    &leg.to_position_ric_km,
+                    &leg.arrival_chief_mean,
+                    next.tof_s,
+                    &resolved_reqs,
+                )
+                .map(|(enriched, _status)| enriched)
+                .ok(),
+            ),
+            Some(ref vel) => enrich_waypoint(
+                &leg.to_position_ric_km,
+                Some(vel),
+                &leg.arrival_chief_mean,
+                &resolved_reqs,
+            ).ok(),
+        }).collect();
 
     // Advisory: transit e/i separation per leg.
     // assess_transit_safety reads per-sample chief from trajectory internally.
@@ -564,7 +656,7 @@ pub fn compute_formation_report(
 
     FormationDesignReport {
         perch: perch_result,
-        waypoints,
+        waypoints: enriched_waypoints,
         transit_safety,
         mission_min_ei_separation_km,
         drift_prediction,
@@ -740,6 +832,29 @@ mod tests {
     /// composition). 1e-3 rad ≈ 0.06° is conservative for a sub-orbit arc.
     const PIPELINE_DRIFT_PHASE_TOL_RAD: f64 = 1.0e-3;
 
+    /// Upper bound on residual e/i phase at mid-transit when the enrichment
+    /// is computed inside `execute_mission` (full pipeline round-trip, rad).
+    /// 100x looser than [`PIPELINE_DRIFT_PHASE_TOL_RAD`] because the
+    /// pipeline round-trip adds Newton-Raphson solver targeting noise
+    /// (~1e-3 km position residual → ~1e-2 rad phase at a ≈ 7 000 km,
+    /// δe ≈ 1e-5 scale) on top of the analytical drift compensation.
+    /// 0.05 rad ≈ 2.9° keeps enough headroom without masking a broken
+    /// compensation (which would produce π/2 ≈ 1.57 rad).
+    const PIPELINE_ENRICHMENT_PHASE_TOL_RAD: f64 = 0.05;
+
+    /// Upper bound on |Δδa| introduced by e/i enrichment (dimensionless).
+    /// The null-space projection (D'Amico Eq. 2.17) preserves position but
+    /// δa is a free DOF that shifts during e/i alignment — typically
+    /// O(1e-4) for proximity-regime geometries. 1e-3 (~7 km at a = 7 000 km)
+    /// catches gross errors (e.g., enrichment accidentally inflating δa
+    /// to far-field scale) while allowing normal null-space adjustment.
+    const ENRICHMENT_DA_DRIFT_TOL: f64 = 1e-3;
+
+    /// Default time-of-flight for test waypoints (seconds). ~1.2 orbital
+    /// periods for ISS-like orbits (T ≈ 5 570 s), giving meaningful J2
+    /// drift without multi-revolution ambiguity.
+    const TEST_WAYPOINT_TOF_S: f64 = 4200.0;
+
     /// Build a minimal `PipelineInput` from the standard far-field test scenario.
     fn far_field_input() -> PipelineInput {
         use crate::types::StateVector;
@@ -768,13 +883,13 @@ mod tests {
                 crate::pipeline::types::WaypointInput {
                     position_ric_km: [0.5, 2.0, 0.5],
                     velocity_ric_km_s: None,
-                    tof_s: Some(4200.0),
+                    tof_s: Some(TEST_WAYPOINT_TOF_S),
                     label: Some("WP1".into()),
                 },
                 crate::pipeline::types::WaypointInput {
                     position_ric_km: [0.5, 0.5, 0.5],
                     velocity_ric_km_s: Some([0.0, 0.001, 0.0]),
-                    tof_s: Some(4200.0),
+                    tof_s: Some(TEST_WAYPOINT_TOF_S),
                     label: Some("WP2".into()),
                 },
             ],
@@ -860,7 +975,7 @@ mod tests {
             waypoints: vec![crate::pipeline::types::WaypointInput {
                 position_ric_km: [0.5, 2.0, 0.5],
                 velocity_ric_km_s: None,
-                tof_s: Some(4200.0),
+                tof_s: Some(TEST_WAYPOINT_TOF_S),
                 label: Some("WP1".into()),
             }],
             proximity: ProximityConfig::default(),
@@ -1229,5 +1344,151 @@ mod tests {
         if let (Some(out_poca), Some(sa_poca)) = (&output.safety.poca, &safety.poca) {
             assert_eq!(out_poca.len(), sa_poca.len(), "POCA leg count should match");
         }
+    }
+
+    #[test]
+    fn accept_waypoint_enrichment_replans_with_safe_ei() {
+        use crate::mission::safety::compute_ei_separation;
+
+        let input = proximity_input_with_enrichment();
+        let baseline_output = execute_mission(&input).expect("baseline");
+
+        // Compute an enrichment suggestion at waypoint 0 using the baseline's
+        // arrival chief. The enrichment itself pulls its SafetyRequirements from
+        // the input (set by proximity_input_with_enrichment()).
+        let reqs = input.safety_requirements.expect("safety reqs set by fixture");
+        let leg = &baseline_output.mission.legs[0];
+        let enriched = enrich_waypoint(
+            &leg.to_position_ric_km,
+            None,
+            &leg.arrival_chief_mean,
+            &reqs,
+        ).expect("enrichment");
+
+        // Accept the enrichment → replan
+        let mut updated_input = input.clone();
+        let enriched_output = accept_waypoint_enrichment(
+            &mut updated_input,
+            0,
+            &enriched.roe,
+            &leg.arrival_chief_mean,
+        ).expect("accept enrichment");
+
+        // Enriched arrival should have better e/i than baseline
+        let enriched_leg = &enriched_output.mission.legs[0];
+        let ei_enriched = compute_ei_separation(
+            &enriched_leg.post_arrival_roe,
+            &enriched_leg.arrival_chief_mean,
+        );
+        let ei_baseline = compute_ei_separation(
+            &leg.post_arrival_roe,
+            &leg.arrival_chief_mean,
+        );
+        assert!(
+            ei_enriched.min_separation_km > ei_baseline.min_separation_km,
+            "enriched e/i ({:.4} km) should exceed baseline ({:.4} km)",
+            ei_enriched.min_separation_km, ei_baseline.min_separation_km,
+        );
+
+        // Waypoint velocity must now be set (accepted enrichment → concrete target)
+        assert!(
+            updated_input.waypoints[0].velocity_ric_km_s.is_some(),
+            "accepted enrichment should populate waypoint velocity",
+        );
+
+        // Enrichment is an e/i layer — δa should stay near-zero
+        // (D'Amico Eq. 2.19: non-zero δa → along-track drift).
+        let delta_da = enriched.roe.da - leg.post_arrival_roe.da;
+        assert!(
+            delta_da.abs() < ENRICHMENT_DA_DRIFT_TOL,
+            "enrichment should not inflate δa: baseline={:.3e}, enriched={:.3e}, \
+             delta={:.3e} (limit={:.0e})",
+            leg.post_arrival_roe.da, enriched.roe.da, delta_da, ENRICHMENT_DA_DRIFT_TOL,
+        );
+    }
+
+    #[test]
+    fn accept_waypoint_enrichment_rejects_out_of_bounds_index() {
+        use crate::mission::errors::MissionError;
+
+        let input = proximity_input_with_enrichment();
+        let baseline_output = execute_mission(&input).expect("baseline");
+        let leg = &baseline_output.mission.legs[0];
+        let reqs = input.safety_requirements.expect("safety reqs set by fixture");
+        let enriched = enrich_waypoint(
+            &leg.to_position_ric_km, None, &leg.arrival_chief_mean, &reqs,
+        ).expect("enrichment");
+
+        let mut updated_input = input.clone();
+        let result = accept_waypoint_enrichment(
+            &mut updated_input, 99, &enriched.roe, &leg.arrival_chief_mean,
+        );
+        assert!(matches!(
+            result,
+            Err(PipelineError::Mission(MissionError::InvalidReplanIndex { index: 99, .. }))
+        ));
+    }
+
+    #[test]
+    fn formation_report_enrichment_uses_drift_compensation() {
+        use crate::mission::formation::types::EnrichmentMode;
+
+        let input = proximity_input_with_enrichment();
+        let output = execute_mission(&input).expect("pipeline");
+
+        let report = output.formation_design.expect("report should exist");
+
+        // Diagnostic drift prediction on first leg departure (unchanged behavior).
+        if let Some(ref drift) = report.drift_prediction {
+            assert!(drift.predicted_min_ei_km > 0.0);
+        }
+
+        // Position-only waypoint enrichments must be tagged as PositionOnly mode.
+        for enriched in report.waypoints.iter().flatten() {
+            assert_eq!(enriched.mode, EnrichmentMode::PositionOnly);
+        }
+    }
+
+    #[test]
+    fn waypoint_enrichment_aligns_at_next_leg_midpoint() {
+        use crate::mission::safety::compute_ei_separation;
+        use crate::propagation::stm::propagate_roe_stm;
+
+        // Requires a mission with 2+ waypoints so waypoint 0 has a following leg.
+        // Extend the fixture locally (inline), since proximity_input_with_enrichment()
+        // has only a single waypoint.
+        let mut input = proximity_input_with_enrichment();
+        input.waypoints.push(crate::pipeline::types::WaypointInput {
+            position_ric_km: [0.3, 1.5, 0.2],
+            velocity_ric_km_s: None,
+            tof_s: Some(TEST_WAYPOINT_TOF_S),
+            label: Some("WP2".into()),
+        });
+
+        let output = execute_mission(&input).expect("pipeline");
+        let report = output.formation_design.expect("report");
+        let enriched_wp0 = report.waypoints[0].as_ref().expect("enrichment for wp0");
+
+        // Propagate the drift-compensated ROE forward by HALF of the NEXT leg's TOF.
+        // Phase angle at that point should be near zero (parallel alignment at mid-transit).
+        let next_leg = &output.mission.legs[1];
+        let (mid_roe, mid_chief) = propagate_roe_stm(
+            &enriched_wp0.roe,
+            &output.mission.legs[0].arrival_chief_mean,
+            next_leg.tof_s / 2.0,
+        ).expect("propagation");
+        let ei_mid = compute_ei_separation(&mid_roe, &mid_chief);
+
+        assert!(
+            ei_mid.phase_angle_rad.abs() < PIPELINE_ENRICHMENT_PHASE_TOL_RAD,
+            "e/i phase at mid-transit of next leg should be ~0 rad (parallel aligned), got {:.4} rad",
+            ei_mid.phase_angle_rad,
+        );
+        assert!(
+            ei_mid.min_separation_km >= enriched_wp0.baseline_ei.min_separation_km,
+            "drift-compensated mid-transit separation ({:.4} km) should not regress \
+             below uncompensated baseline ({:.4} km)",
+            ei_mid.min_separation_km, enriched_wp0.baseline_ei.min_separation_km,
+        );
     }
 }

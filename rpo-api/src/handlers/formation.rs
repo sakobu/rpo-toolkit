@@ -6,6 +6,7 @@ use rpo_core::mission::formation::safety_envelope::enrich_waypoint;
 use rpo_core::mission::formation::{
     EnrichedWaypoint, FormationDesignReport, PerchEnrichmentResult,
 };
+use rpo_core::pipeline::convert::to_waypoints;
 use rpo_core::pipeline::{compute_formation_report, PlanVariant};
 
 use crate::error::{ApiError, InvalidInputError};
@@ -38,7 +39,8 @@ pub fn handle_get_formation_design(
         PlanVariant::Baseline => PerchEnrichmentResult::Baseline(transfer.plan.perch_roe),
     };
 
-    Ok(compute_formation_report(perch, *requirements, &mission.legs))
+    let waypoints = to_waypoints(&session.waypoints);
+    Ok(compute_formation_report(perch, *requirements, &mission.legs, &waypoints))
 }
 
 /// Compute a safe alternative ROE for a single waypoint.

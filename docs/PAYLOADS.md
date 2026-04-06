@@ -469,12 +469,12 @@ When a user drags a waypoint in the 3D view, use `changed_from` so earlier legs 
 
 #### Waypoint fields
 
-| Field               | Required | Default                | Notes                                   |
-| ------------------- | -------- | ---------------------- | --------------------------------------- |
-| `position_ric_km`   | yes      | --                     | `[radial, in-track, cross-track]` in km |
-| `velocity_ric_km_s` | no       | `[0, 0, 0]`            | Target arrival velocity in RIC          |
-| `tof_s`             | no       | `null` (auto-optimize) | Time of flight for this leg             |
-| `label`             | no       | `null`                 | Human-readable label                    |
+| Field               | Required | Default                | Notes                                                                                                                                                                                                    |
+| ------------------- | -------- | ---------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `position_ric_km`   | yes      | --                     | `[radial, in-track, cross-track]` in km                                                                                                                                                                  |
+| `velocity_ric_km_s` | no       | `null` (position-only) | If omitted: position-only waypoint (zero-velocity hold for targeting, 3-DOF null-space freedom for formation enrichment). If set: velocity-constrained target; enrichment becomes advisory-only for that waypoint. |
+| `tof_s`             | no       | `null` (auto-optimize) | Time of flight for this leg                                                                                                                                                                              |
+| `label`             | no       | `null`                 | Human-readable label                                                                                                                                                                                     |
 
 #### Response format
 
