@@ -318,6 +318,20 @@ Requires: mission, transfer, and `safety_requirements` must be set.
 
 Response: `safe_alternative_result`
 
+### accept_waypoint_enrichment
+
+Accept an enrichment suggestion at a specific waypoint and replan from there. Converts the enriched ROE to a concrete RIC velocity target, sets the waypoint velocity, and replans the mission from the modified waypoint onward. Collapses the dual-plan: the enriched trajectory becomes the new baseline.
+
+| Field            | Type                           | Required | Description                      |
+| ---------------- | ------------------------------ | -------- | -------------------------------- |
+| `type`           | `"accept_waypoint_enrichment"` | yes      | Message discriminator            |
+| `request_id`     | `u64`                          | yes      | Client-assigned correlation ID   |
+| `waypoint_index` | `usize`                        | yes      | 0-based waypoint index to enrich |
+
+Requires: mission and `safety_requirements` must be set.
+
+Response: `waypoint_enrichment_accepted`
+
 ### validate
 
 Per-leg nyx high-fidelity validation with progress streaming. Background job (seconds to minutes depending on leg count).
@@ -617,6 +631,18 @@ Safe alternative ROE for a single waypoint (response to `get_safe_alternative`).
 | `mode`               | `string`              | `"position_only"` or `"velocity_constrained"`       |
 | `resolved_alignment` | `string`              | `"parallel"` or `"anti_parallel"`                   |
 
+### waypoint_enrichment_accepted
+
+Replanned mission after accepting an enrichment at a waypoint (response to `accept_waypoint_enrichment`).
+
+| Field        | Type                             | Description                            |
+| ------------ | -------------------------------- | -------------------------------------- |
+| `type`       | `"waypoint_enrichment_accepted"` | Message discriminator                  |
+| `request_id` | `u64`                            | Correlation ID from the client request |
+| `result`     | `LeanPlanResult`                 | Replanned mission with enriched waypoint |
+
+The `result` is the same `LeanPlanResult` shape returned in `plan_result`. After acceptance, the enriched variant and suggestion are cleared — the accepted enrichment becomes the new baseline.
+
 ### covariance_data
 
 On-demand covariance propagation report.
@@ -778,6 +804,16 @@ The `detail` field carries per-error diagnostic data. Examples:
   "reason": "missing_field",
   "field": "chief_config",
   "context": "validate"
+}
+```
+
+`invalid_input` (index out of bounds):
+
+```json
+{
+  "index": 5,
+  "max": 2,
+  "context": "waypoint_index exceeds number of mission legs"
 }
 ```
 

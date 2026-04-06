@@ -216,6 +216,7 @@ async fn handle_text_message(
         // Analysis query messages (formation, covariance, eclipse, session)
         ClientMessage::GetFormationDesign { .. }
         | ClientMessage::GetSafeAlternative { .. }
+        | ClientMessage::AcceptWaypointEnrichment { .. }
         | ClientMessage::GetCovariance { .. }
         | ClientMessage::GetEclipse { .. }
         | ClientMessage::GetSession { .. } => {
@@ -590,6 +591,10 @@ async fn handle_trajectory_query_msg(
 }
 
 /// Handle analysis query messages (formation, covariance, eclipse, session).
+///
+/// Each variant delegates to a handler and maps the result to a `ServerMessage`;
+/// the function body is a flat dispatcher with no algorithmic complexity.
+#[allow(clippy::too_many_lines)]
 async fn handle_analysis_query_msg(
     ws: &mut WebSocket,
     session: &mut Session,
@@ -662,6 +667,27 @@ async fn handle_analysis_query_msg(
                             request_id,
                             transfer: eclipse.transfer,
                             mission: eclipse.mission,
+                        },
+                    )
+                    .await;
+                }
+                Err(e) => {
+                    send_message(ws, &e.to_server_message(Some(request_id))).await;
+                }
+            }
+        }
+
+        ClientMessage::AcceptWaypointEnrichment {
+            request_id,
+            waypoint_index,
+        } => {
+            match handlers::handle_accept_waypoint_enrichment(session, waypoint_index) {
+                Ok(result) => {
+                    send_message(
+                        ws,
+                        &ServerMessage::WaypointEnrichmentAccepted {
+                            request_id,
+                            result: Box::new(result),
                         },
                     )
                     .await;

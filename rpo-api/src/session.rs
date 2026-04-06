@@ -452,6 +452,19 @@ impl Session {
             },
         ))
     }
+
+    /// Resolve safety requirements with alignment from the stored enrichment
+    /// suggestion, falling back to the base requirements when no suggestion
+    /// is available.
+    ///
+    /// This ensures that Auto alignment is resolved once at perch and
+    /// propagated consistently to all downstream waypoints.
+    #[must_use]
+    pub fn resolve_enriched_requirements(&self, base: &SafetyRequirements) -> SafetyRequirements {
+        self.enrichment_suggestion
+            .as_ref()
+            .map_or(*base, |s| s.perch.resolve_requirements(base))
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -732,6 +745,26 @@ mod tests {
 
         assert_eq!(session.waypoints.len(), 1);
         assert!(session.baseline_mission.is_none(), "mission should be cleared");
+    }
+
+    // 6a. set_waypoints preserves transfer (relied on by handle_accept_waypoint_enrichment)
+    #[test]
+    fn test_set_waypoints_preserves_transfer() {
+        let mut session = Session::default();
+        session.transfer = Some(dummy_transfer());
+
+        session.set_waypoints(vec![WaypointInput {
+            position_ric_km: [0.0, 1.0, 0.0],
+            velocity_ric_km_s: None,
+            tof_s: None,
+            label: None,
+        }]);
+
+        assert!(
+            session.transfer.is_some(),
+            "set_waypoints must not clear transfer — \
+             handle_accept_waypoint_enrichment depends on this invariant"
+        );
     }
 
     // 6b. set_config clears mission

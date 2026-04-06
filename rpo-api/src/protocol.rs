@@ -234,6 +234,13 @@ pub enum ClientMessage {
         /// Index of the waypoint/leg to enrich.
         waypoint_index: usize,
     },
+    /// Accept an enrichment suggestion at a specific waypoint and replan from there.
+    AcceptWaypointEnrichment {
+        /// Client-assigned correlation ID.
+        request_id: u64,
+        /// Which waypoint to enrich (0-indexed, into the session's waypoints).
+        waypoint_index: usize,
+    },
     /// Get a snapshot of current session state.
     GetSession {
         /// Client-assigned correlation ID.
@@ -412,6 +419,13 @@ pub enum ServerMessage {
         request_id: u64,
         /// Full MC report (boxed to reduce enum size).
         report: Box<MonteCarloReport>,
+    },
+    /// Acknowledgement that an enrichment was accepted; returns the replanned mission result.
+    WaypointEnrichmentAccepted {
+        /// Correlation ID from the client request.
+        request_id: u64,
+        /// The replanned mission result (lean projection).
+        result: Box<LeanPlanResult>,
     },
     /// Confirmation that the active plan variant was changed.
     PlanSelected {

@@ -65,6 +65,15 @@ pub enum InvalidInputError {
         /// Operation that requires this state.
         context: &'static str,
     },
+    /// A client-supplied index is out of bounds.
+    IndexOutOfBounds {
+        /// The index the client provided.
+        index: usize,
+        /// Maximum valid index (exclusive upper bound).
+        max: usize,
+        /// Operation that received the invalid index.
+        context: &'static str,
+    },
 }
 
 impl fmt::Display for ApiError {
@@ -96,6 +105,13 @@ impl fmt::Display for InvalidInputError {
             Self::EmptyTrajectory => write!(f, "empty chief trajectory"),
             Self::MissingSessionState { missing, context } => {
                 write!(f, "required session state not available: {missing} needed for {context}")
+            }
+            Self::IndexOutOfBounds {
+                index,
+                max,
+                context,
+            } => {
+                write!(f, "index {index} out of bounds (max {max}) for {context}")
             }
         }
     }
@@ -349,6 +365,14 @@ fn invalid_input_error_detail(
         InvalidInputError::MissingSessionState { missing, context } => (
             ErrorCode::MissingSessionState,
             Some(serde_json::json!({ "missing": missing, "context": context })),
+        ),
+        InvalidInputError::IndexOutOfBounds {
+            index,
+            max,
+            context,
+        } => (
+            ErrorCode::InvalidInput,
+            Some(serde_json::json!({ "reason": "index_out_of_bounds", "index": index, "max": max, "context": context })),
         ),
     }
 }

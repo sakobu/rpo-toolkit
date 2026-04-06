@@ -931,6 +931,57 @@ Shows what a specific waypoint's ROE would look like with safe e/i vectors. Does
 }
 ```
 
+#### Send: accept_waypoint_enrichment
+
+Accept the safe alternative shown above and replan the mission with the enriched waypoint velocity.
+
+```json
+{
+  "type": "accept_waypoint_enrichment",
+  "request_id": 37,
+  "waypoint_index": 0
+}
+```
+
+**Response:**
+
+```json
+{
+  "type": "waypoint_enrichment_accepted",
+  "request_id": 37,
+  "result": {
+    "phase": "proximity",
+    "transfer_summary": null,
+    "perch_roe": {
+      "da": 0.000145,
+      "dlambda": 0.000291,
+      "dex": 1.5e-5,
+      "dey": 2.18e-5,
+      "dix": 0.0,
+      "diy": 2.18e-5
+    },
+    "legs": [
+      {
+        "leg_index": 0,
+        "from_label": "Perch",
+        "to_label": "WP1",
+        "departure_dv_km_s": 0.00312,
+        "arrival_dv_km_s": 0.00089,
+        "total_dv_km_s": 0.00401,
+        "tof_s": 4200.0,
+        "iterations": 6,
+        "position_error_km": 2.1e-7
+      }
+    ],
+    "total_dv_km_s": 0.00401,
+    "total_duration_s": 4200.0,
+    "safety": null
+  }
+}
+```
+
+After acceptance, the dual-plan is collapsed: the enriched trajectory is the new baseline. Subsequent `get_formation_design`, `validate`, and `run_mc` operate on the accepted plan.
+
 ---
 
 #### Send: get_eclipse
