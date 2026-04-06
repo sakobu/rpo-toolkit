@@ -142,12 +142,18 @@ Set waypoints and plan/replan the mission. For far-field, requires a stored tran
 
 `WaypointInput` fields:
 
-| Field               | Type         | Required | Default                | Description                                                                                                                                                                                              |
-| ------------------- | ------------ | -------- | ---------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `position_ric_km`   | `[R, I, C]`  | yes      | --                     | RIC position target (km)                                                                                                                                                                                  |
-| `velocity_ric_km_s` | `[R, I, C]?` | no       | `null` (position-only) | If omitted: position-only waypoint (zero-velocity hold for targeting, 3-DOF null-space freedom for formation enrichment). If set: velocity-constrained target; enrichment becomes advisory-only for that waypoint. |
-| `tof_s`             | `f64?`       | no       | `null` (auto-optimize) | Time of flight for this leg (seconds). Null triggers TOF optimization.                                                                                                                                    |
-| `label`             | `string?`    | no       | `null`                 | Human-readable label                                                                                                                                                                                      |
+| Field               | Type         | Required | Default                | Description                                              |
+| ------------------- | ------------ | -------- | ---------------------- | -------------------------------------------------------- |
+| `position_ric_km`   | `[R, I, C]`  | yes      | --                     | RIC position target (km)                                 |
+| `velocity_ric_km_s` | `[R, I, C]?` | no       | `null` (position-only) | RIC velocity target (km/s). See velocity semantics below |
+| `tof_s`             | `f64?`       | no       | `null` (auto-optimize) | Time of flight (seconds). Null triggers TOF optimization |
+| `label`             | `string?`    | no       | `null`                 | Human-readable label                                     |
+
+**`velocity_ric_km_s` semantics:**
+
+- **Omitted / `null`:** Position-only waypoint. Targeting derives the minimum-norm (cheapest Δv) arrival velocity analytically. Formation enrichment has 3-DOF null-space freedom to propose a safe e/i-aligned alternative.
+- **`[0, 0, 0]`:** Explicit station-keeping — arrive and hold at the RIC position with zero relative velocity.
+- **Any other value:** Velocity-constrained target. Targeting hits the exact (position, velocity) pair. Enrichment is advisory-only for that waypoint.
 
 Response: `plan_result`
 
@@ -576,13 +582,17 @@ Full formation design report for the currently selected plan variant (response t
 
 `FormationDesignReport` fields:
 
-| Field                          | Type                              | Description                                                |
-| ------------------------------ | --------------------------------- | ---------------------------------------------------------- |
-| `perch`                        | `PerchEnrichmentResult`           | Perch enrichment: `enriched` (with safe e/i) or `fallback` |
-| `waypoints`                    | `(EnrichedWaypoint \| null)[]`    | Per-waypoint enrichment (null if failed). Position-only waypoints get actionable 3-DOF enrichment with drift compensation; velocity-constrained waypoints get advisory-only comparison. Check `mode` field. |
-| `transit_safety`               | `(TransitSafetyReport \| null)[]` | Per-leg e/i separation profile (null if failed)            |
-| `mission_min_ei_separation_km` | `f64?`                            | Mission-wide minimum e/i separation (omitted if no data)   |
-| `drift_prediction`             | `DriftPrediction?`                | Predicted mid-transit e/i for leg-1 coast arc (omitted if outside compensation regime). `{ predicted_min_ei_km: f64, predicted_phase_angle_rad: f64 }` |
+| Field                          | Type                              | Description                                                   |
+| ------------------------------ | --------------------------------- | ------------------------------------------------------------- |
+| `perch`                        | `PerchEnrichmentResult`           | Perch enrichment: `enriched` (safe e/i) or `fallback`         |
+| `waypoints`                    | `(EnrichedWaypoint \| null)[]`    | Per-waypoint enrichment (`null` if failed). See note below    |
+| `transit_safety`               | `(TransitSafetyReport \| null)[]` | Per-leg e/i separation profile (`null` if failed)             |
+| `mission_min_ei_separation_km` | `f64?`                            | Mission-wide minimum e/i separation (omitted if no data)      |
+| `drift_prediction`             | `DriftPrediction?`                | Predicted mid-transit e/i for leg-1 coast arc. See note below |
+
+**`waypoints` enrichment modes:** Position-only waypoints (`velocity_ric_km_s` omitted) get actionable 3-DOF enrichment with J2 drift compensation. Velocity-constrained waypoints get advisory-only comparison. Check the `mode` field (`PositionOnly` vs `VelocityConstrained`).
+
+**`drift_prediction`:** Omitted if outside the drift compensation regime. Contains `{ predicted_min_ei_km: f64, predicted_phase_angle_rad: f64 }`.
 
 `TransitSafetyReport` fields:
 
@@ -635,10 +645,10 @@ Safe alternative ROE for a single waypoint (response to `get_safe_alternative`).
 
 Replanned mission after accepting an enrichment at a waypoint (response to `accept_waypoint_enrichment`).
 
-| Field        | Type                             | Description                            |
-| ------------ | -------------------------------- | -------------------------------------- |
-| `type`       | `"waypoint_enrichment_accepted"` | Message discriminator                  |
-| `request_id` | `u64`                            | Correlation ID from the client request |
+| Field        | Type                             | Description                              |
+| ------------ | -------------------------------- | ---------------------------------------- |
+| `type`       | `"waypoint_enrichment_accepted"` | Message discriminator                    |
+| `request_id` | `u64`                            | Correlation ID from the client request   |
 | `result`     | `LeanPlanResult`                 | Replanned mission with enriched waypoint |
 
 The `result` is the same `LeanPlanResult` shape returned in `plan_result`. After acceptance, the enriched variant and suggestion are cleared — the accepted enrichment becomes the new baseline.

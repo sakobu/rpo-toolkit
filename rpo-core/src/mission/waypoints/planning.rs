@@ -9,7 +9,7 @@ use nalgebra::Vector3;
 
 use crate::mission::config::{MissionConfig, SafetyConfig};
 use crate::mission::errors::MissionError;
-use crate::mission::targeting::{optimize_tof, solve_leg};
+use crate::mission::targeting::{optimize_tof, solve_leg, ArrivalVelocityStrategy};
 use crate::mission::types::{ManeuverLeg, SafetyMetrics, Waypoint, WaypointMission};
 use crate::propagation::propagator::PropagationModel;
 use crate::types::DepartureState;
@@ -133,23 +133,30 @@ pub fn plan_waypoint_mission(
     let mut current = *initial;
 
     for wp in waypoints {
-        let target_velocity_ric_km_s = wp.velocity_ric_km_s.unwrap_or_else(Vector3::zeros);
+        let velocity_strategy = match wp.velocity_ric_km_s {
+            Some(v) => ArrivalVelocityStrategy::Fixed(v),
+            None => ArrivalVelocityStrategy::MinimumNorm,
+        };
+
         let leg = if let Some(tof) = wp.tof_s {
-            // Fixed TOF
+            // Fixed TOF: resolve the strategy once
+            let target_velocity = velocity_strategy.resolve(
+                &current, &wp.position_ric_km, tof, propagator,
+            )?;
             solve_leg(
                 &current,
                 &wp.position_ric_km,
-                &target_velocity_ric_km_s,
+                &target_velocity,
                 tof,
                 targeting_config,
                 propagator,
             )?
         } else {
-            // Optimize TOF
+            // Optimize TOF: strategy is resolved per-TOF inside optimize_tof
             let (_, leg) = optimize_tof(
                 &current,
                 &wp.position_ric_km,
-                &target_velocity_ric_km_s,
+                &velocity_strategy,
                 targeting_config,
                 tof_config,
                 propagator,
@@ -293,6 +300,18 @@ mod tests {
     /// A zero-ROE departure state maps to the chief origin; 1e-6 km = 1 mm
     /// accounts for linearization residual in the ROE→RIC mapping.
     const ZERO_ROE_POSITION_BOUND_KM: f64 = 1e-6;
+
+    /// Minimum detectable nonzero signal from minimum-norm velocity derivation.
+    /// Velocities for non-trivial position offsets are O(1e-4) km/s; 1e-10 is well below.
+    const MINIMUM_NORM_SIGNAL_FLOOR: f64 = 1e-10;
+
+    /// ROE state continuity between consecutive legs.
+    /// Two propagations accumulate ~O(1e-15) per operation; 1e-14 allows margin.
+    const ROE_CONTINUITY_TOL: f64 = 1e-14;
+
+    /// Position convergence tolerance for targeting solver output.
+    /// Solver targets 1e-6 km; 1e-5 provides comfortable margin for test assertions.
+    const SOLVER_POSITION_TOL_KM: f64 = 1e-5;
 
     fn default_config() -> MissionConfig {
         MissionConfig::default()
@@ -845,6 +864,128 @@ mod tests {
         assert!(
             safety.operational.min_3d_ric_position_km.norm() > 0.0,
             "3D RIC position should be nonzero"
+        );
+    }
+
+    // =======================================================================
+    // Minimum-norm velocity tests
+    // =======================================================================
+
+    /// Position-only waypoint produces nonzero minimum-norm target velocity.
+    #[test]
+    fn position_only_waypoint_gets_nonzero_target_velocity() {
+        let departure = zero_departure();
+        let waypoints = vec![Waypoint {
+            position_ric_km: Vector3::new(0.5, 2.0, 0.3),
+            velocity_ric_km_s: None,
+            tof_s: Some(departure.chief.period().unwrap() * 0.75),
+        }];
+        let config = default_config();
+        let propagator = PropagationModel::J2Stm;
+
+        let mission = plan_waypoint_mission(&departure, &waypoints, &config, &propagator).unwrap();
+        let leg = &mission.legs[0];
+
+        assert!(
+            leg.target_velocity_ric_km_s.norm() > MINIMUM_NORM_SIGNAL_FLOOR,
+            "position-only waypoint should get non-zero minimum-norm velocity, got norm={}",
+            leg.target_velocity_ric_km_s.norm(),
+        );
+    }
+
+    /// Multi-waypoint chain: transit legs get minimum-norm velocity, station-keep gets zero.
+    #[test]
+    fn multi_waypoint_transit_with_minimum_norm() {
+        let departure = zero_departure();
+        let period = departure.chief.period().unwrap();
+        let waypoints = vec![
+            Waypoint {
+                position_ric_km: Vector3::new(0.3, 1.0, 0.0),
+                velocity_ric_km_s: None,
+                tof_s: Some(period * 0.75),
+            },
+            Waypoint {
+                position_ric_km: Vector3::new(0.5, 2.0, 0.2),
+                velocity_ric_km_s: None,
+                tof_s: Some(period * 0.75),
+            },
+            Waypoint {
+                position_ric_km: Vector3::new(0.0, 0.0, 0.0),
+                velocity_ric_km_s: Some(Vector3::zeros()),
+                tof_s: Some(period),
+            },
+        ];
+        let config = default_config();
+        let propagator = PropagationModel::J2Stm;
+
+        let mission = plan_waypoint_mission(&departure, &waypoints, &config, &propagator).unwrap();
+
+        // Transit legs: non-zero target velocity (minimum-norm)
+        assert!(mission.legs[0].target_velocity_ric_km_s.norm() > MINIMUM_NORM_SIGNAL_FLOOR,
+            "leg 0 (transit) should have non-zero target velocity");
+        assert!(mission.legs[1].target_velocity_ric_km_s.norm() > MINIMUM_NORM_SIGNAL_FLOOR,
+            "leg 1 (transit) should have non-zero target velocity");
+        // Station-keep leg: zero target velocity
+        assert!(mission.legs[2].target_velocity_ric_km_s.norm() < MINIMUM_NORM_SIGNAL_FLOOR,
+            "leg 2 (station-keep) should have zero target velocity");
+
+        // State continuity: post-arrival ROE of leg N = pre-departure of leg N+1
+        for i in 0..mission.legs.len() - 1 {
+            let post = &mission.legs[i].post_arrival_roe;
+            let pre_next = &mission.legs[i + 1].pre_departure_roe;
+            let diff = (post.to_vector() - pre_next.to_vector()).norm();
+            assert!(diff < ROE_CONTINUITY_TOL, "ROE continuity broken at leg {i}: diff={diff}");
+        }
+    }
+
+    /// TOF optimization with minimum-norm velocity converges to a valid solution.
+    #[test]
+    fn tof_optimization_with_minimum_norm() {
+        let departure = zero_departure();
+        let waypoints = vec![Waypoint {
+            position_ric_km: Vector3::new(0.5, 2.0, 0.3),
+            velocity_ric_km_s: None,
+            tof_s: None, // optimize both TOF and velocity
+        }];
+        let config = default_config();
+        let propagator = PropagationModel::J2Stm;
+
+        let mission = plan_waypoint_mission(&departure, &waypoints, &config, &propagator).unwrap();
+
+        assert_eq!(mission.legs.len(), 1);
+        assert!(mission.total_dv_km_s > 0.0, "should require some delta-v");
+        assert!(mission.legs[0].position_error_km < SOLVER_POSITION_TOL_KM,
+            "position should converge: error={}", mission.legs[0].position_error_km);
+        assert!(mission.legs[0].target_velocity_ric_km_s.norm() > MINIMUM_NORM_SIGNAL_FLOOR,
+            "target velocity should be non-zero (minimum-norm)");
+    }
+
+    /// Minimum-norm Δv ≤ zero-velocity Δv for the same target position.
+    #[test]
+    fn position_only_at_least_as_cheap_as_zero_velocity() {
+        let departure = zero_departure();
+        let target_pos = Vector3::new(0.5, 2.0, 0.3);
+        let config = default_config();
+        let propagator = PropagationModel::J2Stm;
+
+        let wp_minnorm = vec![Waypoint {
+            position_ric_km: target_pos,
+            velocity_ric_km_s: None,
+            tof_s: None,
+        }];
+        let mission_mn = plan_waypoint_mission(&departure, &wp_minnorm, &config, &propagator).unwrap();
+
+        let wp_zero = vec![Waypoint {
+            position_ric_km: target_pos,
+            velocity_ric_km_s: Some(Vector3::zeros()),
+            tof_s: None,
+        }];
+        let mission_zero = plan_waypoint_mission(&departure, &wp_zero, &config, &propagator).unwrap();
+
+        assert!(
+            mission_mn.total_dv_km_s <= mission_zero.total_dv_km_s + MINIMUM_NORM_SIGNAL_FLOOR,
+            "minimum-norm ({:.6} km/s) should be <= zero-velocity ({:.6} km/s)",
+            mission_mn.total_dv_km_s, mission_zero.total_dv_km_s,
         );
     }
 

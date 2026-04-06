@@ -2,6 +2,7 @@
 
 use crate::elements::eci_ric_dcm::DcmError;
 use crate::elements::keplerian_conversions::ConversionError;
+use crate::elements::roe_to_ric::RicError;
 use crate::propagation::lambert::LambertError;
 use crate::propagation::propagator::PropagationError;
 use crate::types::KeplerError;
@@ -15,6 +16,8 @@ pub enum MissionError {
     Lambert(LambertError),
     /// ECI ↔ Keplerian conversion failure.
     Conversion(ConversionError),
+    /// ROE ↔ RIC pseudo-inverse failure.
+    Ric(RicError),
     /// V-bar perch offset must be nonzero.
     InvalidVBarOffset {
         /// The invalid along-track offset (km).
@@ -69,6 +72,7 @@ impl std::fmt::Display for MissionError {
             Self::Propagation(e) => write!(f, "MissionError: {e}"),
             Self::Lambert(e) => write!(f, "MissionError: {e}"),
             Self::Conversion(e) => write!(f, "MissionError: {e}"),
+            Self::Ric(e) => write!(f, "MissionError: {e}"),
             Self::InvalidVBarOffset { along_track_km } => write!(
                 f,
                 "MissionError: invalid V-bar perch — along-track offset = {along_track_km:.6e} km (must be nonzero)"
@@ -106,6 +110,7 @@ impl std::error::Error for MissionError {
             Self::Propagation(e) => Some(e),
             Self::Lambert(e) => Some(e),
             Self::Conversion(e) => Some(e),
+            Self::Ric(e) => Some(e),
             Self::Kepler(e) => Some(e),
             _ => None,
         }
@@ -133,6 +138,12 @@ impl From<LambertError> for MissionError {
 impl From<ConversionError> for MissionError {
     fn from(e: ConversionError) -> Self {
         Self::Conversion(e)
+    }
+}
+
+impl From<RicError> for MissionError {
+    fn from(e: RicError) -> Self {
+        Self::Ric(e)
     }
 }
 

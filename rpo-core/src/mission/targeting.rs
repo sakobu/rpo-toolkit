@@ -7,6 +7,7 @@
 use nalgebra::{SMatrix, Vector3};
 
 use crate::elements::gve::apply_maneuver;
+use crate::elements::roe_to_ric::{compute_t_velocity, ric_position_to_roe};
 use crate::propagation::propagator::{PropagatedState, PropagationModel};
 use crate::types::{DepartureState, KeplerianElements, QuasiNonsingularROE};
 
@@ -25,6 +26,98 @@ const TOF_REFINE_HALF_WINDOW: f64 = 0.5;
 
 /// Golden ratio for golden-section TOF refinement: (√5 − 1) / 2.
 const GOLDEN_RATIO: f64 = 0.618_033_988_749_894_9;
+
+/// Strategy for determining arrival velocity at a waypoint.
+///
+/// Controls how the targeting solver and TOF optimizer derive the
+/// target velocity for position-only waypoints.
+#[derive(Debug, Clone)]
+pub enum ArrivalVelocityStrategy {
+    /// User-specified fixed velocity target (km/s, RIC).
+    Fixed(Vector3<f64>),
+    /// Derive minimum-norm arrival velocity analytically.
+    ///
+    /// Chains: STM propagation -> `T_pos` pseudoinverse (Eq. 2.17) ->
+    /// ΔROE -> `T_vel` (Eq. 2.17) to find the cheapest arrival
+    /// velocity consistent with the target position.
+    /// Recomputed per TOF evaluation in the golden-section optimizer.
+    ///
+    /// # Validity
+    /// - Near-circular chief orbit (`e < ~0.1`)
+    /// - `T_pos · T_posᵀ` must be non-singular at the arrival epoch's
+    ///   argument of latitude (see [`ric_position_to_roe`] singularity docs)
+    MinimumNorm,
+}
+
+impl ArrivalVelocityStrategy {
+    /// Resolve this strategy to a concrete velocity vector.
+    ///
+    /// For [`Fixed`](Self::Fixed), returns the stored velocity.
+    /// For [`MinimumNorm`](Self::MinimumNorm), propagates the departure state
+    /// forward by `tof_s` and derives the cheapest arrival velocity analytically.
+    ///
+    /// # Invariants
+    /// - For `MinimumNorm`: `tof_s > 0`, `departure.chief` valid mean elements
+    /// - For `Fixed`: none (returns stored value directly)
+    ///
+    /// # Errors
+    ///
+    /// Returns `MissionError::Ric` if `T_pos · T_posᵀ` is singular, or
+    /// `MissionError::Conversion` if chief elements are invalid.
+    pub fn resolve(
+        &self,
+        departure: &DepartureState,
+        target_position_ric_km: &Vector3<f64>,
+        tof_s: f64,
+        propagator: &PropagationModel,
+    ) -> Result<Vector3<f64>, MissionError> {
+        match self {
+            Self::Fixed(v) => Ok(*v),
+            Self::MinimumNorm => compute_minimum_norm_arrival_velocity(
+                departure, target_position_ric_km, tof_s, propagator,
+            ),
+        }
+    }
+}
+
+/// Derive the minimum-norm arrival velocity for a position-only waypoint.
+///
+/// Computes the RIC velocity consistent with being at the target position
+/// on the minimum-norm ROE state that produces that position
+/// (D'Amico Eq. 2.17 velocity rows evaluated on `T_pos`† target):
+///
+/// 1. Compute target ROE from arrival position (Eq. 2.17 `T_pos` pseudoinverse)
+/// 2. Compute velocity at that ROE: `v = T_vel * target_roe`
+///
+/// This gives the natural relative velocity the deputy would have if
+/// orbiting on the minimum-norm ROE matching the target position.
+/// The targeting solver then only needs to correct the small mismatch
+/// between the actual and desired velocity, minimizing the arrival burn.
+///
+/// # Invariants
+/// - `tof_s > 0` (non-positive TOF produces undefined propagation)
+/// - `departure.chief.a_km > 0` and `0 <= departure.chief.e < 1`
+/// - `departure.chief` must be **mean** Keplerian elements
+/// - Near-circular assumption: `T_pos` pseudoinverse accuracy degrades for `e > 0.1`
+///
+/// # Errors
+/// Returns `MissionError::Ric` if `T_pos · T_posᵀ` is singular, or
+/// `MissionError::Conversion` if chief elements are invalid.
+fn compute_minimum_norm_arrival_velocity(
+    departure: &DepartureState,
+    target_position_ric_km: &Vector3<f64>,
+    tof_s: f64,
+    propagator: &PropagationModel,
+) -> Result<Vector3<f64>, MissionError> {
+    // Propagate to get arrival-epoch chief elements (the propagated ROE is discarded —
+    // we want the minimum-norm ROE matching the target position at arrival geometry).
+    let arrival = propagator.propagate(
+        &departure.roe, &departure.chief, departure.epoch, tof_s,
+    )?;
+    let target_roe = ric_position_to_roe(target_position_ric_km, &arrival.chief_mean)?;
+    let t_vel = compute_t_velocity(&arrival.chief_mean)?;
+    Ok(t_vel * target_roe.to_vector())
+}
 
 /// Clamp each component of a vector to `[-cap, cap]`.
 fn clamp_dv(dv: &Vector3<f64>, cap: f64) -> Vector3<f64> {
@@ -130,6 +223,89 @@ struct ConvergedSolution {
     target_velocity: Vector3<f64>,
 }
 
+/// Core Newton-Raphson shooting loop for two-burn transfer targeting.
+///
+/// Finds departure Δv₁ that hits `target_position` in RIC space after
+/// propagation by `tof_s`. Returns the converged solution; callers decide
+/// whether to build a full [`ManeuverLeg`] or extract cost only.
+///
+/// # Invariants
+/// - `tof_s > 0` (non-positive TOF produces undefined propagation)
+/// - `departure.chief.a_km > 0` and `0 <= departure.chief.e < 1`
+/// - `departure.chief` must be **mean** Keplerian elements, not osculating
+/// - `config.max_iterations > 0`
+/// - CW STM is singular at integer orbital periods for radial/cross-track
+///   targets; use non-integer period TOFs to avoid singular Jacobian
+///
+/// # Errors
+/// Returns `MissionError::TargetingConvergence` if the solver fails to converge,
+/// or `MissionError::SingularJacobian` if the Jacobian cannot be inverted.
+fn newton_raphson_solve(
+    departure: &DepartureState,
+    target_position: &Vector3<f64>,
+    target_velocity: &Vector3<f64>,
+    tof_s: f64,
+    config: &TargetingConfig,
+    propagator: &PropagationModel,
+) -> Result<ConvergedSolution, MissionError> {
+    let mut dv1 = cw_initial_guess(
+        &departure.chief,
+        target_position,
+        target_velocity,
+        tof_s,
+        config.dv_cap_km_s,
+    )?;
+
+    // Analytical Jacobian: constant w.r.t. Δv (affine forward model).
+    // Computed once; pre-invert for direct Newton steps.
+    let jac = compute_analytical_jacobian(&departure.chief, tof_s)?;
+    let jac_inv = if let Some(inv) = jac.try_inverse() {
+        inv
+    } else {
+        let svd = jac.svd(true, true);
+        svd.pseudo_inverse(JACOBIAN_PINV_TOL)
+            .map_err(|_| MissionError::SingularJacobian)?
+    };
+
+    let mut last_error = f64::INFINITY;
+    let max_iter = f64::from(config.max_iterations.max(1));
+
+    for iter in 0..config.max_iterations {
+        let (arrival, post_dep_roe) = forward_model(departure, &dv1, tof_s, propagator)?;
+
+        // Position residual only — velocity corrected by arrival burn
+        let pos_err = target_position - arrival.ric.position_ric_km;
+        let pos_error_km = pos_err.norm();
+        last_error = pos_error_km;
+
+        if pos_error_km < config.position_tol_km {
+            return Ok(ConvergedSolution {
+                dv1,
+                post_dep_roe,
+                arrival,
+                iterations: iter + 1,
+                position_error_km: pos_error_km,
+                target_position: *target_position,
+                target_velocity: *target_velocity,
+            });
+        }
+
+        let delta_dv = jac_inv * pos_err;
+
+        // Damping: ramp from initial_damping to 1.0
+        let progress = f64::from(iter) / max_iter;
+        let damping = config.initial_damping + (1.0 - config.initial_damping) * progress;
+
+        dv1 += damping * delta_dv;
+        dv1 = clamp_dv(&dv1, config.dv_cap_km_s);
+    }
+
+    Err(MissionError::TargetingConvergence {
+        final_error_km: last_error,
+        iterations: config.max_iterations,
+    })
+}
+
 /// Solve a single two-burn transfer leg using Newton-Raphson shooting.
 ///
 /// Finds departure Δv₁ (to hit target position) and arrival Δv₂ (to match
@@ -163,63 +339,10 @@ pub fn solve_leg(
     config: &TargetingConfig,
     propagator: &PropagationModel,
 ) -> Result<ManeuverLeg, MissionError> {
-    let mut dv1 = cw_initial_guess(
-        &departure.chief,
-        target_position,
-        target_velocity,
-        tof_s,
-        config.dv_cap_km_s,
+    let solution = newton_raphson_solve(
+        departure, target_position, target_velocity, tof_s, config, propagator,
     )?;
-
-    // Analytical Jacobian: constant w.r.t. Δv (affine forward model).
-    // Computed once; pre-invert for direct Newton steps.
-    let jac = compute_analytical_jacobian(&departure.chief, tof_s)?;
-    let jac_inv = if let Some(inv) = jac.try_inverse() {
-        inv
-    } else {
-        let svd = jac.svd(true, true);
-        svd.pseudo_inverse(JACOBIAN_PINV_TOL)
-            .map_err(|_| MissionError::SingularJacobian)?
-    };
-
-    let mut last_error = f64::INFINITY;
-    let max_iter = f64::from(config.max_iterations.max(1));
-
-    for iter in 0..config.max_iterations {
-        let (arrival, post_dep_roe) = forward_model(departure, &dv1, tof_s, propagator)?;
-
-        // Position residual only — velocity corrected by arrival burn
-        let pos_err = target_position - arrival.ric.position_ric_km;
-        let pos_error_km = pos_err.norm();
-        last_error = pos_error_km;
-
-        if pos_error_km < config.position_tol_km {
-            let solution = ConvergedSolution {
-                dv1,
-                post_dep_roe,
-                arrival,
-                iterations: iter + 1,
-                position_error_km: pos_error_km,
-                target_position: *target_position,
-                target_velocity: *target_velocity,
-            };
-            return build_leg(departure, &solution, tof_s, config, propagator);
-        }
-
-        let delta_dv = jac_inv * pos_err;
-
-        // Damping: ramp from initial_damping to 1.0
-        let progress = f64::from(iter) / max_iter;
-        let damping = config.initial_damping + (1.0 - config.initial_damping) * progress;
-
-        dv1 += damping * delta_dv;
-        dv1 = clamp_dv(&dv1, config.dv_cap_km_s);
-    }
-
-    Err(MissionError::TargetingConvergence {
-        final_error_km: last_error,
-        iterations: config.max_iterations,
-    })
+    build_leg(departure, &solution, tof_s, config, propagator)
 }
 
 /// Cost-only variant: returns only the total Δv (km/s) without building
@@ -235,50 +358,11 @@ fn solve_leg_cost_only(
     config: &TargetingConfig,
     propagator: &PropagationModel,
 ) -> Result<f64, MissionError> {
-    let mut dv1 = cw_initial_guess(
-        &departure.chief,
-        target_position,
-        target_velocity,
-        tof_s,
-        config.dv_cap_km_s,
+    let solution = newton_raphson_solve(
+        departure, target_position, target_velocity, tof_s, config, propagator,
     )?;
-
-    let jac = compute_analytical_jacobian(&departure.chief, tof_s)?;
-    let jac_inv = if let Some(inv) = jac.try_inverse() {
-        inv
-    } else {
-        let svd = jac.svd(true, true);
-        svd.pseudo_inverse(JACOBIAN_PINV_TOL)
-            .map_err(|_| MissionError::SingularJacobian)?
-    };
-
-    let mut last_error = f64::INFINITY;
-    let max_iter = f64::from(config.max_iterations.max(1));
-
-    for iter in 0..config.max_iterations {
-        let (arrival, _) = forward_model(departure, &dv1, tof_s, propagator)?;
-
-        let pos_err = target_position - arrival.ric.position_ric_km;
-        let pos_error_km = pos_err.norm();
-        last_error = pos_error_km;
-
-        if pos_error_km < config.position_tol_km {
-            let dv2 = target_velocity - arrival.ric.velocity_ric_km_s;
-            return Ok(dv1.norm() + dv2.norm());
-        }
-
-        let delta_dv = jac_inv * pos_err;
-        let progress = f64::from(iter) / max_iter;
-        let damping = config.initial_damping + (1.0 - config.initial_damping) * progress;
-
-        dv1 += damping * delta_dv;
-        dv1 = clamp_dv(&dv1, config.dv_cap_km_s);
-    }
-
-    Err(MissionError::TargetingConvergence {
-        final_error_km: last_error,
-        iterations: config.max_iterations,
-    })
+    let dv2 = solution.target_velocity - solution.arrival.ric.velocity_ric_km_s;
+    Ok(solution.dv1.norm() + dv2.norm())
 }
 
 /// Build a [`ManeuverLeg`] from converged solver results.
@@ -346,7 +430,7 @@ fn build_leg(
 /// # Arguments
 /// * `departure` — Departure ROE state, chief elements, and epoch
 /// * `target_position` — Target RIC position (km)
-/// * `target_velocity` — Target RIC velocity (km/s)
+/// * `velocity_strategy` — Arrival velocity strategy (fixed or minimum-norm)
 /// * `targeting_config` — Targeting solver configuration
 /// * `tof_config` — TOF optimization bounds and search configuration
 /// * `propagator` — Propagation model (J2 or J2+Drag)
@@ -356,7 +440,7 @@ fn build_leg(
 pub fn optimize_tof(
     departure: &DepartureState,
     target_position: &Vector3<f64>,
-    target_velocity: &Vector3<f64>,
+    velocity_strategy: &ArrivalVelocityStrategy,
     targeting_config: &TargetingConfig,
     tof_config: &TofOptConfig,
     propagator: &PropagationModel,
@@ -366,6 +450,14 @@ pub fn optimize_tof(
     let tof_max = tof_config.max_periods * period;
     let num_starts = f64::from(tof_config.num_starts);
 
+    // Resolve velocity strategy with zero-velocity fallback for degenerate orbits.
+    // The final solve at the optimal TOF uses `?` and will propagate any errors.
+    let resolve_or_zero = |tof: f64| -> Vector3<f64> {
+        velocity_strategy
+            .resolve(departure, target_position, tof, propagator)
+            .unwrap_or_else(|_| Vector3::zeros())
+    };
+
     // Multi-start: evaluate at equally spaced TOFs
     let mut best_tof = None;
     let mut best_dv = f64::INFINITY;
@@ -374,10 +466,11 @@ pub fn optimize_tof(
         let frac = (f64::from(k) + 0.5) / num_starts;
         let tof = tof_min + frac * (tof_max - tof_min);
 
+        let target_vel = resolve_or_zero(tof);
         if let Ok(dv) = solve_leg_cost_only(
             departure,
             target_position,
-            target_velocity,
+            &target_vel,
             tof,
             targeting_config,
             propagator,
@@ -400,10 +493,11 @@ pub fn optimize_tof(
     let mut hi = (center_tof + TOF_REFINE_HALF_WINDOW * period).min(tof_max);
 
     let eval = |tof: f64| -> f64 {
+        let target_vel = resolve_or_zero(tof);
         solve_leg_cost_only(
             departure,
             target_position,
-            target_velocity,
+            &target_vel,
             tof,
             targeting_config,
             propagator,
@@ -433,10 +527,13 @@ pub fn optimize_tof(
     }
 
     let optimal_tof = lo.midpoint(hi);
+    let target_vel = velocity_strategy.resolve(
+        departure, target_position, optimal_tof, propagator,
+    )?;
     let leg = solve_leg(
         departure,
         target_position,
-        target_velocity,
+        &target_vel,
         optimal_tof,
         targeting_config,
         propagator,
@@ -477,6 +574,18 @@ mod tests {
     /// non-convergence in a single iteration. No real mission would use this;
     /// it exists solely to exercise the TargetingConvergence error path.
     const FORCED_NONCONVERGENCE_TOL_KM: f64 = 1e-12;
+
+    /// Minimum detectable nonzero signal from minimum-norm velocity derivation.
+    /// Velocities for non-trivial position offsets are O(1e-4) km/s; 1e-10 is well below.
+    const MINIMUM_NORM_SIGNAL_FLOOR: f64 = 1e-10;
+
+    /// Exact-match tolerance for strategy resolution that returns its stored value.
+    /// No computation involved — limited only by f64 representation noise.
+    const STRATEGY_IDENTITY_TOL: f64 = 1e-15;
+
+    /// Optimality margin for TOF search: 1% slack accounts for golden-section
+    /// discretization (bracket half-width = 0.5 periods, ~20 evaluations).
+    const TOF_OPT_MARGIN_FACTOR: f64 = 1.01;
 
     fn test_epoch() -> Epoch {
         crate::test_helpers::test_epoch()
@@ -653,8 +762,9 @@ mod tests {
         let target_pos = Vector3::new(0.0, 5.0, 0.0);
         let target_vel = Vector3::zeros();
 
+        let strategy = ArrivalVelocityStrategy::Fixed(target_vel);
         let (opt_tof, opt_leg) = optimize_tof(
-            &departure, &target_pos, &target_vel, &config, &tof_config, &propagator,
+            &departure, &target_pos, &strategy, &config, &tof_config, &propagator,
         )
         .expect("TOF optimization should succeed");
 
@@ -664,7 +774,7 @@ mod tests {
             tof_config.min_periods * period, &config, &propagator,
         ) {
             assert!(
-                opt_leg.total_dv_km_s <= leg_min.total_dv_km_s * 1.01,
+                opt_leg.total_dv_km_s <= leg_min.total_dv_km_s * TOF_OPT_MARGIN_FACTOR,
                 "Optimal Δv ({}) should be ≤ min-period Δv ({})",
                 opt_leg.total_dv_km_s,
                 leg_min.total_dv_km_s,
@@ -675,7 +785,7 @@ mod tests {
             tof_config.max_periods * period, &config, &propagator,
         ) {
             assert!(
-                opt_leg.total_dv_km_s <= leg_max.total_dv_km_s * 1.01,
+                opt_leg.total_dv_km_s <= leg_max.total_dv_km_s * TOF_OPT_MARGIN_FACTOR,
                 "Optimal Δv ({}) should be ≤ max-period Δv ({})",
                 opt_leg.total_dv_km_s,
                 leg_max.total_dv_km_s,
@@ -699,8 +809,9 @@ mod tests {
         let target_pos = Vector3::new(0.0, 5.0, 0.0);
         let target_vel = Vector3::zeros();
 
+        let strategy = ArrivalVelocityStrategy::Fixed(target_vel);
         let (opt_tof, _) = optimize_tof(
-            &departure, &target_pos, &target_vel, &config, &tof_config, &propagator,
+            &departure, &target_pos, &strategy, &config, &tof_config, &propagator,
         )
         .expect("TOF optimization should succeed");
 
@@ -814,5 +925,93 @@ mod tests {
             result.is_ok(),
             "J2 targeting should converge in 1 iteration, got: {result:?}"
         );
+    }
+
+    /// Minimum-norm velocity is nonzero for a non-origin target position.
+    #[test]
+    fn compute_min_norm_arrival_velocity_nonzero_for_offset() {
+        let departure = DepartureState {
+            roe: QuasiNonsingularROE::default(),
+            chief: iss_like_elements(),
+            epoch: Epoch::from_gregorian_utc(2024, 1, 1, 0, 0, 0, 0),
+        };
+        let target_position = Vector3::new(0.5, 1.0, 0.3);
+        let tof_s = departure.chief.period().unwrap() * 0.75;
+        let propagator = PropagationModel::J2Stm;
+
+        let vel = compute_minimum_norm_arrival_velocity(
+            &departure, &target_position, tof_s, &propagator,
+        ).unwrap();
+
+        assert!(vel.norm() > MINIMUM_NORM_SIGNAL_FLOOR,
+            "minimum-norm velocity should be non-zero for offset target, got {}", vel.norm());
+    }
+
+    /// Fixed strategy resolves to its stored value without computation.
+    #[test]
+    fn arrival_strategy_fixed_resolves_to_value() {
+        let v = Vector3::new(0.001, 0.0, 0.0);
+        let strategy = ArrivalVelocityStrategy::Fixed(v);
+        let departure = DepartureState {
+            roe: QuasiNonsingularROE::default(),
+            chief: iss_like_elements(),
+            epoch: Epoch::from_gregorian_utc(2024, 1, 1, 0, 0, 0, 0),
+        };
+        let propagator = PropagationModel::J2Stm;
+        let tof_s = departure.chief.period().unwrap() * 0.75;
+        let resolved = strategy.resolve(
+            &departure, &Vector3::zeros(), tof_s, &propagator,
+        ).unwrap();
+        assert!((resolved - v).norm() < STRATEGY_IDENTITY_TOL);
+    }
+
+    /// `MinimumNorm` TOF optimization produces Δv ≤ zero-velocity baseline.
+    #[test]
+    fn optimize_tof_minimum_norm_cheaper_than_zero_velocity() {
+        let departure = DepartureState {
+            roe: QuasiNonsingularROE::default(),
+            chief: iss_like_elements(),
+            epoch: Epoch::from_gregorian_utc(2024, 1, 1, 0, 0, 0, 0),
+        };
+        let target_position = Vector3::new(0.5, 2.0, 0.3);
+        let config = TargetingConfig::default();
+        let tof_config = TofOptConfig::default();
+        let propagator = PropagationModel::J2Stm;
+
+        let (_, leg_zero) = optimize_tof(
+            &departure, &target_position,
+            &ArrivalVelocityStrategy::Fixed(Vector3::zeros()),
+            &config, &tof_config, &propagator,
+        ).unwrap();
+
+        let (_, leg_minnorm) = optimize_tof(
+            &departure, &target_position,
+            &ArrivalVelocityStrategy::MinimumNorm,
+            &config, &tof_config, &propagator,
+        ).unwrap();
+
+        assert!(
+            leg_minnorm.total_dv_km_s <= leg_zero.total_dv_km_s + MINIMUM_NORM_SIGNAL_FLOOR,
+            "minimum-norm ({:.6} km/s) should be <= zero-velocity ({:.6} km/s)",
+            leg_minnorm.total_dv_km_s, leg_zero.total_dv_km_s,
+        );
+    }
+
+    /// `MinimumNorm` strategy resolves to a nonzero velocity for offset target.
+    #[test]
+    fn arrival_strategy_minimum_norm_resolves_nonzero() {
+        let departure = DepartureState {
+            roe: QuasiNonsingularROE::default(),
+            chief: iss_like_elements(),
+            epoch: Epoch::from_gregorian_utc(2024, 1, 1, 0, 0, 0, 0),
+        };
+        let target_position = Vector3::new(0.5, 1.0, 0.0);
+        let tof_s = departure.chief.period().unwrap() * 0.75;
+        let propagator = PropagationModel::J2Stm;
+        let strategy = ArrivalVelocityStrategy::MinimumNorm;
+        let resolved = strategy.resolve(
+            &departure, &target_position, tof_s, &propagator,
+        ).unwrap();
+        assert!(resolved.norm() > MINIMUM_NORM_SIGNAL_FLOOR);
     }
 }

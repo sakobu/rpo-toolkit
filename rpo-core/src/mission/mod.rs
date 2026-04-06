@@ -36,7 +36,7 @@ pub use safety::{
     analyze_safety, analyze_trajectory_safety, assess_safety, compute_ei_separation,
     EiSeparation, RcContext, SafetyAssessment, SafetyError,
 };
-pub use targeting::{optimize_tof, solve_leg};
+pub use targeting::{optimize_tof, solve_leg, ArrivalVelocityStrategy};
 pub use types::{
     EclipseIntervalComparison, EclipseValidation, EclipseValidationPoint,
     Maneuver, ManeuverLeg, MissionPhase, MissionPlan, OperationalSafety, PassiveSafety,

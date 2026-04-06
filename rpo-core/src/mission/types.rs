@@ -93,17 +93,19 @@ pub struct MissionPlan {
 pub struct Waypoint {
     /// Target position in RIC frame (km): [radial, in-track, cross-track]
     pub position_ric_km: Vector3<f64>,
-    /// Target velocity in RIC frame (km/s): [radial, in-track, cross-track].
+    /// Target velocity in RIC frame (km/s): \[radial, in-track, cross-track\].
     ///
-    /// Interpretation depends on the consuming layer:
+    /// - `None`: minimum-norm arrival velocity derived analytically.
+    ///   The solver finds the cheapest velocity consistent with the target
+    ///   position (D'Amico Eq. 2.17 `T_vel` applied to `T_pos` pseudoinverse).
+    ///   For transit waypoints this is typically much cheaper than
+    ///   station-keeping. Use `Some([0, 0, 0])` to explicitly request
+    ///   station-keeping.
+    /// - `Some(v)`: concrete velocity target; solver targets `v` exactly.
     ///
-    /// - **Targeting/planning** (`plan_waypoint_mission`): `None` defaults
-    ///   to zero-velocity station-keeping (hold at the RIC position).
-    /// - **Formation enrichment** (`safety_envelope::enrich_waypoint`):
-    ///   `None` means 3-DOF null-space freedom — velocity is selected to
-    ///   maximize e/i safety separation (D'Amico Eq. 2.17 pseudo-inverse).
-    ///
-    /// `Some(v)` = concrete velocity target; both layers solve for `v`.
+    /// **Formation enrichment** (`safety_envelope::enrich_waypoint`):
+    /// `None` means 3-DOF null-space freedom — velocity is selected to
+    /// maximize e/i safety separation (D'Amico Eq. 2.17 pseudoinverse).
     pub velocity_ric_km_s: Option<Vector3<f64>>,
     /// Time of flight to this waypoint (seconds). If `None`, TOF will be optimized.
     pub tof_s: Option<f64>,
