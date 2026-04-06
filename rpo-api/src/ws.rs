@@ -259,7 +259,7 @@ async fn handle_state_msg(
             let msg = ServerMessage::StateUpdated {
                 request_id,
                 updated: vec!["chief".into(), "deputy".into()],
-                invalidated: vec!["transfer".into(), "drag_config".into(), "mission".into()],
+                invalidated: vec!["transfer".into(), "drag_config".into(), "mission".into(), "selected_variant".into()],
             };
             send_message(ws, &msg).await;
         }
@@ -293,7 +293,7 @@ async fn handle_state_msg(
                 &ServerMessage::StateUpdated {
                     request_id,
                     updated: vec!["safety_requirements".into()],
-                    invalidated: vec!["mission".into()],
+                    invalidated: vec!["mission".into(), "selected_variant".into()],
                 },
             )
             .await;
