@@ -855,6 +855,14 @@ mod tests {
     /// drift without multi-revolution ambiguity.
     const TEST_WAYPOINT_TOF_S: f64 = 4200.0;
 
+    /// Lower bound on |Δ(Δv)| between baseline and enriched downstream legs
+    /// (km/s). When enrichment modifies waypoint 0's arrival velocity, the
+    /// solver must re-target leg 1 from a different initial state, producing
+    /// a different Δv. 1e-10 km/s is 5+ orders below typical maneuver scale
+    /// (O(1e-3 km/s)) — just above f64 noise — so any physically meaningful
+    /// cascade will exceed it.
+    const CASCADE_DV_CHANGE_TOL_KM_S: f64 = 1e-10;
+
     /// Build a minimal `PipelineInput` from the standard far-field test scenario.
     fn far_field_input() -> PipelineInput {
         use crate::types::StateVector;
@@ -1489,6 +1497,70 @@ mod tests {
             "drift-compensated mid-transit separation ({:.4} km) should not regress \
              below uncompensated baseline ({:.4} km)",
             ei_mid.min_separation_km, enriched_wp0.baseline_ei.min_separation_km,
+        );
+    }
+
+    #[test]
+    fn full_enrichment_cycle_suggest_accept_verify() {
+        use crate::mission::safety::compute_ei_separation;
+
+        // 1. Plan baseline mission with TWO position-only waypoints (cascade test).
+        let mut input = proximity_input_with_enrichment();
+        input.waypoints.push(crate::pipeline::types::WaypointInput {
+            position_ric_km: [0.3, 1.5, 0.2],
+            velocity_ric_km_s: None,
+            tof_s: Some(TEST_WAYPOINT_TOF_S),
+            label: Some("WP2".into()),
+        });
+
+        let baseline = execute_mission(&input).expect("baseline");
+        let report = baseline.formation_design.as_ref().expect("report");
+
+        // 2. Formation report should have position-only enrichment suggestions.
+        let suggestion_0 = report.waypoints[0].as_ref().expect("suggestion for wp 0");
+        assert!(
+            suggestion_0.enriched_ei.min_separation_km > suggestion_0.baseline_ei.min_separation_km,
+            "enriched should be safer than baseline"
+        );
+
+        // 3. Accept enrichment at waypoint 0.
+        let leg_0 = &baseline.mission.legs[0];
+        let enriched = accept_waypoint_enrichment(
+            &mut input,
+            0,
+            &suggestion_0.roe,
+            &leg_0.arrival_chief_mean,
+        ).expect("accept");
+
+        // 4. Verify: arrival at waypoint 0 should be at least as safe as baseline.
+        let enriched_leg_0 = &enriched.mission.legs[0];
+        let ei_enriched = compute_ei_separation(
+            &enriched_leg_0.post_arrival_roe,
+            &enriched_leg_0.arrival_chief_mean,
+        );
+        let ei_baseline = compute_ei_separation(
+            &leg_0.post_arrival_roe,
+            &leg_0.arrival_chief_mean,
+        );
+        assert!(
+            ei_enriched.min_separation_km >= ei_baseline.min_separation_km,
+            "enriched arrival e/i ({:.4} km) must not regress below baseline ({:.4} km)",
+            ei_enriched.min_separation_km, ei_baseline.min_separation_km,
+        );
+
+        // 5. Waypoint 0's velocity should now be set (no longer position-only).
+        assert!(
+            input.waypoints[0].velocity_ric_km_s.is_some(),
+            "accepted enrichment should set waypoint velocity"
+        );
+
+        // 6. Downstream leg 1 should cascade (waypoint 0's departure state changed).
+        let baseline_leg_1 = &baseline.mission.legs[1];
+        let enriched_leg_1 = &enriched.mission.legs[1];
+        assert!(
+            (enriched_leg_1.total_dv_km_s - baseline_leg_1.total_dv_km_s).abs()
+                > CASCADE_DV_CHANGE_TOL_KM_S,
+            "downstream leg should differ after enrichment acceptance"
         );
     }
 }
