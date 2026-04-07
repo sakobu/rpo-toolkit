@@ -172,7 +172,7 @@ fn propagate_dispersed_legs<R: Rng>(
     rng: &mut R,
 ) -> Result<LegPropagationResult, MonteCarloError> {
     let maneuver_disp = input.config.dispersions.maneuver.as_ref();
-    let traj_steps = input.config.trajectory_steps.max(1);
+    let traj_steps = input.config.trajectory_steps;
 
     let mut chief_state = input.initial_chief.clone();
     let mut deputy_state = dispersed_deputy;

@@ -263,7 +263,8 @@ pub struct SafetyMetrics {
 
 /// Per-timestep comparison between analytical and numerical propagation.
 ///
-/// Produced by `rpo_nyx::validation::validate_mission_nyx` per-leg propagation.
+/// Defined in rpo-core for WASM serialization. Values are populated by
+/// the full-physics nyx validation pipeline.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ValidationPoint {
     /// Time since mission start (seconds)
@@ -284,7 +285,8 @@ pub struct ValidationPoint {
 
 /// Aggregate validation results for a mission.
 ///
-/// Produced by `rpo_nyx::validation::validate_mission_nyx`.
+/// Defined in rpo-core for WASM serialization. Values are populated by
+/// the full-physics nyx validation pipeline.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ValidationReport {
     /// Per-leg comparison points
@@ -322,6 +324,9 @@ impl ValidationReport {
 }
 
 /// Per-sample eclipse comparison (analytical vs ANISE).
+///
+/// Defined in rpo-core for WASM serialization. Values are populated by
+/// the full-physics nyx validation pipeline (eclipse comparison module).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EclipseValidationPoint {
     /// Time since mission start (seconds).
@@ -337,6 +342,9 @@ pub struct EclipseValidationPoint {
 }
 
 /// Comparison of a single eclipse interval (analytical vs ANISE).
+///
+/// Defined in rpo-core for WASM serialization. Values are populated by
+/// the full-physics nyx validation pipeline (eclipse comparison module).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EclipseIntervalComparison {
     /// Analytical interval start epoch.
@@ -361,8 +369,9 @@ pub struct EclipseIntervalComparison {
 
 /// Aggregate eclipse validation results.
 ///
-/// Produced by `validate_mission_nyx()` when the mission includes
-/// Phase 6 eclipse data (`WaypointMission.eclipse`).
+/// Defined in rpo-core for WASM serialization. Values are populated by
+/// the full-physics nyx validation pipeline when the mission includes
+/// eclipse data (`WaypointMission.eclipse`).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EclipseValidation {
     /// Per-sample eclipse comparison points.

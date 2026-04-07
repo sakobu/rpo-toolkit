@@ -36,6 +36,26 @@ pub enum Distribution {
     },
 }
 
+impl Distribution {
+    /// Validate that the distribution parameters are non-negative.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`super::MonteCarloError::NegativeSigma`] if `sigma < 0.0`,
+    /// or [`super::MonteCarloError::NegativeHalfWidth`] if `half_width < 0.0`.
+    pub fn validate(&self) -> Result<(), super::MonteCarloError> {
+        match *self {
+            Self::Gaussian { sigma } if sigma < 0.0 => {
+                Err(super::MonteCarloError::NegativeSigma { value: sigma })
+            }
+            Self::Uniform { half_width } if half_width < 0.0 => {
+                Err(super::MonteCarloError::NegativeHalfWidth { value: half_width })
+            }
+            _ => Ok(()),
+        }
+    }
+}
+
 /// Initial state uncertainty model (RIC frame, applied to deputy relative to chief).
 ///
 /// Dispersions are added to the deputy's initial RIC state offset.
@@ -82,6 +102,21 @@ impl Default for StateDispersion {
     }
 }
 
+impl StateDispersion {
+    /// Validate all contained distributions.
+    ///
+    /// # Errors
+    /// Returns the first invalid distribution's error.
+    pub fn validate(&self) -> Result<(), super::MonteCarloError> {
+        self.position_radial_km.validate()?;
+        self.position_intrack_km.validate()?;
+        self.position_crosstrack_km.validate()?;
+        self.velocity_radial_km_s.validate()?;
+        self.velocity_intrack_km_s.validate()?;
+        self.velocity_crosstrack_km_s.validate()
+    }
+}
+
 /// Maneuver execution error model (for MC sampling).
 ///
 /// Shares the same (`magnitude_sigma`, `pointing_sigma_rad`) representation as
@@ -93,6 +128,26 @@ pub struct ManeuverDispersion {
     pub magnitude_sigma: f64,
     /// 1-sigma pointing error (rad), applied as isotropic rotation about Δv axis.
     pub pointing_sigma_rad: f64,
+}
+
+impl ManeuverDispersion {
+    /// Validate that magnitude and pointing sigmas are non-negative.
+    ///
+    /// # Errors
+    /// Returns [`super::MonteCarloError::NegativeSigma`] if either sigma is negative.
+    pub fn validate(&self) -> Result<(), super::MonteCarloError> {
+        if self.magnitude_sigma < 0.0 {
+            return Err(super::MonteCarloError::NegativeSigma {
+                value: self.magnitude_sigma,
+            });
+        }
+        if self.pointing_sigma_rad < 0.0 {
+            return Err(super::MonteCarloError::NegativeSigma {
+                value: self.pointing_sigma_rad,
+            });
+        }
+        Ok(())
+    }
 }
 
 impl Default for ManeuverDispersion {
@@ -152,6 +207,18 @@ pub struct SpacecraftDispersion {
     pub dry_mass_kg: Distribution,
 }
 
+impl SpacecraftDispersion {
+    /// Validate all contained distributions.
+    ///
+    /// # Errors
+    /// Returns the first invalid distribution's error.
+    pub fn validate(&self) -> Result<(), super::MonteCarloError> {
+        self.coeff_drag.validate()?;
+        self.drag_area_m2.validate()?;
+        self.dry_mass_kg.validate()
+    }
+}
+
 /// Composite dispersion configuration.
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq)]
 pub struct DispersionConfig {
@@ -185,6 +252,23 @@ impl DispersionConfig {
                 .or_else(|| maneuver_unc.map(|m| ManeuverDispersion::from(*m))),
             spacecraft: self.spacecraft,
         }
+    }
+
+    /// Validate all present dispersion parameters.
+    ///
+    /// # Errors
+    /// Returns the first invalid parameter's error.
+    pub fn validate(&self) -> Result<(), super::MonteCarloError> {
+        if let Some(ref s) = self.state {
+            s.validate()?;
+        }
+        if let Some(ref m) = self.maneuver {
+            m.validate()?;
+        }
+        if let Some(ref sc) = self.spacecraft {
+            sc.validate()?;
+        }
+        Ok(())
     }
 }
 
@@ -250,11 +334,30 @@ impl MonteCarloConfig {
             ..self
         }
     }
+
+    /// Validate configuration invariants.
+    ///
+    /// Checks `num_samples > 0`, `trajectory_steps > 0`, and delegates to
+    /// [`DispersionConfig::validate`] for distribution parameter checks.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`super::MonteCarloError`] on the first violated invariant.
+    pub fn validate(&self) -> Result<(), super::MonteCarloError> {
+        if self.num_samples == 0 {
+            return Err(super::MonteCarloError::ZeroSamples);
+        }
+        if self.trajectory_steps == 0 {
+            return Err(super::MonteCarloError::ZeroTrajectorySteps);
+        }
+        self.dispersions.validate()
+    }
 }
 
 /// Per-sample result (no full trajectory stored).
 ///
-/// Produced by `rpo_nyx::monte_carlo::run_monte_carlo` per-sample propagation.
+/// Defined in rpo-core for WASM serialization. Values are populated by
+/// the full-physics Monte Carlo runner (nyx integration layer).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SampleResult {
     /// Zero-based sample index.
@@ -318,7 +421,8 @@ pub struct DispersionEnvelope {
 
 /// Aggregate ensemble statistics.
 ///
-/// Produced by `rpo_nyx::monte_carlo::run_monte_carlo` ensemble analysis.
+/// Defined in rpo-core for WASM serialization. Values are populated by
+/// the full-physics Monte Carlo runner (nyx integration layer).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EnsembleStatistics {
     /// Total Δv distribution across samples (km/s).
@@ -351,6 +455,9 @@ pub struct EnsembleStatistics {
 
 /// Comparison between linear covariance prediction and MC ensemble.
 ///
+/// Defined in rpo-core for WASM serialization. Values are populated by
+/// the full-physics Monte Carlo statistics module (nyx integration layer).
+///
 /// The covariance model propagates uncertainty along the **nominal mission plan**
 /// (open-loop: P = Phi P0 Phi^T). It does not model closed-loop re-targeting feedback.
 ///
@@ -379,7 +486,8 @@ pub struct CovarianceCrossCheck {
 
 /// Complete Monte Carlo analysis report.
 ///
-/// Produced by `rpo_nyx::monte_carlo::run_monte_carlo`.
+/// Defined in rpo-core for WASM serialization. Values are populated by
+/// the full-physics Monte Carlo runner (nyx integration layer).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MonteCarloReport {
     /// Configuration used for this MC run.
@@ -403,6 +511,7 @@ pub struct MonteCarloReport {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::mission::monte_carlo::MonteCarloError;
     use crate::propagation::covariance::types::{ManeuverUncertainty, NavigationAccuracy};
     use nalgebra::Vector3;
 
@@ -494,5 +603,103 @@ mod tests {
         let resolved = config.resolved(None, None);
         assert!(resolved.state.is_none());
         assert!(resolved.maneuver.is_none());
+    }
+
+    // -----------------------------------------------------------------------
+    // Validation tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_distribution_validate_gaussian_ok() {
+        assert!(Distribution::Gaussian { sigma: 0.0 }.validate().is_ok());
+        assert!(Distribution::Gaussian { sigma: 1.0 }.validate().is_ok());
+    }
+
+    #[test]
+    fn test_distribution_validate_gaussian_negative() {
+        let result = Distribution::Gaussian { sigma: -0.1 }.validate();
+        assert!(
+            matches!(result, Err(MonteCarloError::NegativeSigma { .. })),
+            "expected NegativeSigma, got {result:?}"
+        );
+    }
+
+    #[test]
+    fn test_distribution_validate_uniform_ok() {
+        assert!(Distribution::Uniform { half_width: 0.0 }.validate().is_ok());
+        assert!(Distribution::Uniform { half_width: 1.0 }.validate().is_ok());
+    }
+
+    #[test]
+    fn test_distribution_validate_uniform_negative() {
+        let result = Distribution::Uniform { half_width: -0.5 }.validate();
+        assert!(
+            matches!(result, Err(MonteCarloError::NegativeHalfWidth { .. })),
+            "expected NegativeHalfWidth, got {result:?}"
+        );
+    }
+
+    #[test]
+    fn test_mc_config_validate_ok() {
+        let config = MonteCarloConfig {
+            num_samples: 10,
+            dispersions: DispersionConfig::default(),
+            mode: MonteCarloMode::OpenLoop,
+            seed: Some(42),
+            trajectory_steps: 50,
+        };
+        assert!(config.validate().is_ok());
+    }
+
+    #[test]
+    fn test_mc_config_validate_zero_samples() {
+        let config = MonteCarloConfig {
+            num_samples: 0,
+            dispersions: DispersionConfig::default(),
+            mode: MonteCarloMode::OpenLoop,
+            seed: Some(42),
+            trajectory_steps: 50,
+        };
+        assert!(matches!(
+            config.validate(),
+            Err(MonteCarloError::ZeroSamples)
+        ));
+    }
+
+    #[test]
+    fn test_mc_config_validate_zero_trajectory_steps() {
+        let config = MonteCarloConfig {
+            num_samples: 10,
+            dispersions: DispersionConfig::default(),
+            mode: MonteCarloMode::OpenLoop,
+            seed: Some(42),
+            trajectory_steps: 0,
+        };
+        assert!(matches!(
+            config.validate(),
+            Err(MonteCarloError::ZeroTrajectorySteps)
+        ));
+    }
+
+    #[test]
+    fn test_mc_config_validate_negative_dispersion() {
+        let config = MonteCarloConfig {
+            num_samples: 10,
+            dispersions: DispersionConfig {
+                state: Some(StateDispersion {
+                    position_radial_km: Distribution::Gaussian { sigma: -1.0 },
+                    ..StateDispersion::default()
+                }),
+                maneuver: None,
+                spacecraft: None,
+            },
+            mode: MonteCarloMode::OpenLoop,
+            seed: Some(42),
+            trajectory_steps: 50,
+        };
+        assert!(matches!(
+            config.validate(),
+            Err(MonteCarloError::NegativeSigma { .. })
+        ));
     }
 }

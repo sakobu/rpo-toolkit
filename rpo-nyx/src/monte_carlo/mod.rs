@@ -91,6 +91,8 @@ impl From<rpo_core::propagation::propagator::PropagationError> for MonteCarloErr
 ///
 /// # Invariants
 /// - `input.config.num_samples > 0`
+/// - `input.config.trajectory_steps > 0`
+/// - All dispersion sigmas/half-widths are non-negative
 /// - `input.initial_chief` and `input.initial_deputy` are bound orbits
 ///   (caller responsibility).
 /// - `input.nominal_mission.legs` is non-empty (caller responsibility).
@@ -101,6 +103,10 @@ impl From<rpo_core::propagation::propagator::PropagationError> for MonteCarloErr
 ///
 /// # Errors
 /// - [`MonteCarloError::Core`] wrapping [`CoreMonteCarloError::ZeroSamples`] if `num_samples == 0`.
+/// - [`MonteCarloError::Core`] wrapping [`CoreMonteCarloError::ZeroTrajectorySteps`] if
+///   `trajectory_steps == 0`.
+/// - [`MonteCarloError::Core`] wrapping [`CoreMonteCarloError::NegativeSigma`] or
+///   [`CoreMonteCarloError::NegativeHalfWidth`] if any dispersion parameter is negative.
 /// - [`MonteCarloError::Core`] wrapping [`CoreMonteCarloError::AllSamplesFailed`] if every sample
 ///   fails (with breakdown of convergence vs propagation failures).
 pub fn run_monte_carlo(
@@ -109,9 +115,7 @@ pub fn run_monte_carlo(
     let config = input.config;
     let nominal_mission = input.nominal_mission;
 
-    if config.num_samples == 0 {
-        return Err(CoreMonteCarloError::ZeroSamples.into());
-    }
+    config.validate()?;
 
     let start = Instant::now();
     let master_seed = config.seed.unwrap_or(DEFAULT_MC_SEED);
@@ -329,7 +333,7 @@ mod tests {
             dispersions: DispersionConfig::default(),
             mode: MonteCarloMode::OpenLoop,
             seed: Some(42),
-            trajectory_steps: 0,
+            trajectory_steps: 10,
         };
         let mission_config = MissionConfig::default();
         let propagator = PropagationModel::J2Stm;
@@ -352,6 +356,54 @@ mod tests {
         match run_monte_carlo(&input) {
             Err(MonteCarloError::Core(rpo_core::mission::monte_carlo::MonteCarloError::ZeroSamples)) => {}
             other => panic!("expected ZeroSamples error, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn mc_zero_trajectory_steps_error() {
+        use std::sync::Arc;
+        let dummy_epoch = hifitime::Epoch::from_gregorian_utc_hms(2024, 1, 1, 0, 0, 0);
+        let chief = StateVector {
+            epoch: dummy_epoch,
+            position_eci_km: Vector3::new(6786.0, 0.0, 0.0),
+            velocity_eci_km_s: Vector3::new(0.0, 7.67, 0.0),
+        };
+        let mission = WaypointMission {
+            legs: vec![],
+            total_dv_km_s: 0.0,
+            total_duration_s: 0.0,
+            safety: None,
+            covariance: None,
+            eclipse: None,
+        };
+        let mc_config = MonteCarloConfig {
+            num_samples: 10,
+            dispersions: DispersionConfig::default(),
+            mode: MonteCarloMode::OpenLoop,
+            seed: Some(42),
+            trajectory_steps: 0,
+        };
+        let mission_config = MissionConfig::default();
+        let propagator = PropagationModel::J2Stm;
+        let almanac = Arc::new(anise::prelude::Almanac::default());
+
+        let input = MonteCarloInput {
+            nominal_mission: &mission,
+            initial_chief: &chief,
+            initial_deputy: &chief,
+            config: &mc_config,
+            mission_config: &mission_config,
+            chief_config: &SpacecraftConfig::SERVICER_500KG,
+            deputy_config: &SpacecraftConfig::SERVICER_500KG,
+            propagator: &propagator,
+            almanac: &almanac,
+            covariance_report: None,
+            control: None,
+        };
+
+        match run_monte_carlo(&input) {
+            Err(MonteCarloError::Core(rpo_core::mission::monte_carlo::MonteCarloError::ZeroTrajectorySteps)) => {}
+            other => panic!("expected ZeroTrajectorySteps error, got {other:?}"),
         }
     }
 
