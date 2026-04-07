@@ -423,7 +423,7 @@ pub fn apply_perch_enrichment(
 /// replans from that waypoint onward.
 ///
 /// This is the waypoint-level analog of [`apply_perch_enrichment`] +
-/// [`replan_mission`]: the user sees the enriched suggestion, accepts it,
+/// `replan_mission`: the user sees the enriched suggestion, accepts it,
 /// and the system replans with the enriched target.
 ///
 /// # Arguments
@@ -642,7 +642,7 @@ pub fn build_lean_plan_result(
 
 /// Plan a mission from a pre-computed transfer result.
 ///
-/// WASM-eligible: accepts a [`TransferResult`] (from the server's [`compute_transfer`]
+/// WASM-eligible: accepts a [`TransferResult`] (from the server's `compute_transfer`
 /// or from client-side proximity classification) and runs the full planning
 /// pipeline: enrichment, waypoint targeting, safety analysis, output assembly.
 ///

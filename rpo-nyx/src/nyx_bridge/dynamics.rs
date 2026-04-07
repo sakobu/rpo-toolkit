@@ -124,7 +124,7 @@ pub fn extract_dmf_rates(
 /// 4. Sun + Moon third-body gravitational perturbations
 ///
 /// Spacecraft-specific properties (Cd, drag area, Cr, SRP area) are set on
-/// the `Spacecraft` object via [`config_to_spacecraft`], not here.
+/// the `Spacecraft` object via [`config_to_spacecraft`](crate::nyx_bridge::config_to_spacecraft), not here.
 ///
 /// # Invariants
 /// - `almanac` must contain Earth frame data (`IAU_EARTH`) for the

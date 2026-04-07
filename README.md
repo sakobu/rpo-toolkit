@@ -17,7 +17,7 @@ Astrodynamics toolkit for rendezvous and proximity operations (RPO) mission plan
 
 ```bash
 cargo build                     # build workspace
-cargo test                      # 489 tests across 5 crates (+ 21 ignored full-physics; 510 total with --include-ignored)
+cargo test                      # 504 tests across 5 crates (+ 21 ignored full-physics; 525 total with -- --include-ignored)
 ```
 
 Run an example mission (analytical):
@@ -128,11 +128,12 @@ rpo-cli/src/           AGPL-3.0 → docs/CLI.md
   main.rs       CLI entry point, clap dispatch
   commands/     Porcelain (mission, validate, mc) + plumbing (classify, transfer, convert, propagate, roe, safety, eclipse)
   output/       Markdown report generation, insight logic, shared formatters
+    markdown_fmt/ mod.rs, mission.rs, mc.rs, helpers.rs
 
 rpo-api/src/           AGPL-3.0 → docs/API.md
   lib.rs        axum WebSocket API server
   protocol.rs   Wire types: ClientMessage / ServerMessage enums
-  handlers/     classify, transfer, plan, formation, free_drift, poca, cola, eclipse, update_config, extract_drag, validate, mc
+  handlers/     classify, transfer, plan, formation, free_drift, poca, cola, drag, validate, mc
 ```
 
 **Dependency graph:**
@@ -227,7 +228,7 @@ The CLI (`rpo-cli`) provides batch execution and shell-composable plumbing for s
 
 ## Testing
 
-510 tests across 5 crates (343 rpo-core, 93 rpo-nyx, 45 rpo-api, 11 rpo-cli, 16 regression + 2 doctests); 21 full-physics tests are `#[ignore]` by default (require ANISE kernels, ~50 MB cached download). Tests cover roundtrip transform invariants, STM identity at dt=0, energy/momentum conservation, regression against published data (Koenig Tables 2-3, D'Amico Sec. 2.1-2.2), Newton-Raphson convergence, POCA Brent-refinement invariants (refined distance <= grid-sampled), free-drift abort-case trajectories, COLA inverse GVE analytical solutions and post-avoidance verification, autonomous COLA evaluation with multi-leg secondary conjunction detection, COLA burn conversion and two-segment nyx propagation, MC dispersion inheritance from navigation accuracy, formation design null-space orthogonality and position preservation, e/i enrichment separation thresholds, perch enrichment with safe e/i vectors, transit safety monitoring, J2 drift compensation, full suggest → accept → verify enrichment cycle, deterministic Monte Carlo seeding, covariance symmetry preservation, dual-plan session state management, session invalidation and safety requirements propagation, WebSocket handler integration, error serialization, and CLI smoke tests.
+525 tests across 5 crates (359 rpo-core, 110 rpo-nyx, 45 rpo-api, 11 rpo-cli); 21 full-physics tests are `#[ignore]` by default (require ANISE kernels, ~50 MB cached download). Tests cover roundtrip transform invariants, STM identity at dt=0, energy/momentum conservation, regression against published data (Koenig Tables 2-3, D'Amico Sec. 2.1-2.2), Newton-Raphson convergence, POCA Brent-refinement invariants (refined distance <= grid-sampled), free-drift abort-case trajectories, COLA inverse GVE analytical solutions and post-avoidance verification, autonomous COLA evaluation with multi-leg secondary conjunction detection, COLA burn conversion and two-segment nyx propagation, MC dispersion inheritance from navigation accuracy, formation design null-space orthogonality and position preservation, e/i enrichment separation thresholds, perch enrichment with safe e/i vectors, transit safety monitoring, J2 drift compensation, full suggest → accept → verify enrichment cycle, deterministic Monte Carlo seeding, covariance symmetry preservation, dual-plan session state management, session invalidation and safety requirements propagation, WebSocket handler integration, error serialization, and CLI smoke tests.
 
 ```bash
 cargo test                  # full suite (5 crates)

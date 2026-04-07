@@ -2,8 +2,8 @@
 //!
 //! Contains the 4 server-only pipeline functions that require nyx-space
 //! (via the Lambert solver). The WASM-eligible pipeline functions
-//! ([`rpo_core::pipeline::execute_mission_from_transfer`],
-//! [`rpo_core::pipeline::replan_from_transfer`]) remain in `rpo-core`.
+//! ([`execute_mission_from_transfer`],
+//! [`replan_from_transfer`]) remain in `rpo-core`.
 //!
 //! ## Functions
 //!
@@ -86,8 +86,8 @@ pub fn compute_transfer(input: &PipelineInput) -> Result<TransferResult, Pipelin
 
 /// Compute safety analysis and derive COLA burns for validation injection.
 ///
-/// Combines [`compute_safety_analysis`](rpo_core::pipeline::compute_safety_analysis)
-/// and [`convert_cola_to_burns`](crate::validation::convert_cola_to_burns) into a
+/// Combines [`compute_safety_analysis`]
+/// and [`convert_cola_to_burns`] into a
 /// single call, ensuring COLA burns are always derived consistently from the
 /// safety analysis. Used by both CLI and API validate handlers.
 ///
@@ -106,11 +106,11 @@ pub fn compute_validation_burns(
 }
 
 /// Server-side full pipeline: computes Lambert transfer, then delegates to
-/// [`execute_mission_from_transfer`](rpo_core::pipeline::execute_mission_from_transfer).
+/// [`execute_mission_from_transfer`].
 ///
 /// Used by the CLI `mission` command and the API `PlanMission` handler.
 /// For WASM clients that already hold a [`TransferResult`], call
-/// [`execute_mission_from_transfer`](rpo_core::pipeline::execute_mission_from_transfer) directly.
+/// [`execute_mission_from_transfer`] directly.
 ///
 /// # Errors
 ///
@@ -121,10 +121,10 @@ pub fn execute_mission(input: &PipelineInput) -> Result<PipelineOutput, Pipeline
 }
 
 /// Server-side replan: computes Lambert transfer, then delegates to
-/// [`replan_from_transfer`](rpo_core::pipeline::replan_from_transfer).
+/// [`replan_from_transfer`].
 ///
 /// For WASM clients that already hold a [`TransferResult`], call
-/// [`replan_from_transfer`](rpo_core::pipeline::replan_from_transfer) directly.
+/// [`replan_from_transfer`] directly.
 ///
 /// # Errors
 ///
@@ -151,7 +151,6 @@ mod tests {
         EiAlignment, PerchEnrichmentResult, PerchFallbackReason, SafetyRequirements,
     };
     use rpo_core::propagation::lambert::LambertConfig;
-    use rpo_core::types::KeplerianElements;
 
     use super::*;
     use rpo_core::test_helpers::iss_like_elements;

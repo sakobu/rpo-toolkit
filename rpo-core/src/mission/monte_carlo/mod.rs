@@ -29,6 +29,8 @@ pub use types::{
 pub enum MonteCarloError {
     /// `num_samples` must be > 0.
     ZeroSamples,
+    /// `trajectory_steps` must be > 0.
+    ZeroTrajectorySteps,
     /// All MC samples failed (none converged or propagated successfully).
     AllSamplesFailed {
         /// Total number of samples attempted.
@@ -83,6 +85,7 @@ impl fmt::Display for MonteCarloError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::ZeroSamples => write!(f, "num_samples must be > 0"),
+            Self::ZeroTrajectorySteps => write!(f, "trajectory_steps must be > 0"),
             Self::AllSamplesFailed {
                 num_samples,
                 convergence_failures,

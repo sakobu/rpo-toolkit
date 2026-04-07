@@ -210,6 +210,7 @@ mod tests {
     use crate::elements::wrap_angle;
     use crate::test_helpers::{
         iss_like_elements, koenig_table2_case1, koenig_table2_case1_roe, koenig_table2_case2,
+        koenig_table2_case3,
     };
 
 
@@ -295,6 +296,102 @@ mod tests {
         };
 
         let tau = 3600.0; // 1 hour
+        let (roe_fwd, chief_fwd) = propagate_roe_stm(&roe, &chief, tau).unwrap();
+        let (roe_back, _) = propagate_roe_stm(&roe_fwd, &chief_fwd, -tau).unwrap();
+
+        assert!(
+            (roe_back.da - roe.da).abs() < ROE_ROUNDTRIP_TOL,
+            "da not recovered: {} vs {}",
+            roe_back.da,
+            roe.da
+        );
+        assert!(
+            wrap_angle(roe_back.dlambda - roe.dlambda).abs() < DLAMBDA_ROUNDTRIP_TOL,
+            "dlambda not recovered: {} vs {}",
+            roe_back.dlambda,
+            roe.dlambda
+        );
+        assert!(
+            (roe_back.dex - roe.dex).abs() < ROE_ROUNDTRIP_TOL,
+            "dex not recovered"
+        );
+        assert!(
+            (roe_back.dey - roe.dey).abs() < ROE_ROUNDTRIP_TOL,
+            "dey not recovered"
+        );
+        assert!(
+            (roe_back.dix - roe.dix).abs() < ROE_ROUNDTRIP_TOL,
+            "dix not recovered"
+        );
+        assert!(
+            (roe_back.diy - roe.diy).abs() < ROE_ROUNDTRIP_TOL,
+            "diy not recovered"
+        );
+    }
+
+    /// Forward-backward symmetry for near-equatorial orbit with moderate eccentricity
+    /// (Koenig Table 2 Case 2: e=0.2, i=1°). Exercises STM terms that vanish at i=0.
+    #[test]
+    fn forward_backward_symmetry_eccentric() {
+        let chief = koenig_table2_case2();
+        let roe = QuasiNonsingularROE {
+            da: 1.0 / chief.a_km,
+            dlambda: 0.001,
+            dex: 0.0001,
+            dey: 0.0001,
+            dix: 0.0005,
+            diy: 0.0003,
+        };
+
+        let tau = 7200.0; // 2 hours
+        let (roe_fwd, chief_fwd) = propagate_roe_stm(&roe, &chief, tau).unwrap();
+        let (roe_back, _) = propagate_roe_stm(&roe_fwd, &chief_fwd, -tau).unwrap();
+
+        assert!(
+            (roe_back.da - roe.da).abs() < ROE_ROUNDTRIP_TOL,
+            "da not recovered: {} vs {}",
+            roe_back.da,
+            roe.da
+        );
+        assert!(
+            wrap_angle(roe_back.dlambda - roe.dlambda).abs() < DLAMBDA_ROUNDTRIP_TOL,
+            "dlambda not recovered: {} vs {}",
+            roe_back.dlambda,
+            roe.dlambda
+        );
+        assert!(
+            (roe_back.dex - roe.dex).abs() < ROE_ROUNDTRIP_TOL,
+            "dex not recovered"
+        );
+        assert!(
+            (roe_back.dey - roe.dey).abs() < ROE_ROUNDTRIP_TOL,
+            "dey not recovered"
+        );
+        assert!(
+            (roe_back.dix - roe.dix).abs() < ROE_ROUNDTRIP_TOL,
+            "dix not recovered"
+        );
+        assert!(
+            (roe_back.diy - roe.diy).abs() < ROE_ROUNDTRIP_TOL,
+            "diy not recovered"
+        );
+    }
+
+    /// Forward-backward symmetry for high-eccentricity orbit
+    /// (Koenig Table 2 Case 3: e=0.5, i=45°). Large eta corrections in Koenig Eq. A6.
+    #[test]
+    fn forward_backward_symmetry_high_ecc() {
+        let chief = koenig_table2_case3();
+        let roe = QuasiNonsingularROE {
+            da: 1.0 / chief.a_km,
+            dlambda: 0.001,
+            dex: 0.0001,
+            dey: 0.0001,
+            dix: 0.0005,
+            diy: 0.0003,
+        };
+
+        let tau = 10800.0; // 3 hours
         let (roe_fwd, chief_fwd) = propagate_roe_stm(&roe, &chief, tau).unwrap();
         let (roe_back, _) = propagate_roe_stm(&roe_fwd, &chief_fwd, -tau).unwrap();
 

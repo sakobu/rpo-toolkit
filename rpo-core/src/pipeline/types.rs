@@ -212,7 +212,9 @@ pub struct EnrichmentSuggestion {
 /// Intermediate result from classification + Lambert + perch state computation.
 ///
 /// Computed before waypoint targeting so that callers can optionally
-/// extract differential drag rates from the perch states.
+/// extract differential drag rates from the perch states. On the server,
+/// produced by the nyx Lambert pipeline; WASM clients may construct this
+/// from client-side proximity classification.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TransferResult {
     /// Mission plan (phase classification, Lambert transfer, perch ROE).
