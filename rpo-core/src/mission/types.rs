@@ -262,6 +262,8 @@ pub struct SafetyMetrics {
 }
 
 /// Per-timestep comparison between analytical and numerical propagation.
+///
+/// Produced by `rpo_nyx::validation::validate_mission_nyx` per-leg propagation.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ValidationPoint {
     /// Time since mission start (seconds)
@@ -281,6 +283,8 @@ pub struct ValidationPoint {
 }
 
 /// Aggregate validation results for a mission.
+///
+/// Produced by `rpo_nyx::validation::validate_mission_nyx`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ValidationReport {
     /// Per-leg comparison points

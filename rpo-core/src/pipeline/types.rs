@@ -211,8 +211,9 @@ pub struct EnrichmentSuggestion {
 
 /// Intermediate result from classification + Lambert + perch state computation.
 ///
-/// Computed before waypoint targeting so that callers can optionally
-/// extract differential drag rates from the perch states.
+/// Produced by `rpo_nyx::pipeline::compute_transfer`. Computed before waypoint
+/// targeting so that callers can optionally extract differential drag rates
+/// from the perch states.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TransferResult {
     /// Mission plan (phase classification, Lambert transfer, perch ROE).

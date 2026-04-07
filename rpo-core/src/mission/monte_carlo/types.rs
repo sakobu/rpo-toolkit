@@ -16,6 +16,11 @@ use crate::propagation::covariance::types::{ManeuverUncertainty, NavigationAccur
 // ---------------------------------------------------------------------------
 
 /// Distribution model for scalar uncertainty parameters.
+///
+/// # Invariants
+///
+/// - `Gaussian::sigma >= 0.0`
+/// - `Uniform::half_width >= 0.0`
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "snake_case")]
 pub enum Distribution {
@@ -31,8 +36,10 @@ pub enum Distribution {
     },
 }
 
-/// Initial state uncertainty model (RIC frame, applied to deputy).
+/// Initial state uncertainty model (RIC frame, applied to deputy relative to chief).
 ///
+/// Dispersions are added to the deputy's initial RIC state offset.
+/// Each axis is sampled independently (uncorrelated).
 /// Uses descriptive RIC axis names to avoid ambiguity.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
 pub struct StateDispersion {
@@ -137,7 +144,7 @@ impl From<NavigationAccuracy> for StateDispersion {
 /// because there are no universal defaults for Cd/area/mass uncertainty.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
 pub struct SpacecraftDispersion {
-    /// Drag coefficient dispersion.
+    /// Drag coefficient (Cd) dispersion (dimensionless).
     pub coeff_drag: Distribution,
     /// Drag cross-sectional area dispersion (m²).
     pub drag_area_m2: Distribution,
@@ -206,6 +213,11 @@ impl std::fmt::Display for MonteCarloMode {
 /// All MC runs use nyx full-physics propagation.
 /// Must be explicitly constructed — no `Default` impl because `num_samples`
 /// and `dispersions` have no meaningful defaults.
+///
+/// # Invariants
+///
+/// - `num_samples > 0`
+/// - `trajectory_steps > 0`
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct MonteCarloConfig {
     /// Number of Monte Carlo samples to run.
@@ -241,6 +253,8 @@ impl MonteCarloConfig {
 }
 
 /// Per-sample result (no full trajectory stored).
+///
+/// Produced by `rpo_nyx::monte_carlo::run_monte_carlo` per-sample propagation.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SampleResult {
     /// Zero-based sample index.
@@ -256,6 +270,10 @@ pub struct SampleResult {
 }
 
 /// Percentile statistics for a scalar quantity.
+///
+/// Empirical (non-parametric) summary computed from MC ensemble samples.
+/// Percentiles use nearest-rank method; NaN/Inf values are filtered before
+/// computation.
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq)]
 pub struct PercentileStats {
     /// Minimum value.
@@ -283,6 +301,9 @@ pub struct PercentileStats {
 }
 
 /// Trajectory dispersion envelope at a single time point.
+///
+/// Percentile statistics of RIC position across the MC ensemble,
+/// sampled at the given mission elapsed time.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DispersionEnvelope {
     /// Elapsed time since mission start (seconds).
@@ -296,6 +317,8 @@ pub struct DispersionEnvelope {
 }
 
 /// Aggregate ensemble statistics.
+///
+/// Produced by `rpo_nyx::monte_carlo::run_monte_carlo` ensemble analysis.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EnsembleStatistics {
     /// Total Δv distribution across samples (km/s).
@@ -355,6 +378,8 @@ pub struct CovarianceCrossCheck {
 }
 
 /// Complete Monte Carlo analysis report.
+///
+/// Produced by `rpo_nyx::monte_carlo::run_monte_carlo`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MonteCarloReport {
     /// Configuration used for this MC run.

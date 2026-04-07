@@ -14,10 +14,6 @@
 //! - **Monte Carlo** — ensemble nyx propagation with dispersions
 //! - **Drag extraction** — DMF differential-drag rates via nyx dynamics
 //!
-//! # Re-exports
-//!
-//! The analytical engine is available via `rpo_nyx::rpo_core`.
-
 #![warn(clippy::pedantic)]
 #![allow(clippy::module_name_repetitions)]
 #![warn(missing_docs)]
@@ -28,6 +24,3 @@ pub mod nyx_bridge;
 pub mod pipeline;
 pub mod planning;
 pub mod validation;
-
-/// Convenience re-export of the analytical engine.
-pub use rpo_core;
