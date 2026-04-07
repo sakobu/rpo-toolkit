@@ -7,11 +7,13 @@ use indicatif::ProgressBar;
 
 use rpo_core::mission::WaypointMission;
 use rpo_core::pipeline::{
-    apply_perch_enrichment, compute_transfer, plan_waypoints_from_transfer, suggest_enrichment,
+    apply_perch_enrichment, plan_waypoints_from_transfer, suggest_enrichment,
     EnrichmentSuggestion, PipelineInput, TransferResult,
 };
-use rpo_core::propagation::{load_full_almanac, DragConfig, PropagationModel};
+use rpo_core::propagation::{DragConfig, PropagationModel};
 use rpo_core::types::SpacecraftConfig;
+use rpo_nyx::nyx_bridge::load_full_almanac;
+use rpo_nyx::pipeline::compute_transfer;
 
 use crate::error::CliError;
 use crate::output::common::{create_spinner, resolve_drag_and_propagator, status};

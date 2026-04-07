@@ -2893,6 +2893,7 @@ dependencies = [
  "hifitime",
  "nalgebra 0.34.1",
  "rpo-core",
+ "rpo-nyx",
  "serde",
  "serde_json",
  "tokio",
@@ -2913,12 +2914,23 @@ dependencies = [
  "indicatif 0.17.11",
  "nalgebra 0.34.1",
  "rpo-core",
+ "rpo-nyx",
  "serde",
  "serde_json",
 ]
 
 [[package]]
 name = "rpo-core"
+version = "0.1.0"
+dependencies = [
+ "hifitime",
+ "nalgebra 0.34.1",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "rpo-nyx"
 version = "0.1.0"
 dependencies = [
  "anise",
@@ -2929,6 +2941,7 @@ dependencies = [
  "rand_chacha 0.3.1",
  "rand_distr 0.4.3",
  "rayon",
+ "rpo-core",
  "serde",
  "serde_json",
 ]

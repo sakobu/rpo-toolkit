@@ -4,9 +4,10 @@ use nalgebra::Vector3;
 use rand::Rng;
 use rand_distr::{Normal, Uniform as RandUniform};
 
-use crate::constants::{DV_NORM_ZERO_THRESHOLD_KM_S, RODRIGUES_AXIS_NORM_THRESHOLD};
+use rpo_core::constants::{DV_NORM_ZERO_THRESHOLD_KM_S, RODRIGUES_AXIS_NORM_THRESHOLD};
 
-use super::types::{Distribution, ManeuverDispersion};
+use rpo_core::mission::monte_carlo::{Distribution, ManeuverDispersion};
+use rpo_core::mission::monte_carlo::MonteCarloError as CoreMonteCarloError;
 use super::MonteCarloError;
 
 /// Draw a single value from a [`Distribution`].
@@ -16,8 +17,8 @@ use super::MonteCarloError;
 /// - Uniform `half_width >= 0`; zero half-width returns `0.0` deterministically.
 ///
 /// # Errors
-/// Returns [`MonteCarloError::NegativeSigma`] if `sigma < 0`, or
-/// [`MonteCarloError::NegativeHalfWidth`] if `half_width < 0`.
+/// Returns [`CoreMonteCarloError::NegativeSigma`] if `sigma < 0`, or
+/// [`CoreMonteCarloError::NegativeHalfWidth`] if `half_width < 0`.
 pub(crate) fn sample_distribution<R: Rng>(
     dist: &Distribution,
     rng: &mut R,
@@ -25,11 +26,11 @@ pub(crate) fn sample_distribution<R: Rng>(
     match *dist {
         Distribution::Gaussian { sigma } => {
             if sigma < 0.0 {
-                return Err(MonteCarloError::NegativeSigma { value: sigma });
+                return Err(CoreMonteCarloError::NegativeSigma { value: sigma }.into());
             }
             if sigma > 0.0 {
                 let normal = Normal::new(0.0, sigma)
-                    .map_err(|_| MonteCarloError::NegativeSigma { value: sigma })?;
+                    .map_err(|_| CoreMonteCarloError::NegativeSigma { value: sigma })?;
                 Ok(rng.sample(normal))
             } else {
                 Ok(0.0)
@@ -37,7 +38,9 @@ pub(crate) fn sample_distribution<R: Rng>(
         }
         Distribution::Uniform { half_width } => {
             if half_width < 0.0 {
-                return Err(MonteCarloError::NegativeHalfWidth { value: half_width });
+                return Err(
+                    CoreMonteCarloError::NegativeHalfWidth { value: half_width }.into(),
+                );
             }
             if half_width > 0.0 {
                 let uniform = RandUniform::new(-half_width, half_width);
@@ -67,7 +70,7 @@ pub(crate) fn sample_distribution<R: Rng>(
 /// distributions and does not bias the result in practice.
 ///
 /// # Errors
-/// Returns [`MonteCarloError::NegativeSigma`] if `magnitude_sigma < 0`.
+/// Returns [`CoreMonteCarloError::NegativeSigma`] if `magnitude_sigma < 0`.
 pub(crate) fn disperse_maneuver<R: Rng>(
     nominal_dv: &Vector3<f64>,
     dispersion: &ManeuverDispersion,
@@ -113,7 +116,8 @@ pub(crate) fn disperse_maneuver<R: Rng>(
     let unit_dv = nominal_dv / nominal_mag;
     let cos_a = angle.cos();
     let sin_a = angle.sin();
-    let v_rotated = unit_dv * cos_a + k.cross(&unit_dv) * sin_a + k * k.dot(&unit_dv) * (1.0 - cos_a);
+    let v_rotated =
+        unit_dv * cos_a + k.cross(&unit_dv) * sin_a + k * k.dot(&unit_dv) * (1.0 - cos_a);
 
     Ok(scale * nominal_mag * v_rotated)
 }
@@ -121,7 +125,7 @@ pub(crate) fn disperse_maneuver<R: Rng>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::mission::monte_carlo::statistics::compute_percentile_stats;
+    use super::super::statistics::compute_percentile_stats;
     use rand::SeedableRng;
     use rand_chacha::ChaCha20Rng;
 

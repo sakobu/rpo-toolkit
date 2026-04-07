@@ -11,13 +11,13 @@ Astrodynamics toolkit for rendezvous and proximity operations (RPO) mission plan
 - **Analyze safety and closest approach** -- e/i vector separation (passive safety), formation design with dual-plan perch enrichment (baseline + safe e/i) and per-waypoint enrichment (suggest safe alternative → user accepts → replan), transit e/i monitoring, 3D keep-out evaluation, free-drift abort-case trajectory analysis, Brent-refined closest approach (POCA) on both nominal and free-drift arcs, autonomous collision avoidance (COLA) with multi-leg secondary conjunction detection
 - **Compute covariance and eclipses** -- linear covariance propagation with RIC 3-sigma bounds, Mahalanobis proximity distance, empirical collision probability, analytical Sun/Moon ephemeris with conical shadow model
 
-**Two-engine architecture.** An analytical engine (custom J2/drag STMs) evaluates in microseconds for interactive mission design. A numerical engine (nyx-space) runs in seconds-to-minutes for Lambert transfers, high-fidelity validation, and Monte Carlo. All types are serde-serializable.
+**Two-engine architecture.** The analytical engine (`rpo-core`, MIT + Apache-2.0) evaluates in microseconds and compiles to WebAssembly for interactive browser-based mission design. The numerical engine (`rpo-nyx`, AGPL-3.0) wraps nyx-space for Lambert transfers, high-fidelity validation, and Monte Carlo. The crate boundary enforces at compile time that the WASM binary never links AGPL code. All types are serde-serializable.
 
 ## Quick Start
 
 ```bash
 cargo build                     # build workspace
-cargo test                      # 487 tests across 3 crates (+ 21 ignored full-physics; 508 total with --include-ignored)
+cargo test                      # 489 tests across 5 crates (+ 21 ignored full-physics; 510 total with --include-ignored)
 ```
 
 Run an example mission (analytical):
@@ -106,36 +106,58 @@ Reproduce with:
 ## Architecture
 
 ```
-rpo-core/src/
+rpo-core/src/          MIT + Apache-2.0 — analytical engine, compiles to WASM
   types/        StateVector, KeplerianElements, QuasiNonsingularROE, SpacecraftConfig
   elements/     ECI/Keplerian/ROE/RIC conversions, GVE B-matrix, eclipse (Meeus)
-  propagation/  J2 & J2+drag STMs, Lambert solver, covariance kernels, nyx bridge
-  mission/      Planning, targeting, safety, formation design, free-drift, closest approach, avoidance, COLA assessment, validation, Monte Carlo
-  pipeline/     Shared CLI/API orchestration: execute_mission(), canonical I/O types
+  propagation/  J2 & J2+drag STMs, Lambert types, covariance kernels
+  mission/      Planning, targeting, safety, formation design, free-drift, POCA, COLA, Monte Carlo types
+  pipeline/     Shared orchestration: execute_mission_from_transfer(), canonical I/O types
 
-rpo-cli/src/              → docs/CLI.md
+rpo-nyx/src/           AGPL-3.0 — nyx-space integration
+  nyx_bridge/   Full-physics dynamics, impulse application, DMF drag extraction
+  lambert.rs    Izzo Lambert solver (via nyx-space)
+  validation/   Analytical vs. full-physics trajectory comparison
+  monte_carlo/  Parallel ensemble propagation (nyx + rayon)
+  pipeline/     Server-only wrappers: compute_transfer(), execute_mission()
+  planning.rs   Far-field classification + Lambert transfer planning
+
+rpo-wasm/src/          MIT + Apache-2.0 — WebAssembly bindings
+  lib.rs        WASM exports wrapping rpo-core analytical functions
+
+rpo-cli/src/           AGPL-3.0 → docs/CLI.md
   main.rs       CLI entry point, clap dispatch
   commands/     Porcelain (mission, validate, mc) + plumbing (classify, transfer, convert, propagate, roe, safety, eclipse)
   output/       Markdown report generation, insight logic, shared formatters
 
-rpo-api/src/              → docs/API.md
+rpo-api/src/           AGPL-3.0 → docs/API.md
   lib.rs        axum WebSocket API server
   protocol.rs   Wire types: ClientMessage / ServerMessage enums
   handlers/     classify, transfer, plan, formation, free_drift, poca, cola, eclipse, update_config, extract_drag, validate, mc
 ```
 
-|                   | Analytical Engine (rpo-core)                            | Numerical Engine (nyx-space)               |
+**Dependency graph:**
+
+```
+rpo-core (MIT + Apache-2.0)  ←── rpo-wasm (MIT + Apache-2.0)
+     ↑
+rpo-nyx (AGPL-3.0)  ←── rpo-cli (AGPL-3.0)
+                     ←── rpo-api (AGPL-3.0)
+```
+
+|                   | Analytical Engine (rpo-core)                            | Numerical Engine (rpo-nyx)                 |
 | ----------------- | ------------------------------------------------------- | ------------------------------------------ |
+| **License**       | MIT + Apache-2.0                                        | AGPL-3.0-or-later (nyx-space)              |
+| **WASM**          | Yes (`wasm32-unknown-unknown`)                          | No (requires nyx/anise/rayon)              |
 | **Speed**         | Microseconds                                            | Seconds to minutes                         |
 | **Perturbations** | J2 + differential drag (DMF)                            | Full: gravity field, drag, SRP, 3rd-body   |
 | **Use cases**     | Formation design, targeting, covariance, interactive UI | Lambert transfers, validation, Monte Carlo |
 | **Valid regime**  | ROE-linear (delta-r/r < 0.5%)                           | Any separation                             |
 
-The analytical engine powers interactive mission design; the numerical engine provides truth-model validation.
+The analytical engine powers interactive browser-based mission design via WASM; the numerical engine provides server-side truth-model validation.
 
 ## Library Usage
 
-For the full pipeline (classify → Lambert → waypoints → covariance → eclipse), use `pipeline::execute_mission()`. The example below shows the lower-level waypoint planning API:
+For the full pipeline (classify → Lambert → waypoints → covariance → eclipse), use `rpo_nyx::pipeline::execute_mission()`. For WASM/browser contexts, use `rpo_core::pipeline::execute_mission_from_transfer()` with a server-provided `TransferResult`. The example below shows the lower-level waypoint planning API (analytical only, no nyx dependency):
 
 ```rust
 use rpo_core::prelude::*;
@@ -201,15 +223,16 @@ for (i, leg) in mission.legs.iter().enumerate() {
 - [API Reference](docs/API.md) -- WebSocket protocol, message types, error codes
 - [Input Schema](docs/schema/pipeline-input.schema.json) -- shared JSON schema for `PipelineInput`
 
-The CLI (`rpo-cli`) provides batch execution and shell-composable plumbing for scripting. The WebSocket API (`rpo-api`) serves interactive sessions with progress streaming, cancellation, and incremental replanning. Both share the same `PipelineInput` type and `rpo-core` pipeline.
+The CLI (`rpo-cli`) provides batch execution and shell-composable plumbing for scripting. The WebSocket API (`rpo-api`) serves interactive sessions with progress streaming, cancellation, and incremental replanning. Both depend on `rpo-core` (analytical types and functions) and `rpo-nyx` (server-side operations). The WASM crate (`rpo-wasm`) depends only on `rpo-core` — no AGPL code in the browser.
 
 ## Testing
 
-508 tests across 3 crates (452 rpo-core, 45 rpo-api, 11 rpo-cli); 21 full-physics tests are `#[ignore]` by default (require ANISE kernels, ~50 MB cached download). Tests cover roundtrip transform invariants, STM identity at dt=0, energy/momentum conservation, regression against published data (Koenig Tables 2-3, D'Amico Sec. 2.1-2.2), Newton-Raphson convergence, POCA Brent-refinement invariants (refined distance <= grid-sampled), free-drift abort-case trajectories, COLA inverse GVE analytical solutions and post-avoidance verification, autonomous COLA evaluation with multi-leg secondary conjunction detection, COLA burn conversion and two-segment nyx propagation, MC dispersion inheritance from navigation accuracy, formation design null-space orthogonality and position preservation, e/i enrichment separation thresholds, perch enrichment with safe e/i vectors, transit safety monitoring, J2 drift compensation, full suggest → accept → verify enrichment cycle, deterministic Monte Carlo seeding, covariance symmetry preservation, dual-plan session state management, session invalidation and safety requirements propagation, WebSocket handler integration, error serialization, and CLI smoke tests.
+510 tests across 5 crates (343 rpo-core, 93 rpo-nyx, 45 rpo-api, 11 rpo-cli, 16 regression + 2 doctests); 21 full-physics tests are `#[ignore]` by default (require ANISE kernels, ~50 MB cached download). Tests cover roundtrip transform invariants, STM identity at dt=0, energy/momentum conservation, regression against published data (Koenig Tables 2-3, D'Amico Sec. 2.1-2.2), Newton-Raphson convergence, POCA Brent-refinement invariants (refined distance <= grid-sampled), free-drift abort-case trajectories, COLA inverse GVE analytical solutions and post-avoidance verification, autonomous COLA evaluation with multi-leg secondary conjunction detection, COLA burn conversion and two-segment nyx propagation, MC dispersion inheritance from navigation accuracy, formation design null-space orthogonality and position preservation, e/i enrichment separation thresholds, perch enrichment with safe e/i vectors, transit safety monitoring, J2 drift compensation, full suggest → accept → verify enrichment cycle, deterministic Monte Carlo seeding, covariance symmetry preservation, dual-plan session state management, session invalidation and safety requirements propagation, WebSocket handler integration, error serialization, and CLI smoke tests.
 
 ```bash
-cargo test                  # full suite
-cargo test -p rpo-core      # library only
+cargo test                  # full suite (5 crates)
+cargo test -p rpo-core      # analytical engine only
+cargo test -p rpo-nyx       # nyx integration tests
 cargo clippy --workspace -- -D warnings   # lint (pedantic)
 ```
 
@@ -217,12 +240,14 @@ cargo clippy --workspace -- -D warnings   # lint (pedantic)
 
 The analytical engine and API server are complete. What's next:
 
-1. **R3F frontend** -- React Three Fiber 3D visualization: orbit arcs, RIC-frame relative motion, maneuver arrows, eclipse timeline, covariance uncertainty ellipses.
-2. **Containerization** -- Docker, nginx reverse proxy, deployment infrastructure.
-3. **Extended orbit regimes** -- GEO/HEO validation, finite burns.
+1. **WASM composable API** -- Expose rpo-core's analytical functions as WASM exports via rpo-wasm with tsify TypeScript type generation.
+2. **R3F frontend** -- React Three Fiber 3D visualization: orbit arcs, RIC-frame relative motion, maneuver arrows, eclipse timeline, covariance uncertainty ellipses.
+3. **API migration** -- Replace stateful WebSocket session with stateless endpoints; analytical operations move to WASM, server handles only Lambert/validate/MC/drag.
+4. **Extended orbit regimes** -- GEO/HEO validation, finite burns.
 
 ## License
 
-AGPL-3.0-or-later (required by nyx-space dependency)
+- **rpo-core**, **rpo-wasm** -- MIT OR Apache-2.0 (permissive, no AGPL in browser)
+- **rpo-nyx**, **rpo-cli**, **rpo-api** -- AGPL-3.0-or-later (required by nyx-space dependency)
 
 Sarkis Melkonian

@@ -12,10 +12,12 @@ use tokio::sync::mpsc;
 use rpo_core::mission::avoidance::ColaConfig;
 use rpo_core::mission::config::{MissionConfig, SafetyConfig};
 use rpo_core::mission::types::WaypointMission;
-use rpo_core::mission::{validate_mission_nyx, ValidationConfig, ValidationReport};
-use rpo_core::pipeline::{compute_validation_burns, TransferResult, WaypointInput};
+use rpo_core::mission::ValidationReport;
+use rpo_core::pipeline::{TransferResult, WaypointInput};
 use rpo_core::propagation::PropagationModel;
 use rpo_core::types::{SpacecraftConfig, StateVector};
+use rpo_nyx::pipeline::compute_validation_burns;
+use rpo_nyx::validation::{validate_mission_nyx, ValidationConfig};
 
 use super::common::{replan_if_drag_changed, resolve_drag_and_propagator, send_progress};
 use crate::error::ApiError;

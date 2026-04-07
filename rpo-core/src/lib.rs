@@ -22,24 +22,18 @@
 //! |--------|---------|
 //! | [`types`] | Domain vocabulary: state vectors, Keplerian elements, ROEs, eclipse types |
 //! | [`elements`] | Static geometry: ECI/Keplerian/ROE/RIC conversions, frame transforms, eclipse |
-//! | [`propagation`] | Trajectory computation: J2 and J2+drag STMs, Lambert solver, covariance, nyx bridge |
-//! | [`mission`] | Mission orchestration: planning, targeting, safety, validation, Monte Carlo |
-//! | [`pipeline`] | Shared CLI/API pipeline: canonical input/output types, `execute_mission()` |
+//! | [`propagation`] | Trajectory computation: J2 and J2+drag STMs, Lambert types, covariance |
+//! | [`mission`] | Mission orchestration: planning, targeting, safety, Monte Carlo types |
+//! | [`pipeline`] | Shared CLI/API pipeline: canonical input/output types, `execute_mission_from_transfer()` |
 //! | [`constants`] | Physical constants and named tolerances |
 //!
 //! ## Entry points
 //!
 //! Most workflows start with one of these functions:
 //!
-//! - [`pipeline::execute_mission_from_transfer`] — plan from a pre-computed transfer (WASM-eligible)
-//! - [`pipeline::execute_mission`] — full pipeline: classify + Lambert + plan *(requires `"server"` feature)*
-//! - [`pipeline::compute_transfer`] — classify + Lambert + perch states *(requires `"server"` feature)*
+//! - [`pipeline::execute_mission_from_transfer`] — plan from a pre-computed transfer
 //! - [`mission::plan_waypoint_mission`] — multi-waypoint proximity operations
 //! - [`mission::classify_separation`] — proximity vs. far-field classification
-//! - [`mission::plan_mission`] — classify + Lambert transfer for far-field *(requires `"server"` feature)*
-//! - [`mission::validate_mission_nyx`] — nyx full-physics validation *(requires `"server"` feature)*
-//! - [`mission::run_monte_carlo`] — full-physics Monte Carlo ensemble *(requires `"server"` feature)*
-//! - [`propagation::solve_lambert`] — Lambert transfer solver *(requires `"server"` feature)*
 
 #![warn(missing_docs)]
 #![warn(clippy::pedantic)]
@@ -52,8 +46,9 @@ pub mod prelude;
 pub mod propagation;
 pub mod types;
 
-#[cfg(test)]
-mod test_helpers;
+#[cfg(any(test, feature = "test-fixtures"))]
+#[doc(hidden)]
+pub mod test_helpers;
 
 #[cfg(test)]
 mod copy_trait_tests {

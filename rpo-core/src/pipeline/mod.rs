@@ -1,10 +1,10 @@
 //! Pipeline module: shared mission orchestration for CLI, API, and WASM.
 //!
 //! Owns the canonical input/output types and the mission planning entry
-//! points. WASM-eligible entry points ([`execute_mission_from_transfer`],
+//! points. Entry points ([`execute_mission_from_transfer`],
 //! [`replan_from_transfer`]) accept a pre-computed [`TransferResult`].
-//! Server-only wrappers ([`execute_mission`], [`replan_mission`]) compute
-//! the Lambert transfer internally (requires the `"server"` feature).
+//! Server-only wrappers (`compute_transfer`, `execute_mission`, `replan_mission`)
+//! that require nyx-space live in `rpo-nyx`.
 //!
 //! ## DAG position
 //!
@@ -27,10 +27,6 @@ pub use execute::{
     compute_poca_analysis, compute_safety_analysis, execute_mission_from_transfer,
     plan_waypoints_from_transfer, replan_from_transfer, suggest_enrichment,
     suggest_enrichment_from_parts,
-};
-#[cfg(feature = "server")]
-pub use execute::{
-    compute_transfer, compute_validation_burns, execute_mission, replan_mission,
 };
 pub use projections::{
     LeanPlanResult, LegSummary, LegTrajectory, TrajectoryPoint, TransferSummary,

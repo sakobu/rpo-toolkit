@@ -3,13 +3,14 @@
 
 use nalgebra::Vector3;
 
-use crate::constants::COVARIANCE_SIGMA_FLOOR;
-use crate::propagation::covariance::types::MissionCovarianceReport;
-use crate::propagation::propagator::PropagatedState;
-
-use super::types::{
+use rpo_core::constants::COVARIANCE_SIGMA_FLOOR;
+use rpo_core::mission::monte_carlo::{
     CovarianceCrossCheck, DispersionEnvelope, EnsembleStatistics, PercentileStats,
 };
+use rpo_core::mission::monte_carlo::MonteCarloError as CoreMonteCarloError;
+use rpo_core::propagation::covariance::types::MissionCovarianceReport;
+use rpo_core::propagation::propagator::PropagatedState;
+
 use super::MonteCarloError;
 
 /// Compute percentile statistics from a slice of scalar values.
@@ -24,14 +25,16 @@ use super::MonteCarloError;
 /// - For n = 1, all percentiles equal the single value and `std_dev = 0`.
 ///
 /// # Errors
-/// Returns [`MonteCarloError::EmptyEnsemble`] if no finite values remain
+/// Returns [`CoreMonteCarloError::EmptyEnsemble`] if no finite values remain
 /// after filtering NaN/Inf.
-pub(crate) fn compute_percentile_stats(values: &[f64]) -> Result<PercentileStats, MonteCarloError> {
+pub(crate) fn compute_percentile_stats(
+    values: &[f64],
+) -> Result<PercentileStats, MonteCarloError> {
     // Filter non-finite values (NaN, Inf) that can arise from degenerate
     // nyx propagation states or frame conversions.
     let mut sorted: Vec<f64> = values.iter().copied().filter(|x| x.is_finite()).collect();
     if sorted.is_empty() {
-        return Err(MonteCarloError::EmptyEnsemble);
+        return Err(CoreMonteCarloError::EmptyEnsemble.into());
     }
     // Convert length to u32 for lossless f64 conversion.
     // MC sample counts are always bounded by MonteCarloConfig.num_samples (u32),
@@ -159,7 +162,7 @@ pub(crate) fn compute_dispersion_envelope(
 /// - If predicted covariance sigma is below [`COVARIANCE_SIGMA_FLOOR`],
 ///   the corresponding sigma ratio defaults to 1.0 (avoids division by zero).
 /// - If `trajectories` is empty, containment defaults to 0.0.
-/// - Returns `MonteCarloError::TooManySamples` if trajectory count exceeds u32
+/// - Returns `CoreMonteCarloError::TooManySamples` if trajectory count exceeds u32
 ///   (should not happen — bounded by `MonteCarloConfig::num_samples: u32`).
 pub(crate) fn compute_covariance_cross_check(
     cov_report: &MissionCovarianceReport,
@@ -184,9 +187,21 @@ pub(crate) fn compute_covariance_cross_check(
         // Per-axis sigma ratio: MC 1-sigma / covariance 1-sigma (expect ~1.0)
         let cov_1sigma = cov_sigma3 / 3.0;
         Vector3::new(
-            if cov_1sigma.x > COVARIANCE_SIGMA_FLOOR { mc_sigma.x / cov_1sigma.x } else { 1.0 },
-            if cov_1sigma.y > COVARIANCE_SIGMA_FLOOR { mc_sigma.y / cov_1sigma.y } else { 1.0 },
-            if cov_1sigma.z > COVARIANCE_SIGMA_FLOOR { mc_sigma.z / cov_1sigma.z } else { 1.0 },
+            if cov_1sigma.x > COVARIANCE_SIGMA_FLOOR {
+                mc_sigma.x / cov_1sigma.x
+            } else {
+                1.0
+            },
+            if cov_1sigma.y > COVARIANCE_SIGMA_FLOOR {
+                mc_sigma.y / cov_1sigma.y
+            } else {
+                1.0
+            },
+            if cov_1sigma.z > COVARIANCE_SIGMA_FLOOR {
+                mc_sigma.z / cov_1sigma.z
+            } else {
+                1.0
+            },
         )
     } else {
         // No dispersion data — neutral default
@@ -208,9 +223,9 @@ pub(crate) fn compute_covariance_cross_check(
             })
             .count();
         let n_total_u32 = u32::try_from(n_total)
-            .map_err(|_| MonteCarloError::TooManySamples { count: n_total })?;
+            .map_err(|_| CoreMonteCarloError::TooManySamples { count: n_total })?;
         let n_within_u32 = u32::try_from(n_within)
-            .map_err(|_| MonteCarloError::TooManySamples { count: n_within })?;
+            .map_err(|_| CoreMonteCarloError::TooManySamples { count: n_within })?;
         f64::from(n_within_u32) / f64::from(n_total_u32)
     } else {
         0.0
@@ -226,12 +241,12 @@ pub(crate) fn compute_covariance_cross_check(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::mission::monte_carlo::sampling::sample_distribution;
-    use crate::mission::monte_carlo::types::Distribution;
-    use crate::propagation::covariance::types::{
+    use rpo_core::mission::monte_carlo::Distribution;
+    use super::super::sampling::sample_distribution;
+    use rpo_core::propagation::covariance::types::{
         CovarianceState, LegCovarianceReport, NavigationAccuracy,
     };
-    use crate::types::Matrix6;
+    use rpo_core::types::Matrix6;
     use hifitime::Epoch;
     use nalgebra::SMatrix;
     use rand::SeedableRng;
@@ -367,7 +382,11 @@ mod tests {
         assert_eq!(stats.min, 1.0);
         assert_eq!(stats.max, 5.0);
         assert_eq!(stats.p50, 3.0);
-        assert!((stats.mean - 3.0).abs() < MEAN_EXACT_TOL, "mean should be 3.0, got {}", stats.mean);
+        assert!(
+            (stats.mean - 3.0).abs() < MEAN_EXACT_TOL,
+            "mean should be 3.0, got {}",
+            stats.mean
+        );
     }
 
     /// All-NaN input produces EmptyEnsemble error (no finite data to summarize).
@@ -376,7 +395,10 @@ mod tests {
         let values = vec![f64::NAN, f64::NAN, f64::NAN];
         let result = compute_percentile_stats(&values);
         assert!(
-            matches!(result, Err(MonteCarloError::EmptyEnsemble)),
+            matches!(
+                result,
+                Err(MonteCarloError::Core(CoreMonteCarloError::EmptyEnsemble))
+            ),
             "all-NaN input should return EmptyEnsemble, got {result:?}"
         );
     }
@@ -412,9 +434,9 @@ mod tests {
     /// trajectories with known terminal positions inside/outside the 3-sigma box.
     #[test]
     fn terminal_containment_sample_fraction() {
-        use crate::propagation::propagator::PropagatedState;
-        use crate::test_helpers::iss_like_elements;
-        use crate::types::{QuasiNonsingularROE, RICState};
+        use rpo_core::propagation::propagator::PropagatedState;
+        use rpo_core::test_helpers::iss_like_elements;
+        use rpo_core::types::{QuasiNonsingularROE, RICState};
 
         // Center at (0, 5, 0), 3-sigma box: R=3, I=30, C=0.9
         let center = Vector3::new(0.0, 5.0, 0.0);
@@ -439,10 +461,10 @@ mod tests {
 
         // 3 samples inside the box, 1 outside (cross-track exceeds 0.9)
         let trajectories = vec![
-            make_traj(center),                                      // inside (delta = 0)
-            make_traj(center + Vector3::new(1.0, 10.0, 0.5)),      // inside
-            make_traj(center + Vector3::new(-2.0, -20.0, -0.8)),   // inside
-            make_traj(center + Vector3::new(0.0, 0.0, 1.0)),       // outside (C: 1.0 > 0.9)
+            make_traj(center),                                    // inside (delta = 0)
+            make_traj(center + Vector3::new(1.0, 10.0, 0.5)),    // inside
+            make_traj(center + Vector3::new(-2.0, -20.0, -0.8)), // inside
+            make_traj(center + Vector3::new(0.0, 0.0, 1.0)),     // outside (C: 1.0 > 0.9)
         ];
 
         let cv = compute_covariance_cross_check(&cov, &stats, &trajectories).unwrap();

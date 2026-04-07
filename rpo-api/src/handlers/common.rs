@@ -10,7 +10,8 @@ use rpo_core::mission::types::WaypointMission;
 use rpo_core::mission::waypoints::plan_waypoint_mission;
 use rpo_core::pipeline::convert::to_waypoints;
 use rpo_core::pipeline::{resolve_propagator, PropagatorChoice, TransferResult, WaypointInput};
-use rpo_core::propagation::{extract_dmf_rates, DragConfig, PropagationModel};
+use rpo_core::propagation::{DragConfig, PropagationModel};
+use rpo_nyx::nyx_bridge::extract_dmf_rates;
 use rpo_core::types::{DepartureState, SpacecraftConfig};
 
 use crate::error::{ApiError, InvalidInputError};

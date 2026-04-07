@@ -13,12 +13,7 @@ pub mod planning;
 pub mod safety;
 pub mod targeting;
 pub mod types;
-#[cfg(feature = "server")]
-pub mod validation;
 pub mod waypoints;
-
-#[cfg(all(test, feature = "server"))]
-mod regression_tests;
 
 pub use config::{MissionConfig, ProximityConfig, SafetyConfig, TargetingConfig, TofOptConfig};
 pub use errors::{EclipseComputeError, MissionError};
@@ -32,8 +27,6 @@ pub use free_drift::{bounded_motion_residual, compute_free_drift, FreeDriftAnaly
 pub use planning::{
     classify_separation, compute_transfer_eclipse, dimensionless_separation, eci_separation_km,
 };
-#[cfg(feature = "server")]
-pub use planning::plan_mission;
 pub use safety::{
     analyze_safety, analyze_trajectory_safety, assess_safety, compute_ei_separation,
     EiSeparation, RcContext, SafetyAssessment, SafetyError,
@@ -44,20 +37,11 @@ pub use types::{
     Maneuver, ManeuverLeg, MissionPhase, MissionPlan, OperationalSafety, PassiveSafety,
     PerchGeometry, SafetyMetrics, ValidationPoint, ValidationReport, Waypoint, WaypointMission,
 };
-#[cfg(feature = "server")]
-pub use validation::{
-    validate_leg_nyx, validate_mission_nyx, ColaBurn, LegValidationOutput, ValidationConfig,
-    ValidationError, convert_cola_to_burns,
-};
 pub use covariance::propagate_mission_covariance;
 pub use monte_carlo::{
     CovarianceCrossCheck, DispersionConfig, DispersionEnvelope, Distribution,
-    EnsembleStatistics, ManeuverDispersion, MonteCarloConfig, MonteCarloMode,
+    EnsembleStatistics, ManeuverDispersion, MonteCarloConfig, MonteCarloError, MonteCarloMode,
     MonteCarloReport, PercentileStats, SampleResult, SpacecraftDispersion, StateDispersion,
-};
-#[cfg(feature = "server")]
-pub use monte_carlo::{
-    run_monte_carlo, MonteCarloControl, MonteCarloError, MonteCarloInput,
 };
 pub use waypoints::{
     get_mission_state_at_time, plan_waypoint_mission, replan_from_waypoint,

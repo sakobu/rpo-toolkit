@@ -2,8 +2,10 @@
 
 use std::path::Path;
 
-use rpo_core::mission::{validate_mission_nyx, ValidationConfig, ValidationReport};
-use rpo_core::pipeline::{compute_validation_burns, PipelineOutput};
+use rpo_core::mission::ValidationReport;
+use rpo_core::pipeline::PipelineOutput;
+use rpo_nyx::pipeline::compute_validation_burns;
+use rpo_nyx::validation::{validate_mission_nyx, ValidationConfig};
 
 use crate::cli::OutputMode;
 use crate::error::CliError;

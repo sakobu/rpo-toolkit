@@ -5,28 +5,31 @@ use rand::Rng;
 use rand::SeedableRng;
 use rand_chacha::ChaCha20Rng;
 
-use crate::constants::{MC_DEFAULT_COLLISION_THRESHOLD_KM, MIN_SPACECRAFT_MASS_KG};
-use crate::elements::keplerian_conversions::state_to_keplerian;
-use crate::elements::eci_ric_dcm::{eci_to_ric_dcm, eci_to_ric_relative};
-use crate::elements::roe::compute_roe;
-use crate::mission::config::{MissionConfig, SafetyConfig};
-use crate::mission::errors::MissionError;
-use crate::mission::safety::analyze_trajectory_safety;
-use crate::mission::types::{Waypoint, WaypointMission};
-use crate::mission::waypoints::plan_waypoint_mission;
-use crate::propagation::nyx_bridge::{
+use rpo_core::constants::{MC_DEFAULT_COLLISION_THRESHOLD_KM, MIN_SPACECRAFT_MASS_KG};
+use rpo_core::elements::eci_ric_dcm::{eci_to_ric_dcm, eci_to_ric_relative};
+use rpo_core::elements::keplerian_conversions::state_to_keplerian;
+use rpo_core::elements::roe::compute_roe;
+use rpo_core::mission::config::{MissionConfig, SafetyConfig};
+use rpo_core::mission::errors::MissionError;
+use rpo_core::mission::monte_carlo::{
+    EnsembleStatistics, MonteCarloConfig, MonteCarloMode, SampleResult, SpacecraftDispersion,
+    StateDispersion,
+};
+use rpo_core::mission::monte_carlo::MonteCarloError as CoreMonteCarloError;
+use rpo_core::mission::safety::analyze_trajectory_safety;
+use rpo_core::mission::types::{Waypoint, WaypointMission};
+use rpo_core::mission::waypoints::plan_waypoint_mission;
+use rpo_core::propagation::propagator::{PropagatedState, PropagationModel};
+use rpo_core::types::{DepartureState, SpacecraftConfig, StateVector};
+
+use crate::nyx_bridge::{
     apply_impulse, build_full_physics_dynamics, build_nyx_safety_states, nyx_propagate_segment,
     ChiefDeputySnapshot,
 };
-use crate::propagation::propagator::{PropagatedState, PropagationModel};
-use crate::types::{DepartureState, SpacecraftConfig, StateVector};
 
 use super::sampling::{disperse_maneuver, sample_distribution};
 use super::statistics::{compute_dispersion_envelope, compute_percentile_stats};
-use super::types::{
-    EnsembleStatistics, MonteCarloConfig, MonteCarloInput, MonteCarloMode, SampleResult,
-    SpacecraftDispersion, StateDispersion,
-};
+use super::types::MonteCarloInput;
 use super::MonteCarloError;
 
 /// Result of a single MC sample execution (internal).
@@ -57,7 +60,7 @@ struct LegPropagationResult {
 /// - `initial_chief` must have a non-degenerate position vector (for DCM).
 ///
 /// # Errors
-/// - [`MonteCarloError::NegativeSma`] / [`MonteCarloError::InvalidEccentricity`]
+/// - [`CoreMonteCarloError::NegativeSma`] / [`CoreMonteCarloError::InvalidEccentricity`]
 ///   if the dispersed state is not a bound orbit.
 /// - Sampling errors from [`sample_distribution`].
 /// - [`DcmError`] via [`MonteCarloError`] if DCM computation fails.
@@ -94,21 +97,25 @@ fn disperse_deputy_state<R: Rng>(
     };
 
     // Validity check: ensure dispersed state is a bound orbit
-    let ke = state_to_keplerian(&dispersed).map_err(|_| MonteCarloError::NegativeSma {
-        sample_index,
-        a_km: 0.0,
+    let ke = state_to_keplerian(&dispersed).map_err(|_| {
+        CoreMonteCarloError::NegativeSma {
+            sample_index,
+            a_km: 0.0,
+        }
     })?;
     if ke.a_km <= 0.0 {
-        return Err(MonteCarloError::NegativeSma {
+        return Err(CoreMonteCarloError::NegativeSma {
             sample_index,
             a_km: ke.a_km,
-        });
+        }
+        .into());
     }
     if ke.e >= 1.0 {
-        return Err(MonteCarloError::InvalidEccentricity {
+        return Err(CoreMonteCarloError::InvalidEccentricity {
             sample_index,
             e: ke.e,
-        });
+        }
+        .into());
     }
 
     Ok(dispersed)
@@ -156,7 +163,7 @@ fn disperse_spacecraft<R: Rng>(
 /// # Errors
 /// - Maneuver dispersion errors from [`disperse_maneuver`].
 /// - Nyx propagation or impulse application errors.
-/// - [`MonteCarloError::EmptyEnsemble`] if a trajectory segment is empty.
+/// - [`CoreMonteCarloError::EmptyEnsemble`] if a trajectory segment is empty.
 fn propagate_dispersed_legs<R: Rng>(
     input: &MonteCarloInput<'_>,
     dispersed_deputy: StateVector,
@@ -213,18 +220,16 @@ fn propagate_dispersed_legs<R: Rng>(
         chief_state = chief_traj
             .last()
             .map(|ts| ts.state.clone())
-            .ok_or(MonteCarloError::EmptyEnsemble)?;
+            .ok_or(CoreMonteCarloError::EmptyEnsemble)?;
         deputy_state = deputy_traj
             .last()
             .map(|ts| ts.state.clone())
-            .ok_or(MonteCarloError::EmptyEnsemble)?;
+            .ok_or(CoreMonteCarloError::EmptyEnsemble)?;
 
         // Skip t=0 sample from each leg's safety analysis: at the maneuver
         // instant, positions haven't separated yet — distance is physically
         // meaningless (consistent with validation.rs build_leg_comparison_points).
-        for (idx, (c_entry, d_entry)) in
-            chief_traj.into_iter().zip(deputy_traj).enumerate()
-        {
+        for (idx, (c_entry, d_entry)) in chief_traj.into_iter().zip(deputy_traj).enumerate() {
             if idx > 0 {
                 safety_pairs.push(ChiefDeputySnapshot {
                     elapsed_s: elapsed_total_s + c_entry.elapsed_s,
@@ -271,11 +276,11 @@ fn propagate_dispersed_legs<R: Rng>(
 ///   an error is returned for this sample.
 ///
 /// # Errors
-/// - [`MonteCarloError::NegativeSma`] / [`MonteCarloError::InvalidEccentricity`]
+/// - [`CoreMonteCarloError::NegativeSma`] / [`CoreMonteCarloError::InvalidEccentricity`]
 ///   if state dispersion produces an unbound orbit.
-/// - [`MonteCarloError::NegativeSigma`] / [`MonteCarloError::NegativeHalfWidth`]
+/// - [`CoreMonteCarloError::NegativeSigma`] / [`CoreMonteCarloError::NegativeHalfWidth`]
 ///   if dispersion parameters are invalid.
-/// - [`MonteCarloError::EmptyEnsemble`] if a nyx trajectory segment is empty.
+/// - [`CoreMonteCarloError::EmptyEnsemble`] if a nyx trajectory segment is empty.
 /// - Propagation or nyx bridge errors from bridge functions.
 #[allow(clippy::similar_names)]
 pub(crate) fn run_single_sample(
@@ -408,7 +413,7 @@ fn retarget_from_dispersed(
 /// - `total_num_samples` is the total number of MC samples attempted (including failures).
 ///
 /// # Errors
-/// Returns [`MonteCarloError::EmptyEnsemble`] if `compute_percentile_stats`
+/// Returns [`CoreMonteCarloError::EmptyEnsemble`] if `compute_percentile_stats`
 /// fails on an empty Δv vector (should not occur if `samples` is non-empty).
 pub(crate) fn collect_ensemble_statistics(
     samples: &[SampleResult],
@@ -451,9 +456,7 @@ pub(crate) fn collect_ensemble_statistics(
     };
 
     // Per-waypoint miss distance statistics
-    let num_waypoints = samples
-        .first()
-        .map_or(0, |s| s.waypoint_miss_km.len());
+    let num_waypoints = samples.first().map_or(0, |s| s.waypoint_miss_km.len());
     let mut waypoint_miss_stats = Vec::with_capacity(num_waypoints);
     for wp_idx in 0..num_waypoints {
         let misses: Vec<f64> = samples
@@ -467,7 +470,7 @@ pub(crate) fn collect_ensemble_statistics(
             // are non-finite, fall back to None
             match compute_percentile_stats(&misses) {
                 Ok(stats) => waypoint_miss_stats.push(Some(stats)),
-                Err(MonteCarloError::EmptyEnsemble) => {
+                Err(MonteCarloError::Core(CoreMonteCarloError::EmptyEnsemble)) => {
                     waypoint_miss_stats.push(None);
                 }
                 Err(e) => return Err(e),

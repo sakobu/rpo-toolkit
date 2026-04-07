@@ -1,14 +1,5 @@
 //! Monte Carlo domain types: dispersions, configurations, and reports.
 
-#[cfg(feature = "server")]
-use std::fmt;
-#[cfg(feature = "server")]
-use std::sync::atomic::{AtomicBool, AtomicU32};
-#[cfg(feature = "server")]
-use std::sync::Arc;
-
-#[cfg(feature = "server")]
-use anise::prelude::Almanac;
 use nalgebra::Vector3;
 use serde::{Deserialize, Serialize};
 
@@ -17,18 +8,8 @@ use crate::constants::{
     DEFAULT_NAV_POSITION_SIGMA_KM, DEFAULT_NAV_VELOCITY_SIGMA_KM_S,
 };
 
-#[cfg(feature = "server")]
-use crate::mission::config::MissionConfig;
 use crate::mission::types::SafetyMetrics;
-#[cfg(feature = "server")]
-use crate::mission::types::WaypointMission;
 use crate::propagation::covariance::types::{ManeuverUncertainty, NavigationAccuracy};
-#[cfg(feature = "server")]
-use crate::propagation::covariance::types::MissionCovarianceReport;
-#[cfg(feature = "server")]
-use crate::propagation::propagator::PropagationModel;
-#[cfg(feature = "server")]
-use crate::types::{SpacecraftConfig, StateVector};
 
 // ---------------------------------------------------------------------------
 // Monte Carlo types
@@ -256,65 +237,6 @@ impl MonteCarloConfig {
             dispersions: self.dispersions.resolved(nav, maneuver_unc),
             ..self
         }
-    }
-}
-
-/// Optional progress/cancel hooks for external callers (e.g., API server).
-///
-/// - `progress`: incremented per completed sample (poll for progress fraction)
-/// - `cancel`: set to `true` to request cooperative cancellation
-///
-/// Not `Serialize`/`Deserialize` — runtime-only coordination.
-#[cfg(feature = "server")]
-pub struct MonteCarloControl {
-    /// Incremented per completed sample. Poll to compute fraction: `progress.load() / num_samples`.
-    pub progress: Arc<AtomicU32>,
-    /// Set to `true` to request cancellation. Checked before each sample's nyx propagation.
-    pub cancel: Arc<AtomicBool>,
-}
-
-/// Bundled inputs for Monte Carlo ensemble analysis.
-///
-/// Groups all arguments needed by [`crate::mission::monte_carlo::run_monte_carlo`]
-/// into a single struct to avoid long parameter lists.
-///
-/// Not `Serialize`/`Deserialize` because it contains borrows and `Arc`.
-/// `Debug` is manually implemented because `Almanac` does not derive `Debug`.
-#[cfg(feature = "server")]
-pub struct MonteCarloInput<'a> {
-    /// Nominal mission plan (reference Δv and TOFs).
-    pub nominal_mission: &'a WaypointMission,
-    /// Chief ECI state at mission start.
-    pub initial_chief: &'a StateVector,
-    /// Deputy ECI state at mission start.
-    pub initial_deputy: &'a StateVector,
-    /// Monte Carlo configuration (samples, dispersions, mode, seed).
-    pub config: &'a MonteCarloConfig,
-    /// Mission targeting/TOF/safety configuration (used for closed-loop re-targeting).
-    pub mission_config: &'a MissionConfig,
-    /// Chief spacecraft physical properties.
-    pub chief_config: &'a SpacecraftConfig,
-    /// Deputy spacecraft physical properties.
-    pub deputy_config: &'a SpacecraftConfig,
-    /// Propagation model for closed-loop re-targeting.
-    pub propagator: &'a PropagationModel,
-    /// Preloaded ANISE almanac for nyx propagation.
-    pub almanac: &'a Arc<Almanac>,
-    /// Optional covariance predictions for validation comparison.
-    pub covariance_report: Option<&'a MissionCovarianceReport>,
-    /// Optional progress/cancel hooks (API server use). `None` for CLI/test callers.
-    pub control: Option<&'a MonteCarloControl>,
-}
-
-#[cfg(feature = "server")]
-impl fmt::Debug for MonteCarloInput<'_> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("MonteCarloInput")
-            .field("config", &self.config)
-            .field("mode", &self.config.mode)
-            .field("num_samples", &self.config.num_samples)
-            .field("almanac", &"<Almanac>")
-            .finish_non_exhaustive()
     }
 }
 

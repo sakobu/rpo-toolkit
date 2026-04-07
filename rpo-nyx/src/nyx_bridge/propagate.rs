@@ -11,11 +11,11 @@ use rayon::prelude::*;
 
 use serde::Serialize;
 
-use crate::elements::keplerian_conversions::state_to_keplerian;
-use crate::elements::eci_ric_dcm::{eci_to_ric_relative, ric_to_eci_dv, DcmError};
-use crate::elements::roe::compute_roe;
-use crate::propagation::propagator::PropagatedState;
-use crate::types::{SpacecraftConfig, StateVector};
+use rpo_core::elements::keplerian_conversions::state_to_keplerian;
+use rpo_core::elements::eci_ric_dcm::{eci_to_ric_relative, ric_to_eci_dv, DcmError};
+use rpo_core::elements::roe::compute_roe;
+use rpo_core::propagation::propagator::PropagatedState;
+use rpo_core::types::{SpacecraftConfig, StateVector};
 
 use super::errors::NyxBridgeError;
 use super::conversions::{config_to_spacecraft, spacecraft_to_state};
@@ -26,7 +26,7 @@ use super::conversions::{config_to_spacecraft, spacecraft_to_state};
 /// rule: public/crate-visible quantities with physical units must carry unit
 /// suffixes in their field names.
 #[derive(Debug, Clone)]
-pub(crate) struct TimedState {
+pub struct TimedState {
     /// Elapsed time since propagation start (seconds).
     pub elapsed_s: f64,
     /// ECI state at this time.
@@ -66,7 +66,7 @@ pub struct ChiefDeputySnapshot {
 /// # Errors
 ///
 /// Returns [`NyxBridgeError`] if the eclipse or ephemeris query fails.
-pub(crate) fn query_anise_eclipse(
+pub fn query_anise_eclipse(
     spacecraft_orbit: Orbit,
     earth_frame: Frame,
     almanac: &Arc<Almanac>,
@@ -106,7 +106,7 @@ pub(crate) fn query_anise_eclipse(
 ///
 /// # Errors
 /// Returns [`NyxBridgeError::Propagation`] if nyx propagation fails.
-pub(crate) fn nyx_propagate_segment(
+pub fn nyx_propagate_segment(
     sv: &StateVector,
     duration_s: f64,
     n_samples: u32,
@@ -150,7 +150,10 @@ pub(crate) fn nyx_propagate_segment(
 /// # Invariants
 /// - `chief.position_eci_km` must be non-zero (for RIC frame definition)
 /// - `chief` angular momentum must be non-zero
-pub(crate) fn apply_impulse(
+///
+/// # Errors
+/// Returns [`DcmError`] if the RIC frame cannot be constructed.
+pub fn apply_impulse(
     deputy: &StateVector,
     chief: &StateVector,
     dv_ric_km_s: &Vector3<f64>,
@@ -178,7 +181,7 @@ pub(crate) fn apply_impulse(
 ///
 /// # Errors
 /// Returns [`NyxBridgeError::Conversion`] if Keplerian element extraction fails.
-pub(crate) fn build_nyx_safety_states(
+pub fn build_nyx_safety_states(
     chief_deputy_pairs: &[ChiefDeputySnapshot],
 ) -> Result<Vec<PropagatedState>, NyxBridgeError> {
     chief_deputy_pairs
@@ -202,9 +205,9 @@ pub(crate) fn build_nyx_safety_states(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::elements::eci_ric_dcm::ric_to_eci_dv;
-    use crate::elements::keplerian_conversions::keplerian_to_state;
-    use crate::test_helpers::{iss_like_elements, test_epoch};
+    use rpo_core::elements::eci_ric_dcm::ric_to_eci_dv;
+    use rpo_core::elements::keplerian_conversions::keplerian_to_state;
+    use rpo_core::test_helpers::{iss_like_elements, test_epoch};
 
     /// Position must be unchanged after impulse (exact identity operation).
     /// 1e-15 is at machine epsilon level for km-scale positions.

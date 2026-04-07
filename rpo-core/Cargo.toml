@@ -4,22 +4,15 @@ description = "Core astrodynamics library for RPO mission planning"
 version.workspace = true
 edition.workspace = true
 authors.workspace = true
-license.workspace = true
+license = "MIT OR Apache-2.0"
 
 [features]
-default = ["server"]
-server = ["nyx-space", "anise", "rayon", "rand", "rand_chacha", "rand_distr"]
+test-fixtures = []
 
 [dependencies]
 nalgebra = { version = "0.34", features = ["serde-serialize"] }
 hifitime = "4"
 serde = { version = "1", features = ["derive"] }
-nyx-space = { version = "2.3.1", optional = true }
-anise = { version = "0.9", optional = true }
-rand = { version = "0.8", optional = true }
-rand_distr = { version = "0.4", optional = true }
-rand_chacha = { version = "0.3", optional = true }
-rayon = { version = "1.10", optional = true }
 
 [dev-dependencies]
 serde_json = "1"

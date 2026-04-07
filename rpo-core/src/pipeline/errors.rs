@@ -7,18 +7,7 @@ use std::fmt;
 
 use crate::elements::keplerian_conversions::ConversionError;
 use crate::mission::errors::MissionError;
-#[cfg(feature = "server")]
-use crate::mission::monte_carlo::MonteCarloError;
-#[cfg(feature = "server")]
-use crate::mission::validation::ValidationError;
 use crate::propagation::covariance::CovarianceError;
-// LambertError is always-available (pure type), but the PipelineError::Lambert
-// variant is server-only (no solver to produce it without nyx). Gate the import
-// to avoid unused-import warnings.
-#[cfg(feature = "server")]
-use crate::propagation::lambert::LambertError;
-#[cfg(feature = "server")]
-use crate::propagation::nyx_bridge::NyxBridgeError;
 use crate::propagation::propagator::PropagationError;
 
 /// Unified error type for pipeline operations.
@@ -28,18 +17,6 @@ pub enum PipelineError {
     Mission(MissionError),
     /// Propagation error (STM, Keplerian).
     Propagation(PropagationError),
-    /// Lambert solver error.
-    #[cfg(feature = "server")]
-    Lambert(LambertError),
-    /// Nyx validation error.
-    #[cfg(feature = "server")]
-    Validation(ValidationError),
-    /// Monte Carlo error (boxed to reduce enum size).
-    #[cfg(feature = "server")]
-    MonteCarlo(Box<MonteCarloError>),
-    /// Nyx bridge error (almanac, dynamics, propagation; boxed to reduce enum size).
-    #[cfg(feature = "server")]
-    NyxBridge(Box<NyxBridgeError>),
     /// Covariance propagation error.
     Covariance(CovarianceError),
     /// A required field is missing for the requested operation.
@@ -58,14 +35,6 @@ impl fmt::Display for PipelineError {
         match self {
             Self::Mission(e) => write!(f, "{e}"),
             Self::Propagation(e) => write!(f, "{e}"),
-            #[cfg(feature = "server")]
-            Self::Lambert(e) => write!(f, "{e}"),
-            #[cfg(feature = "server")]
-            Self::Validation(e) => write!(f, "{e}"),
-            #[cfg(feature = "server")]
-            Self::MonteCarlo(e) => write!(f, "{}", *e),
-            #[cfg(feature = "server")]
-            Self::NyxBridge(e) => write!(f, "{}", *e),
             Self::Covariance(e) => write!(f, "{e}"),
             Self::MissingField { field, context } => {
                 write!(f, "{field} required for {context}")
@@ -80,14 +49,6 @@ impl std::error::Error for PipelineError {
         match self {
             Self::Mission(e) => Some(e),
             Self::Propagation(e) => Some(e),
-            #[cfg(feature = "server")]
-            Self::Lambert(e) => Some(e),
-            #[cfg(feature = "server")]
-            Self::Validation(e) => Some(e),
-            #[cfg(feature = "server")]
-            Self::MonteCarlo(e) => Some(e.as_ref()),
-            #[cfg(feature = "server")]
-            Self::NyxBridge(e) => Some(e.as_ref()),
             Self::Covariance(e) => Some(e),
             Self::MissingField { .. } | Self::EmptyTrajectory => None,
         }
@@ -105,34 +66,6 @@ impl From<MissionError> for PipelineError {
 impl From<PropagationError> for PipelineError {
     fn from(e: PropagationError) -> Self {
         Self::Propagation(e)
-    }
-}
-
-#[cfg(feature = "server")]
-impl From<LambertError> for PipelineError {
-    fn from(e: LambertError) -> Self {
-        Self::Lambert(e)
-    }
-}
-
-#[cfg(feature = "server")]
-impl From<ValidationError> for PipelineError {
-    fn from(e: ValidationError) -> Self {
-        Self::Validation(e)
-    }
-}
-
-#[cfg(feature = "server")]
-impl From<MonteCarloError> for PipelineError {
-    fn from(e: MonteCarloError) -> Self {
-        Self::MonteCarlo(Box::new(e))
-    }
-}
-
-#[cfg(feature = "server")]
-impl From<NyxBridgeError> for PipelineError {
-    fn from(e: NyxBridgeError) -> Self {
-        Self::NyxBridge(Box::new(e))
     }
 }
 
