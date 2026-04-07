@@ -5,6 +5,7 @@ pub mod drag_stm;
 pub mod j2_params;
 pub mod keplerian;
 pub mod lambert;
+#[cfg(feature = "server")]
 pub mod nyx_bridge;
 pub mod propagator;
 pub mod stm;
@@ -17,10 +18,10 @@ pub use covariance::{
 pub use drag_stm::{compute_j2_drag_stm, propagate_roe_j2_drag};
 pub use j2_params::{compute_j2_params, J2Params};
 pub use keplerian::propagate_keplerian;
-pub use lambert::{
-    solve_lambert, solve_lambert_izzo, solve_lambert_with_config, LambertConfig, LambertError,
-    LambertTransfer, TransferDirection,
-};
+pub use lambert::{LambertConfig, LambertError, LambertTransfer, TransferDirection};
+#[cfg(feature = "server")]
+pub use lambert::{solve_lambert, solve_lambert_izzo, solve_lambert_with_config};
+#[cfg(feature = "server")]
 pub use nyx_bridge::{
     extract_dmf_rates, load_default_almanac, load_full_almanac, ChiefDeputySnapshot,
     NyxBridgeError,

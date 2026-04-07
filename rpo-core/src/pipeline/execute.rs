@@ -20,18 +20,24 @@ use crate::mission::formation::perch::enrich_perch;
 use crate::mission::formation::safety_envelope::enrich_waypoint;
 use crate::mission::formation::transit::assess_transit_safety;
 use crate::mission::free_drift::{compute_free_drift, FreeDriftAnalysis};
-use crate::mission::planning::{compute_transfer_eclipse, plan_mission};
+use crate::mission::planning::compute_transfer_eclipse;
+#[cfg(feature = "server")]
+use crate::mission::planning::plan_mission;
 use crate::mission::types::PerchGeometry;
-use crate::mission::waypoints::{plan_waypoint_mission, replan_from_waypoint};
+use crate::mission::waypoints::plan_waypoint_mission;
+use crate::mission::waypoints::replan_from_waypoint;
 use crate::propagation::covariance::{
     ric_accuracy_to_roe_covariance, CovarianceError, ManeuverUncertainty,
     MissionCovarianceReport, NavigationAccuracy,
 };
+#[cfg(feature = "server")]
 use crate::propagation::keplerian::propagate_keplerian;
 use crate::propagation::propagator::{DragConfig, PropagationModel};
 use crate::types::elements::KeplerianElements;
 use crate::types::roe::QuasiNonsingularROE;
-use crate::types::{DepartureState, StateVector};
+use crate::types::DepartureState;
+#[cfg(feature = "server")]
+use crate::types::StateVector;
 
 use crate::mission::config::SafetyConfig;
 
@@ -61,6 +67,7 @@ const AUTO_COLA_BUDGET_KM_S: f64 = 0.01;
 ///
 /// Returns [`PipelineError`] if classification or Lambert solving fails,
 /// or if the chief trajectory is empty after Lambert propagation.
+#[cfg(feature = "server")]
 pub fn compute_transfer(input: &PipelineInput) -> Result<TransferResult, PipelineError> {
     let plan = plan_mission(
         &input.chief,
@@ -359,6 +366,7 @@ pub fn compute_safety_analysis(
 ///
 /// # Errors
 /// Returns [`crate::mission::ValidationError`] if a COLA burn epoch is out of bounds.
+#[cfg(feature = "server")]
 pub fn compute_validation_burns(
     wp_mission: &crate::mission::types::WaypointMission,
     safety: Option<&SafetyConfig>,
@@ -503,21 +511,26 @@ pub fn apply_perch_enrichment(
 ///
 /// # Arguments
 /// * `input` — mutable pipeline input (waypoint velocity will be updated)
+/// * `transfer` — mutable transfer result; passed through to replanning
+///   and modified in-place if enrichment applies
 /// * `waypoint_index` — which waypoint to enrich (0-indexed)
 /// * `enriched_roe` — the accepted enriched ROE from `enrich_waypoint`
 /// * `chief_at_waypoint` — chief mean elements at the waypoint epoch
 ///
 /// # Invariants
-/// - `chief_at_waypoint` must be a valid mean Keplerian state
-///   (`a_km > 0`, `0 ≤ e < 1`).
+/// - `chief_at_waypoint` must be valid mean Keplerian elements
+///   (`a_km > 0`, `0 ≤ e < 1`) at the waypoint epoch.
 /// - ROE linearization assumes small relative separation
 ///   (dimensionless ROE norm ≪ 1); see `roe_to_ric` (D'Amico Eq. 2.17).
+/// - `transfer` is modified in-place by enrichment; caller must not
+///   assume it is unchanged after this call.
 ///
 /// # Errors
 /// Returns [`PipelineError`] if `waypoint_index` is out of bounds,
 /// if ROE-to-RIC conversion fails, or if replanning fails.
 pub fn accept_waypoint_enrichment(
     input: &mut PipelineInput,
+    transfer: &mut TransferResult,
     waypoint_index: usize,
     enriched_roe: &QuasiNonsingularROE,
     chief_at_waypoint: &KeplerianElements,
@@ -539,7 +552,7 @@ pub fn accept_waypoint_enrichment(
     input.waypoints[waypoint_index].velocity_ric_km_s = Some(ric.velocity_ric_km_s.into());
 
     // Replan from the modified waypoint.
-    replan_mission(input, waypoint_index, None)
+    replan_from_transfer(transfer, input, waypoint_index, None)
 }
 
 /// Build a [`FormationDesignReport`] from a perch enrichment result, safety
@@ -710,23 +723,42 @@ pub fn build_lean_plan_result(
     }
 }
 
-/// Execute the full mission pipeline: classify → Lambert → waypoints → covariance → eclipse.
+/// Plan a mission from a pre-computed transfer result.
 ///
-/// Single entry point for the CLI `mission` command and the API `PlanMission` handler.
+/// WASM-eligible: accepts a [`TransferResult`] (from the server's [`compute_transfer`]
+/// or from client-side proximity classification) and runs the full planning
+/// pipeline: enrichment, waypoint targeting, safety analysis, output assembly.
+///
+/// # Arguments
+///
+/// * `transfer` — pre-computed transfer result; modified in-place if perch
+///   enrichment applies (see [`apply_perch_enrichment`]).
+/// * `input` — pipeline input defining waypoints, propagator, safety config,
+///   and optional COLA/covariance settings.
+///
+/// # Invariants
+///
+/// - `transfer.plan.perch_roe` must satisfy ROE linearization validity
+///   (dimensionless norm well below 1); see `roe_to_ric` (D'Amico Eq. 2.17).
+/// - `input.waypoints` must be non-empty for a meaningful mission.
 ///
 /// # Errors
 ///
-/// Returns [`PipelineError`] if any pipeline phase fails.
-pub fn execute_mission(input: &PipelineInput) -> Result<PipelineOutput, PipelineError> {
-    let mut transfer = compute_transfer(input)?;
+/// Returns [`PipelineError::Mission`] if waypoint targeting fails.
+/// Returns [`PipelineError::Propagation`] if STM propagation fails.
+/// Returns [`PipelineError::Covariance`] if covariance propagation fails.
+pub fn execute_mission_from_transfer(
+    transfer: &mut TransferResult,
+    input: &PipelineInput,
+) -> Result<PipelineOutput, PipelineError> {
     let propagator = to_propagation_model(&input.propagator);
 
-    let suggestion = suggest_enrichment(&transfer, input);
+    let suggestion = suggest_enrichment(transfer, input);
     if let Some(ref s) = suggestion {
-        apply_perch_enrichment(&mut transfer, s);
+        apply_perch_enrichment(transfer, s);
     }
 
-    let wp_mission = plan_waypoints_from_transfer(&transfer, input, &propagator)?;
+    let wp_mission = plan_waypoints_from_transfer(transfer, input, &propagator)?;
 
     let safety = compute_safety_analysis(
         &wp_mission, input.config.safety.as_ref(), input.cola.as_ref(), &propagator,
@@ -734,7 +766,7 @@ pub fn execute_mission(input: &PipelineInput) -> Result<PipelineOutput, Pipeline
 
     Ok(build_output(
         BuildOutputCtx {
-            transfer: &transfer,
+            transfer,
             input,
             propagator: &propagator,
             auto_drag: None,
@@ -746,32 +778,65 @@ pub fn execute_mission(input: &PipelineInput) -> Result<PipelineOutput, Pipeline
     ))
 }
 
-/// Incremental replan pipeline: classify → Lambert → replan from index.
+/// Server-side full pipeline: computes Lambert transfer, then delegates to
+/// [`execute_mission_from_transfer`].
 ///
-/// When `cached_mission` is provided, reuses the kept legs (`0..modified_index`)
-/// without re-solving them. When `None`, plans the full mission first as a
-/// fallback (prior behavior).
-///
-/// Used by the API's `MoveWaypoint` handler.
+/// Used by the CLI `mission` command and the API `PlanMission` handler.
+/// For WASM clients that already hold a [`TransferResult`], call
+/// [`execute_mission_from_transfer`] directly.
 ///
 /// # Errors
 ///
-/// Returns [`PipelineError`] if any pipeline phase fails.
-pub fn replan_mission(
+/// Returns [`PipelineError`] if Lambert solving or any pipeline phase fails.
+#[cfg(feature = "server")]
+pub fn execute_mission(input: &PipelineInput) -> Result<PipelineOutput, PipelineError> {
+    let mut transfer = compute_transfer(input)?;
+    execute_mission_from_transfer(&mut transfer, input)
+}
+
+/// Replan a mission from a pre-computed transfer result.
+///
+/// WASM-eligible: the client holds the [`TransferResult`] and optional cached
+/// mission from previous planning. Only the changed waypoint triggers replanning.
+///
+/// When `cached_mission` is provided, reuses the kept legs (`0..modified_index`)
+/// without re-solving them. When `None`, plans the full mission first.
+///
+/// # Arguments
+///
+/// * `transfer` — pre-computed transfer result; modified in-place if perch
+///   enrichment applies.
+/// * `input` — pipeline input with current waypoints.
+/// * `modified_index` — 0-based index of the waypoint that changed.
+/// * `cached_mission` — optional previously planned mission; legs before
+///   `modified_index` are reused without re-solving.
+///
+/// # Invariants
+///
+/// - `modified_index < input.waypoints.len()`.
+/// - If `cached_mission` is `Some`, its legs must correspond to the same
+///   waypoint sequence (prior to modification).
+///
+/// # Errors
+///
+/// Returns [`PipelineError::Mission`] if waypoint targeting or replanning fails.
+/// Returns [`PipelineError::Propagation`] if STM propagation fails.
+/// Returns [`PipelineError::Covariance`] if covariance propagation fails.
+pub fn replan_from_transfer(
+    transfer: &mut TransferResult,
     input: &PipelineInput,
     modified_index: usize,
     cached_mission: Option<crate::mission::types::WaypointMission>,
 ) -> Result<PipelineOutput, PipelineError> {
-    let mut transfer = compute_transfer(input)?;
     let propagator = to_propagation_model(&input.propagator);
 
-    let suggestion = suggest_enrichment(&transfer, input);
+    let suggestion = suggest_enrichment(transfer, input);
     if let Some(ref s) = suggestion {
-        apply_perch_enrichment(&mut transfer, s);
+        apply_perch_enrichment(transfer, s);
     }
 
     let waypoints = to_waypoints(&input.waypoints);
-    let departure = departure_from_transfer(&transfer);
+    let departure = departure_from_transfer(transfer);
 
     let base_mission = match cached_mission {
         Some(m) => m,
@@ -793,7 +858,7 @@ pub fn replan_mission(
 
     Ok(build_output(
         BuildOutputCtx {
-            transfer: &transfer,
+            transfer,
             input,
             propagator: &propagator,
             auto_drag: None,
@@ -805,7 +870,26 @@ pub fn replan_mission(
     ))
 }
 
-#[cfg(test)]
+/// Server-side replan: computes Lambert transfer, then delegates to
+/// [`replan_from_transfer`].
+///
+/// For WASM clients that already hold a [`TransferResult`], call
+/// [`replan_from_transfer`] directly.
+///
+/// # Errors
+///
+/// Returns [`PipelineError`] if Lambert solving or replanning fails.
+#[cfg(feature = "server")]
+pub fn replan_mission(
+    input: &PipelineInput,
+    modified_index: usize,
+    cached_mission: Option<crate::mission::types::WaypointMission>,
+) -> Result<PipelineOutput, PipelineError> {
+    let mut transfer = compute_transfer(input)?;
+    replan_from_transfer(&mut transfer, input, modified_index, cached_mission)
+}
+
+#[cfg(all(test, feature = "server"))]
 mod tests {
     use crate::mission::config::ProximityConfig;
     use crate::propagation::lambert::LambertConfig;
@@ -1375,8 +1459,10 @@ mod tests {
 
         // Accept the enrichment → replan
         let mut updated_input = input.clone();
+        let mut transfer = compute_transfer(&updated_input).expect("transfer");
         let enriched_output = accept_waypoint_enrichment(
             &mut updated_input,
+            &mut transfer,
             0,
             &enriched.roe,
             &leg.arrival_chief_mean,
@@ -1428,8 +1514,9 @@ mod tests {
         ).expect("enrichment");
 
         let mut updated_input = input.clone();
+        let mut transfer = compute_transfer(&updated_input).expect("transfer");
         let result = accept_waypoint_enrichment(
-            &mut updated_input, 99, &enriched.roe, &leg.arrival_chief_mean,
+            &mut updated_input, &mut transfer, 99, &enriched.roe, &leg.arrival_chief_mean,
         );
         assert!(matches!(
             result,
@@ -1525,8 +1612,10 @@ mod tests {
 
         // 3. Accept enrichment at waypoint 0.
         let leg_0 = &baseline.mission.legs[0];
+        let mut transfer = compute_transfer(&input).expect("transfer");
         let enriched = accept_waypoint_enrichment(
             &mut input,
+            &mut transfer,
             0,
             &suggestion_0.roe,
             &leg_0.arrival_chief_mean,

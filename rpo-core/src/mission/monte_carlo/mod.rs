@@ -5,29 +5,40 @@
 //! deterministic per-sample seeding via `ChaCha20Rng`.
 
 pub mod types;
+#[cfg(feature = "server")]
 pub(crate) mod execution;
+#[cfg(feature = "server")]
 pub(crate) mod sampling;
+#[cfg(feature = "server")]
 pub(crate) mod statistics;
 
 use std::fmt;
+#[cfg(feature = "server")]
 use std::time::Instant;
 
+#[cfg(feature = "server")]
 use rayon::prelude::*;
 
 use crate::elements::eci_ric_dcm::DcmError;
 use crate::mission::errors::MissionError;
+#[cfg(feature = "server")]
 use crate::propagation::nyx_bridge::NyxBridgeError;
 use crate::propagation::propagator::PropagationError;
 
+#[cfg(feature = "server")]
 use execution::{collect_ensemble_statistics, run_single_sample};
+#[cfg(feature = "server")]
 use statistics::compute_covariance_cross_check;
 pub use types::{
     CovarianceCrossCheck, DispersionConfig, DispersionEnvelope, Distribution,
-    EnsembleStatistics, ManeuverDispersion, MonteCarloConfig, MonteCarloControl, MonteCarloInput,
+    EnsembleStatistics, ManeuverDispersion, MonteCarloConfig,
     MonteCarloMode, MonteCarloReport, PercentileStats, SampleResult, SpacecraftDispersion,
     StateDispersion,
 };
+#[cfg(feature = "server")]
+pub use types::{MonteCarloControl, MonteCarloInput};
 
+#[cfg(feature = "server")]
 /// Default master seed when `MonteCarloConfig.seed` is `None`.
 const DEFAULT_MC_SEED: u64 = 42;
 
@@ -74,6 +85,7 @@ pub enum MonteCarloError {
     /// Propagation failure during sample execution.
     Propagation(PropagationError),
     /// Nyx bridge failure.
+    #[cfg(feature = "server")]
     NyxBridge(Box<NyxBridgeError>),
     /// Empty ensemble (no samples to compute statistics from).
     EmptyEnsemble,
@@ -115,6 +127,7 @@ impl fmt::Display for MonteCarloError {
             }
             Self::Mission(e) => write!(f, "mission planning failure: {e}"),
             Self::Propagation(e) => write!(f, "propagation failure: {e}"),
+            #[cfg(feature = "server")]
             Self::NyxBridge(e) => write!(f, "nyx bridge failure: {e}"),
             Self::EmptyEnsemble => write!(f, "empty ensemble: no samples to compute statistics"),
             Self::TooManySamples { count } => {
@@ -131,6 +144,7 @@ impl std::error::Error for MonteCarloError {
         match self {
             Self::Mission(e) => Some(e),
             Self::Propagation(e) => Some(e),
+            #[cfg(feature = "server")]
             Self::NyxBridge(e) => Some(e.as_ref()),
             Self::DcmFailure(e) => Some(e),
             _ => None,
@@ -156,12 +170,14 @@ impl From<PropagationError> for MonteCarloError {
     }
 }
 
+#[cfg(feature = "server")]
 impl From<NyxBridgeError> for MonteCarloError {
     fn from(e: NyxBridgeError) -> Self {
         Self::NyxBridge(Box::new(e))
     }
 }
 
+#[cfg(feature = "server")]
 /// Run full-physics Monte Carlo ensemble analysis using nyx propagation.
 ///
 /// Each sample propagates chief + deputy through nyx with dispersed initial
@@ -279,7 +295,7 @@ pub fn run_monte_carlo(input: &MonteCarloInput<'_>) -> Result<MonteCarloReport, 
     })
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "server"))]
 mod tests {
     use super::*;
     use crate::mission::config::MissionConfig;

@@ -31,14 +31,15 @@
 //!
 //! Most workflows start with one of these functions:
 //!
-//! - [`pipeline::execute_mission`] — full pipeline: classify → Lambert → waypoints → covariance → eclipse
-//! - [`pipeline::compute_transfer`] — classify + Lambert + perch states (for validate/MC)
+//! - [`pipeline::execute_mission_from_transfer`] — plan from a pre-computed transfer (WASM-eligible)
+//! - [`pipeline::execute_mission`] — full pipeline: classify + Lambert + plan *(requires `"server"` feature)*
+//! - [`pipeline::compute_transfer`] — classify + Lambert + perch states *(requires `"server"` feature)*
 //! - [`mission::plan_waypoint_mission`] — multi-waypoint proximity operations
-//! - [`mission::plan_mission`] — classify + Lambert transfer for far-field
 //! - [`mission::classify_separation`] — proximity vs. far-field classification
-//! - [`mission::validate_mission_nyx`] — nyx full-physics validation
-//! - [`mission::run_monte_carlo`] — full-physics Monte Carlo ensemble
-//! - [`propagation::solve_lambert`] — Lambert transfer solver
+//! - [`mission::plan_mission`] — classify + Lambert transfer for far-field *(requires `"server"` feature)*
+//! - [`mission::validate_mission_nyx`] — nyx full-physics validation *(requires `"server"` feature)*
+//! - [`mission::run_monte_carlo`] — full-physics Monte Carlo ensemble *(requires `"server"` feature)*
+//! - [`propagation::solve_lambert`] — Lambert transfer solver *(requires `"server"` feature)*
 
 #![warn(missing_docs)]
 #![warn(clippy::pedantic)]

@@ -10,14 +10,18 @@
 use crate::elements::eclipse::{compute_eclipse_from_states, extract_eclipse_intervals};
 use crate::elements::keplerian_conversions::{state_to_keplerian, ConversionError};
 use crate::elements::roe::compute_roe;
-use crate::propagation::lambert::{solve_lambert_with_config, LambertConfig, LambertTransfer};
+use crate::propagation::lambert::LambertTransfer;
+#[cfg(feature = "server")]
+use crate::propagation::lambert::{solve_lambert_with_config, LambertConfig};
 use crate::types::{
     EclipseState, KeplerianElements, QuasiNonsingularROE, StateVector, TransferEclipseData,
 };
 
 use super::config::ProximityConfig;
 use super::errors::{EclipseComputeError, MissionError};
-use super::types::{MissionPhase, MissionPlan, PerchGeometry};
+use super::types::{MissionPhase, PerchGeometry};
+#[cfg(feature = "server")]
+use super::types::MissionPlan;
 
 /// Minimum perch offset (km) — guards against degenerate zero-offset perch geometry.
 const PERCH_OFFSET_MIN_KM: f64 = 1e-10;
@@ -235,6 +239,7 @@ pub fn compute_transfer_eclipse(
 ///
 /// # Errors
 /// Returns `MissionError` if the Lambert solver fails or the perch geometry is invalid.
+#[cfg(feature = "server")]
 pub fn plan_mission(
     chief: &StateVector,
     deputy: &StateVector,
@@ -301,6 +306,7 @@ pub fn plan_mission(
 ///
 /// Inverts the ROE definition (Koenig Eq. 2) to recover deputy Keplerian
 /// elements from chief elements and relative state.
+#[cfg(feature = "server")]
 #[allow(clippy::similar_names)]
 fn perch_roe_to_keplerian(
     roe: &QuasiNonsingularROE,
@@ -342,7 +348,7 @@ fn perch_roe_to_keplerian(
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "server"))]
 mod tests {
     use super::*;
     use crate::elements::keplerian_conversions::keplerian_to_state;

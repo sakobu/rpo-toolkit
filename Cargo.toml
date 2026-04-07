@@ -1,5 +1,5 @@
 [workspace]
-members = ["rpo-core", "rpo-cli", "rpo-api"]
+members = ["rpo-core", "rpo-cli", "rpo-api", "rpo-wasm"]
 resolver = "2"
 
 [workspace.package]

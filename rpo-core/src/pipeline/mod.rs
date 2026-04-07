@@ -1,8 +1,10 @@
-//! Pipeline module: shared mission orchestration for CLI and API.
+//! Pipeline module: shared mission orchestration for CLI, API, and WASM.
 //!
-//! Owns the canonical input/output types and the `execute_mission()` /
-//! `compute_transfer()` / `replan_mission()` entry points that compose
-//! the core planning primitives into a complete mission pipeline.
+//! Owns the canonical input/output types and the mission planning entry
+//! points. WASM-eligible entry points ([`execute_mission_from_transfer`],
+//! [`replan_from_transfer`]) accept a pre-computed [`TransferResult`].
+//! Server-only wrappers ([`execute_mission`], [`replan_mission`]) compute
+//! the Lambert transfer internally (requires the `"server"` feature).
 //!
 //! ## DAG position
 //!
@@ -22,9 +24,13 @@ pub use execute::{
     accept_waypoint_enrichment, apply_perch_enrichment, build_lean_plan_result, build_output,
     BuildOutputCtx, compute_formation_report,
     compute_free_drift_analysis, compute_free_drift_poca, compute_mission_covariance,
-    compute_poca_analysis, compute_safety_analysis, compute_validation_burns, compute_transfer, execute_mission,
-    plan_waypoints_from_transfer, replan_mission, suggest_enrichment,
+    compute_poca_analysis, compute_safety_analysis, execute_mission_from_transfer,
+    plan_waypoints_from_transfer, replan_from_transfer, suggest_enrichment,
     suggest_enrichment_from_parts,
+};
+#[cfg(feature = "server")]
+pub use execute::{
+    compute_transfer, compute_validation_burns, execute_mission, replan_mission,
 };
 pub use projections::{
     LeanPlanResult, LegSummary, LegTrajectory, TrajectoryPoint, TransferSummary,

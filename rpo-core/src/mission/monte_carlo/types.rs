@@ -1,9 +1,13 @@
 //! Monte Carlo domain types: dispersions, configurations, and reports.
 
+#[cfg(feature = "server")]
 use std::fmt;
+#[cfg(feature = "server")]
 use std::sync::atomic::{AtomicBool, AtomicU32};
+#[cfg(feature = "server")]
 use std::sync::Arc;
 
+#[cfg(feature = "server")]
 use anise::prelude::Almanac;
 use nalgebra::Vector3;
 use serde::{Deserialize, Serialize};
@@ -13,12 +17,17 @@ use crate::constants::{
     DEFAULT_NAV_POSITION_SIGMA_KM, DEFAULT_NAV_VELOCITY_SIGMA_KM_S,
 };
 
+#[cfg(feature = "server")]
 use crate::mission::config::MissionConfig;
-use crate::mission::types::{SafetyMetrics, WaypointMission};
-use crate::propagation::covariance::types::{
-    ManeuverUncertainty, MissionCovarianceReport, NavigationAccuracy,
-};
+use crate::mission::types::SafetyMetrics;
+#[cfg(feature = "server")]
+use crate::mission::types::WaypointMission;
+use crate::propagation::covariance::types::{ManeuverUncertainty, NavigationAccuracy};
+#[cfg(feature = "server")]
+use crate::propagation::covariance::types::MissionCovarianceReport;
+#[cfg(feature = "server")]
 use crate::propagation::propagator::PropagationModel;
+#[cfg(feature = "server")]
 use crate::types::{SpacecraftConfig, StateVector};
 
 // ---------------------------------------------------------------------------
@@ -256,6 +265,7 @@ impl MonteCarloConfig {
 /// - `cancel`: set to `true` to request cooperative cancellation
 ///
 /// Not `Serialize`/`Deserialize` — runtime-only coordination.
+#[cfg(feature = "server")]
 pub struct MonteCarloControl {
     /// Incremented per completed sample. Poll to compute fraction: `progress.load() / num_samples`.
     pub progress: Arc<AtomicU32>,
@@ -270,6 +280,7 @@ pub struct MonteCarloControl {
 ///
 /// Not `Serialize`/`Deserialize` because it contains borrows and `Arc`.
 /// `Debug` is manually implemented because `Almanac` does not derive `Debug`.
+#[cfg(feature = "server")]
 pub struct MonteCarloInput<'a> {
     /// Nominal mission plan (reference Δv and TOFs).
     pub nominal_mission: &'a WaypointMission,
@@ -295,6 +306,7 @@ pub struct MonteCarloInput<'a> {
     pub control: Option<&'a MonteCarloControl>,
 }
 
+#[cfg(feature = "server")]
 impl fmt::Debug for MonteCarloInput<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("MonteCarloInput")

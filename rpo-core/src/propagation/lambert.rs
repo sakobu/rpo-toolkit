@@ -11,12 +11,15 @@
 use nalgebra::Vector3;
 use serde::{Deserialize, Serialize};
 
+#[cfg(feature = "server")]
 use nyx_space::tools::lambert::{self, LambertInput, LambertSolution, TransferKind};
 
+#[cfg(feature = "server")]
 use crate::propagation::nyx_bridge::state_to_orbit;
 use crate::types::StateVector;
 
 /// Minimum position separation (km) between departure and arrival for a valid Lambert problem.
+#[cfg(feature = "server")]
 const LAMBERT_MIN_SEPARATION_KM: f64 = 1e-6;
 
 /// Transfer direction for Lambert solutions.
@@ -146,6 +149,7 @@ impl std::error::Error for LambertError {}
 /// Validate Lambert inputs.
 ///
 /// Checks that TOF > 0 and position separation > `LAMBERT_MIN_SEPARATION_KM`.
+#[cfg(feature = "server")]
 fn validate_inputs(
     departure: &StateVector,
     arrival: &StateVector,
@@ -164,6 +168,7 @@ fn validate_inputs(
 }
 
 /// Build a [`LambertTransfer`] from computed transfer velocities.
+#[cfg(feature = "server")]
 pub(crate) fn build_transfer(
     departure: &StateVector,
     arrival: &StateVector,
@@ -198,6 +203,7 @@ pub(crate) fn build_transfer(
 }
 
 /// Convert a [`TransferDirection`] to a nyx [`TransferKind`].
+#[cfg(feature = "server")]
 fn direction_to_kind(direction: TransferDirection) -> TransferKind {
     match direction {
         TransferDirection::Auto => TransferKind::Auto,
@@ -207,6 +213,7 @@ fn direction_to_kind(direction: TransferDirection) -> TransferKind {
 }
 
 /// Build a [`LambertTransfer`] from a nyx [`LambertSolution`].
+#[cfg(feature = "server")]
 fn transfer_from_solution(
     departure: &StateVector,
     arrival: &StateVector,
@@ -244,6 +251,7 @@ fn transfer_from_solution(
 ///
 /// # Errors
 /// Returns `LambertError` if the solver fails or inputs are invalid.
+#[cfg(feature = "server")]
 pub fn solve_lambert(
     departure: &StateVector,
     arrival: &StateVector,
@@ -264,6 +272,7 @@ pub fn solve_lambert(
 ///
 /// # Errors
 /// Returns `LambertError` if the solver fails or inputs are invalid.
+#[cfg(feature = "server")]
 pub fn solve_lambert_with_config(
     departure: &StateVector,
     arrival: &StateVector,
@@ -284,6 +293,7 @@ pub fn solve_lambert_with_config(
 ///
 /// # Errors
 /// Returns `LambertError` if the solver fails or inputs are invalid.
+#[cfg(feature = "server")]
 pub fn solve_lambert_izzo(
     departure: &StateVector,
     arrival: &StateVector,
@@ -315,7 +325,7 @@ pub fn solve_lambert_izzo(
     ))
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "server"))]
 mod tests {
     use super::*;
     use crate::elements::keplerian_conversions::keplerian_to_state;

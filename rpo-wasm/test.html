@@ -1,0 +1,31 @@
+<!DOCTYPE html>
+<html>
+  <head><title>RPO WASM Smoke Test</title></head>
+  <body>
+    <h2>RPO WASM Smoke Test</h2>
+    <pre id="output">Loading WASM...</pre>
+    <script type="module">
+      import init, { classify_separation } from "./pkg/rpo_wasm.js";
+      await init();
+
+      const chief = {
+        epoch: "2024-01-01T00:00:00 UTC",
+        position_eci_km: [5876.261, 3392.661, 0.0],
+        velocity_eci_km_s: [-2.380512, 4.123167, 6.006917],
+      };
+      const deputy = {
+        epoch: "2024-01-01T00:00:00 UTC",
+        position_eci_km: [5199.839421, 4281.648523, 1398.070066],
+        velocity_eci_km_s: [-3.993103, 2.970313, 5.76454],
+      };
+
+      const result = classify_separation(chief, deputy);
+      const output = JSON.stringify(result, null, 2);
+      console.log("Classification:", output);
+
+      const phase = result.far_field ? "far_field" : "proximity";
+      document.getElementById("output").textContent =
+        `Phase: ${phase}\n\n${output}`;
+    </script>
+  </body>
+</html>
