@@ -10,14 +10,14 @@ use anise::prelude::Almanac;
 use tokio::sync::mpsc;
 
 use rpo_core::mission::config::MissionConfig;
+use rpo_core::mission::monte_carlo::MonteCarloConfig;
 use rpo_core::mission::types::WaypointMission;
-use rpo_core::mission::{
-    run_monte_carlo, MonteCarloConfig, MonteCarloControl, MonteCarloInput, MonteCarloReport,
-};
+use rpo_core::mission::MonteCarloReport;
 use rpo_core::pipeline::{compute_mission_covariance, TransferResult, WaypointInput};
 use rpo_core::propagation::covariance::{ManeuverUncertainty, NavigationAccuracy};
 use rpo_core::propagation::PropagationModel;
 use rpo_core::types::{SpacecraftConfig, StateVector};
+use rpo_nyx::monte_carlo::{run_monte_carlo, MonteCarloControl, MonteCarloInput};
 
 use super::common::{replan_if_drag_changed, resolve_drag_and_propagator, send_progress};
 use crate::error::ApiError;

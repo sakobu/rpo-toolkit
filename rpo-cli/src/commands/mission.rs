@@ -2,7 +2,8 @@
 
 use std::path::Path;
 
-use rpo_core::pipeline::{execute_mission, to_propagation_model, PipelineInput};
+use rpo_core::pipeline::{to_propagation_model, PipelineInput};
+use rpo_nyx::pipeline::execute_mission;
 
 use crate::cli::OutputMode;
 use crate::error::CliError;

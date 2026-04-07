@@ -7,13 +7,14 @@ use nalgebra::Vector3;
 use nyx_space::cosmic::Spacecraft;
 
 use super::EARTH_J2000;
-use crate::types::{SpacecraftConfig, StateVector};
+use rpo_core::types::{SpacecraftConfig, StateVector};
 
 /// Convert a [`StateVector`] to an ANISE [`Orbit`] for ephemeris queries.
 ///
 /// Uses the project's `EARTH_J2000` frame (with μ = 398600.4418 km³/s²).
 /// Position in km, velocity in km/s, epoch from the state vector.
-pub(crate) fn state_to_orbit(sv: &StateVector) -> Orbit {
+#[must_use]
+pub fn state_to_orbit(sv: &StateVector) -> Orbit {
     Orbit::new(
         sv.position_eci_km.x,
         sv.position_eci_km.y,
@@ -32,7 +33,8 @@ pub(crate) fn state_to_orbit(sv: &StateVector) -> Orbit {
 /// - Position/velocity in ECI J2000, km and km/s
 /// - Epoch from `StateVector.epoch` (hifitime `Epoch`)
 /// - Mass, areas, coefficients from `SpacecraftConfig`
-pub(crate) fn config_to_spacecraft(sv: &StateVector, config: &SpacecraftConfig) -> Spacecraft {
+#[must_use]
+pub fn config_to_spacecraft(sv: &StateVector, config: &SpacecraftConfig) -> Spacecraft {
     let orbit = state_to_orbit(sv);
     Spacecraft::from_srp_defaults(orbit, config.dry_mass_kg, config.srp_area_m2)
         .with_drag(config.drag_area_m2, config.coeff_drag)
@@ -42,7 +44,8 @@ pub(crate) fn config_to_spacecraft(sv: &StateVector, config: &SpacecraftConfig) 
 /// Convert a nyx [`Spacecraft`] back to a ROE-RUST [`StateVector`].
 ///
 /// Extracts ECI position (km) and velocity (km/s) from the spacecraft's orbit.
-pub(crate) fn spacecraft_to_state(sc: &Spacecraft) -> StateVector {
+#[must_use]
+pub fn spacecraft_to_state(sc: &Spacecraft) -> StateVector {
     StateVector {
         epoch: sc.orbit.epoch,
         position_eci_km: Vector3::new(
@@ -61,8 +64,8 @@ pub(crate) fn spacecraft_to_state(sc: &Spacecraft) -> StateVector {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::elements::keplerian_conversions::keplerian_to_state;
-    use crate::test_helpers::{iss_like_elements, test_epoch};
+    use rpo_core::elements::keplerian_conversions::keplerian_to_state;
+    use rpo_core::test_helpers::{iss_like_elements, test_epoch};
 
     /// Spacecraft↔StateVector roundtrip tolerance. Nyx stores position
     /// and velocity as separate vectors; conversion introduces no error

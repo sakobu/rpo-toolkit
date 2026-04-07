@@ -77,4 +77,46 @@ mod tests {
             Vector3::new(0.1, 0.0, 0.0),
         );
     }
+
+    /// Copy fidelity: array→Vector3 copies f64 values without arithmetic.
+    /// Tolerance is machine epsilon — the copy should be bitwise exact.
+    const COPY_FIDELITY_TOL: f64 = f64::EPSILON;
+
+    #[test]
+    fn to_waypoints_conversion() {
+        let inputs = vec![
+            WaypointInput {
+                position_ric_km: [1.0, 2.0, 3.0],
+                velocity_ric_km_s: Some([0.1, 0.2, 0.3]),
+                tof_s: Some(100.0),
+                label: None,
+            },
+            WaypointInput {
+                position_ric_km: [4.0, 5.0, 6.0],
+                velocity_ric_km_s: None,
+                tof_s: None,
+                label: None,
+            },
+        ];
+
+        let waypoints = to_waypoints(&inputs);
+        assert_eq!(waypoints.len(), 2);
+        assert!(
+            (waypoints[0].position_ric_km.x - 1.0).abs() < COPY_FIDELITY_TOL,
+            "position_ric_km.x copy mismatch"
+        );
+        assert!(
+            (waypoints[0].velocity_ric_km_s.unwrap().y - 0.2).abs() < COPY_FIDELITY_TOL,
+            "velocity_ric_km_s.y copy mismatch"
+        );
+        assert!(
+            (waypoints[0].tof_s.unwrap() - 100.0).abs() < COPY_FIDELITY_TOL,
+            "tof_s copy mismatch"
+        );
+        assert!(
+            waypoints[1].velocity_ric_km_s.is_none(),
+            "None velocity should be preserved as position-only"
+        );
+        assert!(waypoints[1].tof_s.is_none());
+    }
 }

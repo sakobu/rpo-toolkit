@@ -1,34 +1,37 @@
-//! Cross-cutting integration and regression tests.
-//!
-//! These tests validate the interaction between multiple modules (STM, Lambert,
-//! nyx bridge, mission planning) and compare analytical propagation against
-//! independent numerical truth sources (RK4 J2 integrator, nyx two-body/full-physics).
-//! Regression data traces to Koenig Tables 2–4 and D'Amico Table 2.1.
+// Cross-cutting integration and regression tests.
+//
+// These tests validate the interaction between multiple modules (STM, Lambert,
+// nyx bridge, mission planning) and compare analytical propagation against
+// independent numerical truth sources (RK4 J2 integrator, nyx two-body/full-physics).
+// Regression data traces to Koenig Tables 2–4 and D'Amico Table 2.1.
 
 use nyx_space::md::prelude::{OrbitalDynamics, SpacecraftDynamics};
 
-use crate::constants::MU_EARTH;
-use crate::elements::eci_ric_dcm::eci_to_ric_relative;
-use crate::elements::keplerian_conversions::{keplerian_to_state, state_to_keplerian};
-use crate::elements::roe::compute_roe;
-use crate::elements::roe_to_ric::roe_to_ric;
-use crate::mission::closest_approach::find_closest_approaches;
-use crate::mission::config::ProximityConfig;
-use crate::mission::planning::{classify_separation, plan_mission};
-use crate::mission::safety::analyze_trajectory_safety;
-use crate::mission::types::{MissionPhase, PerchGeometry};
-use crate::propagation::lambert::LambertConfig;
-use crate::propagation::nyx_bridge;
-use crate::propagation::propagator::PropagationModel;
-use crate::propagation::stm::propagate_roe_stm;
-use crate::test_helpers::{
+use rpo_core::constants::MU_EARTH;
+use rpo_core::elements::eci_ric_dcm::eci_to_ric_relative;
+use rpo_core::elements::keplerian_conversions::{keplerian_to_state, state_to_keplerian};
+use rpo_core::elements::roe::compute_roe;
+use rpo_core::elements::roe_to_ric::roe_to_ric;
+use rpo_core::mission::closest_approach::find_closest_approaches;
+use rpo_core::mission::config::ProximityConfig;
+use rpo_core::mission::planning::classify_separation;
+use rpo_core::mission::safety::analyze_trajectory_safety;
+use rpo_core::mission::types::{MissionPhase, PerchGeometry};
+use rpo_core::propagation::lambert::LambertConfig;
+use rpo_core::propagation::propagator::PropagationModel;
+use rpo_core::propagation::stm::propagate_roe_stm;
+use rpo_core::test_helpers::{
     damico_table21_case1_roe, damico_table21_chief, deputy_from_roe, iss_like_elements,
     koenig_table2_case1, koenig_table2_case1_roe, koenig_table2_case2, koenig_table2_case2_roe,
     koenig_table2_case3, koenig_table2_case3_roe, leo_400km_elements, leo_800km_target_elements,
     propagate_test_trajectory_at, rk4_j2_propagate, test_drag_config, test_epoch,
     DMF_RATE_NONZERO_LOWER_BOUND, DMF_RATE_UPPER_BOUND,
 };
-use crate::types::{KeplerianElements, QuasiNonsingularROE, SpacecraftConfig, StateVector};
+use rpo_core::types::{KeplerianElements, QuasiNonsingularROE, SpacecraftConfig, StateVector};
+
+use rpo_nyx::lambert::solve_lambert;
+use rpo_nyx::nyx_bridge;
+use rpo_nyx::planning::plan_mission;
 
 // =========================================================================
 // Named tolerance constants
@@ -410,7 +413,7 @@ fn j2_effect_physical_reasonableness() {
 
 /// Solve Lambert, propagate with nyx two-body, and assert position/velocity agreement.
 fn verify_lambert_against_nyx(dep: &StateVector, arr: &StateVector) {
-    let transfer = crate::propagation::lambert::solve_lambert(dep, arr)
+    let transfer = solve_lambert(dep, arr)
         .expect("Lambert should converge");
 
     let tof = (arr.epoch - dep.epoch).to_seconds();
@@ -503,7 +506,7 @@ fn compare_stm_vs_rk4(
     let a = chief.a_km * 1000.0; // convert to meters
     [
         a * (stm_roe.da - numerical_roe.da).abs(),
-        a * (crate::elements::wrap_angle(stm_roe.dlambda - numerical_roe.dlambda)).abs(),
+        a * (rpo_core::elements::wrap_angle(stm_roe.dlambda - numerical_roe.dlambda)).abs(),
         a * (stm_roe.dex - numerical_roe.dex).abs(),
         a * (stm_roe.dey - numerical_roe.dey).abs(),
         a * (stm_roe.dix - numerical_roe.dix).abs(),

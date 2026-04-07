@@ -14,10 +14,11 @@ use rpo_core::mission::waypoints::{plan_waypoint_mission, replan_from_waypoint};
 use rpo_core::mission::ProximityConfig;
 use rpo_core::pipeline::convert::to_waypoints;
 use rpo_core::pipeline::{
-    build_lean_plan_result, compute_formation_report, compute_mission_covariance, compute_transfer,
+    build_lean_plan_result, compute_formation_report, compute_mission_covariance,
     suggest_enrichment_from_parts, EnrichmentSuggestion, LeanPlanResult, LegTrajectory,
     PlanVariant, TransferResult, WaypointInput,
 };
+use rpo_nyx::pipeline::compute_transfer;
 use rpo_core::propagation::covariance::{
     ManeuverUncertainty, MissionCovarianceReport, NavigationAccuracy,
 };

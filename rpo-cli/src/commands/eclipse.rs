@@ -2,8 +2,9 @@
 
 use std::path::Path;
 
-use rpo_core::pipeline::{execute_mission, PipelineInput};
+use rpo_core::pipeline::PipelineInput;
 use rpo_core::types::EclipseState;
+use rpo_nyx::pipeline::execute_mission;
 
 use crate::error::CliError;
 use crate::input::load_json_with_hint;

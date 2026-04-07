@@ -2,8 +2,9 @@
 
 use std::path::Path;
 
-use rpo_core::mission::{run_monte_carlo, MissionPhase, MonteCarloInput};
+use rpo_core::mission::MissionPhase;
 use rpo_core::pipeline::{build_output, compute_mission_covariance, compute_safety_analysis, PipelineInput};
+use rpo_nyx::monte_carlo::{run_monte_carlo, MonteCarloInput};
 
 use crate::cli::OutputMode;
 use crate::error::CliError;

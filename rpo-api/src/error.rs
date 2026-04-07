@@ -11,8 +11,11 @@ use std::fmt;
 
 use rpo_core::elements::keplerian_conversions::ConversionError;
 use rpo_core::mission::formation::FormationDesignError;
-use rpo_core::mission::{FreeDriftError, MissionError, MonteCarloError, ValidationError};
-use rpo_core::propagation::{CovarianceError, LambertError, NyxBridgeError, PropagationError};
+use rpo_core::mission::{FreeDriftError, MissionError};
+use rpo_core::propagation::{CovarianceError, LambertError, PropagationError};
+use rpo_nyx::monte_carlo::MonteCarloError;
+use rpo_nyx::nyx_bridge::NyxBridgeError;
+use rpo_nyx::validation::ValidationError;
 
 use crate::protocol::{ErrorCode, ServerMessage};
 
@@ -205,10 +208,6 @@ impl From<rpo_core::pipeline::PipelineError> for ApiError {
         match e {
             PipelineError::Mission(e) => Self::Mission(Box::new(e)),
             PipelineError::Propagation(e) => Self::Propagation(e),
-            PipelineError::Lambert(e) => Self::Lambert(e),
-            PipelineError::Validation(e) => Self::Validation(e),
-            PipelineError::MonteCarlo(e) => Self::MonteCarlo(e),
-            PipelineError::NyxBridge(e) => Self::NyxBridge(e),
             PipelineError::Covariance(e) => Self::Covariance(e),
             PipelineError::MissingField { field, context } => {
                 Self::InvalidInput(InvalidInputError::MissingField { field, context })
@@ -216,6 +215,19 @@ impl From<rpo_core::pipeline::PipelineError> for ApiError {
             PipelineError::EmptyTrajectory => {
                 Self::InvalidInput(InvalidInputError::EmptyTrajectory)
             }
+        }
+    }
+}
+
+impl From<rpo_nyx::pipeline::PipelineError> for ApiError {
+    fn from(e: rpo_nyx::pipeline::PipelineError) -> Self {
+        use rpo_nyx::pipeline::PipelineError as NyxPipelineError;
+        match e {
+            NyxPipelineError::Core(core_err) => Self::from(core_err),
+            NyxPipelineError::Lambert(e) => Self::Lambert(e),
+            NyxPipelineError::Validation(e) => Self::Validation(e),
+            NyxPipelineError::MonteCarlo(e) => Self::MonteCarlo(Box::new(e)),
+            NyxPipelineError::NyxBridge(e) => Self::NyxBridge(e),
         }
     }
 }
@@ -297,9 +309,10 @@ fn mission_error_detail(inner: &MissionError) -> (ErrorCode, Option<serde_json::
 
 /// Diagnostic detail for [`MonteCarloError`] variants.
 fn monte_carlo_error_detail(inner: &MonteCarloError) -> (ErrorCode, Option<serde_json::Value>) {
-    match *inner {
-        MonteCarloError::Cancelled => (ErrorCode::Cancelled, None),
-        MonteCarloError::ZeroSamples => (
+    use rpo_core::mission::monte_carlo::MonteCarloError as CoreMcError;
+    match inner {
+        MonteCarloError::Core(CoreMcError::Cancelled) => (ErrorCode::Cancelled, None),
+        MonteCarloError::Core(CoreMcError::ZeroSamples) => (
             ErrorCode::InvalidInput,
             Some(serde_json::json!({ "reason": "num_samples must be > 0" })),
         ),

@@ -1,6 +1,7 @@
 //! Transfer computation handler: Lambert transfer + perch handoff states.
 
-use rpo_core::pipeline::{compute_transfer, TransferResult};
+use rpo_core::pipeline::TransferResult;
+use rpo_nyx::pipeline::compute_transfer;
 
 use crate::error::ApiError;
 use crate::session::Session;

@@ -1,0 +1,23 @@
+[package]
+name = "rpo-nyx"
+description = "nyx-space integration for RPO mission planning: Lambert solver, full-physics validation, Monte Carlo ensemble analysis"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license = "AGPL-3.0-or-later"
+
+[dependencies]
+rpo-core = { path = "../rpo-core", default-features = false }
+nyx-space = "2.3.1"
+anise = "0.9"
+rayon = "1.10"
+rand = "0.8"
+rand_distr = "0.4"
+rand_chacha = "0.3"
+hifitime = "4"
+nalgebra = { version = "0.34", features = ["serde-serialize"] }
+serde = { version = "1", features = ["derive"] }
+
+[dev-dependencies]
+rpo-core = { path = "../rpo-core", features = ["test-fixtures"] }
+serde_json = "1"

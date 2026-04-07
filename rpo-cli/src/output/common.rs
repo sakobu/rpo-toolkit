@@ -15,8 +15,9 @@ use rpo_core::mission::{
 use rpo_core::pipeline::{
     resolve_propagator, to_propagation_model, PipelineInput, PipelineOutput, TransferResult,
 };
-use rpo_core::propagation::{extract_dmf_rates, DragConfig, PropagationModel};
+use rpo_core::propagation::{DragConfig, PropagationModel};
 use rpo_core::types::SpacecraftConfig;
+use rpo_nyx::nyx_bridge::extract_dmf_rates;
 
 use crate::error::CliError;
 

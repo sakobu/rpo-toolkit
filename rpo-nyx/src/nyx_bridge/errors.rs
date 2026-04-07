@@ -5,9 +5,9 @@ use anise::errors::AlmanacError;
 use nyx_space::dynamics::DynamicsError;
 use nyx_space::propagators::PropagationError as NyxPropagationError;
 
-use crate::elements::keplerian_conversions::ConversionError;
-use crate::elements::eci_ric_dcm::DcmError;
-use crate::types::KeplerError;
+use rpo_core::elements::keplerian_conversions::ConversionError;
+use rpo_core::elements::eci_ric_dcm::DcmError;
+use rpo_core::types::KeplerError;
 
 /// Errors from the nyx-space integration bridge.
 #[derive(Debug)]

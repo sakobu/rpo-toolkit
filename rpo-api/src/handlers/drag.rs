@@ -7,7 +7,8 @@ use std::sync::Arc;
 
 use anise::prelude::Almanac;
 
-use rpo_core::propagation::{extract_dmf_rates, DragConfig};
+use rpo_core::propagation::DragConfig;
+use rpo_nyx::nyx_bridge::extract_dmf_rates;
 use rpo_core::types::{SpacecraftConfig, StateVector};
 
 use crate::error::ApiError;

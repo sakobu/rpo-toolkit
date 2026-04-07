@@ -7,17 +7,17 @@ use anise::prelude::Almanac;
 use nalgebra::Vector3;
 use serde::Serialize;
 
-use crate::elements::eci_ric_dcm::eci_to_ric_relative;
-use crate::mission::safety::analyze_trajectory_safety;
-use crate::propagation::nyx_bridge::{
+use rpo_core::elements::eci_ric_dcm::eci_to_ric_relative;
+use rpo_core::mission::safety::analyze_trajectory_safety;
+use crate::nyx_bridge::{
     apply_impulse, build_full_physics_dynamics, build_nyx_safety_states, nyx_propagate_segment,
     query_anise_eclipse, state_to_orbit, ChiefDeputySnapshot, NyxBridgeError, TimedState,
 };
-use crate::propagation::propagator::PropagatedState;
-use crate::types::{SpacecraftConfig, StateVector};
+use rpo_core::propagation::propagator::PropagatedState;
+use rpo_core::types::{SpacecraftConfig, StateVector};
 
-use crate::mission::avoidance::AvoidanceManeuver;
-use crate::mission::types::{
+use rpo_core::mission::avoidance::AvoidanceManeuver;
+use rpo_core::mission::types::{
     ManeuverLeg, ValidationPoint, ValidationReport, WaypointMission,
 };
 use super::eclipse::{EclipseSample, build_eclipse_validation};
@@ -41,7 +41,7 @@ pub struct ValidationConfig {
 /// A mid-coast COLA impulse for nyx validation.
 ///
 /// # Invariants
-/// - `elapsed_s` must be in `(0, leg.tof_s)` — burn cannot be at leg boundaries
+/// - `elapsed_s` must be in `(0, leg.tof_s)` -- burn cannot be at leg boundaries
 /// - `dv_ric_km_s` must be finite
 #[derive(Debug, Clone, Copy)]
 pub struct ColaBurn {
@@ -185,7 +185,7 @@ pub fn validate_leg_nyx(
         chief_state, deputy_state, leg, &ctx,
     )?;
 
-    // Build comparison points (no eclipse or COLA — those stay in validate_mission_nyx)
+    // Build comparison points (no eclipse or COLA -- those stay in validate_mission_nyx)
     let leg_output = build_leg_comparison_points(
         &chief_results,
         &deputy_results,
@@ -213,7 +213,7 @@ pub fn validate_leg_nyx(
 /// collects safety pairs and eclipse samples for downstream analysis.
 ///
 /// When `cola_split_index` is `Some(n)`, points at index `>= n` are tagged
-/// `post_cola = true` — they follow a COLA burn and should be excluded from
+/// `post_cola = true` -- they follow a COLA burn and should be excluded from
 /// fidelity statistics.
 fn build_leg_comparison_points(
     chief_results: &[TimedState],
@@ -240,7 +240,7 @@ fn build_leg_comparison_points(
             (numerical_ric.velocity_ric_km_s - analytical_ric.velocity_ric_km_s).norm();
 
         // Skip t=0 sample from safety: at the maneuver instant, positions
-        // haven't separated yet — distance is physically meaningless
+        // haven't separated yet -- distance is physically meaningless
         // (consistent with monte_carlo/execution.rs).
         if idx > 0 {
             safety_pairs.push(ChiefDeputySnapshot {
@@ -356,7 +356,7 @@ struct ColaLegOutput {
 /// Propagate a single leg with a mid-coast COLA impulse.
 ///
 /// Two-segment approach: propagate chief and deputy to COLA time, apply
-/// impulse using exact chief state for RIC→ECI conversion, propagate
+/// impulse using exact chief state for RIC->ECI conversion, propagate
 /// remainder. Chief/deputy within each segment run in parallel via
 /// [`rayon::join`]; segments are sequential (segment 2 depends on
 /// segment 1's terminal state for the COLA impulse).
@@ -373,7 +373,7 @@ fn propagate_leg_with_cola(
     let dynamics = build_full_physics_dynamics(ctx.almanac)?;
 
     // Find the first uniform sample step at or beyond the COLA epoch.
-    // Stays in u32 domain — no f64→integer cast needed.
+    // Stays in u32 domain -- no f64->integer cast needed.
     let step_s = leg.tof_s / f64::from(ctx.samples_per_leg);
     let n1 = (1..=ctx.samples_per_leg)
         .find(|&k| f64::from(k) * step_s >= cola.elapsed_s)
@@ -384,7 +384,7 @@ fn propagate_leg_with_cola(
     let deputy_post_burn =
         apply_impulse(deputy_state, chief_state, &leg.departure_maneuver.dv_ric_km_s)?;
 
-    // Segment 1: [0, cola.elapsed_s] — chief/deputy in parallel
+    // Segment 1: [0, cola.elapsed_s] -- chief/deputy in parallel
     let (chief_seg1, deputy_seg1) = rayon::join(
         || nyx_propagate_segment(
             chief_state, cola.elapsed_s, n1,
@@ -407,7 +407,7 @@ fn propagate_leg_with_cola(
     // Apply COLA impulse
     let deputy_post_cola = apply_impulse(&deputy_at_cola, &chief_at_cola, &cola.dv_ric_km_s)?;
 
-    // Segment 2: [cola.elapsed_s, tof_s] — chief/deputy in parallel
+    // Segment 2: [cola.elapsed_s, tof_s] -- chief/deputy in parallel
     let remaining_s = leg.tof_s - cola.elapsed_s;
     let (chief_seg2, deputy_seg2) = rayon::join(
         || nyx_propagate_segment(
@@ -467,7 +467,7 @@ fn lookup_earth_frame(
 /// leg indices at 0. This function derives the correct leg index from elapsed
 /// time and the per-leg durations.
 fn assign_safety_leg_indices(
-    safety: &mut crate::mission::types::SafetyMetrics,
+    safety: &mut rpo_core::mission::types::SafetyMetrics,
     legs: &[ManeuverLeg],
 ) {
     let mut found_3d = false;
@@ -493,13 +493,13 @@ fn assign_safety_leg_indices(
 ///
 /// Propagates chief and deputy through each mission leg using nyx with full
 /// force models (J2 harmonics, drag, SRP, Sun/Moon third-body), applies
-/// impulsive Δv maneuvers at burn epochs, and compares the resulting RIC
+/// impulsive delta-v maneuvers at burn epochs, and compares the resulting RIC
 /// trajectory against the analytical trajectory from the mission planner.
 ///
 /// # Algorithm
-/// 1. For each leg: propagate chief through nyx, apply departure Δv to deputy,
+/// 1. For each leg: propagate chief through nyx, apply departure delta-v to deputy,
 ///    propagate deputy through nyx, sample and compare RIC states.
-/// 2. At leg boundaries: apply arrival Δv, advance to next leg.
+/// 2. At leg boundaries: apply arrival delta-v, advance to next leg.
 /// 3. Build safety states from accumulated chief/deputy pairs.
 /// 4. Compute aggregate statistics and return report.
 ///
@@ -509,11 +509,11 @@ fn assign_safety_leg_indices(
 /// - `almanac` must contain Earth frame data (`IAU_EARTH`) and planetary ephemerides
 ///
 /// # Arguments
-/// * `mission` — Analytical waypoint mission (from `plan_waypoint_mission`)
-/// * `chief_initial` — Chief ECI state at mission start
-/// * `deputy_initial` — Deputy ECI state at mission start
-/// * `config` — Validation settings (sampling density, spacecraft properties)
-/// * `almanac` — Full-physics ANISE almanac (from `load_full_almanac`)
+/// * `mission` -- Analytical waypoint mission (from `plan_waypoint_mission`)
+/// * `chief_initial` -- Chief ECI state at mission start
+/// * `deputy_initial` -- Deputy ECI state at mission start
+/// * `config` -- Validation settings (sampling density, spacecraft properties)
+/// * `almanac` -- Full-physics ANISE almanac (from `load_full_almanac`)
 ///
 /// # Errors
 /// Returns [`ValidationError`] if the mission has no legs, almanac frame lookup
@@ -534,7 +534,7 @@ pub fn validate_mission_nyx(
     let mut deputy_state = deputy_initial.clone();
     let mut cumulative_time = 0.0_f64;
     let mut leg_points = Vec::with_capacity(mission.legs.len());
-    let estimated_total_samples = config.samples_per_leg as usize // u32 → usize: always safe
+    let estimated_total_samples = config.samples_per_leg as usize // u32 -> usize: always safe
         * mission.legs.len();
     let mut safety_pairs: Vec<ChiefDeputySnapshot> =
         Vec::with_capacity(estimated_total_samples);
@@ -619,38 +619,38 @@ pub fn validate_mission_nyx(
 mod tests {
     use nalgebra::Vector3;
 
-    use crate::elements::keplerian_conversions::keplerian_to_state;
-    use crate::propagation::nyx_bridge;
-    use crate::propagation::propagator::PropagationModel;
-    use crate::test_helpers::{
+    use rpo_core::elements::keplerian_conversions::keplerian_to_state;
+    use crate::nyx_bridge;
+    use rpo_core::propagation::propagator::PropagationModel;
+    use rpo_core::test_helpers::{
         iss_like_elements, test_epoch, DMF_RATE_NONZERO_LOWER_BOUND, DMF_RATE_UPPER_BOUND,
     };
-    use crate::types::SpacecraftConfig;
+    use rpo_core::types::SpacecraftConfig;
 
     // =========================================================================
     // COLA Burn Conversion Tests (pure logic, no nyx)
     // =========================================================================
 
     /// Build a minimal `AvoidanceManeuver` at the given epoch and leg index.
-    fn make_avoidance(epoch: hifitime::Epoch, leg_index: usize) -> crate::mission::avoidance::AvoidanceManeuver {
-        crate::mission::avoidance::AvoidanceManeuver {
+    fn make_avoidance(epoch: hifitime::Epoch, leg_index: usize) -> rpo_core::mission::avoidance::AvoidanceManeuver {
+        rpo_core::mission::avoidance::AvoidanceManeuver {
             epoch,
             dv_ric_km_s: Vector3::new(0.0, 0.001, 0.0),
             maneuver_location_rad: 0.0,
             post_avoidance_poca_km: 0.5,
             fuel_cost_km_s: 0.001,
-            correction_type: crate::mission::avoidance::CorrectionType::InPlane,
+            correction_type: rpo_core::mission::avoidance::CorrectionType::InPlane,
             leg_index,
         }
     }
 
     /// Build a minimal `WaypointMission` with one leg of given TOF starting at `dep_epoch`.
-    fn make_one_leg_mission(dep_epoch: hifitime::Epoch, tof_s: f64) -> crate::mission::types::WaypointMission {
-        use crate::mission::types::{Maneuver, ManeuverLeg};
+    fn make_one_leg_mission(dep_epoch: hifitime::Epoch, tof_s: f64) -> rpo_core::mission::types::WaypointMission {
+        use rpo_core::mission::types::{Maneuver, ManeuverLeg};
         let zero_dv = Vector3::zeros();
         let arr_epoch = dep_epoch + hifitime::Duration::from_seconds(tof_s);
 
-        crate::mission::types::WaypointMission {
+        rpo_core::mission::types::WaypointMission {
             legs: vec![ManeuverLeg {
                 departure_maneuver: Maneuver { dv_ric_km_s: zero_dv, epoch: dep_epoch },
                 arrival_maneuver: Maneuver { dv_ric_km_s: zero_dv, epoch: arr_epoch },
@@ -658,10 +658,10 @@ mod tests {
                 total_dv_km_s: 0.0,
                 pre_departure_roe: Default::default(),
                 post_departure_roe: Default::default(),
-                departure_chief_mean: crate::test_helpers::iss_like_elements(),
+                departure_chief_mean: rpo_core::test_helpers::iss_like_elements(),
                 pre_arrival_roe: Default::default(),
                 post_arrival_roe: Default::default(),
-                arrival_chief_mean: crate::test_helpers::iss_like_elements(),
+                arrival_chief_mean: rpo_core::test_helpers::iss_like_elements(),
                 trajectory: vec![],
                 from_position_ric_km: Vector3::zeros(),
                 to_position_ric_km: Vector3::zeros(),
@@ -703,17 +703,17 @@ mod tests {
         let tof_s = 4200.0;
         let mission = make_one_leg_mission(dep_epoch, tof_s);
 
-        // Epoch before leg start → elapsed_s <= 0
+        // Epoch before leg start -> elapsed_s <= 0
         let before = dep_epoch - hifitime::Duration::from_seconds(100.0);
         let result = super::convert_cola_to_burns(Some(&[make_avoidance(before, 0)]), &mission);
         assert!(result.is_err(), "epoch before leg start should fail");
 
-        // Epoch after leg end → elapsed_s >= tof_s
+        // Epoch after leg end -> elapsed_s >= tof_s
         let after = dep_epoch + hifitime::Duration::from_seconds(tof_s + 100.0);
         let result = super::convert_cola_to_burns(Some(&[make_avoidance(after, 0)]), &mission);
         assert!(result.is_err(), "epoch after leg end should fail");
 
-        // Epoch exactly at departure → elapsed_s = 0 (boundary, should fail)
+        // Epoch exactly at departure -> elapsed_s = 0 (boundary, should fail)
         let result = super::convert_cola_to_burns(Some(&[make_avoidance(dep_epoch, 0)]), &mission);
         assert!(result.is_err(), "epoch at exact departure should fail");
     }
@@ -733,11 +733,11 @@ mod tests {
 
     /// Position tolerance for a single-leg transfer (~1 orbit).
     /// Unmodeled perturbations (drag, SRP, 3rd-body) contribute ~50m total;
-    /// 10× margin gives 0.5 km.
+    /// 10x margin gives 0.5 km.
     const FULL_PHYSICS_SINGLE_LEG_POS_TOL_KM: f64 = 0.5;
 
-    /// Position tolerance for a multi-leg mission (~3 legs × 0.75 period each).
-    /// ~3× single-leg tolerance plus maneuver state mismatch across legs.
+    /// Position tolerance for a multi-leg mission (~3 legs x 0.75 period each).
+    /// ~3x single-leg tolerance plus maneuver state mismatch across legs.
     const FULL_PHYSICS_MULTI_LEG_POS_TOL_KM: f64 = 3.0;
 
     /// Position tolerance for drag STM vs nyx comparison.
@@ -753,7 +753,7 @@ mod tests {
     const SAFETY_3D_ABSOLUTE_TOL_KM: f64 = 0.5;
 
     /// Relative tolerance for e/i vector separation comparison.
-    /// ROE-level drift O(1e-5) over 1–3 orbits.
+    /// ROE-level drift O(1e-5) over 1-3 orbits.
     const SAFETY_EI_RELATIVE_TOL: f64 = 0.50;
 
     /// Below this threshold (km), R/C separations are operationally "at V-bar"
@@ -774,16 +774,16 @@ mod tests {
     ///
     /// Chief: ISS-like orbit. Deputy: ~300m-scale formation (nonzero dex, dey, dix).
     /// Waypoint: [0.5, 3.0, 1.0] RIC km, TOF = 0.8 orbital periods.
-    /// Non-integer period avoids CW singularity at nt = 2π (rank-1 Φ_rv).
+    /// Non-integer period avoids CW singularity at nt = 2pi (rank-1 phi_rv).
     /// 50 samples for detailed error characterization.
     #[test]
     #[ignore] // Requires MetaAlmanac (network on first run)
     fn validate_full_physics_single_leg() {
-        use crate::mission::waypoints::plan_waypoint_mission;
-        use crate::test_helpers::deputy_from_roe;
-        use crate::mission::config::MissionConfig;
-        use crate::mission::types::Waypoint;
-        use crate::types::{DepartureState, QuasiNonsingularROE};
+        use rpo_core::mission::waypoints::plan_waypoint_mission;
+        use rpo_core::test_helpers::deputy_from_roe;
+        use rpo_core::mission::config::MissionConfig;
+        use rpo_core::mission::types::Waypoint;
+        use rpo_core::types::{DepartureState, QuasiNonsingularROE};
 
         let epoch = test_epoch();
         let chief_ke = iss_like_elements();
@@ -826,11 +826,9 @@ mod tests {
             samples_per_leg: 50,
             chief_config: SpacecraftConfig::SERVICER_500KG,
             deputy_config: SpacecraftConfig::SERVICER_500KG,
-
-
         };
 
-        let report = crate::mission::validation::validate_mission_nyx(
+        let report = crate::validation::validate_mission_nyx(
             &mission,
             &chief_sv,
             &deputy_sv,
@@ -882,11 +880,11 @@ mod tests {
     #[test]
     #[ignore] // Requires MetaAlmanac (network on first run)
     fn validate_full_physics_multi_waypoint() {
-        use crate::mission::waypoints::plan_waypoint_mission;
-        use crate::test_helpers::deputy_from_roe;
-        use crate::mission::config::MissionConfig;
-        use crate::mission::types::Waypoint;
-        use crate::types::{DepartureState, QuasiNonsingularROE};
+        use rpo_core::mission::waypoints::plan_waypoint_mission;
+        use rpo_core::test_helpers::deputy_from_roe;
+        use rpo_core::mission::config::MissionConfig;
+        use rpo_core::mission::types::Waypoint;
+        use rpo_core::types::{DepartureState, QuasiNonsingularROE};
 
         let epoch = test_epoch();
         let chief_ke = iss_like_elements();
@@ -941,11 +939,9 @@ mod tests {
             samples_per_leg: 50,
             chief_config: SpacecraftConfig::SERVICER_500KG,
             deputy_config: SpacecraftConfig::SERVICER_500KG,
-
-
         };
 
-        let report = crate::mission::validation::validate_mission_nyx(
+        let report = crate::validation::validate_mission_nyx(
             &mission,
             &chief_sv,
             &deputy_sv,
@@ -983,20 +979,20 @@ mod tests {
     /// J2+drag STM, validate against nyx full-physics propagation.
     ///
     /// 1. ISS-like orbit, deputy colocated (zero ROE)
-    /// 2. Chief: SERVICER_500KG (B*=0.0044), Deputy: 200kg/2m² (B*=0.022, ~5× higher)
-    /// 3. Extract DMF rates → DragConfig
+    /// 2. Chief: SERVICER_500KG (B*=0.0044), Deputy: 200kg/2m2 (B*=0.022, ~5x higher)
+    /// 3. Extract DMF rates -> DragConfig
     /// 4. Plan with J2DragStm: single V-bar waypoint [0,5,0], 0.8 periods
-    ///    (non-integer period avoids CW singularity at nt = 2π)
+    ///    (non-integer period avoids CW singularity at nt = 2pi)
     /// 5. Plan same with J2Stm for comparison
     /// 6. Validate both against nyx
     /// 7. Assert drag-aware error < tolerance; log improvement ratio
     #[test]
     #[ignore] // Requires MetaAlmanac (network on first run)
     fn validate_drag_stm_vs_nyx_drag() {
-        use crate::mission::waypoints::plan_waypoint_mission;
-        use crate::mission::config::MissionConfig;
-        use crate::mission::types::Waypoint;
-        use crate::types::{DepartureState, QuasiNonsingularROE};
+        use rpo_core::mission::waypoints::plan_waypoint_mission;
+        use rpo_core::mission::config::MissionConfig;
+        use rpo_core::mission::types::Waypoint;
+        use rpo_core::types::{DepartureState, QuasiNonsingularROE};
 
         let epoch = test_epoch();
         let chief_ke = iss_like_elements();
@@ -1071,10 +1067,8 @@ mod tests {
             samples_per_leg: 50,
             chief_config,
             deputy_config,
-
-
         };
-        let drag_report = crate::mission::validation::validate_mission_nyx(
+        let drag_report = crate::validation::validate_mission_nyx(
             &drag_mission,
             &chief_sv,
             &deputy_sv,
@@ -1084,7 +1078,7 @@ mod tests {
         )
         .expect("drag validation should succeed");
 
-        let j2_report = crate::mission::validation::validate_mission_nyx(
+        let j2_report = crate::validation::validate_mission_nyx(
             &j2_mission,
             &chief_sv,
             &deputy_sv,
@@ -1107,10 +1101,10 @@ mod tests {
             j2_report.rms_position_error_km,
         );
 
-        // Diagnostic: improvement ratio (not hard-asserted — SRP/3rd-body may dominate)
+        // Diagnostic: improvement ratio (not hard-asserted -- SRP/3rd-body may dominate)
         if j2_report.max_position_error_km > IMPROVEMENT_RATIO_GUARD_KM {
             let improvement = j2_report.max_position_error_km / drag_report.max_position_error_km;
-            eprintln!("Drag/J2 improvement ratio: {improvement:.2}×");
+            eprintln!("Drag/J2 improvement ratio: {improvement:.2}x");
             if improvement < 1.0 {
                 eprintln!(
                     "  Note: drag STM did not improve over J2-only for this scenario. \
@@ -1138,17 +1132,17 @@ mod tests {
     #[test]
     #[ignore] // Requires MetaAlmanac (network on first run)
     fn validate_safety_full_physics() {
-        use crate::mission::waypoints::plan_waypoint_mission;
-        use crate::test_helpers::deputy_from_roe;
-        use crate::mission::config::{MissionConfig, SafetyConfig};
-        use crate::mission::types::Waypoint;
-        use crate::types::{DepartureState, QuasiNonsingularROE};
+        use rpo_core::mission::waypoints::plan_waypoint_mission;
+        use rpo_core::test_helpers::deputy_from_roe;
+        use rpo_core::mission::config::{MissionConfig, SafetyConfig};
+        use rpo_core::mission::types::Waypoint;
+        use rpo_core::types::{DepartureState, QuasiNonsingularROE};
 
         let epoch = test_epoch();
         let chief_ke = iss_like_elements();
         let a = chief_ke.a_km;
 
-        // Perpendicular e/i vectors: dex along ex, diy along iy → meaningful separation
+        // Perpendicular e/i vectors: dex along ex, diy along iy -> meaningful separation
         let formation_roe = QuasiNonsingularROE {
             da: 0.0,
             dlambda: 0.0,
@@ -1201,11 +1195,9 @@ mod tests {
             samples_per_leg: 50,
             chief_config: SpacecraftConfig::SERVICER_500KG,
             deputy_config: SpacecraftConfig::SERVICER_500KG,
-
-
         };
 
-        let report = crate::mission::validation::validate_mission_nyx(
+        let report = crate::validation::validate_mission_nyx(
             &mission,
             &chief_sv,
             &deputy_sv,
@@ -1235,11 +1227,11 @@ mod tests {
             analytical.passive.min_ei_separation_km, numerical.passive.min_ei_separation_km,
         );
         eprintln!(
-            "  |δe|:            {:.6} vs {:.6}",
+            "  |de|:            {:.6} vs {:.6}",
             analytical.passive.de_magnitude, numerical.passive.de_magnitude,
         );
         eprintln!(
-            "  |δi|:            {:.6} vs {:.6}",
+            "  |di|:            {:.6} vs {:.6}",
             analytical.passive.di_magnitude, numerical.passive.di_magnitude,
         );
         eprintln!(
@@ -1249,7 +1241,7 @@ mod tests {
 
         // R/C separation: relative agreement within 50%
         // When both values are near zero (V-bar configuration), relative comparison
-        // is meaningless — skip it.
+        // is meaningless -- skip it.
         let rc_ref = analytical.operational.min_rc_separation_km.max(numerical.operational.min_rc_separation_km);
         if rc_ref > SAFETY_RC_NEAR_ZERO_KM {
             let rc_rel_err =
@@ -1292,7 +1284,7 @@ mod tests {
     // COLA Two-Segment Propagation Tests (require nyx)
     // =========================================================================
 
-    /// Two-segment propagation with zero COLA Δv should produce the same
+    /// Two-segment propagation with zero COLA delta-v should produce the same
     /// trajectory as single-segment `propagate_leg_parallel` within tolerance.
     ///
     /// This is the fundamental invariant of `propagate_leg_with_cola`: when
@@ -1301,11 +1293,11 @@ mod tests {
     #[test]
     #[ignore] // Requires MetaAlmanac (network on first run)
     fn propagate_leg_with_cola_zero_dv_matches_single_segment() {
-        use crate::mission::waypoints::plan_waypoint_mission;
-        use crate::test_helpers::deputy_from_roe;
-        use crate::mission::config::MissionConfig;
-        use crate::mission::types::Waypoint;
-        use crate::types::{DepartureState, QuasiNonsingularROE};
+        use rpo_core::mission::waypoints::plan_waypoint_mission;
+        use rpo_core::test_helpers::deputy_from_roe;
+        use rpo_core::mission::config::MissionConfig;
+        use rpo_core::mission::types::Waypoint;
+        use rpo_core::types::{DepartureState, QuasiNonsingularROE};
 
         let epoch = test_epoch();
         let chief_ke = iss_like_elements();
@@ -1350,7 +1342,7 @@ mod tests {
             &chief_sv, &deputy_sv, leg, &ctx,
         ).expect("baseline propagation should succeed");
 
-        // Two-segment with zero COLA Δv at mid-leg
+        // Two-segment with zero COLA delta-v at mid-leg
         let zero_cola = super::ColaBurn {
             leg_index: 0,
             elapsed_s: leg.tof_s * 0.5,
@@ -1360,7 +1352,7 @@ mod tests {
             &chief_sv, &deputy_sv, leg, &zero_cola, &ctx,
         ).expect("COLA propagation should succeed");
 
-        // Compare final states — should match within nyx integrator tolerance.
+        // Compare final states -- should match within nyx integrator tolerance.
         // The two-segment approach re-initializes the integrator at the split point,
         // so we allow a small tolerance for integrator restart transients.
         let chief_final_baseline = &chief_baseline.last().unwrap().state;
@@ -1376,7 +1368,7 @@ mod tests {
         let chief_pos_diff = (chief_final_baseline.position_eci_km - chief_final_cola.position_eci_km).norm();
         let deputy_pos_diff = (deputy_final_baseline.position_eci_km - deputy_final_cola.position_eci_km).norm();
 
-        eprintln!("Zero-COLA vs baseline: chief Δpos={chief_pos_diff:.6} km, deputy Δpos={deputy_pos_diff:.6} km");
+        eprintln!("Zero-COLA vs baseline: chief dpos={chief_pos_diff:.6} km, deputy dpos={deputy_pos_diff:.6} km");
 
         assert!(
             chief_pos_diff < RESTART_TOL_KM,
@@ -1394,11 +1386,11 @@ mod tests {
     #[test]
     #[ignore] // Requires MetaAlmanac (network on first run)
     fn propagate_leg_with_cola_sample_split() {
-        use crate::mission::waypoints::plan_waypoint_mission;
-        use crate::test_helpers::deputy_from_roe;
-        use crate::mission::config::MissionConfig;
-        use crate::mission::types::Waypoint;
-        use crate::types::{DepartureState, QuasiNonsingularROE};
+        use rpo_core::mission::waypoints::plan_waypoint_mission;
+        use rpo_core::test_helpers::deputy_from_roe;
+        use rpo_core::mission::config::MissionConfig;
+        use rpo_core::mission::types::Waypoint;
+        use rpo_core::types::{DepartureState, QuasiNonsingularROE};
 
         let epoch = test_epoch();
         let chief_ke = iss_like_elements();
@@ -1460,11 +1452,11 @@ mod tests {
         let samples_usize = usize::try_from(samples).unwrap();
         assert!(
             n_total >= samples_usize && n_total <= samples_usize + 4,
-            "total samples {n_total} should be approximately {samples} (±4)"
+            "total samples {n_total} should be approximately {samples} (+/-4)"
         );
 
         // n1 should be roughly 30% of samples (COLA at 30% of leg)
-        // Allow ±5 samples for discrete step rounding
+        // Allow +/-5 samples for discrete step rounding
         let expected_n1 = (f64::from(samples) * 0.3).round() as usize;
         assert!(
             n1.abs_diff(expected_n1) <= 5,

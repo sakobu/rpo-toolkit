@@ -3,11 +3,11 @@
 use hifitime::Epoch;
 use nalgebra::Vector3;
 
-use crate::constants::ECLIPSE_PERCENTAGE_AGREEMENT_TOL;
-use crate::elements::eclipse::{compute_eclipse_state, sun_position_eci_km};
-use crate::types::{EclipseInterval, EclipseState, EclipseSummary};
+use rpo_core::constants::ECLIPSE_PERCENTAGE_AGREEMENT_TOL;
+use rpo_core::elements::eclipse::{compute_eclipse_state, sun_position_eci_km};
+use rpo_core::types::{EclipseInterval, EclipseState, EclipseSummary};
 
-use crate::mission::types::{
+use rpo_core::mission::types::{
     EclipseIntervalComparison, EclipseValidation, EclipseValidationPoint,
 };
 
@@ -23,7 +23,7 @@ fn classify_shadow_state(max_pct: f64) -> EclipseState {
 }
 
 /// Guard threshold for flat eclipse percentage segments in [`interpolate_crossing`].
-/// When |pct₁ − pct₀| < machine epsilon, the segment is flat and interpolation
+/// When |pct1 - pct0| < machine epsilon, the segment is flat and interpolation
 /// is undefined; fall back to the current sample epoch to avoid division by zero.
 const ECLIPSE_INTERPOLATION_FLAT_GUARD: f64 = f64::EPSILON;
 
@@ -37,7 +37,7 @@ pub(super) struct EclipseSample {
     pub(super) elapsed_s: f64,
     /// Epoch at this sample.
     pub(super) epoch: Epoch,
-    /// ANISE eclipse percentage (0–100).
+    /// ANISE eclipse percentage (0-100).
     pub(super) numerical_pct: f64,
     /// Sun position in ECI J2000 (km) from ANISE.
     pub(super) anise_sun_eci_km: Vector3<f64>,
@@ -51,18 +51,18 @@ pub(super) struct EclipseSample {
 /// sunlit (<1% eclipse) and shadow (>=1% eclipse) states, and records
 /// contiguous shadow intervals with worst-case shadow state.
 ///
-/// When a transition is detected between adjacent samples `(t₀, pct₀)` and
-/// `(t₁, pct₁)`, linear interpolation finds the crossing epoch:
+/// When a transition is detected between adjacent samples `(t0, pct0)` and
+/// `(t1, pct1)`, linear interpolation finds the crossing epoch:
 ///
 /// ```text
-/// t_cross = t₀ + (t₁ - t₀) × (threshold - pct₀) / (pct₁ - pct₀)
+/// t_cross = t0 + (t1 - t0) * (threshold - pct0) / (pct1 - pct0)
 /// ```
 ///
-/// This reduces eclipse boundary error from ±(`sample_interval`/2) to the
+/// This reduces eclipse boundary error from +(`sample_interval`/2) to the
 /// non-linearity of the shadow geometry between samples.
 ///
 /// # Arguments
-/// * `samples` — Time-ordered [`EclipseSample`] array. Uses `epoch` and
+/// * `samples` -- Time-ordered [`EclipseSample`] array. Uses `epoch` and
 ///   `numerical_pct` fields (0.0 = fully sunlit, 100.0 = full umbra).
 ///
 /// # Returns
@@ -139,9 +139,9 @@ fn compute_numerical_eclipse_intervals(
 
 /// Linearly interpolate the epoch at which the eclipse percentage crosses a threshold.
 ///
-/// Given two adjacent samples `(t₀, pct₀)` and `(t₁, pct₁)` that straddle
-/// `threshold`, returns the interpolated crossing epoch. Falls back to `t₁`
-/// if `pct₁ == pct₀` (flat segment, avoids division by zero).
+/// Given two adjacent samples `(t0, pct0)` and `(t1, pct1)` that straddle
+/// `threshold`, returns the interpolated crossing epoch. Falls back to `t1`
+/// if `pct1 == pct0` (flat segment, avoids division by zero).
 fn interpolate_crossing(
     t0: Epoch,
     pct0: f64,
@@ -167,8 +167,8 @@ fn interpolate_crossing(
 /// intervals are counted separately.
 ///
 /// # Arguments
-/// * `analytical` — The analytical eclipse summary containing intervals to match.
-/// * `numerical` — The numerical eclipse intervals to match against.
+/// * `analytical` -- The analytical eclipse summary containing intervals to match.
+/// * `numerical` -- The numerical eclipse intervals to match against.
 ///
 /// # Returns
 /// A tuple of `(comparisons, unmatched_count)` where `comparisons` contains
@@ -233,7 +233,7 @@ fn match_eclipse_intervals(
 ///
 /// Returns `None` if there are no eclipse samples.
 pub(super) fn build_eclipse_validation(
-    eclipse_data: &crate::types::MissionEclipseData,
+    eclipse_data: &rpo_core::types::MissionEclipseData,
     eclipse_samples: &[EclipseSample],
 ) -> Option<EclipseValidation> {
     if eclipse_samples.is_empty() {
@@ -323,11 +323,11 @@ pub(super) fn build_eclipse_validation(
 mod tests {
     use nalgebra::Vector3;
 
-    use crate::elements::keplerian_conversions::keplerian_to_state;
-    use crate::propagation::nyx_bridge;
-    use crate::propagation::propagator::PropagationModel;
-    use crate::test_helpers::{iss_like_elements, test_epoch};
-    use crate::types::SpacecraftConfig;
+    use rpo_core::elements::keplerian_conversions::keplerian_to_state;
+    use crate::nyx_bridge;
+    use rpo_core::propagation::propagator::PropagationModel;
+    use rpo_core::test_helpers::{iss_like_elements, test_epoch};
+    use rpo_core::types::SpacecraftConfig;
 
     // Named tolerance constants for eclipse validation tests
 
@@ -340,18 +340,18 @@ mod tests {
     const INTERVAL_EXACT_MATCH_TOL_S: f64 = 1e-10;
 
     /// Eclipse numerical interval duration tolerance.
-    /// Sample-spaced intervals have ±1 sample quantization;
+    /// Sample-spaced intervals have +/-1 sample quantization;
     /// at 1s spacing, 2s covers worst case.
     const INTERVAL_DURATION_TOL_S: f64 = 2.0;
 
     /// Maximum expected Sun direction angular error (Meeus vs ANISE DE440s).
-    /// Meeus Ch. 25 with precession correction gives ~0.005° at 2024 epoch.
-    /// 0.02° (3.5e-4 rad) provides margin for nutation/perturbation residuals.
+    /// Meeus Ch. 25 with precession correction gives ~0.005 deg at 2024 epoch.
+    /// 0.02 deg (3.5e-4 rad) provides margin for nutation/perturbation residuals.
     const SUN_DIRECTION_VALIDATION_TOL_RAD: f64 = 3.5e-4;
 
     /// Maximum expected Moon direction angular error (Meeus vs ANISE DE440s).
-    /// Meeus Ch. 47 truncated series gives ~0.007° with precession correction.
-    /// 1.0° (0.0175 rad) provides generous margin for the truncated series.
+    /// Meeus Ch. 47 truncated series gives ~0.007 deg with precession correction.
+    /// 1.0 deg (0.0175 rad) provides generous margin for the truncated series.
     const MOON_DIRECTION_VALIDATION_TOL_RAD: f64 = 0.0175;
 
     /// Maximum eclipse entry/exit timing error (seconds).
@@ -367,7 +367,7 @@ mod tests {
 
     #[test]
     fn eclipse_validation_serde_roundtrip() {
-        use crate::mission::types::EclipseValidationPoint;
+        use rpo_core::mission::types::EclipseValidationPoint;
 
         let point = EclipseValidationPoint {
             elapsed_s: 100.0,
@@ -390,13 +390,13 @@ mod tests {
 
     #[test]
     fn eclipse_validation_tolerances_are_reasonable() {
-        use crate::constants::ECLIPSE_PERCENTAGE_AGREEMENT_TOL;
-        // Sun direction: 0.02° = 3.5e-4 rad (Meeus with precession correction)
+        use rpo_core::constants::ECLIPSE_PERCENTAGE_AGREEMENT_TOL;
+        // Sun direction: 0.02 deg = 3.5e-4 rad (Meeus with precession correction)
         assert!(SUN_DIRECTION_VALIDATION_TOL_RAD > 0.0);
-        assert!(SUN_DIRECTION_VALIDATION_TOL_RAD < 0.01); // < 0.57°
-        // Moon direction: 1.0° = 0.0175 rad (Meeus truncated ~0.5°)
+        assert!(SUN_DIRECTION_VALIDATION_TOL_RAD < 0.01); // < 0.57 deg
+        // Moon direction: 1.0 deg = 0.0175 rad (Meeus truncated ~0.5 deg)
         assert!(MOON_DIRECTION_VALIDATION_TOL_RAD > SUN_DIRECTION_VALIDATION_TOL_RAD);
-        assert!(MOON_DIRECTION_VALIDATION_TOL_RAD < 0.1); // < 5.7°
+        assert!(MOON_DIRECTION_VALIDATION_TOL_RAD < 0.1); // < 5.7 deg
         // Eclipse timing: <120s (dominated by sample-interval quantization)
         assert!(ECLIPSE_TIMING_VALIDATION_TOL_S > 0.0);
         assert!(ECLIPSE_TIMING_VALIDATION_TOL_S < 300.0);
@@ -410,9 +410,9 @@ mod tests {
     // =========================================================================
 
     /// Helper to create an EclipseInterval for testing.
-    fn make_eclipse_interval(start_s: f64, end_s: f64) -> crate::types::EclipseInterval {
-        use crate::types::{EclipseInterval, EclipseState};
-        let base = crate::test_helpers::test_epoch();
+    fn make_eclipse_interval(start_s: f64, end_s: f64) -> rpo_core::types::EclipseInterval {
+        use rpo_core::types::{EclipseInterval, EclipseState};
+        let base = rpo_core::test_helpers::test_epoch();
         EclipseInterval {
             start: base + hifitime::Duration::from_seconds(start_s),
             end: base + hifitime::Duration::from_seconds(end_s),
@@ -423,10 +423,10 @@ mod tests {
 
     /// Helper to create an EclipseSummary from intervals.
     fn make_eclipse_summary(
-        intervals: Vec<crate::types::EclipseInterval>,
-    ) -> crate::types::EclipseSummary {
+        intervals: Vec<rpo_core::types::EclipseInterval>,
+    ) -> rpo_core::types::EclipseSummary {
         let total = intervals.iter().map(|i| i.duration_s).sum::<f64>();
-        crate::types::EclipseSummary {
+        rpo_core::types::EclipseSummary {
             intervals,
             total_shadow_duration_s: total,
             time_in_shadow_fraction: 0.0,
@@ -504,7 +504,7 @@ mod tests {
 
     #[test]
     fn eclipse_comparison_point_construction() {
-        use crate::mission::types::EclipseValidationPoint;
+        use rpo_core::mission::types::EclipseValidationPoint;
 
         let point = EclipseValidationPoint {
             elapsed_s: 100.0,
@@ -531,7 +531,7 @@ mod tests {
 
     #[test]
     fn compute_numerical_intervals_from_samples() {
-        let base = crate::test_helpers::test_epoch();
+        let base = rpo_core::test_helpers::test_epoch();
         let samples: Vec<super::EclipseSample> = (0..100)
             .map(|i| {
                 let t = f64::from(i);
@@ -567,16 +567,16 @@ mod tests {
     ///
     /// Constructs samples with known linear transitions:
     /// - t=0..90: sunlit (0%)
-    /// - t=90..110: linear ramp 0% → 100% (threshold 1% crossed at t≈90.2)
+    /// - t=90..110: linear ramp 0% -> 100% (threshold 1% crossed at t~90.2)
     /// - t=110..190: full umbra (100%)
-    /// - t=190..210: linear ramp 100% → 0% (threshold 1% crossed at t≈209.8)
+    /// - t=190..210: linear ramp 100% -> 0% (threshold 1% crossed at t~209.8)
     /// - t=210..300: sunlit (0%)
     ///
     /// With linear interpolation, the entry/exit epochs should be accurate
     /// to floating-point precision (not quantized to sample boundaries).
     #[test]
     fn eclipse_boundary_interpolation_accuracy() {
-        let base = crate::test_helpers::test_epoch();
+        let base = rpo_core::test_helpers::test_epoch();
 
         // 10s sample spacing, 31 samples from t=0 to t=300
         let samples: Vec<super::EclipseSample> = (0..=30)
@@ -604,8 +604,8 @@ mod tests {
 
         assert_eq!(intervals.len(), 1, "should detect 1 eclipse interval");
 
-        // Entry: threshold (1%) crossing on 0%→50% ramp between t=90 and t=100
-        // Interpolation: t_cross = 90 + 10 × (1 - 0) / (50 - 0) = 90.2
+        // Entry: threshold (1%) crossing on 0%->50% ramp between t=90 and t=100
+        // Interpolation: t_cross = 90 + 10 * (1 - 0) / (50 - 0) = 90.2
         let expected_entry_s = 90.2;
         let actual_entry_s = (intervals[0].start - base).to_seconds();
         let entry_err = (actual_entry_s - expected_entry_s).abs();
@@ -614,8 +614,8 @@ mod tests {
             "entry at {actual_entry_s:.6}s, expected {expected_entry_s:.6}s, error {entry_err:.2e}s"
         );
 
-        // Exit: threshold (1%) crossing on 50%→0% ramp between t=200 and t=210
-        // Interpolation: t_cross = 200 + 10 × (1 - 50) / (0 - 50) = 200 + 10 × 49/50 = 209.8
+        // Exit: threshold (1%) crossing on 50%->0% ramp between t=200 and t=210
+        // Interpolation: t_cross = 200 + 10 * (1 - 50) / (0 - 50) = 200 + 10 * 49/50 = 209.8
         let expected_exit_s = 209.8;
         let actual_exit_s = (intervals[0].end - base).to_seconds();
         let exit_err = (actual_exit_s - expected_exit_s).abs();
@@ -644,11 +644,11 @@ mod tests {
     #[test]
     #[ignore] // Requires MetaAlmanac (network on first run)
     fn validate_eclipse_full_mission() {
-        use crate::mission::waypoints::plan_waypoint_mission;
-        use crate::test_helpers::deputy_from_roe;
-        use crate::mission::config::MissionConfig;
-        use crate::mission::types::Waypoint;
-        use crate::types::{DepartureState, QuasiNonsingularROE};
+        use rpo_core::mission::waypoints::plan_waypoint_mission;
+        use rpo_core::test_helpers::deputy_from_roe;
+        use rpo_core::mission::config::MissionConfig;
+        use rpo_core::mission::types::Waypoint;
+        use rpo_core::types::{DepartureState, QuasiNonsingularROE};
 
         let epoch = test_epoch();
         let chief_ke = iss_like_elements();
@@ -705,13 +705,13 @@ mod tests {
         );
 
         let almanac = nyx_bridge::load_full_almanac().expect("full almanac should load");
-        let val_config = crate::mission::validation::ValidationConfig {
+        let val_config = crate::validation::ValidationConfig {
             samples_per_leg: 50,
             chief_config: SpacecraftConfig::SERVICER_500KG,
             deputy_config: SpacecraftConfig::SERVICER_500KG,
         };
 
-        let report = crate::mission::validation::validate_mission_nyx(
+        let report = crate::validation::validate_mission_nyx(
             &mission,
             &chief_sv,
             &deputy_sv,
@@ -777,7 +777,7 @@ mod tests {
     #[test]
     #[ignore] // Requires MetaAlmanac (network on first run)
     fn validate_sun_direction_accuracy() {
-        use crate::elements::eclipse::sun_position_eci_km;
+        use rpo_core::elements::eclipse::sun_position_eci_km;
         use anise::constants::frames::{SUN_J2000, EARTH_J2000 as ANISE_EARTH_J2000};
 
         let almanac = nyx_bridge::load_full_almanac().expect("full almanac should load");
@@ -832,7 +832,7 @@ mod tests {
     #[test]
     #[ignore] // Requires MetaAlmanac (network on first run)
     fn validate_moon_direction_accuracy() {
-        use crate::elements::eclipse::moon_position_eci_km;
+        use rpo_core::elements::eclipse::moon_position_eci_km;
         use anise::constants::frames::{MOON_J2000, EARTH_J2000 as ANISE_EARTH_J2000};
 
         let almanac = nyx_bridge::load_full_almanac().expect("full almanac should load");

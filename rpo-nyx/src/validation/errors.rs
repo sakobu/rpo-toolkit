@@ -1,10 +1,8 @@
 //! Validation error types for nyx full-physics comparison.
 
-use hifitime::Epoch;
-
-use crate::elements::eci_ric_dcm::DcmError;
-use crate::mission::safety::SafetyError;
-use crate::propagation::nyx_bridge::NyxBridgeError;
+use rpo_core::elements::eci_ric_dcm::DcmError;
+use rpo_core::mission::safety::SafetyError;
+use crate::nyx_bridge::NyxBridgeError;
 
 /// Errors from nyx high-fidelity validation.
 #[derive(Debug)]
@@ -18,15 +16,8 @@ pub enum ValidationError {
     },
     /// No trajectory points to analyze.
     EmptyTrajectory,
-    /// ECI↔RIC frame conversion failed.
+    /// ECI-RIC frame conversion failed.
     DcmFailure(DcmError),
-    /// ANISE eclipse query failed at a specific epoch.
-    EclipseQuery {
-        /// The epoch at which the query failed.
-        epoch: Epoch,
-        /// The underlying error message.
-        message: String,
-    },
     /// COLA burn epoch falls outside the valid range for its leg.
     ColaEpochOutOfBounds {
         /// Computed elapsed time from leg departure (seconds).
@@ -49,9 +40,6 @@ impl std::fmt::Display for ValidationError {
                 write!(f, "no trajectory points to analyze")
             }
             Self::DcmFailure(e) => write!(f, "frame conversion failed: {e}"),
-            Self::EclipseQuery { epoch, message } => {
-                write!(f, "eclipse query at {epoch} failed: {message}")
-            }
             Self::ColaEpochOutOfBounds { elapsed_s, tof_s, leg_index } => {
                 write!(
                     f,
@@ -69,7 +57,6 @@ impl std::error::Error for ValidationError {
             Self::Safety { source } => Some(source),
             Self::DcmFailure(e) => Some(e),
             Self::EmptyTrajectory
-            | Self::EclipseQuery { .. }
             | Self::ColaEpochOutOfBounds { .. } => None,
         }
     }

@@ -1146,7 +1146,8 @@ fn write_eclipse_validation(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rpo_core::pipeline::{execute_mission, to_propagation_model};
+    use rpo_core::pipeline::to_propagation_model;
+    use rpo_nyx::pipeline::execute_mission;
     use std::path::PathBuf;
 
     fn examples_dir() -> PathBuf {

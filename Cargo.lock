@@ -2893,6 +2893,7 @@ dependencies = [
  "hifitime",
  "nalgebra 0.34.1",
  "rpo-core",
+ "rpo-nyx",
  "serde",
  "serde_json",
  "tokio",
@@ -2913,12 +2914,23 @@ dependencies = [
  "indicatif 0.17.11",
  "nalgebra 0.34.1",
  "rpo-core",
+ "rpo-nyx",
  "serde",
  "serde_json",
 ]
 
 [[package]]
 name = "rpo-core"
+version = "0.1.0"
+dependencies = [
+ "hifitime",
+ "nalgebra 0.34.1",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "rpo-nyx"
 version = "0.1.0"
 dependencies = [
  "anise",
@@ -2929,8 +2941,19 @@ dependencies = [
  "rand_chacha 0.3.1",
  "rand_distr 0.4.3",
  "rayon",
+ "rpo-core",
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "rpo-wasm"
+version = "0.1.0"
+dependencies = [
+ "rpo-core",
+ "serde",
+ "serde-wasm-bindgen",
+ "wasm-bindgen",
 ]
 
 [[package]]
@@ -3106,6 +3129,17 @@ checksum = "bb4cda13396159f59e7946118cdac0beadeecfb7cf76b197f4147e546f4ead6f"
 dependencies = [
  "lexpr",
  "serde",
+]
+
+[[package]]
+name = "serde-wasm-bindgen"
+version = "0.6.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8302e169f0eddcc139c70f139d19d6467353af16f9fce27e8c30158036a1e16b"
+dependencies = [
+ "js-sys",
+ "serde",
+ "wasm-bindgen",
 ]
 
 [[package]]

@@ -2,10 +2,10 @@
 
 use nalgebra::Vector3;
 
-use crate::propagation::propagator::PropagatedState;
-use crate::types::RICState;
+use rpo_core::propagation::propagator::PropagatedState;
+use rpo_core::types::RICState;
 
-use crate::mission::types::ValidationPoint;
+use rpo_core::mission::types::ValidationPoint;
 
 /// Find the closest analytical RIC state by elapsed time (nearest-neighbor).
 ///
@@ -97,8 +97,8 @@ pub(super) fn compute_report_statistics(leg_points: &[Vec<ValidationPoint>]) -> 
 mod tests {
     use nalgebra::Vector3;
 
-    use crate::mission::types::ValidationPoint;
-    use crate::types::RICState;
+    use rpo_core::mission::types::ValidationPoint;
+    use rpo_core::types::RICState;
 
     /// Tolerance for exact-arithmetic statistics (max, mean, sum).
     /// These involve only addition/comparison of representable f64 values,
@@ -113,7 +113,7 @@ mod tests {
     /// Verify `compute_report_statistics` with known error values.
     ///
     /// Three points with position errors [1.0, 3.0, 2.0] km:
-    /// max=3.0, mean=2.0, rms=sqrt(14/3)≈2.160, max_vel=0.03.
+    /// max=3.0, mean=2.0, rms=sqrt(14/3)~2.160, max_vel=0.03.
     /// Also verifies empty input returns zeros.
     #[test]
     fn validation_report_statistics() {
@@ -147,7 +147,7 @@ mod tests {
             (stats.mean_position_error_km - 2.0).abs() < EXACT_ARITHMETIC_TOL,
             "mean_pos = {}, expected 2.0", stats.mean_position_error_km
         );
-        // rms = sqrt((1 + 9 + 4) / 3) = sqrt(14/3) ≈ 2.160
+        // rms = sqrt((1 + 9 + 4) / 3) = sqrt(14/3) ~ 2.160
         let expected_rms = (14.0_f64 / 3.0).sqrt();
         assert!(
             (stats.rms_position_error_km - expected_rms).abs() < RMS_COMPUTATION_TOL,

@@ -4,10 +4,11 @@ description = "CLI tool for RPO mission planning"
 version.workspace = true
 edition.workspace = true
 authors.workspace = true
-license.workspace = true
+license = "AGPL-3.0-or-later"
 
 [dependencies]
 rpo-core = { path = "../rpo-core" }
+rpo-nyx = { path = "../rpo-nyx" }
 anise = "0.9"
 hifitime = "4"
 clap = { version = "4", features = ["derive"] }

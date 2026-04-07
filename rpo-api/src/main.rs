@@ -44,7 +44,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Load almanac
     tracing::info!("Loading almanac (may download on first run)...");
-    let almanac = rpo_core::propagation::load_full_almanac()
+    let almanac = rpo_nyx::nyx_bridge::load_full_almanac()
         .map_err(|e| format!("failed to load almanac: {e}"))?;
     tracing::info!("Almanac loaded");
 

@@ -148,17 +148,17 @@ pub fn handle_accept_waypoint_enrichment(
 
     // Rebuild a PipelineInput from session, mutate the waypoint, replan.
     let mut input = session.assemble_pipeline_input()?;
+    // Clone: accept_waypoint_enrichment takes &mut, but session ownership
+    // is needed for set_waypoints/store_missions below.
+    let mut transfer = session.require_transfer()?.clone();
     let output = accept_waypoint_enrichment(
         &mut input,
+        &mut transfer,
         waypoint_index,
         &enriched.roe,
         &chief_at_waypoint,
     )?;
-
-    // Build the lean result while we still have borrows on input/output,
-    // then move ownership into the session (avoids cloning trajectories).
-    let transfer = session.require_transfer()?;
-    let result = build_lean_plan_result(transfer, &output.mission, &input.waypoints);
+    let result = build_lean_plan_result(&transfer, &output.mission, &input.waypoints);
 
     session.set_waypoints(input.waypoints);
     session.store_missions(output.mission, None, None);

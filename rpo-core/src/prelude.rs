@@ -6,8 +6,13 @@
 //!
 //! Imports the minimum set of types and functions needed to classify
 //! two spacecraft states, plan a waypoint mission, and read back results.
-//! For validation, Monte Carlo, covariance, and eclipse analysis, import
+//! For Monte Carlo, covariance, and eclipse analysis, import
 //! from the relevant module directly.
+//!
+//! Entry points (`execute_mission_from_transfer`, `replan_from_transfer`)
+//! accept a pre-computed `TransferResult`. Server-only wrappers
+//! (`execute_mission`, `replan_mission`, `plan_mission`) that require
+//! nyx-space live in `rpo-nyx`.
 
 // Core domain types
 pub use crate::types::{
@@ -16,7 +21,7 @@ pub use crate::types::{
 
 // Mission planning
 pub use crate::mission::{
-    classify_separation, plan_mission, plan_waypoint_mission, MissionConfig, MissionPhase, Waypoint,
+    classify_separation, plan_waypoint_mission, MissionConfig, MissionPhase, Waypoint,
     WaypointMission,
 };
 
@@ -25,5 +30,6 @@ pub use crate::propagation::PropagationModel;
 
 // Pipeline
 pub use crate::pipeline::{
-    execute_mission, replan_mission, PipelineInput, PipelineOutput, PropagatorChoice, WaypointInput,
+    execute_mission_from_transfer, replan_from_transfer, PipelineInput, PipelineOutput,
+    PropagatorChoice, TransferResult, WaypointInput,
 };

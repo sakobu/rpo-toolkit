@@ -9,10 +9,10 @@ use nyx_space::dynamics::{Drag, Harmonics, PointMasses, SolarPressure};
 use nyx_space::io::gravity::HarmonicsMem;
 use nyx_space::md::prelude::{OrbitalDynamics, SpacecraftDynamics};
 
-use crate::elements::keplerian_conversions::state_to_keplerian;
-use crate::elements::roe::compute_roe;
-use crate::propagation::propagator::DragConfig;
-use crate::types::{SpacecraftConfig, StateVector};
+use rpo_core::elements::keplerian_conversions::state_to_keplerian;
+use rpo_core::elements::roe::compute_roe;
+use rpo_core::propagation::propagator::DragConfig;
+use rpo_core::types::{SpacecraftConfig, StateVector};
 
 use super::errors::NyxBridgeError;
 use super::propagate::nyx_propagate_segment;
@@ -133,7 +133,7 @@ pub fn extract_dmf_rates(
 /// # Errors
 /// Returns [`NyxBridgeError::FrameLookup`] if `IAU_EARTH` frame data is unavailable,
 /// or [`NyxBridgeError::DynamicsSetup`] if drag/SRP initialization fails.
-pub(crate) fn build_full_physics_dynamics(
+pub fn build_full_physics_dynamics(
     almanac: &Arc<Almanac>,
 ) -> Result<SpacecraftDynamics, NyxBridgeError> {
     let iau_earth = almanac

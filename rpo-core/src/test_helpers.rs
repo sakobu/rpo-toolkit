@@ -1,4 +1,14 @@
 //! Shared test fixtures for unit tests.
+//!
+//! Exposed as `#[doc(hidden)] pub` so that `rpo-nyx` integration tests can
+//! reuse fixtures. Not part of the public API.
+
+#![allow(
+    clippy::must_use_candidate,
+    clippy::doc_markdown,
+    clippy::missing_panics_doc,
+    clippy::similar_names
+)]
 
 use hifitime::Epoch;
 use nalgebra::Vector3;

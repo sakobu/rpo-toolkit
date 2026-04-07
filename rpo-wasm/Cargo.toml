@@ -1,0 +1,16 @@
+[package]
+name = "rpo-wasm"
+description = "WASM bindings for the RPO analytical engine"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license = "MIT OR Apache-2.0"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+rpo-core = { path = "../rpo-core" }
+wasm-bindgen = "0.2"
+serde-wasm-bindgen = "0.6"
+serde = { version = "1", features = ["derive"] }
