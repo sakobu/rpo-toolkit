@@ -70,6 +70,7 @@ mod tests {
     use crate::constants::MU_EARTH;
     use crate::elements::keplerian_conversions::keplerian_to_state;
     use crate::test_helpers::{eccentric_elements, iss_like_elements, test_epoch};
+    use crate::types::elements::KeplerianElements;
 
 
     /// Position closure after one full orbital period. Limited by Kepler
@@ -183,6 +184,51 @@ mod tests {
             assert!(
                 err < ANGULAR_MOMENTUM_TOL,
                 "Angular momentum conservation violated at step {k}: error = {err} km²/s"
+            );
+        }
+    }
+
+    /// Energy and angular momentum conservation for a high-eccentricity orbit (e=0.7)
+    /// over 3 full orbital periods with 600 steps. Stresses the Kepler equation solver
+    /// at periapsis where velocity variation is extreme.
+    #[test]
+    fn energy_conservation_high_eccentricity() {
+        let epoch = test_epoch();
+        let ke = KeplerianElements {
+            a_km: 10000.0,
+            e: 0.7,
+            i_rad: 45.0_f64.to_radians(),
+            raan_rad: 0.0,
+            aop_rad: 0.0,
+            mean_anomaly_rad: 0.0,
+        };
+        let initial = keplerian_to_state(&ke, epoch).unwrap();
+        let period = ke.period().unwrap();
+
+        let trajectory = propagate_keplerian(&initial, 3.0 * period, 600).unwrap();
+
+        let energy_0 = {
+            let r = initial.position_eci_km.norm();
+            let v = initial.velocity_eci_km_s.norm();
+            v * v / 2.0 - MU_EARTH / r
+        };
+        let h_0 = initial.position_eci_km.cross(&initial.velocity_eci_km_s);
+
+        for (k, state) in trajectory.iter().enumerate() {
+            let r = state.position_eci_km.norm();
+            let v = state.velocity_eci_km_s.norm();
+            let energy_k = v * v / 2.0 - MU_EARTH / r;
+            let energy_err = (energy_k - energy_0).abs();
+            assert!(
+                energy_err < ENERGY_CONSERVATION_TOL,
+                "Energy conservation violated at step {k}: error = {energy_err} km²/s²"
+            );
+
+            let h_k = state.position_eci_km.cross(&state.velocity_eci_km_s);
+            let h_err = (h_k - h_0).norm();
+            assert!(
+                h_err < ANGULAR_MOMENTUM_TOL,
+                "Angular momentum conservation violated at step {k}: error = {h_err} km²/s"
             );
         }
     }

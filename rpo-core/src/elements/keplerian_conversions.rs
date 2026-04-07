@@ -386,6 +386,69 @@ mod tests {
     }
 
     #[test]
+    fn roundtrip_retrograde_orbit() {
+        let epoch = test_epoch();
+        let ke = KeplerianElements {
+            a_km: 7200.0,
+            e: 0.05,
+            i_rad: 130.0_f64.to_radians(),
+            raan_rad: 45.0_f64.to_radians(),
+            aop_rad: 90.0_f64.to_radians(),
+            mean_anomaly_rad: 60.0_f64.to_radians(),
+        };
+        let sv = keplerian_to_state(&ke, epoch).unwrap();
+        let ke2 = state_to_keplerian(&sv).unwrap();
+        let sv2 = keplerian_to_state(&ke2, sv.epoch).unwrap();
+
+        let pos_err = (sv.position_eci_km - sv2.position_eci_km).norm();
+        let vel_err = (sv.velocity_eci_km_s - sv2.velocity_eci_km_s).norm();
+        assert!(pos_err < POSITION_ROUNDTRIP_TOL_KM, "retrograde pos err: {pos_err}");
+        assert!(vel_err < VELOCITY_ROUNDTRIP_TOL_KM_S, "retrograde vel err: {vel_err}");
+    }
+
+    #[test]
+    fn roundtrip_near_polar_orbit() {
+        let epoch = test_epoch();
+        let ke = KeplerianElements {
+            a_km: 7000.0,
+            e: 0.1,
+            i_rad: 89.9_f64.to_radians(),
+            raan_rad: 200.0_f64.to_radians(),
+            aop_rad: 270.0_f64.to_radians(),
+            mean_anomaly_rad: 30.0_f64.to_radians(),
+        };
+        let sv = keplerian_to_state(&ke, epoch).unwrap();
+        let ke2 = state_to_keplerian(&sv).unwrap();
+        let sv2 = keplerian_to_state(&ke2, sv.epoch).unwrap();
+
+        let pos_err = (sv.position_eci_km - sv2.position_eci_km).norm();
+        let vel_err = (sv.velocity_eci_km_s - sv2.velocity_eci_km_s).norm();
+        assert!(pos_err < POSITION_ROUNDTRIP_TOL_KM, "near-polar pos err: {pos_err}");
+        assert!(vel_err < VELOCITY_ROUNDTRIP_TOL_KM_S, "near-polar vel err: {vel_err}");
+    }
+
+    #[test]
+    fn roundtrip_molniya_like() {
+        let epoch = test_epoch();
+        let ke = KeplerianElements {
+            a_km: 26600.0,
+            e: 0.74,
+            i_rad: 63.4_f64.to_radians(),
+            raan_rad: 280.0_f64.to_radians(),
+            aop_rad: 270.0_f64.to_radians(),
+            mean_anomaly_rad: 10.0_f64.to_radians(),
+        };
+        let sv = keplerian_to_state(&ke, epoch).unwrap();
+        let ke2 = state_to_keplerian(&sv).unwrap();
+        let sv2 = keplerian_to_state(&ke2, sv.epoch).unwrap();
+
+        let pos_err = (sv.position_eci_km - sv2.position_eci_km).norm();
+        let vel_err = (sv.velocity_eci_km_s - sv2.velocity_eci_km_s).norm();
+        assert!(pos_err < POSITION_ROUNDTRIP_TOL_KM, "molniya pos err: {pos_err}");
+        assert!(vel_err < VELOCITY_ROUNDTRIP_TOL_KM_S, "molniya vel err: {vel_err}");
+    }
+
+    #[test]
     fn unbound_orbit_returns_error() {
         let epoch = test_epoch();
         // Escape velocity at 7000 km altitude: v_escape = sqrt(2*mu/r) ≈ 10.7 km/s
