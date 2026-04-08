@@ -49,6 +49,8 @@ fn default_lambert_tof_s() -> f64 {
 /// User-facing propagator selection.
 ///
 /// Serializes as `"j2"` or `{ "j2_drag": { "drag": { ... } } }`.
+#[cfg_attr(feature = "wasm", derive(tsify_next::Tsify))]
+#[cfg_attr(feature = "wasm", tsify(into_wasm_abi, from_wasm_abi))]
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, Default, PartialEq)]
 #[serde(rename_all = "snake_case")]
 pub enum PropagatorChoice {
@@ -68,6 +70,8 @@ pub enum PropagatorChoice {
 ///
 /// Serializes as `"cubesat_6u"`, `"servicer_500kg"`, or
 /// `{ "custom": { "dry_mass_kg": ..., ... } }`.
+#[cfg_attr(feature = "wasm", derive(tsify_next::Tsify))]
+#[cfg_attr(feature = "wasm", tsify(into_wasm_abi, from_wasm_abi))]
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, Default, PartialEq)]
 pub enum SpacecraftChoice {
     /// Typical 6U cubesat: 12 kg, 0.06 m² cross-section.
@@ -97,6 +101,8 @@ impl SpacecraftChoice {
 // ---- WaypointInput ----
 
 /// Waypoint target from user input (array-based for JSON ergonomics).
+#[cfg_attr(feature = "wasm", derive(tsify_next::Tsify))]
+#[cfg_attr(feature = "wasm", tsify(into_wasm_abi, from_wasm_abi))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WaypointInput {
     /// RIC position target \[R, I, C\] in km.
@@ -120,6 +126,8 @@ pub struct WaypointInput {
 ///
 /// Replaces the CLI's `MissionInput` and the API's `MissionDefinition`.
 /// Fields with serde defaults never need `unwrap_or` in pipeline code.
+#[cfg_attr(feature = "wasm", derive(tsify_next::Tsify))]
+#[cfg_attr(feature = "wasm", tsify(into_wasm_abi, from_wasm_abi))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PipelineInput {
     /// Chief spacecraft ECI state.
@@ -178,6 +186,8 @@ pub struct PipelineInput {
 /// After `set_waypoints`, both a baseline (unenriched) and an enriched plan
 /// may be available. `PlanVariant` selects which is active for downstream
 /// operations (validation, Monte Carlo, COLA, etc.).
+#[cfg_attr(feature = "wasm", derive(tsify_next::Tsify))]
+#[cfg_attr(feature = "wasm", tsify(into_wasm_abi, from_wasm_abi))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum PlanVariant {
@@ -199,7 +209,9 @@ impl Default for PlanVariant {
 ///
 /// Contains the perch enrichment result and requirements.
 /// Does NOT imply mutation — call `apply_perch_enrichment()` to apply.
-#[derive(Debug, Clone)]
+#[cfg_attr(feature = "wasm", derive(tsify_next::Tsify))]
+#[cfg_attr(feature = "wasm", tsify(into_wasm_abi, from_wasm_abi))]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EnrichmentSuggestion {
     /// Perch enrichment result (enriched or fallback).
     pub perch: PerchEnrichmentResult,
@@ -215,6 +227,8 @@ pub struct EnrichmentSuggestion {
 /// extract differential drag rates from the perch states. On the server,
 /// produced by the nyx Lambert pipeline; WASM clients may construct this
 /// from client-side proximity classification.
+#[cfg_attr(feature = "wasm", derive(tsify_next::Tsify))]
+#[cfg_attr(feature = "wasm", tsify(into_wasm_abi, from_wasm_abi))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TransferResult {
     /// Mission plan (phase classification, Lambert transfer, perch ROE).
@@ -225,6 +239,7 @@ pub struct TransferResult {
     pub perch_deputy: StateVector,
     /// Epoch at Lambert arrival.
     #[serde(with = "crate::types::state::epoch_serde")]
+    #[cfg_attr(feature = "wasm", tsify(type = "string"))]
     pub arrival_epoch: hifitime::Epoch,
     /// Lambert Δv magnitude (0.0 if proximity).
     pub lambert_dv_km_s: f64,
@@ -235,6 +250,8 @@ pub struct TransferResult {
 /// Canonical mission output — single source of truth for CLI and API.
 ///
 /// Replaces the CLI's `MissionOutput` and the API's `MissionResultPayload`.
+#[cfg_attr(feature = "wasm", derive(tsify_next::Tsify))]
+#[cfg_attr(feature = "wasm", tsify(into_wasm_abi, from_wasm_abi))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PipelineOutput {
     /// Classification result.
@@ -263,8 +280,7 @@ pub struct PipelineOutput {
     /// Monte Carlo report (included only when MC is run through pipeline).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub monte_carlo: Option<MonteCarloReport>,
-    /// Safety analysis: free-drift, POCA, COLA (computed once, nested for JSON flattening).
-    #[serde(flatten)]
+    /// Safety analysis: free-drift, POCA, COLA (computed once, nested under `safety`).
     pub safety: SafetyAnalysis,
     /// Formation design report (perch enrichment, waypoint advisory, transit safety).
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -274,8 +290,10 @@ pub struct PipelineOutput {
 /// Complete safety analysis: free-drift, POCA, COLA.
 ///
 /// Computed once, consumed by both validation (for COLA injection) and
-/// `build_output` (for report assembly). Flattened into [`PipelineOutput`]
-/// via `#[serde(flatten)]` so the JSON shape is unchanged.
+/// `build_output` (for report assembly). Nested under `safety` in
+/// [`PipelineOutput`].
+#[cfg_attr(feature = "wasm", derive(tsify_next::Tsify))]
+#[cfg_attr(feature = "wasm", tsify(into_wasm_abi, from_wasm_abi))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SafetyAnalysis {
     /// Free-drift (abort-case) analysis per leg.

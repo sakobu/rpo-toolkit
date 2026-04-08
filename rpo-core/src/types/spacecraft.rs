@@ -9,6 +9,8 @@ use serde::{Deserialize, Serialize};
 /// - nyx full-physics propagation (via `config_to_spacecraft()`)
 /// - Analytical DMF drag rates (via `extract_dmf_rates()` → `DragConfig`)
 /// - Mission validation (via `validate_mission_nyx()`)
+#[cfg_attr(feature = "wasm", derive(tsify_next::Tsify))]
+#[cfg_attr(feature = "wasm", tsify(into_wasm_abi, from_wasm_abi))]
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
 pub struct SpacecraftConfig {
     /// Spacecraft dry mass in kg

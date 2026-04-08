@@ -21,6 +21,8 @@ use crate::propagation::covariance::types::{ManeuverUncertainty, NavigationAccur
 ///
 /// - `Gaussian::sigma >= 0.0`
 /// - `Uniform::half_width >= 0.0`
+#[cfg_attr(feature = "wasm", derive(tsify_next::Tsify))]
+#[cfg_attr(feature = "wasm", tsify(into_wasm_abi, from_wasm_abi))]
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "snake_case")]
 pub enum Distribution {
@@ -61,6 +63,8 @@ impl Distribution {
 /// Dispersions are added to the deputy's initial RIC state offset.
 /// Each axis is sampled independently (uncorrelated).
 /// Uses descriptive RIC axis names to avoid ambiguity.
+#[cfg_attr(feature = "wasm", derive(tsify_next::Tsify))]
+#[cfg_attr(feature = "wasm", tsify(into_wasm_abi, from_wasm_abi))]
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
 pub struct StateDispersion {
     /// 1-sigma radial position dispersion (km).
@@ -122,6 +126,8 @@ impl StateDispersion {
 /// Shares the same (`magnitude_sigma`, `pointing_sigma_rad`) representation as
 /// `ManeuverUncertainty` (covariance layer). A `From<ManeuverUncertainty>` impl
 /// is provided for convenience.
+#[cfg_attr(feature = "wasm", derive(tsify_next::Tsify))]
+#[cfg_attr(feature = "wasm", tsify(into_wasm_abi, from_wasm_abi))]
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
 pub struct ManeuverDispersion {
     /// Proportional 1-sigma magnitude error (dimensionless, e.g. 0.01 = 1%).
@@ -197,6 +203,8 @@ impl From<NavigationAccuracy> for StateDispersion {
 ///
 /// No `Default` impl — spacecraft dispersions are always explicitly specified
 /// because there are no universal defaults for Cd/area/mass uncertainty.
+#[cfg_attr(feature = "wasm", derive(tsify_next::Tsify))]
+#[cfg_attr(feature = "wasm", tsify(into_wasm_abi, from_wasm_abi))]
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
 pub struct SpacecraftDispersion {
     /// Drag coefficient (Cd) dispersion (dimensionless).
@@ -220,6 +228,8 @@ impl SpacecraftDispersion {
 }
 
 /// Composite dispersion configuration.
+#[cfg_attr(feature = "wasm", derive(tsify_next::Tsify))]
+#[cfg_attr(feature = "wasm", tsify(into_wasm_abi, from_wasm_abi))]
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq)]
 pub struct DispersionConfig {
     /// Initial state uncertainty (RIC frame).
@@ -273,6 +283,8 @@ impl DispersionConfig {
 }
 
 /// Monte Carlo execution mode.
+#[cfg_attr(feature = "wasm", derive(tsify_next::Tsify))]
+#[cfg_attr(feature = "wasm", tsify(into_wasm_abi, from_wasm_abi))]
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum MonteCarloMode {
@@ -302,6 +314,8 @@ impl std::fmt::Display for MonteCarloMode {
 ///
 /// - `num_samples > 0`
 /// - `trajectory_steps > 0`
+#[cfg_attr(feature = "wasm", derive(tsify_next::Tsify))]
+#[cfg_attr(feature = "wasm", tsify(into_wasm_abi, from_wasm_abi))]
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct MonteCarloConfig {
     /// Number of Monte Carlo samples to run.
@@ -358,6 +372,8 @@ impl MonteCarloConfig {
 ///
 /// Defined in rpo-core for WASM serialization. Values are populated by
 /// the full-physics Monte Carlo runner (nyx integration layer).
+#[cfg_attr(feature = "wasm", derive(tsify_next::Tsify))]
+#[cfg_attr(feature = "wasm", tsify(into_wasm_abi, from_wasm_abi))]
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SampleResult {
     /// Zero-based sample index.
@@ -377,6 +393,8 @@ pub struct SampleResult {
 /// Empirical (non-parametric) summary computed from MC ensemble samples.
 /// Percentiles use nearest-rank method; NaN/Inf values are filtered before
 /// computation.
+#[cfg_attr(feature = "wasm", derive(tsify_next::Tsify))]
+#[cfg_attr(feature = "wasm", tsify(into_wasm_abi, from_wasm_abi))]
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq)]
 pub struct PercentileStats {
     /// Minimum value.
@@ -407,6 +425,8 @@ pub struct PercentileStats {
 ///
 /// Percentile statistics of RIC position across the MC ensemble,
 /// sampled at the given mission elapsed time.
+#[cfg_attr(feature = "wasm", derive(tsify_next::Tsify))]
+#[cfg_attr(feature = "wasm", tsify(into_wasm_abi, from_wasm_abi))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DispersionEnvelope {
     /// Elapsed time since mission start (seconds).
@@ -423,6 +443,8 @@ pub struct DispersionEnvelope {
 ///
 /// Defined in rpo-core for WASM serialization. Values are populated by
 /// the full-physics Monte Carlo runner (nyx integration layer).
+#[cfg_attr(feature = "wasm", derive(tsify_next::Tsify))]
+#[cfg_attr(feature = "wasm", tsify(into_wasm_abi, from_wasm_abi))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EnsembleStatistics {
     /// Total Δv distribution across samples (km/s).
@@ -466,6 +488,8 @@ pub struct EnsembleStatistics {
 /// - **`ClosedLoop`**: Sigma ratios << 1.0 because re-targeting from dispersed
 ///   states concentrates samples far within the open-loop uncertainty bounds.
 ///   Terminal containment often near 100%. These are expected, not a calibration failure.
+#[cfg_attr(feature = "wasm", derive(tsify_next::Tsify))]
+#[cfg_attr(feature = "wasm", tsify(into_wasm_abi, from_wasm_abi))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CovarianceCrossCheck {
     /// Fraction of MC samples whose terminal RIC position falls within
@@ -481,6 +505,7 @@ pub struct CovarianceCrossCheck {
     /// the 1-sigma covariance envelope of the chief.
     pub min_mahalanobis_distance: f64,
     /// Ratio of MC sigma to covariance sigma per RIC axis (expect ~1.0).
+    #[cfg_attr(feature = "wasm", tsify(type = "[number, number, number]"))]
     pub sigma_ratio_ric: Vector3<f64>,
 }
 
@@ -488,6 +513,8 @@ pub struct CovarianceCrossCheck {
 ///
 /// Defined in rpo-core for WASM serialization. Values are populated by
 /// the full-physics Monte Carlo runner (nyx integration layer).
+#[cfg_attr(feature = "wasm", derive(tsify_next::Tsify))]
+#[cfg_attr(feature = "wasm", tsify(into_wasm_abi, from_wasm_abi))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MonteCarloReport {
     /// Configuration used for this MC run.

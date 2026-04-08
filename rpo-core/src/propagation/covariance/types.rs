@@ -20,11 +20,15 @@ use crate::types::Matrix6;
 ///
 /// Defaults to typical LEO proximity operations navigation accuracy:
 /// 100 m position, 0.1 m/s velocity per axis.
+#[cfg_attr(feature = "wasm", derive(tsify_next::Tsify))]
+#[cfg_attr(feature = "wasm", tsify(into_wasm_abi, from_wasm_abi))]
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
 pub struct NavigationAccuracy {
     /// 1-sigma position accuracy per RIC axis (km): [radial, in-track, cross-track]
+    #[cfg_attr(feature = "wasm", tsify(type = "[number, number, number]"))]
     pub position_sigma_ric_km: Vector3<f64>,
     /// 1-sigma velocity accuracy per RIC axis (km/s): [radial, in-track, cross-track]
+    #[cfg_attr(feature = "wasm", tsify(type = "[number, number, number]"))]
     pub velocity_sigma_ric_km_s: Vector3<f64>,
 }
 
@@ -54,6 +58,8 @@ impl Default for NavigationAccuracy {
 /// This is the covariance-layer representation. The MC-layer counterpart
 /// is `ManeuverDispersion`, which uses the same (`magnitude_sigma`, `pointing_sigma_rad`)
 /// representation for sampling.
+#[cfg_attr(feature = "wasm", derive(tsify_next::Tsify))]
+#[cfg_attr(feature = "wasm", tsify(into_wasm_abi, from_wasm_abi))]
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
 pub struct ManeuverUncertainty {
     /// Proportional 1-sigma magnitude error (dimensionless, e.g. 0.01 = 1%)
@@ -75,18 +81,24 @@ impl Default for ManeuverUncertainty {
 ///
 /// Contains the propagated covariance in ROE space, projected to RIC
 /// position covariance, with derived uncertainty metrics.
+#[cfg_attr(feature = "wasm", derive(tsify_next::Tsify))]
+#[cfg_attr(feature = "wasm", tsify(into_wasm_abi, from_wasm_abi))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CovarianceState {
     /// Epoch
     #[serde(with = "crate::types::state::epoch_serde")]
+    #[cfg_attr(feature = "wasm", tsify(type = "string"))]
     pub epoch: Epoch,
     /// Elapsed time since leg start (seconds)
     pub elapsed_s: f64,
     /// 6×6 ROE-space covariance [δa, δλ, δeₓ, δeᵧ, δiₓ, δiᵧ] (must be symmetric PSD)
+    #[cfg_attr(feature = "wasm", tsify(type = "number[][]"))]
     pub covariance_roe: Matrix6,
     /// 3×3 RIC position covariance (km²), projected from ROE via `T_pos`
+    #[cfg_attr(feature = "wasm", tsify(type = "number[][]"))]
     pub covariance_ric_position_km2: SMatrix<f64, 3, 3>,
     /// 3-sigma position bounds per RIC axis (km): sqrt(diag) × 3
+    #[cfg_attr(feature = "wasm", tsify(type = "[number, number, number]"))]
     pub sigma3_position_ric_km: Vector3<f64>,
     /// Mahalanobis distance from chief (dimensionless).
     /// Measures deputy-chief separation in sigma-space; smaller values
@@ -95,6 +107,8 @@ pub struct CovarianceState {
 }
 
 /// Covariance evolution summary for a single maneuver leg.
+#[cfg_attr(feature = "wasm", derive(tsify_next::Tsify))]
+#[cfg_attr(feature = "wasm", tsify(into_wasm_abi, from_wasm_abi))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LegCovarianceReport {
     /// Covariance states at sampled time points along the leg
@@ -106,6 +120,8 @@ pub struct LegCovarianceReport {
 }
 
 /// Complete mission covariance propagation report.
+#[cfg_attr(feature = "wasm", derive(tsify_next::Tsify))]
+#[cfg_attr(feature = "wasm", tsify(into_wasm_abi, from_wasm_abi))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MissionCovarianceReport {
     /// Per-leg covariance evolution
@@ -120,8 +136,10 @@ pub struct MissionCovarianceReport {
     pub min_mahalanobis_distance: f64,
     /// Predicted nominal RIC position at mission end (km).
     /// Used as the center for terminal 3-sigma box containment checks.
+    #[cfg_attr(feature = "wasm", tsify(type = "[number, number, number]"))]
     pub terminal_position_ric_km: Vector3<f64>,
     /// Terminal 3-sigma position uncertainty per RIC axis (km) at mission end.
     /// Used for epoch-matched comparison against MC terminal dispersion.
+    #[cfg_attr(feature = "wasm", tsify(type = "[number, number, number]"))]
     pub terminal_sigma3_position_ric_km: Vector3<f64>,
 }

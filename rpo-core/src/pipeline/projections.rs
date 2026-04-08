@@ -14,6 +14,8 @@ use crate::propagation::propagator::PropagatedState;
 use crate::types::roe::QuasiNonsingularROE;
 
 /// Lean summary of a maneuver leg (no trajectory arrays, no ROE/Keplerian state).
+#[cfg_attr(feature = "wasm", derive(tsify_next::Tsify))]
+#[cfg_attr(feature = "wasm", tsify(into_wasm_abi, from_wasm_abi))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LegSummary {
     /// Departure burn.
@@ -25,10 +27,13 @@ pub struct LegSummary {
     /// Total delta-v for this leg (km/s).
     pub total_dv_km_s: f64,
     /// Departure RIC position (km).
+    #[cfg_attr(feature = "wasm", tsify(type = "[number, number, number]"))]
     pub from_position_ric_km: Vector3<f64>,
     /// Target RIC position (km).
+    #[cfg_attr(feature = "wasm", tsify(type = "[number, number, number]"))]
     pub to_position_ric_km: Vector3<f64>,
     /// Target RIC velocity (km/s).
+    #[cfg_attr(feature = "wasm", tsify(type = "[number, number, number]"))]
     pub target_velocity_ric_km_s: Vector3<f64>,
     /// Newton-Raphson iterations used.
     pub iterations: u32,
@@ -44,6 +49,8 @@ pub struct LegSummary {
 /// Uses `[f64; 3]` arrays instead of `Vector3<f64>` for JSON wire efficiency,
 /// matching `WaypointInput` precedent. Conversion from `Vector3` happens in
 /// `propagated_to_point()`.
+#[cfg_attr(feature = "wasm", derive(tsify_next::Tsify))]
+#[cfg_attr(feature = "wasm", tsify(into_wasm_abi, from_wasm_abi))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TrajectoryPoint {
     /// Elapsed time from leg start (seconds).
@@ -55,6 +62,8 @@ pub struct TrajectoryPoint {
 }
 
 /// Per-leg trajectory data for on-demand fetch.
+#[cfg_attr(feature = "wasm", derive(tsify_next::Tsify))]
+#[cfg_attr(feature = "wasm", tsify(into_wasm_abi, from_wasm_abi))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LegTrajectory {
     /// Index of this leg in the mission.
@@ -64,6 +73,8 @@ pub struct LegTrajectory {
 }
 
 /// Lean Lambert transfer summary (no full state vectors).
+#[cfg_attr(feature = "wasm", derive(tsify_next::Tsify))]
+#[cfg_attr(feature = "wasm", tsify(into_wasm_abi, from_wasm_abi))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TransferSummary {
     /// Total transfer delta-v (km/s).
@@ -74,10 +85,13 @@ pub struct TransferSummary {
     pub direction: TransferDirection,
     /// Arrival epoch.
     #[serde(with = "crate::types::state::epoch_serde")]
+    #[cfg_attr(feature = "wasm", tsify(type = "string"))]
     pub arrival_epoch: Epoch,
 }
 
 /// Lean mission plan result for API responses (~10-30 KB vs 350-500 KB).
+#[cfg_attr(feature = "wasm", derive(tsify_next::Tsify))]
+#[cfg_attr(feature = "wasm", tsify(into_wasm_abi, from_wasm_abi))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LeanPlanResult {
     /// Classification phase.

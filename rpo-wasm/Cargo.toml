@@ -7,10 +7,18 @@ authors.workspace = true
 license = "MIT OR Apache-2.0"
 
 [lib]
-crate-type = ["cdylib"]
+crate-type = ["cdylib", "rlib"]
 
 [dependencies]
-rpo-core = { path = "../rpo-core" }
+rpo-core = { path = "../rpo-core", features = ["wasm"] }
 wasm-bindgen = "0.2"
-serde-wasm-bindgen = "0.6"
+tsify-next = { version = "0.5", default-features = false, features = ["js"] }
 serde = { version = "1", features = ["derive"] }
+serde-wasm-bindgen = "0.6"
+nalgebra = "0.34"
+hifitime = "4"
+
+[dev-dependencies]
+rpo-core = { path = "../rpo-core", features = ["wasm", "test-fixtures"] }
+wasm-bindgen-test = "0.3"
+serde_json = "1"

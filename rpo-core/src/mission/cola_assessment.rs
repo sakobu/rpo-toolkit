@@ -71,6 +71,8 @@ use crate::mission::avoidance::BURN_TIME_CLAMP_FRACTION;
 /// Reports that a COLA maneuver on `original_leg_index` caused a new
 /// conjunction risk on `violated_leg_index` after the perturbation cascaded
 /// through the intervening maneuver boundaries.
+#[cfg_attr(feature = "wasm", derive(tsify_next::Tsify))]
+#[cfg_attr(feature = "wasm", tsify(into_wasm_abi, from_wasm_abi))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SecondaryViolation {
     /// Leg index where the avoidance maneuver was applied.
@@ -86,6 +88,8 @@ pub struct SecondaryViolation {
 /// Uses a string error message rather than the full `AvoidanceError` enum,
 /// since the error chain (`PocaError`, `PropagationError`, `ConversionError`)
 /// does not derive `Serialize`/`Deserialize`.
+#[cfg_attr(feature = "wasm", derive(tsify_next::Tsify))]
+#[cfg_attr(feature = "wasm", tsify(into_wasm_abi, from_wasm_abi))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SkippedLeg {
     /// Index of the leg with the unaddressed POCA violation.
@@ -100,7 +104,10 @@ pub struct SkippedLeg {
 /// The `skipped` field in `Avoidance` and `SecondaryConjunction` surfaces legs
 /// where COLA failed (budget exceeded, degenerate geometry, etc.) so the
 /// operator can see why a violation was not addressed.
-#[derive(Debug, Clone)]
+#[cfg_attr(feature = "wasm", derive(tsify_next::Tsify))]
+#[cfg_attr(feature = "wasm", tsify(into_wasm_abi, from_wasm_abi))]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "status", rename_all = "snake_case")]
 pub enum ColaAssessment {
     /// All POCAs satisfy the alert threshold — no action needed.
     Nominal,

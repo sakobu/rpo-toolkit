@@ -44,8 +44,8 @@ pub use monte_carlo::{
     MonteCarloReport, PercentileStats, SampleResult, SpacecraftDispersion, StateDispersion,
 };
 pub use waypoints::{
-    get_mission_state_at_time, plan_waypoint_mission, replan_from_waypoint,
-    resample_leg_trajectory,
+    compute_mission_eclipse, get_mission_state_at_time, plan_waypoint_mission,
+    replan_from_waypoint, resample_leg_trajectory,
 };
 pub use cola_assessment::{
     assess_cola, ColaAssessment, SecondaryViolation, SkippedLeg,
