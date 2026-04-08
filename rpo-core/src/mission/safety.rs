@@ -67,6 +67,8 @@ impl std::error::Error for SafetyError {}
 ///
 /// Computed from D'Amico Eq. 2.22. Used by both safety analysis and
 /// formation design enrichment.
+#[cfg_attr(feature = "wasm", derive(tsify_next::Tsify))]
+#[cfg_attr(feature = "wasm", tsify(into_wasm_abi, from_wasm_abi))]
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 pub struct EiSeparation {
     /// Minimum R/C separation from e/i geometry (km). D'Amico Eq. 2.22.
@@ -146,6 +148,8 @@ pub fn compute_ei_separation(
 /// the radial/cross-track plane. The classification is derived purely
 /// from the RIC position vector at the minimum point — it does not
 /// require knowledge of the perch type or mission design.
+#[cfg_attr(feature = "wasm", derive(tsify_next::Tsify))]
+#[cfg_attr(feature = "wasm", tsify(into_wasm_abi, from_wasm_abi))]
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "snake_case")]
 pub enum RcContext {
@@ -169,6 +173,8 @@ pub enum RcContext {
 /// ([`SafetyMetrics`]) from threshold-based verdicts and geometric
 /// context. Both CLI and API consumers use this struct instead of
 /// reimplementing threshold comparisons.
+#[cfg_attr(feature = "wasm", derive(tsify_next::Tsify))]
+#[cfg_attr(feature = "wasm", tsify(into_wasm_abi, from_wasm_abi))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SafetyAssessment {
     /// Whether the 3D keep-out distance threshold is satisfied.

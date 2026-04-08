@@ -5,6 +5,8 @@ use serde::{Deserialize, Serialize};
 
 /// Quasi-nonsingular relative orbital elements (Koenig Eq. 2 / D'Amico Eq. 2.2)
 /// All elements are dimensionless (normalized by chief semi-major axis)
+#[cfg_attr(feature = "wasm", derive(tsify_next::Tsify))]
+#[cfg_attr(feature = "wasm", tsify(into_wasm_abi, from_wasm_abi))]
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
 pub struct QuasiNonsingularROE {
     /// Relative semi-major axis: `(a_d - a_c) / a_c`

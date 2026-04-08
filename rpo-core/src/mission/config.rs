@@ -6,6 +6,8 @@ use serde::{Deserialize, Serialize};
 ///
 /// Controls the threshold at which two spacecraft are considered
 /// within ROE-valid proximity vs. requiring a far-field transfer.
+#[cfg_attr(feature = "wasm", derive(tsify_next::Tsify))]
+#[cfg_attr(feature = "wasm", tsify(into_wasm_abi, from_wasm_abi))]
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
 pub struct ProximityConfig {
     /// Max dimensionless δr/r for ROE linearization validity (default: 0.005).
@@ -24,6 +26,8 @@ impl Default for ProximityConfig {
 }
 
 /// Configuration for the Newton-Raphson targeting solver.
+#[cfg_attr(feature = "wasm", derive(tsify_next::Tsify))]
+#[cfg_attr(feature = "wasm", tsify(into_wasm_abi, from_wasm_abi))]
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
 pub struct TargetingConfig {
     /// Maximum Newton-Raphson iterations (default: 100)
@@ -51,6 +55,8 @@ impl Default for TargetingConfig {
 }
 
 /// Configuration for time-of-flight optimization.
+#[cfg_attr(feature = "wasm", derive(tsify_next::Tsify))]
+#[cfg_attr(feature = "wasm", tsify(into_wasm_abi, from_wasm_abi))]
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
 pub struct TofOptConfig {
     /// Minimum TOF as fraction of orbital period (default: 0.5)
@@ -79,6 +85,8 @@ impl Default for TofOptConfig {
 /// Contains thresholds for both operational and passive safety checks:
 /// - `min_distance_3d_km`: operational keep-out sphere (3D distance)
 /// - `min_ei_separation_km`: passive/abort e/i separation (D'Amico Eq. 2.22)
+#[cfg_attr(feature = "wasm", derive(tsify_next::Tsify))]
+#[cfg_attr(feature = "wasm", tsify(into_wasm_abi, from_wasm_abi))]
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
 pub struct SafetyConfig {
     /// e/i vector separation threshold (km) — passive/abort safety bound (D'Amico Eq. 2.22).
@@ -103,6 +111,8 @@ impl Default for SafetyConfig {
 ///
 /// Groups the three config structs that always travel together across
 /// mission planning functions into a single serializable object.
+#[cfg_attr(feature = "wasm", derive(tsify_next::Tsify))]
+#[cfg_attr(feature = "wasm", tsify(into_wasm_abi, from_wasm_abi))]
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct MissionConfig {
     /// Newton-Raphson targeting solver settings.

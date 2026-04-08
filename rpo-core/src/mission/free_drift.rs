@@ -38,6 +38,8 @@ use crate::types::{KeplerianElements, QuasiNonsingularROE};
 /// - Bounded-motion condition: D'Amico Eq. 2.33
 /// - γ parameter: D'Amico Eq. 2.25
 /// - Secular ROE drift under J2: D'Amico Eq. 2.29
+#[cfg_attr(feature = "wasm", derive(tsify_next::Tsify))]
+#[cfg_attr(feature = "wasm", tsify(into_wasm_abi, from_wasm_abi))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FreeDriftAnalysis {
     /// Propagated trajectory from pre-burn ROE state.

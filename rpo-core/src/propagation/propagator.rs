@@ -14,6 +14,8 @@ use crate::types::{KeplerError, KeplerianElements, QuasiNonsingularROE, RICState
 /// Specifies the time derivatives of relative orbital elements due to
 /// differential drag, normalized by chief semi-major axis. These rates
 /// are treated as constant over the propagation interval.
+#[cfg_attr(feature = "wasm", derive(tsify_next::Tsify))]
+#[cfg_attr(feature = "wasm", tsify(into_wasm_abi, from_wasm_abi))]
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
 pub struct DragConfig {
     /// Time derivative of relative SMA due to drag: `δȧ_drag` (1/s, normalized by `a_c`)
@@ -37,9 +39,13 @@ impl DragConfig {
 }
 
 /// Result of a single propagation step.
+#[cfg_attr(feature = "wasm", derive(tsify_next::Tsify))]
+#[cfg_attr(feature = "wasm", tsify(into_wasm_abi, from_wasm_abi))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PropagatedState {
     /// Absolute epoch of this state
+    #[serde(with = "crate::types::state::epoch_serde")]
+    #[cfg_attr(feature = "wasm", tsify(type = "string"))]
     pub epoch: Epoch,
     /// Propagated quasi-nonsingular ROE
     pub roe: QuasiNonsingularROE,

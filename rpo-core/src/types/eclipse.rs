@@ -7,6 +7,8 @@ use serde::{Deserialize, Serialize};
 use super::state::epoch_serde;
 
 /// Shadow state classification for a spacecraft.
+#[cfg_attr(feature = "wasm", derive(tsify_next::Tsify))]
+#[cfg_attr(feature = "wasm", tsify(into_wasm_abi, from_wasm_abi))]
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum EclipseState {
@@ -31,14 +33,19 @@ pub enum EclipseState {
 ///
 /// Each snapshot carries its own epoch, making slices self-contained and
 /// eliminating the need to pass parallel epoch arrays alongside snapshot data.
+#[cfg_attr(feature = "wasm", derive(tsify_next::Tsify))]
+#[cfg_attr(feature = "wasm", tsify(into_wasm_abi, from_wasm_abi))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CelestialSnapshot {
     /// Epoch of this snapshot.
     #[serde(with = "epoch_serde")]
+    #[cfg_attr(feature = "wasm", tsify(type = "string"))]
     pub epoch: Epoch,
     /// Unit vector from spacecraft toward the Sun in ECI J2000.
+    #[cfg_attr(feature = "wasm", tsify(type = "[number, number, number]"))]
     pub sun_direction_eci: Vector3<f64>,
     /// Unit vector from spacecraft toward the Moon in ECI J2000.
+    #[cfg_attr(feature = "wasm", tsify(type = "[number, number, number]"))]
     pub moon_direction_eci: Vector3<f64>,
     /// Distance from spacecraft to Sun (km).
     pub sun_distance_km: f64,
@@ -55,13 +62,17 @@ pub struct CelestialSnapshot {
 /// The `state` field records the **worst-case** (deepest shadow) state
 /// observed during the interval: `Umbra` if any sample was in umbra,
 /// otherwise `Penumbra` with the maximum shadow fraction observed.
+#[cfg_attr(feature = "wasm", derive(tsify_next::Tsify))]
+#[cfg_attr(feature = "wasm", tsify(into_wasm_abi, from_wasm_abi))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EclipseInterval {
     /// Start epoch of the shadow interval.
     #[serde(with = "epoch_serde")]
+    #[cfg_attr(feature = "wasm", tsify(type = "string"))]
     pub start: Epoch,
     /// End epoch of the shadow interval.
     #[serde(with = "epoch_serde")]
+    #[cfg_attr(feature = "wasm", tsify(type = "string"))]
     pub end: Epoch,
     /// Duration of the shadow interval (seconds).
     pub duration_s: f64,
@@ -70,6 +81,8 @@ pub struct EclipseInterval {
 }
 
 /// Summary of eclipse conditions across a mission or leg.
+#[cfg_attr(feature = "wasm", derive(tsify_next::Tsify))]
+#[cfg_attr(feature = "wasm", tsify(into_wasm_abi, from_wasm_abi))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EclipseSummary {
     /// All shadow intervals detected in the trajectory.
@@ -94,6 +107,8 @@ pub struct EclipseSummary {
 /// The summary is deputy-based because the deputy is the one maneuvering
 /// and mission planners care about the deputy's shadow conditions during
 /// transfer (comm/power constraints).
+#[cfg_attr(feature = "wasm", derive(tsify_next::Tsify))]
+#[cfg_attr(feature = "wasm", tsify(into_wasm_abi, from_wasm_abi))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TransferEclipseData {
     /// Eclipse summary for the deputy's transfer arc.
@@ -109,6 +124,8 @@ pub struct TransferEclipseData {
 ///
 /// Each field has the same length — one entry per trajectory point in the
 /// corresponding `ManeuverLeg.trajectory`.
+#[cfg_attr(feature = "wasm", derive(tsify_next::Tsify))]
+#[cfg_attr(feature = "wasm", tsify(into_wasm_abi, from_wasm_abi))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LegEclipseData {
     /// Chief celestial snapshots (Sun/Moon direction, eclipse state) at each
@@ -138,6 +155,8 @@ pub struct LegEclipseData {
 /// Follows the same pattern as `MissionCovarianceReport`, which carries
 /// per-leg `LegCovarianceReport` alongside aggregate metrics — overlay data
 /// lives in its own report structure, not on `ManeuverLeg`.
+#[cfg_attr(feature = "wasm", derive(tsify_next::Tsify))]
+#[cfg_attr(feature = "wasm", tsify(into_wasm_abi, from_wasm_abi))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MissionEclipseData {
     /// Aggregate eclipse summary across all legs (merged intervals, chief-based).

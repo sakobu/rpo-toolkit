@@ -13,6 +13,8 @@ use super::errors::PerchFallbackReason;
 // ---------------------------------------------------------------------------
 
 /// Safety requirements for formation design enrichment.
+#[cfg_attr(feature = "wasm", derive(tsify_next::Tsify))]
+#[cfg_attr(feature = "wasm", tsify(into_wasm_abi, from_wasm_abi))]
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 pub struct SafetyRequirements {
     /// Minimum R/C separation (km) — maps to `d_min` in D'Amico Eq. 2.22.
@@ -27,6 +29,8 @@ pub struct SafetyRequirements {
 /// Controls how the eccentricity vector is oriented relative to the
 /// inclination vector after enrichment. Both `Parallel` and `AntiParallel`
 /// maximize the passive safety metric (D'Amico Eq. 2.23).
+#[cfg_attr(feature = "wasm", derive(tsify_next::Tsify))]
+#[cfg_attr(feature = "wasm", tsify(into_wasm_abi, from_wasm_abi))]
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum EiAlignment {
@@ -44,6 +48,8 @@ pub enum EiAlignment {
 // ---------------------------------------------------------------------------
 
 /// How the enrichment was applied.
+#[cfg_attr(feature = "wasm", derive(tsify_next::Tsify))]
+#[cfg_attr(feature = "wasm", tsify(into_wasm_abi, from_wasm_abi))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum EnrichmentMode {
@@ -55,6 +61,8 @@ pub enum EnrichmentMode {
 }
 
 /// Result of formation design enrichment for a single waypoint.
+#[cfg_attr(feature = "wasm", derive(tsify_next::Tsify))]
+#[cfg_attr(feature = "wasm", tsify(into_wasm_abi, from_wasm_abi))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EnrichedWaypoint {
     /// The safety-enriched ROE target.
@@ -62,6 +70,7 @@ pub struct EnrichedWaypoint {
     /// The original (minimum-norm) ROE for comparison.
     pub baseline_roe: QuasiNonsingularROE,
     /// RIC position — identical to operator's input (null-space guarantee).
+    #[cfg_attr(feature = "wasm", tsify(type = "[number, number, number]"))]
     pub position_ric_km: Vector3<f64>,
     /// E/I separation of the enriched state (D'Amico Eq. 2.22).
     pub enriched_ei: EiSeparation,
@@ -87,6 +96,8 @@ pub struct EnrichedWaypoint {
 /// by `tof/2` under the J2 STM; the e/i separation is read at that epoch.
 /// Fields reflect the mid-transit state — NOT the departure epoch (which
 /// carries the pre-rotated, lagged phase by construction).
+#[cfg_attr(feature = "wasm", derive(tsify_next::Tsify))]
+#[cfg_attr(feature = "wasm", tsify(into_wasm_abi, from_wasm_abi))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DriftPrediction {
     /// Predicted minimum e/i separation at mid-transit (km).
@@ -97,6 +108,8 @@ pub struct DriftPrediction {
 }
 
 /// Result of enriching a perch geometry with safe e/i vectors.
+#[cfg_attr(feature = "wasm", derive(tsify_next::Tsify))]
+#[cfg_attr(feature = "wasm", tsify(into_wasm_abi, from_wasm_abi))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SafePerch {
     /// Geometric perch ROE before enrichment.
@@ -114,6 +127,8 @@ pub struct SafePerch {
 }
 
 /// Result of perch enrichment — distinguishes success from fallback.
+#[cfg_attr(feature = "wasm", derive(tsify_next::Tsify))]
+#[cfg_attr(feature = "wasm", tsify(into_wasm_abi, from_wasm_abi))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "status", rename_all = "snake_case")]
 pub enum PerchEnrichmentResult {
@@ -153,6 +168,8 @@ impl PerchEnrichmentResult {
 // ---------------------------------------------------------------------------
 
 /// Whether J2 drift compensation was applied or skipped.
+#[cfg_attr(feature = "wasm", derive(tsify_next::Tsify))]
+#[cfg_attr(feature = "wasm", tsify(into_wasm_abi, from_wasm_abi))]
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum DriftCompensationStatus {
@@ -163,6 +180,8 @@ pub enum DriftCompensationStatus {
 }
 
 /// Single sample in the e/i separation profile.
+#[cfg_attr(feature = "wasm", derive(tsify_next::Tsify))]
+#[cfg_attr(feature = "wasm", tsify(into_wasm_abi, from_wasm_abi))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EiSample {
     /// Elapsed time from leg departure (seconds).
@@ -174,6 +193,8 @@ pub struct EiSample {
 }
 
 /// E/I separation profile along a coast arc.
+#[cfg_attr(feature = "wasm", derive(tsify_next::Tsify))]
+#[cfg_attr(feature = "wasm", tsify(into_wasm_abi, from_wasm_abi))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TransitSafetyReport {
     /// Minimum e/i separation across the arc (km).
@@ -199,6 +220,8 @@ pub struct TransitSafetyReport {
 /// The `waypoints` and `transit_safety` vectors are indexed by leg — each
 /// element corresponds to the leg at the same index. `None` entries indicate
 /// that enrichment or assessment failed for that leg (non-fatal).
+#[cfg_attr(feature = "wasm", derive(tsify_next::Tsify))]
+#[cfg_attr(feature = "wasm", tsify(into_wasm_abi, from_wasm_abi))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FormationDesignReport {
     /// Perch enrichment result — either enriched or fallback with reason.

@@ -21,6 +21,8 @@ fn is_false(v: &bool) -> bool {
 ///
 /// Determines whether the spacecraft are close enough for linearized
 /// ROE operations or require a far-field transfer.
+#[cfg_attr(feature = "wasm", derive(tsify_next::Tsify))]
+#[cfg_attr(feature = "wasm", tsify(into_wasm_abi, from_wasm_abi))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum MissionPhase {
@@ -55,6 +57,8 @@ pub enum MissionPhase {
 /// A perch orbit is a safe holding geometry at the boundary of the
 /// ROE-valid region, used as the handoff point between far-field
 /// Lambert transfers and near-field ROE proximity operations.
+#[cfg_attr(feature = "wasm", derive(tsify_next::Tsify))]
+#[cfg_attr(feature = "wasm", tsify(into_wasm_abi, from_wasm_abi))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum PerchGeometry {
@@ -73,6 +77,8 @@ pub enum PerchGeometry {
 }
 
 /// A complete mission plan from two arbitrary ECI states.
+#[cfg_attr(feature = "wasm", derive(tsify_next::Tsify))]
+#[cfg_attr(feature = "wasm", tsify(into_wasm_abi, from_wasm_abi))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MissionPlan {
     /// Mission phase classification
@@ -89,9 +95,12 @@ pub struct MissionPlan {
 }
 
 /// A target waypoint in RIC space for maneuver targeting.
+#[cfg_attr(feature = "wasm", derive(tsify_next::Tsify))]
+#[cfg_attr(feature = "wasm", tsify(into_wasm_abi, from_wasm_abi))]
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Waypoint {
     /// Target position in RIC frame (km): [radial, in-track, cross-track]
+    #[cfg_attr(feature = "wasm", tsify(type = "[number, number, number]"))]
     pub position_ric_km: Vector3<f64>,
     /// Target velocity in RIC frame (km/s): \[radial, in-track, cross-track\].
     ///
@@ -106,22 +115,29 @@ pub struct Waypoint {
     /// **Formation enrichment** (`safety_envelope::enrich_waypoint`):
     /// `None` means 3-DOF null-space freedom — velocity is selected to
     /// maximize e/i safety separation (D'Amico Eq. 2.17 pseudoinverse).
+    #[cfg_attr(feature = "wasm", tsify(type = "[number, number, number] | null"))]
     pub velocity_ric_km_s: Option<Vector3<f64>>,
     /// Time of flight to this waypoint (seconds). If `None`, TOF will be optimized.
     pub tof_s: Option<f64>,
 }
 
 /// A single impulsive maneuver (Δv) in the RIC frame.
+#[cfg_attr(feature = "wasm", derive(tsify_next::Tsify))]
+#[cfg_attr(feature = "wasm", tsify(into_wasm_abi, from_wasm_abi))]
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
 pub struct Maneuver {
     /// Δv in RIC frame (km/s): [radial, in-track, cross-track]
+    #[cfg_attr(feature = "wasm", tsify(type = "[number, number, number]"))]
     pub dv_ric_km_s: Vector3<f64>,
     /// Epoch at which the maneuver is applied
     #[serde(with = "crate::types::state::epoch_serde")]
+    #[cfg_attr(feature = "wasm", tsify(type = "string"))]
     pub epoch: Epoch,
 }
 
 /// A single leg of a waypoint transfer (two burns + coast).
+#[cfg_attr(feature = "wasm", derive(tsify_next::Tsify))]
+#[cfg_attr(feature = "wasm", tsify(into_wasm_abi, from_wasm_abi))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ManeuverLeg {
     /// Departure burn (applied at departure epoch)
@@ -148,10 +164,13 @@ pub struct ManeuverLeg {
     /// Coast trajectory between burns
     pub trajectory: Vec<PropagatedState>,
     /// Departure RIC position (km)
+    #[cfg_attr(feature = "wasm", tsify(type = "[number, number, number]"))]
     pub from_position_ric_km: Vector3<f64>,
     /// Target RIC position (km)
+    #[cfg_attr(feature = "wasm", tsify(type = "[number, number, number]"))]
     pub to_position_ric_km: Vector3<f64>,
     /// Target RIC velocity (km/s)
+    #[cfg_attr(feature = "wasm", tsify(type = "[number, number, number]"))]
     pub target_velocity_ric_km_s: Vector3<f64>,
     /// Number of Newton-Raphson iterations used
     pub iterations: u32,
@@ -160,6 +179,8 @@ pub struct ManeuverLeg {
 }
 
 /// A complete waypoint-based mission plan.
+#[cfg_attr(feature = "wasm", derive(tsify_next::Tsify))]
+#[cfg_attr(feature = "wasm", tsify(into_wasm_abi, from_wasm_abi))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WaypointMission {
     /// Ordered sequence of maneuver legs
@@ -185,6 +206,8 @@ pub struct WaypointMission {
 /// Meaningful for all mission types including actively guided approaches.
 /// These metrics reflect the actual physical separation between vehicles
 /// at each trajectory point.
+#[cfg_attr(feature = "wasm", derive(tsify_next::Tsify))]
+#[cfg_attr(feature = "wasm", tsify(into_wasm_abi, from_wasm_abi))]
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
 pub struct OperationalSafety {
     /// Minimum instantaneous R/C distance (km): min sqrt(R² + C²) along trajectory.
@@ -197,6 +220,7 @@ pub struct OperationalSafety {
     /// Mission elapsed time (s) at minimum R/C separation.
     pub min_rc_elapsed_s: f64,
     /// RIC position (km) at minimum R/C separation.
+    #[cfg_attr(feature = "wasm", tsify(type = "[number, number, number]"))]
     pub min_rc_ric_position_km: Vector3<f64>,
 
     /// Leg index (0-based) where minimum 3D distance occurs.
@@ -204,6 +228,7 @@ pub struct OperationalSafety {
     /// Mission elapsed time (s) at minimum 3D distance.
     pub min_3d_elapsed_s: f64,
     /// RIC position (km) at minimum 3D distance.
+    #[cfg_attr(feature = "wasm", tsify(type = "[number, number, number]"))]
     pub min_3d_ric_position_km: Vector3<f64>,
 }
 
@@ -232,6 +257,8 @@ pub struct OperationalSafety {
 ///   (returns 0.0).
 ///
 /// See [`crate::mission::safety::analyze_safety`] for the full computation.
+#[cfg_attr(feature = "wasm", derive(tsify_next::Tsify))]
+#[cfg_attr(feature = "wasm", tsify(into_wasm_abi, from_wasm_abi))]
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
 pub struct PassiveSafety {
     /// Minimum e/i vector separation (km) from D'Amico Eq. 2.22 (analytic orbit-averaged bound).
@@ -253,6 +280,8 @@ pub struct PassiveSafety {
 /// - **Passive / abort** ([`PassiveSafety`]): orbit-averaged e/i vector separation
 ///   (D'Amico Eq. 2.22) — meaningful for free-drift contingency analysis.
 ///   Not a planning constraint in the current targeting solver.
+#[cfg_attr(feature = "wasm", derive(tsify_next::Tsify))]
+#[cfg_attr(feature = "wasm", tsify(into_wasm_abi, from_wasm_abi))]
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
 pub struct SafetyMetrics {
     /// Operational safety: instantaneous geometric distance measures.
@@ -265,6 +294,8 @@ pub struct SafetyMetrics {
 ///
 /// Defined in rpo-core for WASM serialization. Values are populated by
 /// the full-physics nyx validation pipeline.
+#[cfg_attr(feature = "wasm", derive(tsify_next::Tsify))]
+#[cfg_attr(feature = "wasm", tsify(into_wasm_abi, from_wasm_abi))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ValidationPoint {
     /// Time since mission start (seconds)
@@ -287,6 +318,8 @@ pub struct ValidationPoint {
 ///
 /// Defined in rpo-core for WASM serialization. Values are populated by
 /// the full-physics nyx validation pipeline.
+#[cfg_attr(feature = "wasm", derive(tsify_next::Tsify))]
+#[cfg_attr(feature = "wasm", tsify(into_wasm_abi, from_wasm_abi))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ValidationReport {
     /// Per-leg comparison points
@@ -327,6 +360,8 @@ impl ValidationReport {
 ///
 /// Defined in rpo-core for WASM serialization. Values are populated by
 /// the full-physics nyx validation pipeline (eclipse comparison module).
+#[cfg_attr(feature = "wasm", derive(tsify_next::Tsify))]
+#[cfg_attr(feature = "wasm", tsify(into_wasm_abi, from_wasm_abi))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EclipseValidationPoint {
     /// Time since mission start (seconds).
@@ -345,21 +380,27 @@ pub struct EclipseValidationPoint {
 ///
 /// Defined in rpo-core for WASM serialization. Values are populated by
 /// the full-physics nyx validation pipeline (eclipse comparison module).
+#[cfg_attr(feature = "wasm", derive(tsify_next::Tsify))]
+#[cfg_attr(feature = "wasm", tsify(into_wasm_abi, from_wasm_abi))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EclipseIntervalComparison {
     /// Analytical interval start epoch.
     #[serde(with = "crate::types::state::epoch_serde")]
+    #[cfg_attr(feature = "wasm", tsify(type = "string"))]
     pub analytical_start: Epoch,
     /// ANISE interval start epoch.
     #[serde(with = "crate::types::state::epoch_serde")]
+    #[cfg_attr(feature = "wasm", tsify(type = "string"))]
     pub numerical_start: Epoch,
     /// Entry timing error (seconds). Positive = analytical enters shadow later.
     pub entry_error_s: f64,
     /// Analytical interval end epoch.
     #[serde(with = "crate::types::state::epoch_serde")]
+    #[cfg_attr(feature = "wasm", tsify(type = "string"))]
     pub analytical_end: Epoch,
     /// ANISE interval end epoch.
     #[serde(with = "crate::types::state::epoch_serde")]
+    #[cfg_attr(feature = "wasm", tsify(type = "string"))]
     pub numerical_end: Epoch,
     /// Exit timing error (seconds). Positive = analytical exits shadow later.
     pub exit_error_s: f64,
@@ -372,6 +413,8 @@ pub struct EclipseIntervalComparison {
 /// Defined in rpo-core for WASM serialization. Values are populated by
 /// the full-physics nyx validation pipeline when the mission includes
 /// eclipse data (`WaypointMission.eclipse`).
+#[cfg_attr(feature = "wasm", derive(tsify_next::Tsify))]
+#[cfg_attr(feature = "wasm", tsify(into_wasm_abi, from_wasm_abi))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EclipseValidation {
     /// Per-sample eclipse comparison points.

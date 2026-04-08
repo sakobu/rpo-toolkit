@@ -118,6 +118,8 @@ impl From<KeplerError> for FormationDesignError {
 /// Serializable projection of [`FormationDesignError`] — structured for common
 /// variants, with `detail` strings only for rare wrapped-inner-error cases
 /// where the inner types don't implement `Serialize`.
+#[cfg_attr(feature = "wasm", derive(tsify_next::Tsify))]
+#[cfg_attr(feature = "wasm", tsify(into_wasm_abi, from_wasm_abi))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum PerchFallbackReason {

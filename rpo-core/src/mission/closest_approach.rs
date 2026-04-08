@@ -82,18 +82,23 @@ const POSITION_NORM_EPSILON_KM: f64 = 1e-15;
 /// - Brent's method: Brent (1973), Ch. 4
 /// - RIC position/velocity: D'Amico Eq. 2.17 (unperturbed), Eq. 2.31 (J2)
 /// - Minimum distance for bounded motion: D'Amico Eq. 2.23
+#[cfg_attr(feature = "wasm", derive(tsify_next::Tsify))]
+#[cfg_attr(feature = "wasm", tsify(into_wasm_abi, from_wasm_abi))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ClosestApproach {
     /// Epoch of closest approach.
     #[serde(with = "crate::types::state::epoch_serde")]
+    #[cfg_attr(feature = "wasm", tsify(type = "string"))]
     pub epoch: Epoch,
     /// Elapsed time from leg start (s).
     pub elapsed_s: f64,
     /// Refined minimum distance (km).
     pub distance_km: f64,
     /// RIC position at closest approach (km).
+    #[cfg_attr(feature = "wasm", tsify(type = "[number, number, number]"))]
     pub position_ric_km: Vector3<f64>,
     /// RIC velocity at closest approach (km/s).
+    #[cfg_attr(feature = "wasm", tsify(type = "[number, number, number]"))]
     pub velocity_ric_km_s: Vector3<f64>,
     /// Leg index within the mission.
     pub leg_index: usize,

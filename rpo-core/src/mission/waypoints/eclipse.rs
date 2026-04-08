@@ -44,7 +44,7 @@ use crate::types::{EclipseInterval, EclipseSummary, LegEclipseData, MissionEclip
 /// The Sun position for the deputy is obtained from the chief snapshot's
 /// direction and distance fields (already computed by `build_celestial_snapshot`),
 /// avoiding a redundant ephemeris call.
-pub(super) fn compute_mission_eclipse(
+pub fn compute_mission_eclipse(
     legs: &[ManeuverLeg],
 ) -> Result<MissionEclipseData, EclipseComputeError> {
     let mut leg_data = Vec::with_capacity(legs.len());

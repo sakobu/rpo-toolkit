@@ -11,6 +11,8 @@ use serde::{Deserialize, Serialize};
 use crate::types::StateVector;
 
 /// Transfer direction for Lambert solutions.
+#[cfg_attr(feature = "wasm", derive(tsify_next::Tsify))]
+#[cfg_attr(feature = "wasm", tsify(into_wasm_abi, from_wasm_abi))]
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum TransferDirection {
@@ -34,6 +36,8 @@ impl std::fmt::Display for TransferDirection {
 }
 
 /// Configuration for Lambert solver behavior.
+#[cfg_attr(feature = "wasm", derive(tsify_next::Tsify))]
+#[cfg_attr(feature = "wasm", tsify(into_wasm_abi, from_wasm_abi))]
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
 pub struct LambertConfig {
     /// Transfer direction selection.
@@ -43,6 +47,8 @@ pub struct LambertConfig {
 }
 
 /// A solved Lambert transfer between two ECI states.
+#[cfg_attr(feature = "wasm", derive(tsify_next::Tsify))]
+#[cfg_attr(feature = "wasm", tsify(into_wasm_abi, from_wasm_abi))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LambertTransfer {
     /// Departure state (original deputy position, computed departure velocity).
@@ -50,8 +56,10 @@ pub struct LambertTransfer {
     /// Arrival state (target position, computed arrival velocity).
     pub arrival_state: StateVector,
     /// Required Δv at departure (km/s, ECI).
+    #[cfg_attr(feature = "wasm", tsify(type = "[number, number, number]"))]
     pub departure_dv_eci_km_s: Vector3<f64>,
     /// Required Δv at arrival (km/s, ECI).
+    #[cfg_attr(feature = "wasm", tsify(type = "[number, number, number]"))]
     pub arrival_dv_eci_km_s: Vector3<f64>,
     /// Total Δv magnitude (km/s).
     pub total_dv_km_s: f64,

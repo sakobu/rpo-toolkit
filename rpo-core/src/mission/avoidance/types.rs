@@ -49,6 +49,8 @@ pub(crate) const BURN_TIME_CLAMP_FRACTION: f64 = 0.99;
 // ---------------------------------------------------------------------------
 
 /// Configuration for collision avoidance maneuver design.
+#[cfg_attr(feature = "wasm", derive(tsify_next::Tsify))]
+#[cfg_attr(feature = "wasm", tsify(into_wasm_abi, from_wasm_abi))]
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
 pub struct ColaConfig {
     /// Target POCA distance after avoidance (km).
@@ -58,6 +60,8 @@ pub struct ColaConfig {
 }
 
 /// Classification of the avoidance correction type.
+#[cfg_attr(feature = "wasm", derive(tsify_next::Tsify))]
+#[cfg_attr(feature = "wasm", tsify(into_wasm_abi, from_wasm_abi))]
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum CorrectionType {
@@ -70,12 +74,16 @@ pub enum CorrectionType {
 }
 
 /// Avoidance maneuver result from COLA computation.
+#[cfg_attr(feature = "wasm", derive(tsify_next::Tsify))]
+#[cfg_attr(feature = "wasm", tsify(into_wasm_abi, from_wasm_abi))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AvoidanceManeuver {
     /// Epoch of avoidance burn.
     #[serde(with = "crate::types::state::epoch_serde")]
+    #[cfg_attr(feature = "wasm", tsify(type = "string"))]
     pub epoch: Epoch,
     /// Delta-v in RIC frame (km/s).
+    #[cfg_attr(feature = "wasm", tsify(type = "[number, number, number]"))]
     pub dv_ric_km_s: Vector3<f64>,
     /// Mean argument of latitude at burn (rad).
     pub maneuver_location_rad: f64,
