@@ -1,33 +1,32 @@
-//! Request handlers for the WebSocket API.
-//!
-//! Each handler is a function that operates on session state, testable without
-//! WebSocket infrastructure. Inline handlers (classify, transfer, plan, config)
-//! return immediately. Background handlers (drag, validate, mc) are designed to
-//! be spawned on a blocking thread.
+//! Handler modules for the 4 server-side operations.
 
-pub mod classify;
-pub mod cola;
-pub mod common;
 pub mod drag;
-pub mod formation;
-pub mod free_drift;
 pub mod mc;
-pub mod poca;
-pub mod plan;
 pub mod transfer;
 pub mod validate;
 
-pub use classify::handle_classify;
-pub use cola::handle_run_cola;
-pub use common::resolve_propagator_toggle;
 pub use drag::handle_extract_drag;
-pub use formation::{handle_accept_waypoint_enrichment, handle_get_formation_design, handle_get_safe_alternative};
-pub use free_drift::handle_get_free_drift;
-pub use poca::handle_get_poca;
-pub use mc::{handle_mc, McRequest};
-pub use plan::{
-    handle_get_covariance, handle_get_eclipse, handle_get_trajectory, handle_select_plan,
-    handle_set_waypoints, handle_update_config, ConfigUpdate, EclipseResponse, PlanResponse,
-};
+pub(crate) use mc::handle_mc;
 pub use transfer::handle_compute_transfer;
-pub use validate::{handle_validate, ValidateRequest};
+pub(crate) use validate::handle_validate;
+
+use crate::protocol::{ProgressPhase, ProgressUpdate};
+use tokio::sync::mpsc;
+
+/// Best-effort progress update — dropped silently if channel is full.
+///
+/// Used by background handlers (validate, MC) to stream progress to the WS loop.
+/// `try_send` is non-blocking: if the channel is full, the update is discarded
+/// rather than blocking the computation thread.
+pub(crate) fn send_progress(
+    tx: &mpsc::Sender<ProgressUpdate>,
+    phase: ProgressPhase,
+    detail: &str,
+    fraction: f64,
+) {
+    let _ = tx.try_send(ProgressUpdate {
+        phase,
+        detail: Some(detail.to_owned()),
+        fraction: Some(fraction),
+    });
+}

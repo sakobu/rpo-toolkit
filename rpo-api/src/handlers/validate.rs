@@ -1,129 +1,81 @@
-//! Validation handler: per-leg nyx validation with progress streaming.
-//!
-//! Designed to be called from `spawn_blocking`. Sends `Progress` updates
-//! between legs and checks `cancel` between legs.
+//! Full-physics validation handler — blocking, seconds to minutes.
 
+use crate::error::ServerError;
+use crate::protocol::{ColaBurnInput, ProgressPhase, PROGRESS_COMPLETE, PROGRESS_EXECUTING, PROGRESS_START};
+use anise::prelude::Almanac;
+use rpo_core::mission::types::{ValidationReport, WaypointMission};
+use rpo_core::types::spacecraft::SpacecraftConfig;
+use rpo_core::types::state::StateVector;
+use rpo_nyx::validation::{validate_mission_nyx, ValidationConfig};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
-
-use anise::prelude::Almanac;
 use tokio::sync::mpsc;
 
-use rpo_core::mission::avoidance::ColaConfig;
-use rpo_core::mission::config::{MissionConfig, SafetyConfig};
-use rpo_core::mission::types::WaypointMission;
-use rpo_core::mission::ValidationReport;
-use rpo_core::pipeline::{TransferResult, WaypointInput};
-use rpo_core::propagation::PropagationModel;
-use rpo_core::types::{SpacecraftConfig, StateVector};
-use rpo_nyx::pipeline::compute_validation_burns;
-use rpo_nyx::validation::{validate_mission_nyx, ValidationConfig};
+use super::send_progress;
 
-use super::common::{replan_if_drag_changed, resolve_drag_and_propagator, send_progress};
-use crate::error::ApiError;
-use crate::protocol::{ProgressPhase, ProgressUpdate};
-
-/// Request payload for validation, cloned from session state.
+/// Domain inputs for a validation job.
 ///
-/// Contains all data needed to run validation independently of the session,
-/// since validation runs on a blocking thread.
-pub struct ValidateRequest {
-    /// The planned waypoint mission to validate.
+/// Groups the 7 domain parameters needed by [`handle_validate`], keeping the
+/// handler signature at 4 arguments (input + almanac + progress + cancel).
+pub(crate) struct ValidateJobInput {
+    /// Analytical mission to validate against nyx full-physics propagation.
     pub mission: WaypointMission,
-    /// Chief ECI state at perch (mission start).
-    pub perch_chief: StateVector,
-    /// Deputy ECI state at perch (mission start).
-    pub perch_deputy: StateVector,
+    /// Chief ECI state at mission start.
+    pub chief: StateVector,
+    /// Deputy ECI state at mission start.
+    pub deputy: StateVector,
     /// Chief spacecraft physical properties.
     pub chief_config: SpacecraftConfig,
     /// Deputy spacecraft physical properties.
     pub deputy_config: SpacecraftConfig,
-    /// Number of nyx sample points per leg.
+    /// Intermediate comparison samples per leg.
     pub samples_per_leg: u32,
-    /// Auto-derive drag rates before validation.
-    pub auto_drag: bool,
-    /// Waypoint inputs (needed for drag-based replan).
-    pub waypoints: Vec<WaypointInput>,
-    /// Mission solver configuration (needed for drag-based replan).
-    pub config: MissionConfig,
-    /// Propagation model (needed for drag-based replan).
-    pub propagator: PropagationModel,
-    /// Transfer result (needed for departure state in replan).
-    pub transfer: TransferResult,
-    /// Safety configuration (for COLA auto-derivation).
-    pub safety: Option<SafetyConfig>,
-    /// Explicit COLA configuration (overrides safety-based auto-derivation).
-    pub cola: Option<ColaConfig>,
+    /// Optional COLA avoidance burns to inject during nyx propagation.
+    pub cola_burn_inputs: Vec<ColaBurnInput>,
 }
 
-/// Run per-leg nyx validation with progress streaming and cancellation.
+/// Handle a `Validate` message on a blocking thread.
 ///
-/// Uses the pre-planned mission from the request. When `auto_drag` is true,
-/// extracts drag rates and replans with a drag propagator before validating.
+/// Sends progress updates via `progress_tx` and checks `cancel` between phases.
+/// Returns the validation report on success.
 ///
 /// # Errors
-/// Returns [`ApiError`] if planning, propagation, or validation fails,
-/// or if the operation is cancelled.
-pub fn handle_validate(
-    request: ValidateRequest,
+///
+/// - [`ServerError::Cancelled`] if the cancel flag is set before validation starts.
+/// - [`ServerError::Validation`] if nyx full-physics validation fails (empty trajectory,
+///   nyx bridge error, frame conversion failure, COLA epoch out of bounds).
+pub(crate) fn handle_validate(
+    input: ValidateJobInput,
     almanac: &Arc<Almanac>,
-    progress_tx: &mpsc::Sender<ProgressUpdate>,
+    progress_tx: &mpsc::Sender<crate::protocol::ProgressUpdate>,
     cancel: &Arc<AtomicBool>,
-) -> Result<ValidationReport, ApiError> {
-    send_progress(progress_tx, ProgressPhase::Validate, "Planning mission...", 0.0);
+) -> Result<ValidationReport, ServerError> {
+    send_progress(progress_tx, ProgressPhase::Validate, "Starting validation...", PROGRESS_START);
 
     if cancel.load(Ordering::Relaxed) {
-        return Err(ApiError::Cancelled);
+        return Err(ServerError::Cancelled);
     }
 
-    // Resolve propagator (with optional auto-drag)
-    let (propagator, derived_drag) = resolve_drag_and_propagator(
-        request.auto_drag,
-        &request.transfer,
-        &request.chief_config,
-        &request.deputy_config,
-        almanac,
-        &request.propagator,
-    )?;
+    let cola_burns: Vec<_> = input.cola_burn_inputs.into_iter().map(Into::into).collect();
 
-    // If auto_drag changed the propagator, replan the mission
-    let mission = replan_if_drag_changed(
-        request.auto_drag,
-        derived_drag.as_ref(),
-        request.mission,
-        &request.transfer,
-        &request.waypoints,
-        &request.config,
-        &propagator,
-    )?;
-
-    if cancel.load(Ordering::Relaxed) {
-        return Err(ApiError::Cancelled);
-    }
-
-    send_progress(progress_tx, ProgressPhase::Validate, "Running nyx validation...", 0.1);
-
-    // Compute safety analysis and derive COLA burns for nyx injection.
-    let (_safety, cola_burns) = compute_validation_burns(
-        &mission, request.safety.as_ref(), request.cola.as_ref(), &propagator,
-    )?;
-
-    let val_config = ValidationConfig {
-        samples_per_leg: request.samples_per_leg,
-        chief_config: request.chief_config,
-        deputy_config: request.deputy_config,
+    let config = ValidationConfig {
+        samples_per_leg: input.samples_per_leg,
+        chief_config: input.chief_config,
+        deputy_config: input.deputy_config,
     };
+
+    send_progress(progress_tx, ProgressPhase::Validate, "Running nyx validation...", PROGRESS_EXECUTING);
+
     let report = validate_mission_nyx(
-        &mission,
-        &request.perch_chief,
-        &request.perch_deputy,
-        &val_config,
+        &input.mission,
+        &input.chief,
+        &input.deputy,
+        &config,
         &cola_burns,
         almanac,
     )?;
 
-    send_progress(progress_tx, ProgressPhase::Validate, "Validation complete", 1.0);
+    send_progress(progress_tx, ProgressPhase::Validate, "Validation complete", PROGRESS_COMPLETE);
 
     Ok(report)
 }
-

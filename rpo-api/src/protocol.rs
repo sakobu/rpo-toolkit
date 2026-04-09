@@ -1,628 +1,307 @@
-//! Wire protocol types for client ↔ server WebSocket communication.
-//!
-//! All messages are JSON with a `type` tag and a `request_id` (u64, client-assigned).
-//! The server holds a [`Session`](crate::session::Session) per connection;
-//! clients mutate it incrementally via state-setting messages and query
-//! computed results via action messages.
+//! WebSocket protocol types — 5 client message variants, 8 server message variants.
 
+use nalgebra::Vector3;
+use rpo_core::mission::config::{MissionConfig, ProximityConfig};
+use rpo_core::mission::monte_carlo::types::{MonteCarloConfig, MonteCarloReport};
+use rpo_core::mission::types::{PerchGeometry, ValidationReport, WaypointMission};
+use rpo_core::pipeline::types::{PropagatorChoice, TransferResult};
+use rpo_core::propagation::covariance::types::MissionCovarianceReport;
+use rpo_core::propagation::lambert::LambertConfig;
+use rpo_core::propagation::propagator::DragConfig;
+use rpo_core::types::spacecraft::SpacecraftConfig;
+use rpo_core::types::state::StateVector;
+use rpo_nyx::validation::ColaBurn;
 use serde::{Deserialize, Serialize};
 
-use rpo_core::mission::config::MissionConfig;
-use rpo_core::mission::formation::{
-    EnrichedWaypoint, FormationDesignReport, SafetyRequirements,
-};
-use rpo_core::mission::monte_carlo::MonteCarloConfig;
-use rpo_core::mission::types::PerchGeometry;
-use rpo_core::mission::{
-    AvoidanceManeuver, ColaConfig, CorrectionType, MissionPhase, MonteCarloReport, ProximityConfig,
-    SecondaryViolation, SkippedLeg, ValidationReport,
-};
-use rpo_core::mission::closest_approach::ClosestApproach;
-use rpo_core::mission::free_drift::FreeDriftAnalysis;
-use rpo_core::pipeline::{
-    LeanPlanResult, LegTrajectory, PlanVariant, SpacecraftChoice, TransferResult, WaypointInput,
-};
-use rpo_core::propagation::covariance::{ManeuverUncertainty, MissionCovarianceReport, NavigationAccuracy};
-use rpo_core::propagation::lambert::LambertConfig;
-use rpo_core::propagation::DragConfig;
-use rpo_core::types::eclipse::{MissionEclipseData, TransferEclipseData};
-use rpo_core::types::StateVector;
+// ---- Progress ----
 
-use crate::session::SessionSummary;
-
-// ---------------------------------------------------------------------------
-// Internal progress types (handler → WebSocket loop)
-// ---------------------------------------------------------------------------
-
-/// Phase label for long-running background operations.
+/// Phase of a long-running background operation.
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ProgressPhase {
-    /// Per-leg nyx validation.
+    /// Full-physics nyx validation.
     Validate,
-    /// Full-physics Monte Carlo ensemble analysis.
+    /// Monte Carlo ensemble.
     Mc,
 }
 
-/// Progress update sent from background handlers to the WebSocket loop.
-pub struct ProgressUpdate {
-    /// Phase of the operation.
+/// Internal progress update sent from background tasks to the WS loop.
+pub(crate) struct ProgressUpdate {
+    /// Which background operation is reporting.
     pub phase: ProgressPhase,
-    /// Human-readable detail.
+    /// Human-readable status (e.g., "Validating leg 3/5").
     pub detail: Option<String>,
-    /// Fraction complete (0.0 to 1.0).
+    /// Completion fraction (0.0 to 1.0).
     pub fraction: Option<f64>,
 }
 
+/// Start of a long-running operation (0% complete).
+pub(crate) const PROGRESS_START: f64 = 0.0;
 
-// ---------------------------------------------------------------------------
-// PropagatorToggle
-// ---------------------------------------------------------------------------
+/// Handoff to nyx engine (~10% — setup is done, heavy computation starting).
+pub(crate) const PROGRESS_EXECUTING: f64 = 0.1;
 
-/// User-facing propagator selection for the `update_config` message.
+/// Operation complete (100%).
+pub(crate) const PROGRESS_COMPLETE: f64 = 1.0;
+
+// ---- COLA burn protocol type ----
+
+/// Protocol-level COLA burn input.
 ///
-/// Unlike [`PropagatorChoice`](rpo_core::pipeline::PropagatorChoice), this does
-/// not carry a `DragConfig` — the session's stored drag config is used when
-/// `J2Drag` is selected.
-#[derive(Debug, Clone, Copy, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum PropagatorToggle {
-    /// J2-only analytical propagation.
-    J2,
-    /// J2 + differential drag (requires prior `extract_drag`).
-    J2Drag,
+/// Mirrors `rpo_nyx::validation::ColaBurn` but with serde derives for
+/// WebSocket deserialization. The nyx type uses `Vector3<f64>` which
+/// serializes as `[f64; 3]` via nalgebra's serde support.
+#[derive(Debug, Clone, Deserialize)]
+pub struct ColaBurnInput {
+    /// Index of the mission leg this burn applies to.
+    pub leg_index: usize,
+    /// Time from leg departure to COLA burn (seconds).
+    pub elapsed_s: f64,
+    /// Delta-v in RIC frame (km/s) as `[R, I, C]`.
+    pub dv_ric_km_s: [f64; 3],
 }
 
-// ---------------------------------------------------------------------------
-// Client → Server messages
-// ---------------------------------------------------------------------------
+impl From<ColaBurnInput> for ColaBurn {
+    fn from(input: ColaBurnInput) -> Self {
+        Self {
+            leg_index: input.leg_index,
+            elapsed_s: input.elapsed_s,
+            dv_ric_km_s: Vector3::new(
+                input.dv_ric_km_s[0],
+                input.dv_ric_km_s[1],
+                input.dv_ric_km_s[2],
+            ),
+        }
+    }
+}
 
-/// Messages sent from the client to the server.
+// ---- Client messages ----
+
+/// Messages sent by the client over WebSocket.
+///
+/// Each variant is self-contained — the server holds no session state.
+/// The browser manages all state via WASM and sends complete inputs.
+///
+/// `Validate` and `RunMc` carry full mission data (~1 KB), making the enum
+/// large. This is acceptable: variants are deserialized once per message and
+/// moved into handler closures — boxing would add indirection for the common
+/// path without meaningful savings.
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ClientMessage {
-    /// Set chief and deputy ECI states. Invalidates transfer, drag, mission.
-    SetStates {
-        /// Client-assigned correlation ID.
-        request_id: u64,
-        /// Chief spacecraft ECI state.
-        chief: StateVector,
-        /// Deputy spacecraft ECI state.
-        deputy: StateVector,
-    },
-    /// Set spacecraft preset or custom configuration. Invalidates drag.
-    SetSpacecraft {
-        /// Client-assigned correlation ID.
-        request_id: u64,
-        /// Chief spacecraft choice (None = keep current).
-        chief_config: Option<SpacecraftChoice>,
-        /// Deputy spacecraft choice (None = keep current).
-        deputy_config: Option<SpacecraftChoice>,
-    },
-    /// Classify chief/deputy separation (microseconds).
-    Classify {
-        /// Client-assigned correlation ID.
-        request_id: u64,
-    },
-    /// Compute Lambert transfer and store result in session.
+    /// Classify separation + solve Lambert transfer (far-field) or compute
+    /// perch states (proximity).
+    ///
+    /// Wraps `rpo_nyx::pipeline::compute_transfer()`.
+    /// ~100ms for far-field (Lambert), microseconds for proximity.
     ComputeTransfer {
         /// Client-assigned correlation ID.
         request_id: u64,
-        /// Override perch geometry (None = keep session default).
-        perch: Option<PerchGeometry>,
-        /// Override Lambert TOF (None = keep session default).
-        lambert_tof_s: Option<f64>,
-        /// Override Lambert config (None = keep session default).
-        lambert_config: Option<LambertConfig>,
+        /// Chief ECI state vector.
+        chief: StateVector,
+        /// Deputy ECI state vector (same epoch as chief).
+        deputy: StateVector,
+        /// Perch geometry for Lambert arrival.
+        perch: PerchGeometry,
+        /// Far-field vs. proximity classification thresholds.
+        proximity: ProximityConfig,
+        /// Lambert time-of-flight (seconds).
+        lambert_tof_s: f64,
+        /// Lambert solver configuration (direction, revolutions).
+        lambert_config: LambertConfig,
     },
-    /// Extract differential drag rates via nyx (~3 seconds).
+
+    /// Extract differential drag rates via nyx full-physics propagation (~3s).
+    ///
+    /// Wraps `rpo_nyx::nyx_bridge::extract_dmf_rates()`.
     ExtractDrag {
         /// Client-assigned correlation ID.
         request_id: u64,
+        /// Chief ECI state vector.
+        chief: StateVector,
+        /// Deputy ECI state vector.
+        deputy: StateVector,
+        /// Chief spacecraft physical properties.
+        chief_config: SpacecraftConfig,
+        /// Deputy spacecraft physical properties.
+        deputy_config: SpacecraftConfig,
     },
-    /// Set waypoints and plan/replan the mission.
-    SetWaypoints {
-        /// Client-assigned correlation ID.
-        request_id: u64,
-        /// Waypoint targets in RIC frame.
-        waypoints: Vec<WaypointInput>,
-        /// Index of the modified waypoint for incremental replan (None = full plan).
-        #[serde(default)]
-        changed_from: Option<usize>,
-    },
-    /// Update solver configuration and/or overlay parameters.
-    UpdateConfig {
-        /// Client-assigned correlation ID.
-        request_id: u64,
-        /// Solver configuration (None = keep current).
-        config: Option<MissionConfig>,
-        /// Propagator toggle (None = keep current).
-        propagator: Option<PropagatorToggle>,
-        /// Proximity classification thresholds (None = keep current).
-        proximity: Option<ProximityConfig>,
-        /// Navigation accuracy for covariance (None = keep current).
-        navigation_accuracy: Option<NavigationAccuracy>,
-        /// Maneuver uncertainty for covariance (None = keep current).
-        maneuver_uncertainty: Option<ManeuverUncertainty>,
-    },
-    /// Fetch trajectory data for visualization (on-demand).
-    GetTrajectory {
-        /// Client-assigned correlation ID.
-        request_id: u64,
-        /// Leg indices to include (None = all legs).
-        legs: Option<Vec<usize>>,
-        /// Maximum points per leg (None = full resolution).
-        max_points: Option<u32>,
-    },
-    /// Fetch covariance propagation report.
-    GetCovariance {
-        /// Client-assigned correlation ID.
-        request_id: u64,
-    },
-    /// Fetch eclipse data.
-    GetEclipse {
-        /// Client-assigned correlation ID.
-        request_id: u64,
-    },
-    /// Fetch free-drift (abort-case) trajectory and safety data.
-    GetFreeDriftTrajectory {
-        /// Client-assigned correlation ID.
-        request_id: u64,
-        /// Leg indices to include (None = all legs).
-        #[serde(default)]
-        legs: Option<Vec<usize>>,
-        /// Maximum trajectory points per leg (None = full resolution).
-        #[serde(default)]
-        max_points: Option<u32>,
-    },
-    /// Fetch refined closest-approach (POCA) data.
-    GetPoca {
-        /// Client-assigned correlation ID.
-        request_id: u64,
-        /// Leg indices to include (None = all legs).
-        #[serde(default)]
-        legs: Option<Vec<usize>>,
-    },
-    /// Run collision avoidance analysis.
-    RunCola {
-        /// Client-assigned correlation ID.
-        request_id: u64,
-        /// COLA configuration (target distance and fuel budget).
-        config: ColaConfig,
-    },
-    /// Per-leg nyx validation with progress streaming.
+
+    /// Full-physics nyx validation of an analytical mission plan.
+    ///
+    /// Wraps `rpo_nyx::validation::validate_mission_nyx()`.
+    /// Streams `Progress` messages during execution.
     Validate {
         /// Client-assigned correlation ID.
         request_id: u64,
-        /// Number of sample points per leg (default: 50).
+        /// Analytical mission to validate.
+        mission: WaypointMission,
+        /// Chief ECI state at mission start.
+        chief: StateVector,
+        /// Deputy ECI state at mission start.
+        deputy: StateVector,
+        /// Chief spacecraft physical properties.
+        chief_config: SpacecraftConfig,
+        /// Deputy spacecraft physical properties.
+        deputy_config: SpacecraftConfig,
+        /// Intermediate comparison samples per leg.
+        samples_per_leg: u32,
+        /// Optional COLA avoidance burns to inject during validation.
         #[serde(default)]
-        samples_per_leg: Option<u32>,
-        /// Auto-derive drag rates before validation.
-        #[serde(default)]
-        auto_drag: bool,
+        cola_burns: Vec<ColaBurnInput>,
     },
-    /// Full-physics Monte Carlo ensemble analysis.
+
+    /// Monte Carlo ensemble with nyx full-physics propagation.
+    ///
+    /// Wraps `rpo_nyx::monte_carlo::run_monte_carlo()`.
+    /// Streams `Progress` messages during execution.
     RunMc {
         /// Client-assigned correlation ID.
         request_id: u64,
-        /// Monte Carlo config override (None = use session's).
+        /// Nominal mission plan (reference for dispersions).
+        mission: WaypointMission,
+        /// Chief ECI state at mission start.
+        chief: StateVector,
+        /// Deputy ECI state at mission start.
+        deputy: StateVector,
+        /// Chief spacecraft physical properties.
+        chief_config: SpacecraftConfig,
+        /// Deputy spacecraft physical properties.
+        deputy_config: SpacecraftConfig,
+        /// Mission targeting configuration (for closed-loop re-targeting).
+        mission_config: MissionConfig,
+        /// Propagator selection (J2 or J2+Drag).
+        propagator: PropagatorChoice,
+        /// Drag config (required when propagator is J2+Drag).
         #[serde(default)]
-        monte_carlo: Option<MonteCarloConfig>,
-        /// Auto-derive drag rates before MC.
+        drag_config: Option<DragConfig>,
+        /// Monte Carlo configuration (samples, dispersions, mode, seed).
+        monte_carlo: MonteCarloConfig,
+        /// Optional covariance predictions for cross-check.
         #[serde(default)]
-        auto_drag: bool,
+        covariance_report: Option<MissionCovarianceReport>,
     },
-    /// Set or clear safety requirements for formation design enrichment.
-    /// Setting invalidates the current mission (enriched perch changes departure state).
-    SetSafetyRequirements {
-        /// Client-assigned correlation ID.
-        request_id: u64,
-        /// Safety requirements, or `None` to clear.
-        requirements: Option<SafetyRequirements>,
-    },
-    /// Request formation design analysis for the current mission.
-    /// Reads `safety_requirements` from session state (set via `SetSafetyRequirements`).
-    GetFormationDesign {
-        /// Client-assigned correlation ID.
-        request_id: u64,
-    },
-    /// Request a safe alternative ROE for a specific waypoint.
-    /// Stateless query — computes on the fly from current session state.
-    GetSafeAlternative {
-        /// Client-assigned correlation ID.
-        request_id: u64,
-        /// Index of the waypoint/leg to enrich.
-        waypoint_index: usize,
-    },
-    /// Accept an enrichment suggestion at a specific waypoint and replan from there.
-    AcceptWaypointEnrichment {
-        /// Client-assigned correlation ID.
-        request_id: u64,
-        /// Which waypoint to enrich (0-indexed, into the session's waypoints).
-        waypoint_index: usize,
-    },
-    /// Get a snapshot of current session state.
-    GetSession {
-        /// Client-assigned correlation ID.
-        request_id: u64,
-    },
-    /// Reset all session state to defaults.
-    Reset {
-        /// Client-assigned correlation ID.
-        request_id: u64,
-    },
-    /// Select which plan variant (baseline or enriched) is active for downstream ops.
-    SelectPlan {
-        /// Client-assigned correlation ID.
-        request_id: u64,
-        /// Which plan variant to activate.
-        variant: PlanVariant,
-    },
-    /// Cancel a running background operation.
+
+    /// Cancel the active background job.
     Cancel {
-        /// ID of the operation to cancel (or current if None).
+        /// Correlation ID of the job to cancel (or None for any active job).
         request_id: Option<u64>,
     },
 }
 
-// ---------------------------------------------------------------------------
-// Server → Client messages
-// ---------------------------------------------------------------------------
+impl ClientMessage {
+    /// Extract the `request_id` from any message variant.
+    #[must_use]
+    pub fn request_id(&self) -> Option<u64> {
+        match self {
+            Self::ComputeTransfer { request_id, .. }
+            | Self::ExtractDrag { request_id, .. }
+            | Self::Validate { request_id, .. }
+            | Self::RunMc { request_id, .. } => Some(*request_id),
+            Self::Cancel { request_id } => *request_id,
+        }
+    }
+}
 
-/// Messages sent from the server to the client.
+// ---- Server messages ----
+
+/// Messages sent by the server over WebSocket.
 #[derive(Debug, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ServerMessage {
-    /// Acknowledgement of a state-setting message with invalidation info.
-    StateUpdated {
-        /// Correlation ID from the client request.
+    /// Lambert transfer result (classification + perch states).
+    ///
+    /// The variant name deliberately matches the inner `TransferResult` type;
+    /// the serde tag `"transfer_result"` is the wire discriminant.
+    TransferResult {
+        /// Echoed correlation ID.
         request_id: u64,
-        /// Fields that were set.
-        updated: Vec<String>,
-        /// Fields that were invalidated (cleared).
-        invalidated: Vec<String>,
-    },
-    /// Classification result.
-    ClassifyResult {
-        /// Correlation ID from the client request.
-        request_id: u64,
-        /// Classification: Proximity or `FarField` with full state info.
-        phase: MissionPhase,
-    },
-    /// Lambert transfer result.
-    TransferComputed {
-        /// Correlation ID from the client request.
-        request_id: u64,
-        /// Transfer result payload (boxed to reduce enum size).
+        /// Transfer solution (boxed — largest payload, reduces enum size).
         result: Box<TransferResult>,
     },
-    /// Mission plan result with baseline and optional enriched plan.
-    PlanResult {
-        /// Correlation ID from the client request.
-        request_id: u64,
-        /// Baseline plan (unenriched geometric perch, boxed to reduce enum size).
-        baseline: Box<LeanPlanResult>,
-        /// Enriched plan (safe e/i vectors). Present when `safety_requirements` is set
-        /// and enrichment succeeded.
-        #[serde(skip_serializing_if = "Option::is_none")]
-        enriched: Option<Box<LeanPlanResult>>,
-        /// Baseline formation design report.
-        #[serde(skip_serializing_if = "Option::is_none")]
-        baseline_formation: Option<Box<FormationDesignReport>>,
-        /// Enriched formation design report.
-        #[serde(skip_serializing_if = "Option::is_none")]
-        enriched_formation: Option<Box<FormationDesignReport>>,
-    },
-    /// Extracted differential drag rates.
+
+    /// Extracted differential drag configuration.
     DragResult {
-        /// Correlation ID from the client request.
+        /// Echoed correlation ID.
         request_id: u64,
-        /// Extracted drag configuration.
+        /// DMF differential drag rates.
         drag: DragConfig,
     },
-    /// Trajectory data for visualization.
-    TrajectoryData {
-        /// Correlation ID from the client request.
-        request_id: u64,
-        /// Per-leg trajectory points.
-        legs: Vec<LegTrajectory>,
-    },
-    /// Covariance propagation report.
-    CovarianceData {
-        /// Correlation ID from the client request.
-        request_id: u64,
-        /// Full covariance report (boxed to reduce enum size).
-        report: Box<MissionCovarianceReport>,
-    },
-    /// Free-drift trajectory and safety data.
-    FreeDriftData {
-        /// Correlation ID from the client request.
-        request_id: u64,
-        /// Per-leg free-drift trajectory points.
-        legs: Vec<LegTrajectory>,
-        /// Per-leg free-drift safety analysis.
-        analyses: Vec<FreeDriftSummary>,
-    },
-    /// Refined closest-approach data.
-    PocaData {
-        /// Correlation ID from the client request.
-        request_id: u64,
-        /// POCA points across requested legs.
-        points: Vec<PocaPoint>,
-    },
-    /// Collision avoidance result.
-    ColaResult {
-        /// Correlation ID from the client request.
-        request_id: u64,
-        /// Avoidance maneuvers for POCA violations.
-        maneuvers: Vec<AvoidanceManeuverSummary>,
-        /// Downstream violations created by avoidance maneuvers.
-        #[serde(skip_serializing_if = "Vec::is_empty")]
-        secondary_conjunctions: Vec<SecondaryViolationSummary>,
-        /// Legs where COLA was attempted but failed.
-        #[serde(skip_serializing_if = "Vec::is_empty")]
-        skipped: Vec<SkippedLegSummary>,
-    },
-    /// Eclipse data for transfer and/or mission.
-    EclipseData {
-        /// Correlation ID from the client request.
-        request_id: u64,
-        /// Transfer-phase eclipse data (None if proximity).
-        #[serde(skip_serializing_if = "Option::is_none")]
-        transfer: Option<TransferEclipseData>,
-        /// Mission-phase eclipse data (None if no mission planned).
-        #[serde(skip_serializing_if = "Option::is_none")]
-        mission: Option<MissionEclipseData>,
-    },
-    /// Formation design report (response to `GetFormationDesign`).
-    FormationDesignResult {
-        /// Correlation ID from the client request.
-        request_id: u64,
-        /// Full formation design report (boxed to reduce enum size).
-        report: Box<FormationDesignReport>,
-    },
-    /// Safe alternative for a single waypoint (response to `GetSafeAlternative`).
-    SafeAlternativeResult {
-        /// Correlation ID from the client request.
-        request_id: u64,
-        /// Enriched waypoint with safe ROE (boxed to reduce enum size).
-        enriched: Box<EnrichedWaypoint>,
-    },
-    /// Current session state snapshot.
-    SessionState {
-        /// Correlation ID from the client request.
-        request_id: u64,
-        /// Session summary.
-        summary: SessionSummary,
-    },
-    /// Progress update for long-running operations.
-    Progress {
-        /// Correlation ID of the operation in progress.
-        request_id: u64,
-        /// Phase of the operation.
-        phase: ProgressPhase,
-        /// Human-readable detail (e.g., "Validating leg 3/5").
-        detail: Option<String>,
-        /// Fraction complete (0.0 to 1.0).
-        fraction: Option<f64>,
-    },
-    /// Validation result.
+
+    /// Full-physics validation report.
     ValidationResult {
-        /// Correlation ID from the client request.
+        /// Echoed correlation ID.
         request_id: u64,
-        /// Full validation report (boxed to reduce enum size).
+        /// Per-leg comparison and aggregate error statistics.
         report: Box<ValidationReport>,
     },
-    /// Monte Carlo result.
+
+    /// Monte Carlo ensemble report.
     MonteCarloResult {
-        /// Correlation ID from the client request.
+        /// Echoed correlation ID.
         request_id: u64,
-        /// Full MC report (boxed to reduce enum size).
+        /// Ensemble statistics and per-sample results.
         report: Box<MonteCarloReport>,
     },
-    /// Acknowledgement that an enrichment was accepted; returns the replanned mission result.
-    WaypointEnrichmentAccepted {
-        /// Correlation ID from the client request.
+
+    /// Progress update for long-running operations (validate, MC).
+    Progress {
+        /// Correlation ID of the active job.
         request_id: u64,
-        /// The replanned mission result (lean projection).
-        result: Box<LeanPlanResult>,
+        /// Which operation is reporting.
+        phase: ProgressPhase,
+        /// Human-readable status detail.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        detail: Option<String>,
+        /// Completion fraction (0.0 to 1.0).
+        #[serde(skip_serializing_if = "Option::is_none")]
+        fraction: Option<f64>,
     },
-    /// Confirmation that the active plan variant was changed.
-    PlanSelected {
-        /// Correlation ID from the client request.
-        request_id: u64,
-        /// The now-active plan variant.
-        variant: PlanVariant,
-    },
-    /// Operation was cancelled.
-    Cancelled {
-        /// Correlation ID of the cancelled operation.
-        request_id: u64,
-    },
-    /// Periodic heartbeat sent during long-running operations.
-    Heartbeat {
-        /// Monotonic counter (increments each heartbeat).
-        seq: u64,
-    },
+
     /// Error response.
     Error {
-        /// Correlation ID (None if error is not tied to a specific request).
+        /// Correlation ID (None for connection-level errors like malformed JSON).
+        #[serde(skip_serializing_if = "Option::is_none")]
         request_id: Option<u64>,
         /// Machine-readable error code.
-        code: ErrorCode,
+        code: ServerErrorCode,
         /// Human-readable error message.
         message: String,
-        /// Per-variant diagnostic fields.
+        /// Optional structured diagnostic detail.
         #[serde(skip_serializing_if = "Option::is_none")]
         detail: Option<serde_json::Value>,
     },
+
+    /// Confirmation that a background job was cancelled.
+    Cancelled {
+        /// Correlation ID of the cancelled job.
+        request_id: u64,
+    },
+
+    /// Keep-alive during long-running operations.
+    Heartbeat {
+        /// Monotonically increasing sequence number.
+        seq: u64,
+    },
 }
 
-/// Lean free-drift summary for API responses (no full trajectory).
-#[derive(Debug, Clone, Serialize)]
-pub struct FreeDriftSummary {
-    /// Leg index.
-    pub leg_index: usize,
-    /// Min 3D distance on free-drift arc (km).
-    pub min_distance_3d_km: f64,
-    /// Min R/C distance on free-drift arc (km).
-    pub min_rc_separation_km: f64,
-    /// Min e/i separation on free-drift arc (km).
-    pub min_ei_separation_km: f64,
-    /// Bounded-motion residual (D'Amico Eq. 2.33). Dimensionless.
-    pub bounded_motion_residual: f64,
-}
+// ---- Error codes ----
 
-impl FreeDriftSummary {
-    /// Project a [`FreeDriftAnalysis`] to a lean summary.
-    #[must_use]
-    pub fn from_analysis(analysis: &FreeDriftAnalysis, leg_index: usize) -> Self {
-        Self {
-            leg_index,
-            min_distance_3d_km: analysis.safety.operational.min_distance_3d_km,
-            min_rc_separation_km: analysis.safety.operational.min_rc_separation_km,
-            min_ei_separation_km: analysis.safety.passive.min_ei_separation_km,
-            bounded_motion_residual: analysis.bounded_motion_residual,
-        }
-    }
-}
-
-/// Lean POCA point for API responses (no full velocity, just what the frontend needs).
-#[derive(Debug, Clone, Serialize)]
-pub struct PocaPoint {
-    /// Leg index within the mission.
-    pub leg_index: usize,
-    /// Elapsed time from leg start (s).
-    pub elapsed_s: f64,
-    /// Refined minimum distance (km).
-    pub distance_km: f64,
-    /// RIC position at closest approach (km): [R, I, C].
-    pub position_ric_km: [f64; 3],
-    /// Whether this is the global minimum for this leg.
-    pub is_global_minimum: bool,
-}
-
-impl PocaPoint {
-    /// Project a [`ClosestApproach`] to a lean point for the wire.
-    #[must_use]
-    pub fn from_closest_approach(ca: &ClosestApproach) -> Self {
-        Self {
-            leg_index: ca.leg_index,
-            elapsed_s: ca.elapsed_s,
-            distance_km: ca.distance_km,
-            position_ric_km: ca.position_ric_km.into(),
-            is_global_minimum: ca.is_global_minimum,
-        }
-    }
-}
-
-/// Lean avoidance maneuver summary for API responses.
-#[derive(Debug, Clone, Serialize)]
-pub struct AvoidanceManeuverSummary {
-    /// Leg index within the mission.
-    pub leg_index: usize,
-    /// Delta-v in RIC frame (km/s): [R, I, C].
-    pub dv_ric_km_s: [f64; 3],
-    /// Mean argument of latitude at burn (rad).
-    pub maneuver_location_rad: f64,
-    /// POCA distance after avoidance (km).
-    pub post_avoidance_poca_km: f64,
-    /// Total fuel cost (km/s).
-    pub fuel_cost_km_s: f64,
-    /// Correction type: `in_plane`, `cross_track`, or `combined`.
-    pub correction_type: CorrectionType,
-}
-
-impl AvoidanceManeuverSummary {
-    /// Project an [`AvoidanceManeuver`] to a lean summary for the wire.
-    #[must_use]
-    pub fn from_avoidance(m: &AvoidanceManeuver) -> Self {
-        Self {
-            leg_index: m.leg_index,
-            dv_ric_km_s: m.dv_ric_km_s.into(),
-            maneuver_location_rad: m.maneuver_location_rad,
-            post_avoidance_poca_km: m.post_avoidance_poca_km,
-            fuel_cost_km_s: m.fuel_cost_km_s,
-            correction_type: m.correction_type,
-        }
-    }
-}
-
-/// Lean secondary conjunction warning for API responses.
-#[derive(Debug, Clone, Serialize)]
-pub struct SecondaryViolationSummary {
-    /// Leg index where the avoidance maneuver was applied.
-    pub original_leg_index: usize,
-    /// Downstream leg index where the new violation was detected.
-    pub violated_leg_index: usize,
-    /// Distance at closest approach (km).
-    pub distance_km: f64,
-    /// Elapsed time from downstream leg start (s).
-    pub elapsed_s: f64,
-    /// RIC position at closest approach (km): [R, I, C].
-    pub position_ric_km: [f64; 3],
-}
-
-impl SecondaryViolationSummary {
-    /// Project a [`SecondaryViolation`] to a lean summary for the wire.
-    #[must_use]
-    pub fn from_violation(sv: &SecondaryViolation) -> Self {
-        Self {
-            original_leg_index: sv.original_leg_index,
-            violated_leg_index: sv.violated_leg_index,
-            distance_km: sv.poca.distance_km,
-            elapsed_s: sv.poca.elapsed_s,
-            position_ric_km: sv.poca.position_ric_km.into(),
-        }
-    }
-}
-
-/// Lean skipped-leg summary for API responses.
-#[derive(Debug, Clone, Serialize)]
-pub struct SkippedLegSummary {
-    /// Index of the leg with the unaddressed POCA violation.
-    pub leg_index: usize,
-    /// Human-readable description of why COLA failed.
-    pub error_message: String,
-}
-
-impl SkippedLegSummary {
-    /// Project a [`SkippedLeg`] to a lean summary for the wire.
-    #[must_use]
-    pub fn from_skipped(s: &SkippedLeg) -> Self {
-        Self {
-            leg_index: s.leg_index,
-            error_message: s.error_message.clone(),
-        }
-    }
-}
-
-/// Machine-readable error codes for the frontend.
+/// Machine-readable error codes for server responses.
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "snake_case")]
-pub enum ErrorCode {
-    /// Targeting solver did not converge.
-    TargetingConvergence,
-    /// Lambert solver failure.
+pub enum ServerErrorCode {
+    /// Lambert solver failed (convergence, degenerate geometry, etc.).
     LambertFailure,
-    /// Propagation error.
-    PropagationError,
-    /// Validation error.
-    ValidationError,
-    /// Monte Carlo error.
-    MonteCarloError,
-    /// Nyx bridge error.
+    /// Nyx bridge error (almanac, dynamics, propagation).
     NyxBridgeError,
-    /// Covariance propagation error.
-    CovarianceError,
-    /// Invalid input (malformed JSON, bad values).
+    /// Full-physics validation error.
+    ValidationError,
+    /// Monte Carlo execution error.
+    MonteCarloError,
+    /// Invalid input (malformed JSON, missing fields, bad values).
     InvalidInput,
-    /// Mission planning error (general).
-    MissionError,
-    /// Formation design error (singular geometry, unachievable separation, etc.).
-    FormationDesignError,
-    /// Operation was cancelled.
+    /// Operation was cancelled by the client.
     Cancelled,
-    /// Required session state not available (call `set_states`, `compute_transfer`, etc. first).
-    MissingSessionState,
 }

@@ -1,150 +1,130 @@
-//! Monte Carlo handler: full-physics ensemble analysis with progress polling.
-//!
-//! Designed to be called from `spawn_blocking`. Uses `MonteCarloControl` for
-//! cooperative cancellation and progress reporting via atomic counters.
+//! Monte Carlo ensemble handler — blocking, minutes to hours.
 
+use crate::error::ServerError;
+use crate::protocol::{ProgressPhase, PROGRESS_COMPLETE, PROGRESS_EXECUTING, PROGRESS_START};
+use anise::prelude::Almanac;
+use rpo_core::mission::config::MissionConfig;
+use rpo_core::mission::monte_carlo::types::{MonteCarloConfig, MonteCarloReport};
+use rpo_core::mission::types::WaypointMission;
+use rpo_core::pipeline::convert::to_propagation_model;
+use rpo_core::pipeline::types::PropagatorChoice;
+use rpo_core::propagation::covariance::types::MissionCovarianceReport;
+use rpo_core::propagation::propagator::{DragConfig, PropagationModel};
+use rpo_core::types::spacecraft::SpacecraftConfig;
+use rpo_core::types::state::StateVector;
+use rpo_nyx::monte_carlo::{run_monte_carlo, MonteCarloControl, MonteCarloInput};
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::Arc;
-
-use anise::prelude::Almanac;
 use tokio::sync::mpsc;
 
-use rpo_core::mission::config::MissionConfig;
-use rpo_core::mission::monte_carlo::MonteCarloConfig;
-use rpo_core::mission::types::WaypointMission;
-use rpo_core::mission::MonteCarloReport;
-use rpo_core::pipeline::{compute_mission_covariance, TransferResult, WaypointInput};
-use rpo_core::propagation::covariance::{ManeuverUncertainty, NavigationAccuracy};
-use rpo_core::propagation::PropagationModel;
-use rpo_core::types::{SpacecraftConfig, StateVector};
-use rpo_nyx::monte_carlo::{run_monte_carlo, MonteCarloControl, MonteCarloInput};
+use super::send_progress;
 
-use super::common::{replan_if_drag_changed, resolve_drag_and_propagator, send_progress};
-use crate::error::ApiError;
-use crate::protocol::{ProgressPhase, ProgressUpdate};
-
-/// Request payload for Monte Carlo, cloned from session state.
+/// Domain inputs for a Monte Carlo ensemble job.
 ///
-/// Contains all data needed to run MC independently of the session,
-/// since MC runs on a blocking thread.
-pub struct McRequest {
-    /// The planned waypoint mission (nominal reference).
-    pub mission: WaypointMission,
-    /// Chief ECI state at perch (mission start).
-    pub perch_chief: StateVector,
-    /// Deputy ECI state at perch (mission start).
-    pub perch_deputy: StateVector,
+/// Groups the 10 domain parameters needed by [`handle_mc`], keeping the
+/// handler signature at 4 arguments (input + almanac + progress + cancel).
+pub(crate) struct McJobInput<'a> {
+    /// Nominal mission plan (reference for dispersions).
+    pub mission: &'a WaypointMission,
+    /// Chief ECI state at mission start.
+    pub chief: &'a StateVector,
+    /// Deputy ECI state at mission start.
+    pub deputy: &'a StateVector,
     /// Chief spacecraft physical properties.
-    pub chief_config: SpacecraftConfig,
+    pub chief_config: &'a SpacecraftConfig,
     /// Deputy spacecraft physical properties.
-    pub deputy_config: SpacecraftConfig,
-    /// Monte Carlo ensemble configuration.
-    pub mc_config: MonteCarloConfig,
-    /// Mission solver configuration.
-    pub mission_config: MissionConfig,
-    /// Propagation model.
-    pub propagator: PropagationModel,
-    /// Navigation accuracy for covariance (optional).
-    pub navigation_accuracy: Option<NavigationAccuracy>,
-    /// Maneuver uncertainty for covariance (optional).
-    pub maneuver_uncertainty: Option<ManeuverUncertainty>,
-    /// Auto-derive drag rates before MC.
-    pub auto_drag: bool,
-    /// Waypoint inputs (needed for drag-based replan).
-    pub waypoints: Vec<WaypointInput>,
-    /// Transfer result (needed for departure state in replan + covariance).
-    pub transfer: TransferResult,
+    pub deputy_config: &'a SpacecraftConfig,
+    /// Mission targeting configuration (for closed-loop re-targeting).
+    pub mission_config: &'a MissionConfig,
+    /// Propagator selection (J2 or J2+Drag).
+    pub propagator_choice: PropagatorChoice,
+    /// Optional drag config override (replaces the config embedded in
+    /// `PropagatorChoice::J2Drag` when present, e.g., freshly extracted
+    /// via `ExtractDrag`).
+    pub drag_config: Option<DragConfig>,
+    /// Monte Carlo configuration (samples, dispersions, mode, seed).
+    pub mc_config: &'a MonteCarloConfig,
+    /// Optional covariance predictions for cross-check.
+    pub covariance_report: Option<&'a MissionCovarianceReport>,
 }
 
-/// Run full-physics Monte Carlo with progress polling and cancellation.
+/// Handle a `RunMc` message on a blocking thread.
+///
+/// Resolves `PropagatorChoice` → `PropagationModel`, constructs `MonteCarloInput`,
+/// and delegates to `rpo_nyx::monte_carlo::run_monte_carlo()`.
+///
+/// Progress is tracked via `MonteCarloControl::progress` (atomic counter) and
+/// cooperative cancellation via `cancel`.
 ///
 /// # Errors
-/// Returns [`ApiError`] if planning fails, propagation fails, or the operation is cancelled.
-pub fn handle_mc(
-    request: McRequest,
+///
+/// - [`ServerError::Cancelled`] if the cancel flag is set before the MC run.
+/// - [`ServerError::MonteCarlo`] if the ensemble fails (zero samples, all samples
+///   failed, nyx bridge error).
+pub(crate) fn handle_mc(
+    input: &McJobInput<'_>,
     almanac: &Arc<Almanac>,
-    progress_tx: &mpsc::Sender<ProgressUpdate>,
+    progress_tx: &mpsc::Sender<crate::protocol::ProgressUpdate>,
     cancel: &Arc<AtomicBool>,
-) -> Result<MonteCarloReport, ApiError> {
-    send_progress(progress_tx, ProgressPhase::Mc, "Planning mission...", 0.0);
+) -> Result<MonteCarloReport, ServerError> {
+    send_progress(progress_tx, ProgressPhase::Mc, "Starting Monte Carlo...", PROGRESS_START);
 
     if cancel.load(Ordering::Relaxed) {
-        return Err(ApiError::Cancelled);
+        return Err(ServerError::Cancelled);
     }
 
-    // Resolve propagator (with optional auto-drag)
-    let (propagator, derived_drag) = resolve_drag_and_propagator(
-        request.auto_drag,
-        &request.transfer,
-        &request.chief_config,
-        &request.deputy_config,
-        almanac,
-        &request.propagator,
-    )?;
+    // Resolve PropagatorChoice → PropagationModel, applying drag override if present.
+    let propagator = resolve_propagation_model(input.propagator_choice, input.drag_config);
 
-    // If auto_drag changed the propagator, replan the mission
-    let mission = replan_if_drag_changed(
-        request.auto_drag,
-        derived_drag.as_ref(),
-        request.mission,
-        &request.transfer,
-        &request.waypoints,
-        &request.mission_config,
-        &propagator,
-    )?;
+    // Create progress/cancel control for the MC engine
+    let control = MonteCarloControl {
+        progress: Arc::new(AtomicU32::new(0)),
+        cancel: Arc::clone(cancel),
+    };
 
-    if cancel.load(Ordering::Relaxed) {
-        return Err(ApiError::Cancelled);
-    }
-
-    // Optional covariance propagation for MC cross-check
-    let covariance_report = request.navigation_accuracy.as_ref().map(|nav| {
-        compute_mission_covariance(
-            &mission,
-            &request.transfer.plan.chief_at_arrival,
-            nav,
-            request.maneuver_uncertainty.as_ref(),
-            &propagator,
-        )
-    }).transpose()?;
-
-    // Resolve MC dispersions: derive from top-level nav/maneuver if not explicitly set
-    let resolved_mc = request.mc_config.with_resolved_dispersions(
-        request.navigation_accuracy.as_ref(),
-        request.maneuver_uncertainty.as_ref(),
-    );
-
-    // Run Monte Carlo
+    let num_samples = input.mc_config.num_samples;
     send_progress(
         progress_tx,
         ProgressPhase::Mc,
-        &format!("Running {} MC samples...", resolved_mc.num_samples),
-        0.1,
+        &format!("Running {num_samples} MC samples..."),
+        PROGRESS_EXECUTING,
     );
 
-    let mc_control = MonteCarloControl {
-        progress: Arc::new(AtomicU32::new(0)),
-        cancel: cancel.clone(),
-    };
-
     let mc_input = MonteCarloInput {
-        nominal_mission: &mission,
-        initial_chief: &request.perch_chief,
-        initial_deputy: &request.perch_deputy,
-        config: &resolved_mc,
-        mission_config: &request.mission_config,
-        chief_config: &request.chief_config,
-        deputy_config: &request.deputy_config,
+        nominal_mission: input.mission,
+        initial_chief: input.chief,
+        initial_deputy: input.deputy,
+        config: input.mc_config,
+        mission_config: input.mission_config,
+        chief_config: input.chief_config,
+        deputy_config: input.deputy_config,
         propagator: &propagator,
         almanac,
-        covariance_report: covariance_report.as_ref(),
-        control: Some(&mc_control),
+        covariance_report: input.covariance_report,
+        control: Some(&control),
     };
 
     let report = run_monte_carlo(&mc_input)?;
 
-    send_progress(progress_tx, ProgressPhase::Mc, "Monte Carlo complete", 1.0);
+    send_progress(progress_tx, ProgressPhase::Mc, "Monte Carlo complete", PROGRESS_COMPLETE);
 
     Ok(report)
 }
 
+/// Resolve `PropagatorChoice` to `PropagationModel`, applying an optional drag override.
+///
+/// Delegates base conversion to [`rpo_core::pipeline::convert::to_propagation_model`],
+/// then replaces the drag config when `drag_override` is `Some` (e.g., freshly
+/// extracted via `ExtractDrag`).
+fn resolve_propagation_model(
+    choice: PropagatorChoice,
+    drag_override: Option<DragConfig>,
+) -> PropagationModel {
+    let base = to_propagation_model(&choice);
+    match (base, drag_override) {
+        (PropagationModel::J2DragStm { .. }, Some(drag)) => {
+            PropagationModel::J2DragStm { drag }
+        }
+        (model, _) => model,
+    }
+}
