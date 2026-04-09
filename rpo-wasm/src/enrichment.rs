@@ -17,7 +17,7 @@ use crate::error::WasmError;
 /// Core functions take `&mut PipelineInput` and `&mut TransferResult`;
 /// WASM cannot pass mutable references across the boundary, so this
 /// returns owned copies of all three values.
-#[derive(Serialize, Deserialize, Tsify)]
+#[derive(Debug, Serialize, Deserialize, Tsify)]
 // Output-only: no from_wasm_abi needed (never passed from JS to Rust).
 #[tsify(into_wasm_abi)]
 pub struct EnrichmentAcceptResult {
@@ -30,6 +30,11 @@ pub struct EnrichmentAcceptResult {
 }
 
 /// Check whether perch enrichment is available for this transfer + input.
+///
+/// # Arguments
+///
+/// * `transfer` — Pre-computed transfer result (classification + perch ROE).
+/// * `input` — Full pipeline input (must include `safety_requirements` for enrichment).
 ///
 /// Returns `None` if safety requirements are not configured or enrichment
 /// is not applicable.
@@ -46,6 +51,11 @@ pub fn suggest_enrichment(
 ///
 /// Mutates the transfer's perch ROE to the enriched safe-perch values.
 /// Returns the updated transfer.
+///
+/// # Arguments
+///
+/// * `transfer` — Transfer result to enrich (consumed and returned with updated perch ROE).
+/// * `suggestion` — Enrichment suggestion from [`suggest_enrichment`].
 #[must_use]
 #[wasm_bindgen]
 pub fn apply_perch_enrichment(

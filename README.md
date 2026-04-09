@@ -27,7 +27,7 @@ rpo-nyx (AGPL-3.0)  <--  rpo-cli (AGPL-3.0)
 
 ```bash
 cargo build                     # build workspace
-cargo test                      # 479 tests across 5 crates (+ 25 ignored full-physics; 504 total with -- --include-ignored)
+cargo test                      # 503 tests across 5 crates (+ 25 ignored full-physics; 528 total with -- --include-ignored)
 ```
 
 Run an example mission (CLI):
@@ -65,41 +65,42 @@ flowchart TD
     G --> H["Monte Carlo\nensemble analysis\n(minutes)"]
 ```
 
-| Step                      | Function                                                                               | Engine     | Speed                 |
-| ------------------------- | -------------------------------------------------------------------------------------- | ---------- | --------------------- |
-| Classify separation       | `classify_separation()`                                                                | Analytical | microseconds          |
-| Lambert transfer          | `solve_lambert()`                                                                      | nyx-space  | ~100 ms               |
-| Drag estimation           | `extract_dmf_rates()`                                                                  | nyx-space  | ~3 s                  |
-| Waypoint targeting        | `plan_waypoint_mission()`                                                              | Analytical | microseconds          |
-| Formation design          | `suggest_enrichment_from_parts()`, `enrich_waypoint()`, `accept_waypoint_enrichment()` | Analytical | microseconds          |
-| Safety analysis           | `assess_safety()`                                                                      | Analytical | microseconds          |
-| Free-drift abort analysis | `compute_free_drift_analysis()`                                                        | Analytical | microseconds          |
-| Closest approach (POCA)   | `compute_poca_analysis()`                                                              | Analytical | microseconds          |
-| Collision avoidance       | `assess_cola()`                                                                        | Analytical | microseconds          |
-| Covariance + Mahalanobis  | `propagate_mission_covariance()`                                                       | Analytical | microseconds          |
-| Eclipse computation       | inside `plan_waypoint_mission()`                                                       | Analytical | ~10 ms (full mission) |
-| Full-physics validation   | `validate_mission_nyx()`                                                               | nyx-space  | seconds               |
-| Monte Carlo ensemble      | `run_monte_carlo()`                                                                    | nyx-space  | minutes               |
+| Step                         | Function                                                                               | Engine     | Speed        |
+| ---------------------------- | -------------------------------------------------------------------------------------- | ---------- | ------------ |
+| Classify separation          | `classify_separation()`                                                                | Analytical | microseconds |
+| Lambert transfer             | `solve_lambert()`                                                                      | nyx-space  | ~100 ms      |
+| Drag estimation              | `extract_dmf_rates()`                                                                  | nyx-space  | ~3 s         |
+| Waypoint targeting + eclipse | `plan_waypoint_mission()`                                                              | Analytical | microseconds |
+| Formation design             | `suggest_enrichment_from_parts()`, `enrich_waypoint()`, `accept_waypoint_enrichment()` | Analytical | microseconds |
+| Safety analysis              | `assess_safety()`                                                                      | Analytical | microseconds |
+| Free-drift abort analysis    | `compute_free_drift_analysis()`                                                        | Analytical | microseconds |
+| Closest approach (POCA)      | `compute_poca_analysis()`                                                              | Analytical | microseconds |
+| Collision avoidance          | `assess_cola()`                                                                        | Analytical | microseconds |
+| Covariance + Mahalanobis     | `propagate_mission_covariance()`                                                       | Analytical | microseconds |
+| Full-physics validation      | `validate_mission_nyx()`                                                               | nyx-space  | seconds      |
+| Monte Carlo ensemble         | `run_monte_carlo()`                                                                    | nyx-space  | minutes      |
 
 ## Performance
 
 Analytical engine benchmarks (Apple M-series, single core, `cargo bench -p rpo-core`):
 
-| Operation                 | Time    | Notes                                    |
-| ------------------------- | ------- | ---------------------------------------- |
-| `roe_to_ric`              | 7.5 ns  | ROE -> RIC mapping (D'Amico Eq. 2.17)    |
-| `compute_ei_separation`   | 7.9 ns  | e/i vector separation (D'Amico Eq. 2.22) |
-| `analyze_safety`          | 12.8 ns | passive safety analysis                  |
-| `state_to_keplerian`      | 23.5 ns | ECI -> Keplerian conversion              |
-| `keplerian_to_state`      | 38.3 ns | Keplerian -> ECI conversion              |
-| `propagate_j2stm`         | 84.8 ns | J2 STM propagation (1 orbit)             |
-| `propagate_j2_drag_stm`   | 85.2 ns | J2+drag STM propagation (1 orbit)        |
-| `classify_separation`     | 127 ns  | ECI -> Keplerian -> ROE -> classify      |
-| `find_closest_approaches` | 4.0 us  | Brent-refined POCA (1 leg)               |
-| `solve_leg`               | 13.8 us | Newton-Raphson dv targeting (1 leg)      |
-| `compute_free_drift`      | 17.3 us | abort-case trajectory (200 steps)        |
-| `assess_cola`             | 38.4 us | COLA assessment (2-leg mission)          |
-| `plan_waypoint_mission`   | 173 us  | full 2-waypoint mission plan             |
+| Operation                  | Time    | Notes                                        |
+| -------------------------- | ------- | -------------------------------------------- |
+| `roe_to_ric`               | 7.5 ns  | ROE -> RIC mapping (D'Amico Eq. 2.17)        |
+| `compute_ei_separation`    | 7.8 ns  | e/i vector separation (D'Amico Eq. 2.22)     |
+| `analyze_safety`           | 12.8 ns | passive safety analysis                      |
+| `state_to_keplerian`       | 23.9 ns | ECI -> Keplerian conversion                  |
+| `keplerian_to_state`       | 39.0 ns | Keplerian -> ECI conversion                  |
+| `propagate_j2stm`          | 85.9 ns | J2 STM propagation (1 orbit)                 |
+| `propagate_j2_drag_stm`    | 87.3 ns | J2+drag STM propagation (1 orbit)            |
+| `classify_separation`      | 133 ns  | ECI -> Keplerian -> ROE -> classify          |
+| `find_closest_approaches`  | 4.0 us  | Brent-refined POCA (1 leg)                   |
+| `solve_leg`                | 14.6 us | Newton-Raphson dv targeting (1 leg)          |
+| `compute_free_drift`       | 17.7 us | abort-case trajectory (200 steps)            |
+| `assess_cola`              | 39.0 us | COLA assessment (2-leg mission)              |
+| `compute_transfer_eclipse` | 160 us  | transfer arc eclipse (200 steps)             |
+| `compute_mission_eclipse`  | 168 us  | mission eclipse (2 legs, 200 steps/leg)      |
+| `plan_waypoint_mission`    | 198 us  | full 2-waypoint mission plan (incl. eclipse) |
 
 Criterion HTML reports are generated in `target/criterion/`.
 
@@ -218,13 +219,14 @@ All input/output types have full TypeScript definitions.
 
 - [CLI Reference](docs/CLI.md) -- all commands, flags, input formats
 - [API Reference](docs/API.md) -- WebSocket protocol, message types, error codes
+- [WASM Reference](docs/WASM.md) -- WASM bindings, TypeScript API, browser usage
 - [Input Schema](docs/schema/pipeline-input.schema.json) -- shared JSON schema for `PipelineInput`
 
 The CLI provides batch execution and shell-composable plumbing for scripting. The WebSocket API is a stateless backend for the 4 nyx-dependent operations (Lambert transfer, drag extraction, validation, Monte Carlo) with progress streaming. The WASM crate exposes the full analytical engine to the browser with auto-generated TypeScript definitions.
 
 ## Testing
 
-479 tests across 5 crates (357 rpo-core, 110 rpo-nyx, 12 rpo-api, 12 rpo-wasm, 11 rpo-cli). 25 full-physics tests are `#[ignore]` by default (require ANISE kernels, ~50 MB cached download).
+528 tests across 5 crates (357 rpo-core, 110 rpo-nyx, 36 rpo-wasm, 12 rpo-api, 11 rpo-cli, 2 doc-tests). 25 full-physics tests are `#[ignore]` by default (require ANISE kernels, ~50 MB cached download).
 
 ```bash
 cargo test                      # full suite (5 crates)

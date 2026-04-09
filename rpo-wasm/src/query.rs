@@ -14,6 +14,12 @@ use crate::error::WasmError;
 /// Returns the propagated deputy state at the requested time, or `None`
 /// if the elapsed time is outside the mission duration.
 ///
+/// # Arguments
+///
+/// * `mission` — Planned waypoint mission with per-leg maneuver data.
+/// * `elapsed_s` — Elapsed time from mission start (seconds).
+/// * `propagator` — Propagation model choice (J2 or J2+drag).
+///
 /// # Invariants
 ///
 /// - `elapsed_s >= 0.0`

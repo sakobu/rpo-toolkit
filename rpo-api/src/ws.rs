@@ -326,13 +326,9 @@ async fn handle_text_message(
         // ---- Cancel ----
         ClientMessage::Cancel { request_id } => {
             if let Some(job) = active_job.take() {
-                let rid = request_id.unwrap_or(job.request_id);
                 job.cancel.store(true, Ordering::Relaxed);
-                send_message(ws, ServerMessage::Cancelled { request_id: rid }).await;
-            } else if let Some(rid) = request_id {
-                // No active job to cancel — still acknowledge
-                send_message(ws, ServerMessage::Cancelled { request_id: rid }).await;
             }
+            send_message(ws, ServerMessage::Cancelled { request_id }).await;
         }
     }
 }

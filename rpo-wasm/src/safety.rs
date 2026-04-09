@@ -20,10 +20,12 @@ use crate::error::WasmError;
 ///
 /// # Arguments
 ///
+/// * `mission` — Planned waypoint mission with per-leg maneuver data.
 /// * `safety` — Safety thresholds for POCA alert detection. `None` skips
 ///   the POCA alert threshold check (raw POCA data is still computed).
 /// * `cola` — COLA avoidance configuration. `None` skips avoidance
 ///   maneuver computation entirely.
+/// * `propagator` — Propagation model choice (J2 or J2+drag).
 #[must_use]
 #[wasm_bindgen]
 pub fn compute_safety_analysis(
@@ -68,7 +70,13 @@ pub fn assess_cola(
 ///
 /// # Arguments
 ///
+/// * `poca` — Closest approach to mitigate.
+/// * `roe` — Deputy ROE at the maneuver leg's departure.
+/// * `chief_mean` — Chief mean Keplerian elements at the maneuver epoch.
 /// * `departure_epoch` — ISO 8601 epoch string (parsed to `hifitime::Epoch`).
+/// * `tof_s` — Time-of-flight of the maneuver leg (seconds).
+/// * `propagator` — Propagation model choice (J2 or J2+drag).
+/// * `config` — COLA avoidance parameters (target distance, max delta-v).
 ///
 /// # Invariants
 ///

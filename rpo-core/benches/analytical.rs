@@ -10,9 +10,11 @@ use nalgebra::Vector3;
 use rpo_core::elements::{keplerian_to_state, roe_to_ric, state_to_keplerian};
 use rpo_core::mission::{
     analyze_safety, assess_cola, classify_separation, compute_ei_separation, compute_free_drift,
-    find_closest_approaches, plan_waypoint_mission, solve_leg, ColaConfig, MissionConfig,
-    ProximityConfig, TargetingConfig, Waypoint,
+    compute_mission_eclipse, compute_transfer_eclipse, find_closest_approaches,
+    plan_waypoint_mission, solve_leg, ColaConfig, MissionConfig, ProximityConfig, TargetingConfig,
+    Waypoint,
 };
+use rpo_core::propagation::lambert::{LambertTransfer, TransferDirection};
 use rpo_core::propagation::{DragConfig, PropagationModel};
 use rpo_core::types::{DepartureState, KeplerianElements, QuasiNonsingularROE, StateVector};
 
@@ -279,6 +281,63 @@ fn bench_keplerian_conversions(c: &mut Criterion) {
     });
 }
 
+fn bench_compute_mission_eclipse(c: &mut Criterion) {
+    let chief = iss_chief();
+    let dep = departure(&chief);
+    let propagator = PropagationModel::J2Stm;
+    let config = MissionConfig::default();
+
+    let waypoints = vec![
+        Waypoint {
+            position_ric_km: Vector3::new(0.0, 0.5, 0.0),
+            velocity_ric_km_s: None,
+            tof_s: Some(3600.0),
+        },
+        Waypoint {
+            position_ric_km: Vector3::new(0.0, 0.0, 0.0),
+            velocity_ric_km_s: Some(Vector3::new(0.0, 0.0, 0.0)),
+            tof_s: Some(3600.0),
+        },
+    ];
+
+    let mission = plan_waypoint_mission(&dep, &waypoints, &config, &propagator).unwrap();
+
+    c.bench_function("compute_mission_eclipse", |b| {
+        b.iter(|| compute_mission_eclipse(&mission.legs));
+    });
+}
+
+fn bench_compute_transfer_eclipse(c: &mut Criterion) {
+    let chief = iss_chief();
+    let ep = epoch();
+    let chief_sv = keplerian_to_state(&chief, ep).unwrap();
+
+    // Synthetic Lambert transfer: deputy ~5 km ahead, 1-orbit TOF
+    let period = chief.period().unwrap();
+    let arrival_sv = keplerian_to_state(&chief, ep + hifitime::Duration::from_seconds(period))
+        .unwrap();
+    let departure_sv = StateVector {
+        epoch: ep,
+        position_eci_km: chief_sv.position_eci_km + Vector3::new(0.0, 0.005, 0.0),
+        velocity_eci_km_s: chief_sv.velocity_eci_km_s,
+    };
+
+    let transfer = LambertTransfer {
+        departure_state: departure_sv,
+        arrival_state: arrival_sv,
+        departure_dv_eci_km_s: Vector3::zeros(),
+        arrival_dv_eci_km_s: Vector3::zeros(),
+        total_dv_km_s: 0.0,
+        tof_s: period,
+        c3_km2_s2: 0.0,
+        direction: TransferDirection::ShortWay,
+    };
+
+    c.bench_function("compute_transfer_eclipse", |b| {
+        b.iter(|| compute_transfer_eclipse(&transfer, &chief_sv, 200));
+    });
+}
+
 criterion_group!(
     benches,
     bench_classify_separation,
@@ -293,5 +352,7 @@ criterion_group!(
     bench_find_closest_approaches,
     bench_compute_free_drift,
     bench_keplerian_conversions,
+    bench_compute_mission_eclipse,
+    bench_compute_transfer_eclipse,
 );
 criterion_main!(benches);

@@ -185,23 +185,9 @@ pub enum ClientMessage {
 
     /// Cancel the active background job.
     Cancel {
-        /// Correlation ID of the job to cancel (or None for any active job).
-        request_id: Option<u64>,
+        /// Client-assigned correlation ID.
+        request_id: u64,
     },
-}
-
-impl ClientMessage {
-    /// Extract the `request_id` from any message variant.
-    #[must_use]
-    pub fn request_id(&self) -> Option<u64> {
-        match self {
-            Self::ComputeTransfer { request_id, .. }
-            | Self::ExtractDrag { request_id, .. }
-            | Self::Validate { request_id, .. }
-            | Self::RunMc { request_id, .. } => Some(*request_id),
-            Self::Cancel { request_id } => *request_id,
-        }
-    }
 }
 
 // ---- Server messages ----

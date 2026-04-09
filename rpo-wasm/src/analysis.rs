@@ -18,7 +18,7 @@ use rpo_core::types::KeplerianElements;
 use crate::error::WasmError;
 
 /// Wrapper for `Vec<FreeDriftAnalysis>` (wasm-bindgen compatibility).
-#[derive(Serialize, Deserialize, Tsify)]
+#[derive(Debug, Serialize, Deserialize, Tsify)]
 // Output-only: no from_wasm_abi needed (never passed from JS to Rust).
 #[tsify(into_wasm_abi)]
 pub struct FreeDriftResult {
@@ -27,7 +27,7 @@ pub struct FreeDriftResult {
 }
 
 /// Wrapper for `Vec<Vec<ClosestApproach>>` (wasm-bindgen compatibility).
-#[derive(Serialize, Deserialize, Tsify)]
+#[derive(Debug, Serialize, Deserialize, Tsify)]
 // Output-only: no from_wasm_abi needed (never passed from JS to Rust).
 #[tsify(into_wasm_abi)]
 pub struct PocaResult {
@@ -36,7 +36,7 @@ pub struct PocaResult {
 }
 
 /// Wrapper for resampled trajectory states (wasm-bindgen compatibility).
-#[derive(Serialize, Deserialize, Tsify)]
+#[derive(Debug, Serialize, Deserialize, Tsify)]
 // Output-only: no from_wasm_abi needed (never passed from JS to Rust).
 #[tsify(into_wasm_abi)]
 pub struct ResampledTrajectory {
@@ -51,8 +51,12 @@ pub struct ResampledTrajectory {
 ///
 /// # Arguments
 ///
+/// * `mission` — Planned waypoint mission with per-leg maneuver data.
+/// * `chief_at_arrival` — Chief mean Keplerian elements at the arrival epoch.
+/// * `navigation_accuracy` — 1-sigma RIC position/velocity uncertainties.
 /// * `maneuver_uncertainty` — Per-burn execution error model. `None` assumes
 ///   perfect maneuver execution (no covariance injection at burn epochs).
+/// * `propagator` — Propagation model choice (J2 or J2+drag).
 ///
 /// # Errors
 ///
@@ -78,6 +82,11 @@ pub fn compute_mission_covariance(
 
 /// Compute free-drift (abort-case) analysis for all mission legs.
 ///
+/// # Arguments
+///
+/// * `mission` — Planned waypoint mission with per-leg maneuver data.
+/// * `propagator` — Propagation model choice (J2 or J2+drag).
+///
 /// Returns `None` if any leg's free-drift computation fails (graceful degradation).
 #[must_use]
 #[wasm_bindgen]
@@ -91,6 +100,11 @@ pub fn compute_free_drift_analysis(
 }
 
 /// Compute refined closest-approach (POCA) analysis for all mission legs.
+///
+/// # Arguments
+///
+/// * `mission` — Planned waypoint mission with per-leg maneuver data.
+/// * `propagator` — Propagation model choice (J2 or J2+drag).
 ///
 /// Returns `None` if any leg's POCA computation fails (graceful degradation).
 #[must_use]

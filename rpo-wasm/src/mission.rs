@@ -13,7 +13,7 @@ use crate::error::WasmError;
 ///
 /// Core functions take `&mut TransferResult`; WASM cannot pass mutable
 /// references across the boundary, so this returns owned copies of both.
-#[derive(Serialize, Deserialize, Tsify)]
+#[derive(Debug, Serialize, Deserialize, Tsify)]
 // Output-only: no from_wasm_abi needed (never passed from JS to Rust).
 #[tsify(into_wasm_abi)]
 pub struct MissionResult {
@@ -24,6 +24,11 @@ pub struct MissionResult {
 }
 
 /// Execute a full mission from a pre-computed Lambert transfer.
+///
+/// # Arguments
+///
+/// * `transfer` — Pre-computed transfer result (classification + optional Lambert).
+/// * `input` — Full pipeline input (waypoints, config, propagator choice).
 ///
 /// # Errors
 ///
@@ -46,6 +51,9 @@ pub fn execute_mission_from_transfer(
 ///
 /// # Arguments
 ///
+/// * `transfer` — Pre-computed transfer result (classification + optional Lambert).
+/// * `input` — Full pipeline input (waypoints, config, propagator choice).
+/// * `modified_index` — Index of the modified waypoint triggering the re-plan.
 /// * `cached_mission` — Previous mission result for incremental replanning.
 ///   `None` = full re-plan from scratch. `Some(m)` = reuse converged legs
 ///   before `modified_index`, only re-targeting from the modified waypoint onward.
