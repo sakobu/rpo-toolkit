@@ -86,8 +86,8 @@ Analytical engine benchmarks (Apple M-series, single core, `cargo bench -p rpo-c
 
 | Operation                  | Time    | Notes                                        |
 | -------------------------- | ------- | -------------------------------------------- |
-| `roe_to_ric`               | 7.5 ns  | ROE -> RIC mapping (D'Amico Eq. 2.17)        |
-| `compute_ei_separation`    | 7.8 ns  | e/i vector separation (D'Amico Eq. 2.22)     |
+| `roe_to_ric`               | 7.5 ns  | ROE -> RIC mapping                           |
+| `compute_ei_separation`    | 7.8 ns  | e/i vector separation                        |
 | `analyze_safety`           | 12.8 ns | passive safety analysis                      |
 | `state_to_keplerian`       | 23.9 ns | ECI -> Keplerian conversion                  |
 | `keplerian_to_state`       | 39.0 ns | Keplerian -> ECI conversion                  |
