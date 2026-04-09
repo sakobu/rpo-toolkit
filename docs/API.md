@@ -91,17 +91,19 @@ Response: `drag_result`
 
 Full-physics nyx validation of an analytical mission plan. Background job (seconds to minutes). Streams `progress` messages during execution. Supports optional COLA avoidance burns injected into the nyx propagation.
 
-| Field             | Type               | Required | Default | Description                                               |
-| ----------------- | ------------------ | -------- | ------- | --------------------------------------------------------- |
-| `type`            | `"validate"`       | yes      |         | Message discriminator                                     |
-| `request_id`      | `u64`              | yes      |         | Client-assigned correlation ID                            |
-| `mission`         | `WaypointMission`  | yes      |         | Analytical mission to validate                            |
-| `chief`           | `StateVector`      | yes      |         | Chief ECI state at mission start                          |
-| `deputy`          | `StateVector`      | yes      |         | Deputy ECI state at mission start                         |
-| `chief_config`    | `SpacecraftConfig` | yes      |         | Chief spacecraft physical properties                      |
-| `deputy_config`   | `SpacecraftConfig` | yes      |         | Deputy spacecraft physical properties                     |
-| `samples_per_leg` | `u32`              | yes      |         | Intermediate comparison samples per leg                   |
-| `cola_burns`      | `ColaBurnInput[]`  | no       | `[]`    | Optional COLA avoidance burns to inject during validation |
+| Field                     | Type                  | Required | Default | Description                                                      |
+| ------------------------- | --------------------- | -------- | ------- | ---------------------------------------------------------------- |
+| `type`                    | `"validate"`          | yes      |         | Message discriminator                                            |
+| `request_id`              | `u64`                 | yes      |         | Client-assigned correlation ID                                   |
+| `mission`                 | `WaypointMission`     | yes      |         | Analytical mission to validate                                   |
+| `chief`                   | `StateVector`         | yes      |         | Chief ECI state at mission start                                 |
+| `deputy`                  | `StateVector`         | yes      |         | Deputy ECI state at mission start                                |
+| `chief_config`            | `SpacecraftConfig`    | yes      |         | Chief spacecraft physical properties                             |
+| `deputy_config`           | `SpacecraftConfig`    | yes      |         | Deputy spacecraft physical properties                            |
+| `samples_per_leg`         | `u32`                 | yes      |         | Intermediate comparison samples per leg                          |
+| `cola_burns`              | `ColaBurnInput[]`     | no       | `[]`    | Optional COLA avoidance burns to inject during validation        |
+| `analytical_cola`         | `AvoidanceManeuver[]` | no       | `[]`    | Analytical COLA avoidance maneuvers for effectiveness comparison |
+| `cola_target_distance_km` | `f64 \| null`         | no       | `null`  | Target COLA separation threshold (km) from ColaConfig            |
 
 `ColaBurnInput` fields:
 
@@ -111,26 +113,36 @@ Full-physics nyx validation of an analytical mission plan. Background job (secon
 | `elapsed_s`   | `f64`       | Time from leg departure to COLA burn (seconds) |
 | `dv_ric_km_s` | `[R, I, C]` | Delta-v in RIC frame (km/s)                    |
 
+The `validation_result` response includes a `cola_effectiveness` array (empty when no COLA burns were injected) with these fields per entry:
+
+| Field                           | Type           | Description                                                      |
+| ------------------------------- | -------------- | ---------------------------------------------------------------- |
+| `leg_index`                     | `usize`        | Mission leg index                                                |
+| `analytical_post_cola_poca_km`  | `f64 \| null`  | Analytical post-avoidance POCA (km), from `AvoidanceManeuver`    |
+| `nyx_post_cola_min_distance_km` | `f64`          | Minimum chief-deputy distance in post-COLA segment from nyx (km) |
+| `target_distance_km`            | `f64 \| null`  | Target separation threshold (km), from `ColaConfig`              |
+| `threshold_met`                 | `bool \| null` | Whether nyx min distance meets the target (`null` if no target)  |
+
 Response: `progress` (0 or more), then `validation_result`
 
 ### run_mc
 
 Monte Carlo ensemble with nyx full-physics propagation. Background job (minutes to hours). Streams `progress` messages during execution.
 
-| Field               | Type                      | Required | Default | Description                                                    |
-| ------------------- | ------------------------- | -------- | ------- | -------------------------------------------------------------- |
-| `type`              | `"run_mc"`                | yes      |         | Message discriminator                                          |
-| `request_id`        | `u64`                     | yes      |         | Client-assigned correlation ID                                 |
-| `mission`           | `WaypointMission`         | yes      |         | Nominal mission plan (reference for dispersions)               |
-| `chief`             | `StateVector`             | yes      |         | Chief ECI state at mission start                               |
-| `deputy`            | `StateVector`             | yes      |         | Deputy ECI state at mission start                              |
-| `chief_config`      | `SpacecraftConfig`        | yes      |         | Chief spacecraft physical properties                           |
-| `deputy_config`     | `SpacecraftConfig`        | yes      |         | Deputy spacecraft physical properties                          |
-| `mission_config`    | `MissionConfig`           | yes      |         | Mission targeting configuration (for closed-loop re-targeting) |
+| Field               | Type                      | Required | Default | Description                                                             |
+| ------------------- | ------------------------- | -------- | ------- | ----------------------------------------------------------------------- |
+| `type`              | `"run_mc"`                | yes      |         | Message discriminator                                                   |
+| `request_id`        | `u64`                     | yes      |         | Client-assigned correlation ID                                          |
+| `mission`           | `WaypointMission`         | yes      |         | Nominal mission plan (reference for dispersions)                        |
+| `chief`             | `StateVector`             | yes      |         | Chief ECI state at mission start                                        |
+| `deputy`            | `StateVector`             | yes      |         | Deputy ECI state at mission start                                       |
+| `chief_config`      | `SpacecraftConfig`        | yes      |         | Chief spacecraft physical properties                                    |
+| `deputy_config`     | `SpacecraftConfig`        | yes      |         | Deputy spacecraft physical properties                                   |
+| `mission_config`    | `MissionConfig`           | yes      |         | Mission targeting configuration (for closed-loop re-targeting)          |
 | `propagator`        | `PropagatorChoice`        | yes      |         | `"j2"` or `{ "j2_drag": { "drag": { ... } } }` (externally-tagged enum) |
-| `drag_config`       | `DragConfig`              | no       | `null`  | Drag config override (replaces drag embedded in `j2_drag` propagator)    |
-| `monte_carlo`       | `MonteCarloConfig`        | yes      |         | MC configuration (samples, dispersions, mode, seed, trajectory_steps)    |
-| `covariance_report` | `MissionCovarianceReport` | no       | `null`  | Optional covariance predictions for cross-check                |
+| `drag_config`       | `DragConfig`              | no       | `null`  | Drag config override (replaces drag embedded in `j2_drag` propagator)   |
+| `monte_carlo`       | `MonteCarloConfig`        | yes      |         | MC configuration (samples, dispersions, mode, seed, trajectory_steps)   |
+| `covariance_report` | `MissionCovarianceReport` | no       | `null`  | Optional covariance predictions for cross-check                         |
 
 Response: `progress` (0 or more), then `monte_carlo_result`
 
@@ -151,21 +163,21 @@ Response: `cancelled`
 
 Lambert transfer result (classification + perch states). Response to `compute_transfer`.
 
-| Field        | Type                | Description                                                   |
-| ------------ | ------------------- | ------------------------------------------------------------- |
-| `type`       | `"transfer_result"` | Message discriminator                                         |
-| `request_id` | `u64`               | Correlation ID from the client request                        |
+| Field        | Type                | Description                                                                                        |
+| ------------ | ------------------- | -------------------------------------------------------------------------------------------------- |
+| `type`       | `"transfer_result"` | Message discriminator                                                                              |
+| `request_id` | `u64`               | Correlation ID from the client request                                                             |
 | `result`     | `TransferResult`    | Mission plan (phase, transfer, perch ROE, chief elements), perch states, arrival epoch, Lambert Δv |
 
 `TransferResult` fields:
 
-| Field              | Type               | Description                                            |
-| ------------------ | ------------------ | ------------------------------------------------------ |
-| `plan`             | `MissionPlan`      | Phase classification, Lambert transfer, perch ROE, chief elements at arrival |
-| `perch_chief`      | `StateVector`      | Chief ECI state at Lambert arrival (or original if proximity) |
-| `perch_deputy`     | `StateVector`      | Deputy ECI state at perch (or original if proximity)   |
-| `arrival_epoch`    | `string`           | ISO 8601 epoch at Lambert arrival                      |
-| `lambert_dv_km_s`  | `f64`              | Lambert Δv magnitude (0.0 if proximity)                |
+| Field             | Type          | Description                                                                  |
+| ----------------- | ------------- | ---------------------------------------------------------------------------- |
+| `plan`            | `MissionPlan` | Phase classification, Lambert transfer, perch ROE, chief elements at arrival |
+| `perch_chief`     | `StateVector` | Chief ECI state at Lambert arrival (or original if proximity)                |
+| `perch_deputy`    | `StateVector` | Deputy ECI state at perch (or original if proximity)                         |
+| `arrival_epoch`   | `string`      | ISO 8601 epoch at Lambert arrival                                            |
+| `lambert_dv_km_s` | `f64`         | Lambert Δv magnitude (0.0 if proximity)                                      |
 
 ### drag_result
 
@@ -201,11 +213,11 @@ Monte Carlo ensemble report. Response to `run_mc`.
 
 Streamed during long-running operations (`validate`, `run_mc`). Fire-and-forget -- progress updates may be dropped if the internal buffer is full.
 
-| Field        | Type               | Description                                                 |
-| ------------ | ------------------ | ----------------------------------------------------------- |
-| `type`       | `"progress"`       | Message discriminator                                       |
-| `request_id` | `u64`              | Correlation ID of the operation in progress                 |
-| `phase`      | `string`           | `"validate"` or `"mc"`                                      |
+| Field        | Type                | Description                                                 |
+| ------------ | ------------------- | ----------------------------------------------------------- |
+| `type`       | `"progress"`        | Message discriminator                                       |
+| `request_id` | `u64`               | Correlation ID of the operation in progress                 |
+| `phase`      | `string`            | `"validate"` or `"mc"`                                      |
 | `detail`     | `string` or omitted | Human-readable detail (e.g., `"Running nyx validation..."`) |
 | `fraction`   | `number` or omitted | Completion fraction, 0.0 to 1.0                             |
 
@@ -213,13 +225,13 @@ Streamed during long-running operations (`validate`, `run_mc`). Fire-and-forget 
 
 Error response for any operation.
 
-| Field        | Type                | Description                                                           |
-| ------------ | ------------------- | --------------------------------------------------------------------- |
-| `type`       | `"error"`           | Message discriminator                                                 |
+| Field        | Type                | Description                                                              |
+| ------------ | ------------------- | ------------------------------------------------------------------------ |
+| `type`       | `"error"`           | Message discriminator                                                    |
 | `request_id` | `u64` or omitted    | Correlation ID (omitted for connection-level errors like malformed JSON) |
-| `code`       | `string`            | Machine-readable error code (see below)                               |
-| `message`    | `string`            | Human-readable error message                                          |
-| `detail`     | `object` or omitted | Per-variant diagnostic fields (omitted when null)                     |
+| `code`       | `string`            | Machine-readable error code (see below)                                  |
+| `message`    | `string`            | Human-readable error message                                             |
+| `detail`     | `object` or omitted | Per-variant diagnostic fields (omitted when null)                        |
 
 ### cancelled
 
@@ -445,7 +457,9 @@ Request:
   "chief_config": { "...": "SpacecraftConfig" },
   "deputy_config": { "...": "SpacecraftConfig" },
   "samples_per_leg": 50,
-  "cola_burns": []
+  "cola_burns": [],
+  "analytical_cola": [],
+  "cola_target_distance_km": null
 }
 ```
 

@@ -9,7 +9,7 @@ use rpo_core::propagation::{DragConfig, PropagationModel};
 
 use crate::output::common::{
     compute_leg_error_stats, determine_verdict, fmt_bounded_motion_residual, fmt_duration, fmt_m,
-    fmt_m_s, fmt_roe_component, SafetyTier, VerdictResult,
+    fmt_m_s, fmt_roe_component, KM_TO_M, SafetyTier, VerdictResult,
 };
 use crate::output::formation_fmt::write_formation_design_md;
 use crate::output::insights;
@@ -461,9 +461,9 @@ fn write_waypoint_section(
             "| {} | {} | {:.2} | {:.2} | {:.2} | {} |",
             i + 1,
             fmt_duration(leg.tof_s),
-            dv1 * 1000.0,
-            dv2 * 1000.0,
-            leg.total_dv_km_s * 1000.0,
+            dv1 * KM_TO_M,
+            dv2 * KM_TO_M,
+            leg.total_dv_km_s * KM_TO_M,
             label,
         );
     }
@@ -471,7 +471,7 @@ fn write_waypoint_section(
         out,
         "| **Total** | **{}** | | | **{:.2}** | |",
         fmt_duration(output.mission.total_duration_s),
-        total_dv * 1000.0,
+        total_dv * KM_TO_M,
     );
     let _ = writeln!(out);
 }
@@ -515,7 +515,7 @@ fn write_safety_section(
         fmt_m(config.min_distance_3d_km, 0),
     );
     let margin_3d =
-        (safety.operational.min_distance_3d_km - config.min_distance_3d_km) * 1000.0;
+        (safety.operational.min_distance_3d_km - config.min_distance_3d_km) * KM_TO_M;
     let _ = writeln!(out, "| Margin | {margin_3d:+.1} m |");
     let _ = writeln!(
         out,
@@ -588,10 +588,10 @@ fn write_passive_safety_md(
         fmt_m(config.min_ei_separation_km, 0),
     );
     let margin_ei =
-        (safety.passive.min_ei_separation_km - config.min_ei_separation_km) * 1000.0;
+        (safety.passive.min_ei_separation_km - config.min_ei_separation_km) * KM_TO_M;
     let _ = writeln!(out, "| Margin | {margin_ei:+.1} m |");
     // Phase angle is meaningless when e/i separation is effectively zero
-    if safety.passive.min_ei_separation_km * 1000.0 >= 0.05 {
+    if safety.passive.min_ei_separation_km * KM_TO_M >= 0.05 {
         let _ = writeln!(
             out,
             "| e/i phase angle | {:.2}\u{00b0} |",
@@ -680,7 +680,7 @@ fn write_free_drift_section(
             fmt_m(config.min_ei_separation_km, 0),
         );
         // Phase angle is meaningless when e/i separation is effectively zero
-        if s.passive.min_ei_separation_km * 1000.0 >= 0.05 {
+        if s.passive.min_ei_separation_km * KM_TO_M >= 0.05 {
             let _ = writeln!(
                 out,
                 "| e/i phase angle | {:.2}\u{00b0} |",
@@ -724,7 +724,7 @@ fn write_poca_section(
         let _ = writeln!(
             out,
             "| Distance | {:.1} m at t = {:.1} s |",
-            closest.distance_km * 1000.0,
+            closest.distance_km * KM_TO_M,
             closest.elapsed_s,
         );
         let _ = writeln!(
@@ -782,8 +782,8 @@ fn write_cola_section(out: &mut String, maneuvers: &[rpo_core::mission::Avoidanc
             m.dv_ric_km_s.y,
             m.dv_ric_km_s.z,
             m.maneuver_location_rad,
-            m.post_avoidance_poca_km * 1000.0,
-            m.fuel_cost_km_s * 1000.0,
+            m.post_avoidance_poca_km * KM_TO_M,
+            m.fuel_cost_km_s * KM_TO_M,
             correction,
         );
     }
@@ -813,7 +813,7 @@ fn write_secondary_conjunction_section(
             "| {} | {} | {:.1} | {:.1} | [{:.4}, {:.4}, {:.4}] |",
             sv.original_leg_index + 1,
             sv.violated_leg_index + 1,
-            sv.poca.distance_km * 1000.0,
+            sv.poca.distance_km * KM_TO_M,
             sv.poca.elapsed_s,
             sv.poca.position_ric_km.x,
             sv.poca.position_ric_km.y,
@@ -924,9 +924,9 @@ fn write_validation_section(
                     out,
                     "| {} | {:.1} | {:.1} | {:.1} |",
                     i + 1,
-                    stats.max_km * 1000.0,
-                    stats.mean_km * 1000.0,
-                    stats.rms_km * 1000.0,
+                    stats.max_km * KM_TO_M,
+                    stats.mean_km * KM_TO_M,
+                    stats.rms_km * KM_TO_M,
                 );
             }
         }
@@ -981,26 +981,67 @@ fn write_cola_validation_detail(
         _ => return,
     };
 
+    let has_effectiveness = !report.cola_effectiveness.is_empty();
+
     let _ = writeln!(out, "### COLA Burns Injected into Nyx Propagation\n");
-    let _ = writeln!(
-        out,
-        "| Leg | \u{0394}v (m/s) | Type | Analytical Post-COLA POCA |",
-    );
-    let _ = writeln!(out, "| --- | -------- | ---- | ------------------------- |");
+
+    if has_effectiveness {
+        let _ = writeln!(
+            out,
+            "| Leg | \u{0394}v (m/s) | Type | Analytical Post-COLA POCA | Nyx Post-COLA Min | Threshold Met |",
+        );
+        let _ = writeln!(
+            out,
+            "| --- | -------- | ---- | ------------------------- | ----------------- | ------------- |",
+        );
+    } else {
+        let _ = writeln!(
+            out,
+            "| Leg | \u{0394}v (m/s) | Type | Analytical Post-COLA POCA |",
+        );
+        let _ = writeln!(out, "| --- | -------- | ---- | ------------------------- |");
+    }
+
     for m in maneuvers {
         let correction = match m.correction_type {
             rpo_core::mission::CorrectionType::InPlane => "in-plane",
             rpo_core::mission::CorrectionType::CrossTrack => "cross-track",
             rpo_core::mission::CorrectionType::Combined => "combined",
         };
-        let _ = writeln!(
-            out,
-            "| {} | {:.2} | {} | {:.1} m |",
-            m.leg_index + 1,
-            m.fuel_cost_km_s * 1000.0,
-            correction,
-            m.post_avoidance_poca_km * 1000.0,
-        );
+
+        if has_effectiveness {
+            let eff = report
+                .cola_effectiveness
+                .iter()
+                .find(|e| e.leg_index == m.leg_index);
+            let nyx_min = eff.map_or_else(
+                || "\u{2014}".to_string(),
+                |e| format!("{:.1} m", e.nyx_post_cola_min_distance_km * KM_TO_M),
+            );
+            let threshold = eff
+                .and_then(|e| e.threshold_met)
+                .map_or("\u{2014}", |met| if met { "\u{2705}" } else { "\u{274c}" });
+
+            let _ = writeln!(
+                out,
+                "| {} | {:.2} | {} | {:.1} m | {} | {} |",
+                m.leg_index + 1,
+                m.fuel_cost_km_s * KM_TO_M,
+                correction,
+                m.post_avoidance_poca_km * KM_TO_M,
+                nyx_min,
+                threshold,
+            );
+        } else {
+            let _ = writeln!(
+                out,
+                "| {} | {:.2} | {} | {:.1} m |",
+                m.leg_index + 1,
+                m.fuel_cost_km_s * KM_TO_M,
+                correction,
+                m.post_avoidance_poca_km * KM_TO_M,
+            );
+        }
     }
     let _ = writeln!(out);
     let _ = writeln!(
@@ -1040,8 +1081,8 @@ fn write_safety_comparison(
     let _ = writeln!(
         out,
         "| Min R/C-plane distance (m) | {:.1} | {:.1} | \u{2014} |",
-        ana_rc * 1000.0,
-        num_rc * 1000.0,
+        ana_rc * KM_TO_M,
+        num_rc * KM_TO_M,
     );
 
     let ana_3d = report
@@ -1054,9 +1095,9 @@ fn write_safety_comparison(
     let _ = writeln!(
         out,
         "| 3D distance (m) | {:.1} | {:.1} | {:.0}{} |",
-        ana_3d * 1000.0,
-        num_3d * 1000.0,
-        sc.min_distance_3d_km * 1000.0,
+        ana_3d * KM_TO_M,
+        num_3d * KM_TO_M,
+        sc.min_distance_3d_km * KM_TO_M,
         if noncons_3d { " \\*" } else { "" },
     );
 
@@ -1070,9 +1111,9 @@ fn write_safety_comparison(
     let _ = writeln!(
         out,
         "| e/i separation (m) | {:.1} | {:.1} | {:.0}{} |",
-        ana_ei * 1000.0,
-        num_ei * 1000.0,
-        sc.min_ei_separation_km * 1000.0,
+        ana_ei * KM_TO_M,
+        num_ei * KM_TO_M,
+        sc.min_ei_separation_km * KM_TO_M,
         if noncons_ei { " \\*" } else { "" },
     );
     let _ = writeln!(out);

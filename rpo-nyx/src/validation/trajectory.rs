@@ -18,7 +18,7 @@ use rpo_core::types::{SpacecraftConfig, StateVector};
 
 use rpo_core::mission::avoidance::AvoidanceManeuver;
 use rpo_core::mission::types::{
-    ManeuverLeg, ValidationPoint, ValidationReport, WaypointMission,
+    ColaEffectivenessEntry, ManeuverLeg, ValidationPoint, ValidationReport, WaypointMission,
 };
 use super::eclipse::{EclipseSample, build_eclipse_validation};
 use super::errors::ValidationError;
@@ -51,6 +51,26 @@ pub struct ColaBurn {
     pub elapsed_s: f64,
     /// Delta-v in RIC frame (km/s).
     pub dv_ric_km_s: Vector3<f64>,
+}
+
+/// All COLA-related inputs for nyx validation: burns to inject plus analytical
+/// context for effectiveness comparison.
+///
+/// Bundles the nyx-format impulse burns with the analytical avoidance maneuvers
+/// and target threshold so callers pass a single COLA struct instead of
+/// separate `&[ColaBurn]` + context parameters.
+///
+/// Unit and frame assumptions are carried by field-level types
+/// (`ColaBurn::dv_ric_km_s`, `AvoidanceManeuver::post_avoidance_poca_km`, etc.)
+/// per crate boundary convention.
+#[derive(Debug, Clone, Default)]
+pub struct ColaValidationInput {
+    /// Nyx-format impulse burns to inject during propagation.
+    pub burns: Vec<ColaBurn>,
+    /// Analytical avoidance maneuvers from `assess_cola()` for effectiveness comparison.
+    pub analytical_maneuvers: Vec<AvoidanceManeuver>,
+    /// Target COLA separation threshold (km) from `ColaConfig::target_distance_km`.
+    pub target_distance_km: Option<f64>,
 }
 
 /// Convert COLA avoidance maneuvers to validation burn commands.
@@ -444,6 +464,40 @@ fn propagate_leg_with_cola(
     })
 }
 
+/// Compute the minimum chief-deputy distance in the post-COLA segment.
+///
+/// Iterates ECI position pairs from `cola_split_index` onward and returns
+/// `min(||r_deputy_eci - r_chief_eci||)`. Returns `None` if no post-COLA
+/// samples exist or if `cola_split_index` is out of bounds.
+///
+/// The Euclidean norm is frame-invariant, so ECI distance equals RIC distance —
+/// no frame conversion is needed.
+///
+/// # Arguments
+///
+/// * `chief_results` — Chief ECI trajectory samples for the leg
+/// * `deputy_results` — Deputy ECI trajectory samples for the leg (must be
+///   same length as `chief_results`; samples are time-aligned by index)
+/// * `cola_split_index` — Index of the first post-COLA sample
+fn compute_post_cola_min_distance(
+    chief_results: &[TimedState],
+    deputy_results: &[TimedState],
+    cola_split_index: usize,
+) -> Option<f64> {
+    let chief_post = chief_results.get(cola_split_index..)?;
+    let deputy_post = deputy_results.get(cola_split_index..)?;
+
+    if chief_post.is_empty() {
+        return None;
+    }
+
+    chief_post
+        .iter()
+        .zip(deputy_post.iter())
+        .map(|(c, d)| (d.state.position_eci_km - c.state.position_eci_km).norm())
+        .reduce(f64::min)
+}
+
 /// Look up the ANISE Earth frame for eclipse queries, if eclipse data is present.
 fn lookup_earth_frame(
     almanac: &Arc<Almanac>,
@@ -523,7 +577,7 @@ pub fn validate_mission_nyx(
     chief_initial: &StateVector,
     deputy_initial: &StateVector,
     config: &ValidationConfig,
-    cola_burns: &[ColaBurn],
+    cola: &ColaValidationInput,
     almanac: &Arc<Almanac>,
 ) -> Result<ValidationReport, ValidationError> {
     if mission.legs.is_empty() {
@@ -534,6 +588,8 @@ pub fn validate_mission_nyx(
     let mut deputy_state = deputy_initial.clone();
     let mut cumulative_time = 0.0_f64;
     let mut leg_points = Vec::with_capacity(mission.legs.len());
+    let mut cola_effectiveness: Vec<ColaEffectivenessEntry> =
+        Vec::with_capacity(cola.burns.len());
     let estimated_total_samples = config.samples_per_leg as usize // u32 -> usize: always safe
         * mission.legs.len();
     let mut safety_pairs: Vec<ChiefDeputySnapshot> =
@@ -555,12 +611,34 @@ pub fn validate_mission_nyx(
     };
 
     for (leg_idx, leg) in mission.legs.iter().enumerate() {
-        let primary_cola = cola_burns.iter().find(|c| c.leg_index == leg_idx);
+        let primary_cola = cola.burns.iter().find(|c| c.leg_index == leg_idx);
 
-        let (chief_results, deputy_results, cola_split) = if let Some(cola) = primary_cola {
+        let (chief_results, deputy_results, cola_split) = if let Some(burn) = primary_cola {
             let out = propagate_leg_with_cola(
-                &chief_state, &deputy_state, leg, cola, &ctx,
+                &chief_state, &deputy_state, leg, burn, &ctx,
             )?;
+            // Extract post-COLA minimum distance for effectiveness comparison.
+            if let Some(nyx_min) = compute_post_cola_min_distance(
+                &out.chief_results,
+                &out.deputy_results,
+                out.cola_split_index,
+            ) {
+                let analytical = cola
+                    .analytical_maneuvers
+                    .iter()
+                    .find(|m| m.leg_index == leg_idx);
+                cola_effectiveness.push(ColaEffectivenessEntry {
+                    leg_index: leg_idx,
+                    analytical_post_cola_poca_km: analytical
+                        .map(|m| m.post_avoidance_poca_km),
+                    nyx_post_cola_min_distance_km: nyx_min,
+                    target_distance_km: cola
+                        .target_distance_km,
+                    threshold_met: cola
+                        .target_distance_km
+                        .map(|t| nyx_min >= t),
+                });
+            }
             (out.chief_results, out.deputy_results, Some(out.cola_split_index))
         } else {
             let (c, d) = propagate_leg_parallel(
@@ -612,6 +690,7 @@ pub fn validate_mission_nyx(
         chief_config: config.chief_config,
         deputy_config: config.deputy_config,
         eclipse_validation,
+        cola_effectiveness,
     })
 }
 
@@ -728,6 +807,98 @@ mod tests {
     }
 
     // =========================================================================
+    // Post-COLA Minimum Distance Extraction Tests
+    // =========================================================================
+
+    use crate::nyx_bridge::TimedState;
+    use rpo_core::types::state::StateVector;
+
+    /// Tolerance for exact distance comparisons in synthetic axis-aligned test geometries.
+    /// Computed norms are exact to machine precision; this guards against floating-point
+    /// representation noise only.
+    const SYNTHETIC_DISTANCE_TOL: f64 = 1e-12;
+
+    /// Build a `TimedState` with the given ECI position (km) and elapsed time (s).
+    fn make_timed_state(elapsed_s: f64, position_eci_km: Vector3<f64>) -> TimedState {
+        TimedState {
+            elapsed_s,
+            state: StateVector {
+                epoch: rpo_core::test_helpers::test_epoch(),
+                position_eci_km,
+                velocity_eci_km_s: Vector3::zeros(),
+            },
+        }
+    }
+
+    #[test]
+    fn post_cola_min_distance_basic() {
+        // Chief at origin, deputy at varying distances
+        let chief: Vec<TimedState> = (0..10)
+            .map(|i| make_timed_state(f64::from(i) * 100.0, Vector3::zeros()))
+            .collect();
+
+        // Deputy: pre-COLA far away, post-COLA closer with known minimum
+        let mut deputy: Vec<TimedState> = Vec::with_capacity(10);
+        for i in 0..5 {
+            // Pre-COLA: 10 km away
+            deputy.push(make_timed_state(
+                f64::from(i) * 100.0,
+                Vector3::new(10.0, 0.0, 0.0),
+            ));
+        }
+        // Post-COLA: distances [3.0, 1.5, 0.8, 2.0, 4.0] km
+        let post_cola_distances = [3.0, 1.5, 0.8, 2.0, 4.0];
+        for (j, &d) in post_cola_distances.iter().enumerate() {
+            deputy.push(make_timed_state(
+                f64::from(u32::try_from(5 + j).unwrap()) * 100.0,
+                Vector3::new(d, 0.0, 0.0),
+            ));
+        }
+
+        let cola_split_index = 5;
+        let min_dist = super::compute_post_cola_min_distance(&chief, &deputy, cola_split_index);
+        assert!(min_dist.is_some(), "should have post-COLA samples");
+
+        let expected_min = 0.8;
+        let actual = min_dist.unwrap();
+        assert!(
+            (actual - expected_min).abs() < SYNTHETIC_DISTANCE_TOL,
+            "min distance should be {expected_min}, got {actual}",
+        );
+    }
+
+    #[test]
+    fn post_cola_min_distance_empty_returns_none() {
+        let chief = vec![make_timed_state(0.0, Vector3::zeros())];
+        let deputy = vec![make_timed_state(0.0, Vector3::new(5.0, 0.0, 0.0))];
+
+        // cola_split_index at end of array — no post-COLA samples
+        let result = super::compute_post_cola_min_distance(&chief, &deputy, 1);
+        assert!(result.is_none(), "should return None when no post-COLA samples");
+    }
+
+    #[test]
+    fn post_cola_min_distance_3d_norm() {
+        // Verify 3D norm computation (not just x-component)
+        let chief = vec![
+            make_timed_state(0.0, Vector3::zeros()),
+            make_timed_state(100.0, Vector3::zeros()),
+        ];
+        let deputy = vec![
+            make_timed_state(0.0, Vector3::new(10.0, 0.0, 0.0)),
+            make_timed_state(100.0, Vector3::new(0.3, 0.4, 0.0)), // norm = 0.5
+        ];
+
+        let min_dist = super::compute_post_cola_min_distance(&chief, &deputy, 1);
+        assert!(min_dist.is_some());
+        let actual = min_dist.unwrap();
+        assert!(
+            (actual - 0.5).abs() < SYNTHETIC_DISTANCE_TOL,
+            "3D norm should be 0.5, got {actual}",
+        );
+    }
+
+    // =========================================================================
     // Full-Physics Integration Tests
     // =========================================================================
 
@@ -768,6 +939,18 @@ mod tests {
     /// Below this threshold (km), e/i separation values are too small
     /// for a meaningful relative-error comparison.
     const SAFETY_EI_NEAR_ZERO_KM: f64 = 1e-6;
+
+    /// Maximum relative difference between analytical and nyx post-COLA minimum distance.
+    /// Analytical uses linearized GVE (inverse Gauss variational equations) while nyx uses
+    /// full nonlinear dynamics with J2, drag, SRP, and third-body perturbations.
+    /// The 50% tolerance accommodates this fundamental model fidelity gap.
+    const COLA_EFFECTIVENESS_RELATIVE_TOL: f64 = 0.50;
+
+    /// Nyx post-COLA minimum distance must exceed this fraction of the target distance.
+    /// Set at 50% to account for: (a) discrete sampling resolution (50 points/leg may
+    /// miss the true minimum), (b) nonlinear dynamics divergence from the linearized
+    /// avoidance solution, and (c) unmodeled perturbations (SRP, third-body).
+    const COLA_EFFECTIVENESS_THRESHOLD_FRACTION: f64 = 0.50;
 
     /// Single-leg transfer with nonzero initial ROE and mixed-axis waypoint,
     /// validated against nyx full-physics propagation.
@@ -833,7 +1016,7 @@ mod tests {
             &chief_sv,
             &deputy_sv,
             &val_config,
-            &[],
+            &super::ColaValidationInput::default(),
             &almanac,
         )
         .expect("validation should succeed");
@@ -946,7 +1129,7 @@ mod tests {
             &chief_sv,
             &deputy_sv,
             &val_config,
-            &[],
+            &super::ColaValidationInput::default(),
             &almanac,
         )
         .expect("validation should succeed");
@@ -1073,7 +1256,7 @@ mod tests {
             &chief_sv,
             &deputy_sv,
             &val_config,
-            &[],
+            &super::ColaValidationInput::default(),
             &almanac,
         )
         .expect("drag validation should succeed");
@@ -1083,7 +1266,7 @@ mod tests {
             &chief_sv,
             &deputy_sv,
             &val_config,
-            &[],
+            &super::ColaValidationInput::default(),
             &almanac,
         )
         .expect("J2 validation should succeed");
@@ -1202,7 +1385,7 @@ mod tests {
             &chief_sv,
             &deputy_sv,
             &val_config,
-            &[],
+            &super::ColaValidationInput::default(),
             &almanac,
         )
         .expect("validation should succeed");
@@ -1462,5 +1645,183 @@ mod tests {
             n1.abs_diff(expected_n1) <= 5,
             "n1={n1} should be approximately {expected_n1} (COLA at 30% of leg)"
         );
+    }
+
+    /// End-to-end COLA effectiveness validation.
+    ///
+    /// Plans a mission with a close POCA, computes avoidance, validates with nyx,
+    /// and asserts that the nyx post-COLA minimum distance exceeds the target
+    /// threshold fraction.
+    #[test]
+    #[ignore] // Requires MetaAlmanac network access
+    fn validate_cola_effectiveness() {
+        use rpo_core::mission::{
+            assess_cola, ClosestApproach,
+            ColaConfig, ColaAssessment, MissionConfig, SafetyConfig,
+        };
+        use rpo_core::mission::waypoints::plan_waypoint_mission;
+        use rpo_core::mission::closest_approach::find_closest_approaches;
+        use rpo_core::mission::types::Waypoint;
+        use rpo_core::test_helpers::deputy_from_roe;
+        use rpo_core::types::{DepartureState, QuasiNonsingularROE};
+
+        let epoch = test_epoch();
+        let chief_kep = iss_like_elements();
+        let a = chief_kep.a_km;
+
+        let chief_sv = keplerian_to_state(&chief_kep, epoch).unwrap();
+
+        // Deputy: formation sized so POCA ~ 0.1 km (below 0.2 km threshold).
+        // Minimum distance ~ a * min(de, di). For de=di=0.1/a: min distance ~ 0.1 km.
+        // This gives scale = target/poca ~ 2, keeping COLA delta-v affordable.
+        let departure_roe = QuasiNonsingularROE {
+            da: 0.0,
+            dlambda: 0.0,
+            dex: 0.1 / a,
+            dey: 0.0,
+            dix: 0.0,
+            diy: 0.1 / a,
+        };
+        let deputy_kep = deputy_from_roe(&chief_kep, &departure_roe);
+        let deputy_sv = keplerian_to_state(&deputy_kep, epoch).unwrap();
+
+        // Waypoint: along-track displacement, ~0.8 period.
+        // Along-track (T) motion is cheapest for near-circular chief orbits.
+        let period = chief_kep.period().unwrap();
+        let waypoint = Waypoint {
+            position_ric_km: Vector3::new(0.0, 0.5, 0.0),
+            velocity_ric_km_s: Some(Vector3::zeros()),
+            tof_s: Some(0.8 * period),
+        };
+
+        let propagator = PropagationModel::J2Stm;
+        let config = MissionConfig {
+            safety: Some(SafetyConfig {
+                min_distance_3d_km: 0.2,
+                min_ei_separation_km: 0.0,
+            }),
+            ..MissionConfig::default()
+        };
+
+        let departure = DepartureState {
+            roe: departure_roe,
+            chief: chief_kep,
+            epoch,
+        };
+
+        let mission = plan_waypoint_mission(&departure, &[waypoint], &config, &propagator)
+            .expect("mission planning should succeed");
+
+        // COLA assessment: target distance intentionally modest.
+        // Budget generous (1 km/s) because tight formations require large
+        // ROE corrections to reach the target minimum distance.
+        let cola_config = ColaConfig {
+            target_distance_km: 0.2,
+            max_dv_km_s: 1.0,
+        };
+
+        // Compute per-leg POCA (same pattern as build_poca in cola_assessment.rs)
+        let poca: Vec<Vec<ClosestApproach>> = mission
+            .legs
+            .iter()
+            .enumerate()
+            .map(|(i, leg)| {
+                find_closest_approaches(
+                    &leg.trajectory,
+                    &leg.departure_chief_mean,
+                    leg.departure_maneuver.epoch,
+                    &propagator,
+                    &leg.post_departure_roe,
+                    i,
+                )
+                .expect("POCA computation should succeed for test formation")
+            })
+            .collect();
+
+        let assessment = assess_cola(&mission, &poca, &propagator, &cola_config);
+        let maneuvers = match &assessment {
+            ColaAssessment::Avoidance { maneuvers, .. } => maneuvers.clone(),
+            ColaAssessment::SecondaryConjunction { maneuvers, .. } => maneuvers.clone(),
+            ColaAssessment::Nominal => {
+                panic!(
+                    "Test formation must produce a POCA violation triggering avoidance. \
+                     Adjust deputy Keplerian offsets if this fails."
+                );
+            }
+        };
+
+        let cola_burns = super::convert_cola_to_burns(Some(&maneuvers), &mission)
+            .expect("COLA burn conversion should succeed");
+
+        let cola_input = super::ColaValidationInput {
+            burns: cola_burns,
+            analytical_maneuvers: maneuvers.clone(),
+            target_distance_km: Some(cola_config.target_distance_km),
+        };
+
+        let almanac = nyx_bridge::load_full_almanac().expect("full almanac should load");
+        let val_config = super::ValidationConfig {
+            samples_per_leg: 50,
+            chief_config: SpacecraftConfig::SERVICER_500KG,
+            deputy_config: SpacecraftConfig::SERVICER_500KG,
+        };
+
+        let report = crate::validation::validate_mission_nyx(
+            &mission,
+            &chief_sv,
+            &deputy_sv,
+            &val_config,
+            &cola_input,
+            &almanac,
+        )
+        .expect("validation should succeed");
+
+        // Assert effectiveness data is populated
+        assert!(
+            !report.cola_effectiveness.is_empty(),
+            "COLA effectiveness should be populated when COLA burns are present",
+        );
+
+        for eff in &report.cola_effectiveness {
+            eprintln!(
+                "Leg {}: analytical POCA={:.1}m, nyx min={:.1}m, target={:.1}m, met={:?}",
+                eff.leg_index + 1,
+                eff.analytical_post_cola_poca_km.unwrap_or(0.0) * 1000.0,
+                eff.nyx_post_cola_min_distance_km * 1000.0,
+                eff.target_distance_km.unwrap_or(0.0) * 1000.0,
+                eff.threshold_met,
+            );
+
+            // Nyx min distance should exceed a fraction of the target
+            let target = eff.target_distance_km.expect("target should be set");
+            assert!(
+                eff.nyx_post_cola_min_distance_km
+                    > target * COLA_EFFECTIVENESS_THRESHOLD_FRACTION,
+                "Nyx post-COLA min ({:.1}m) should exceed {:.0}% of target ({:.1}m)",
+                eff.nyx_post_cola_min_distance_km * 1000.0,
+                COLA_EFFECTIVENESS_THRESHOLD_FRACTION * 100.0,
+                target * 1000.0,
+            );
+
+            // Analytical vs nyx agreement (when analytical is available)
+            if let Some(analytical) = eff.analytical_post_cola_poca_km {
+                if analytical > 0.0 {
+                    let relative_diff =
+                        (eff.nyx_post_cola_min_distance_km - analytical).abs() / analytical;
+                    eprintln!(
+                        "  analytical vs nyx relative diff: {:.1}%",
+                        relative_diff * 100.0,
+                    );
+                    assert!(
+                        relative_diff < COLA_EFFECTIVENESS_RELATIVE_TOL,
+                        "Analytical ({:.1}m) vs nyx ({:.1}m) relative diff {:.0}% exceeds {:.0}% tolerance",
+                        analytical * 1000.0,
+                        eff.nyx_post_cola_min_distance_km * 1000.0,
+                        relative_diff * 100.0,
+                        COLA_EFFECTIVENESS_RELATIVE_TOL * 100.0,
+                    );
+                }
+            }
+        }
     }
 }

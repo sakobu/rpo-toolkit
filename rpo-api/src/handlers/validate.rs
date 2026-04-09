@@ -6,7 +6,7 @@ use anise::prelude::Almanac;
 use rpo_core::mission::types::{ValidationReport, WaypointMission};
 use rpo_core::types::spacecraft::SpacecraftConfig;
 use rpo_core::types::state::StateVector;
-use rpo_nyx::validation::{validate_mission_nyx, ValidationConfig};
+use rpo_nyx::validation::{validate_mission_nyx, ColaValidationInput, ValidationConfig};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use tokio::sync::mpsc;
@@ -32,6 +32,10 @@ pub(crate) struct ValidateJobInput {
     pub samples_per_leg: u32,
     /// Optional COLA avoidance burns to inject during nyx propagation.
     pub cola_burn_inputs: Vec<ColaBurnInput>,
+    /// Analytical COLA avoidance maneuvers for effectiveness comparison.
+    pub analytical_cola: Vec<rpo_core::mission::AvoidanceManeuver>,
+    /// Target COLA separation threshold (km) from `ColaConfig`.
+    pub cola_target_distance_km: Option<f64>,
 }
 
 /// Handle a `Validate` message on a blocking thread.
@@ -56,7 +60,11 @@ pub(crate) fn handle_validate(
         return Err(ServerError::Cancelled);
     }
 
-    let cola_burns: Vec<_> = input.cola_burn_inputs.into_iter().map(Into::into).collect();
+    let cola_input = ColaValidationInput {
+        burns: input.cola_burn_inputs.into_iter().map(Into::into).collect(),
+        analytical_maneuvers: input.analytical_cola,
+        target_distance_km: input.cola_target_distance_km,
+    };
 
     let config = ValidationConfig {
         samples_per_leg: input.samples_per_leg,
@@ -71,7 +79,7 @@ pub(crate) fn handle_validate(
         &input.chief,
         &input.deputy,
         &config,
-        &cola_burns,
+        &cola_input,
         almanac,
     )?;
 

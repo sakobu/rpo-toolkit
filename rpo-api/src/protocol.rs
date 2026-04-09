@@ -150,6 +150,14 @@ pub enum ClientMessage {
         /// Optional COLA avoidance burns to inject during validation.
         #[serde(default)]
         cola_burns: Vec<ColaBurnInput>,
+        /// Analytical COLA avoidance maneuvers for effectiveness comparison.
+        /// The browser computes these via WASM `assess_cola()`; sending them
+        /// here lets the server return a self-contained effectiveness comparison.
+        #[serde(default)]
+        analytical_cola: Vec<rpo_core::mission::AvoidanceManeuver>,
+        /// Target COLA separation threshold (km) from `ColaConfig`.
+        #[serde(default)]
+        cola_target_distance_km: Option<f64>,
     },
 
     /// Monte Carlo ensemble with nyx full-physics propagation.

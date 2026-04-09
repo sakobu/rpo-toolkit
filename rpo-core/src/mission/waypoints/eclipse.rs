@@ -16,7 +16,7 @@ use crate::types::{EclipseInterval, EclipseSummary, LegEclipseData, MissionEclip
 ///
 /// Single-pass per leg: calls [`keplerian_to_state`] once per trajectory
 /// point, then reuses the chief ECI state for both the chief
-/// [`CelestialSnapshot`](crate::types::CelestialSnapshot) (via [`build_celestial_snapshot`]) and the deputy
+/// [`CelestialSnapshot`](crate::types::CelestialSnapshot) (via `build_celestial_snapshot`) and the deputy
 /// eclipse state (via [`ric_to_eci_position`] + [`compute_eclipse_state`]).
 ///
 /// # Errors

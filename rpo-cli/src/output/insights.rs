@@ -6,6 +6,7 @@
 
 use rpo_core::mission::{MonteCarloReport, SafetyConfig, ValidationReport};
 
+use super::common::KM_TO_M;
 use super::thresholds::insight as insight_thresh;
 
 /// Severity level for cross-tier insights.
@@ -80,8 +81,8 @@ pub fn validation_insights(
                         "Analytical overestimates 3D distance by {delta_pct:.0}% relative to Nyx \
                          ({:.0}m \u{2192} {:.0}m). \
                          Numerical 3D margin is {d3d_ratio:.1}\u{00d7} threshold; {ei_part}.",
-                        ana_3d * 1000.0,
-                        num_3d * 1000.0,
+                        ana_3d * KM_TO_M,
+                        num_3d * KM_TO_M,
                     ),
                 });
                 covered_ei = true;
@@ -102,8 +103,8 @@ pub fn validation_insights(
             message: format!(
                 "Numerical 3D distance ({:.0}m) has <2\u{00d7} margin over threshold ({:.0}m). \
                  Consider increasing waypoint offsets.",
-                num_3d * 1000.0,
-                config.min_distance_3d_km * 1000.0,
+                num_3d * KM_TO_M,
+                config.min_distance_3d_km * KM_TO_M,
             ),
         });
     }
@@ -117,10 +118,26 @@ pub fn validation_insights(
             severity: Severity::Warning,
             message: format!(
                 "Numerical e/i separation ({:.0}m) has <2\u{00d7} margin over threshold ({:.0}m).",
-                num_ei * 1000.0,
-                config.min_ei_separation_km * 1000.0,
+                num_ei * KM_TO_M,
+                config.min_ei_separation_km * KM_TO_M,
             ),
         });
+    }
+
+    // COLA effectiveness: critical when nyx min distance fails to meet target threshold
+    for eff in &report.cola_effectiveness {
+        if eff.threshold_met == Some(false) {
+            let nyx_m = eff.nyx_post_cola_min_distance_km * KM_TO_M;
+            let target_m = eff.target_distance_km.unwrap_or(0.0) * KM_TO_M;
+            insights.push(Insight {
+                severity: Severity::Critical,
+                message: format!(
+                    "COLA burn on leg {} did not achieve target separation under full physics: \
+                     nyx min distance {nyx_m:.0}m vs {target_m:.0}m threshold.",
+                    eff.leg_index + 1,
+                ),
+            });
+        }
     }
 
     insights
@@ -161,7 +178,7 @@ fn leg_error_growth_insight(
     let growth_ratio = last_rms / first_rms;
     let rms_strs: Vec<String> = leg_rms
         .iter()
-        .map(|r| format!("{:.0}m", r * 1000.0))
+        .map(|r| format!("{:.0}m", r * KM_TO_M))
         .collect();
 
     // Extrapolate next leg from last two legs' ratio
@@ -185,7 +202,7 @@ fn leg_error_growth_insight(
              leg {num_legs} ({rms} RMS). At this rate, leg {next_leg} would \
              approach ~{:.0}m error \u{2014} consider running `validate` for \
              missions beyond {num_legs} legs at this fidelity.",
-            next_rms * 1000.0,
+            next_rms * KM_TO_M,
             rms = rms_strs.join(" \u{2192} "),
         ),
     })
@@ -213,7 +230,7 @@ pub fn mc_insights(
                 stats.collision_probability * 100.0,
                 n,
                 report.config.num_samples,
-                config.min_distance_3d_km * 1000.0,
+                config.min_distance_3d_km * KM_TO_M,
             ),
         });
     }
@@ -230,8 +247,8 @@ pub fn mc_insights(
             .map(|ei| {
                 format!(
                     " \u{2014} 5th-percentile separation is {:.1}m against {:.0}m threshold",
-                    ei.p05 * 1000.0,
-                    config.min_ei_separation_km * 1000.0,
+                    ei.p05 * KM_TO_M,
+                    config.min_ei_separation_km * KM_TO_M,
                 )
             })
             .unwrap_or_default();
@@ -280,8 +297,8 @@ pub fn mc_insights(
                 message: format!(
                     "\u{0394}v distribution spread is {ratio:.2}\u{00d7} (p05={:.2} m/s, \
                      p95={:.2} m/s). This indicates significant sensitivity to dispersions.",
-                    dv.p05 * 1000.0,
-                    dv.p95 * 1000.0,
+                    dv.p05 * KM_TO_M,
+                    dv.p95 * KM_TO_M,
                 ),
             });
         }
@@ -304,9 +321,9 @@ pub fn mc_insights(
                      to WP {} ({:.0}m p50). Later waypoints accumulate more dispersion \
                      \u{2014} consider tighter tolerances or additional intermediate waypoints.",
                     last / first,
-                    first * 1000.0,
+                    first * KM_TO_M,
                     miss_medians.len(),
-                    last * 1000.0,
+                    last * KM_TO_M,
                 ),
             });
         }
@@ -365,6 +382,7 @@ mod tests {
             chief_config: rpo_core::types::SpacecraftConfig::CUBESAT_6U,
             deputy_config: rpo_core::types::SpacecraftConfig::CUBESAT_6U,
             eclipse_validation: None,
+            cola_effectiveness: vec![],
         };
 
         let insights = validation_insights(&report, &default_config());

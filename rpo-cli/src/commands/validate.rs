@@ -5,7 +5,7 @@ use std::path::Path;
 use rpo_core::mission::ValidationReport;
 use rpo_core::pipeline::PipelineOutput;
 use rpo_nyx::pipeline::compute_validation_burns;
-use rpo_nyx::validation::{validate_mission_nyx, ValidationConfig};
+use rpo_nyx::validation::{validate_mission_nyx, ColaValidationInput, ValidationConfig};
 
 use crate::cli::OutputMode;
 use crate::error::CliError;
@@ -57,12 +57,18 @@ pub fn run(
         chief_config,
         deputy_config,
     };
+    let cola_input = ColaValidationInput {
+        burns: cola_burns,
+        analytical_maneuvers: safety.cola.clone().unwrap_or_default(),
+        target_distance_km: input.cola.as_ref().map(|c| c.target_distance_km),
+    };
+
     let report = validate_mission_nyx(
         &plan.wp_mission,
         &plan.transfer.perch_chief,
         &plan.transfer.perch_deputy,
         &val_config,
-        &cola_burns,
+        &cola_input,
         &plan.almanac,
     )?;
 

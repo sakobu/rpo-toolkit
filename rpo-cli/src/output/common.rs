@@ -263,6 +263,9 @@ pub fn print_json<T: Serialize>(value: &T) -> Result<(), CliError> {
 
 // ── Unit formatting ─────────────────────────────────────────────────────
 
+/// Conversion factor from kilometres to metres for display formatting.
+pub(crate) const KM_TO_M: f64 = 1000.0;
+
 /// ROE component below which the value is treated as effectively zero for display.
 const ROE_DISPLAY_ZERO_THRESHOLD: f64 = 1e-15;
 
@@ -271,7 +274,7 @@ const ROE_DISPLAY_ZERO_THRESHOLD: f64 = 1e-15;
 /// Example: `fmt_m_s(0.5432, 1)` returns `"543.2 m/s"`.
 #[must_use]
 pub fn fmt_m_s(value_km_s: f64, decimals: usize) -> String {
-    let m_s = value_km_s * 1000.0;
+    let m_s = value_km_s * KM_TO_M;
     format!("{m_s:.decimals$} m/s")
 }
 
@@ -280,7 +283,7 @@ pub fn fmt_m_s(value_km_s: f64, decimals: usize) -> String {
 /// Example: `fmt_m(0.150, 1)` returns `"150.0 m"`.
 #[must_use]
 pub fn fmt_m(value_km: f64, decimals: usize) -> String {
-    let m = value_km * 1000.0;
+    let m = value_km * KM_TO_M;
     format!("{m:.decimals$} m")
 }
 

@@ -249,6 +249,8 @@ async fn handle_text_message(
             deputy_config,
             samples_per_leg,
             cola_burns,
+            analytical_cola,
+            cola_target_distance_km,
         } => {
             cancel_active_job(active_job);
             let almanac = Arc::clone(almanac);
@@ -265,6 +267,8 @@ async fn handle_text_message(
                 deputy_config,
                 samples_per_leg,
                 cola_burn_inputs: cola_burns,
+                analytical_cola,
+                cola_target_distance_km,
             };
 
             let handle = tokio::task::spawn_blocking(move || {

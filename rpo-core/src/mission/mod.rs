@@ -33,7 +33,7 @@ pub use safety::{
 };
 pub use targeting::{optimize_tof, solve_leg, ArrivalVelocityStrategy};
 pub use types::{
-    EclipseIntervalComparison, EclipseValidation, EclipseValidationPoint,
+    ColaEffectivenessEntry, EclipseIntervalComparison, EclipseValidation, EclipseValidationPoint,
     Maneuver, ManeuverLeg, MissionPhase, MissionPlan, OperationalSafety, PassiveSafety,
     PerchGeometry, SafetyMetrics, ValidationPoint, ValidationReport, Waypoint, WaypointMission,
 };

@@ -716,7 +716,7 @@ mod tests {
             &chief_sv,
             &deputy_sv,
             &val_config,
-            &[],
+            &crate::validation::ColaValidationInput::default(),
             &almanac,
         )
         .expect("validation should succeed");

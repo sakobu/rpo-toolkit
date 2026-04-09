@@ -314,6 +314,29 @@ pub struct ValidationPoint {
     pub post_cola: bool,
 }
 
+/// Post-COLA effectiveness metrics comparing analytical prediction to nyx full-physics.
+///
+/// One entry per mission leg that had a COLA burn injected during nyx validation.
+/// Populated by `validate_mission_nyx` when COLA burns are present.
+#[cfg_attr(feature = "wasm", derive(tsify_next::Tsify))]
+#[cfg_attr(feature = "wasm", tsify(into_wasm_abi, from_wasm_abi))]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ColaEffectivenessEntry {
+    /// Mission leg index.
+    pub leg_index: usize,
+    /// Analytical post-avoidance POCA from `AvoidanceManeuver::post_avoidance_poca_km`.
+    /// `None` when no analytical context was provided.
+    pub analytical_post_cola_poca_km: Option<f64>,
+    /// Minimum chief-deputy distance in the post-COLA segment from nyx propagation.
+    pub nyx_post_cola_min_distance_km: f64,
+    /// Target separation threshold from `ColaConfig::target_distance_km`.
+    /// `None` when no target was provided.
+    pub target_distance_km: Option<f64>,
+    /// Whether `nyx_post_cola_min_distance_km >= target_distance_km`.
+    /// `None` when no target was provided.
+    pub threshold_met: Option<bool>,
+}
+
 /// Aggregate validation results for a mission.
 ///
 /// Defined in rpo-core for WASM serialization. Values are populated by
@@ -344,6 +367,10 @@ pub struct ValidationReport {
     /// Present when the mission includes eclipse data.
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub eclipse_validation: Option<EclipseValidation>,
+    /// Per-leg COLA effectiveness: analytical prediction vs nyx full-physics minimum distance.
+    /// Empty when no COLA burns were injected.
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    pub cola_effectiveness: Vec<ColaEffectivenessEntry>,
 }
 
 impl ValidationReport {

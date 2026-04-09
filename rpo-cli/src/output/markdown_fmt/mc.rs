@@ -5,7 +5,8 @@ use rpo_core::pipeline::PipelineOutput;
 use rpo_core::propagation::DragConfig;
 
 use crate::output::common::{
-    cola_dv_summary, determine_mc_verdict, fmt_duration, fmt_m, fmt_m_s, McBaseline, VerdictResult,
+    cola_dv_summary, determine_mc_verdict, fmt_duration, fmt_m, fmt_m_s, KM_TO_M, McBaseline,
+    VerdictResult,
 };
 use crate::output::formation_fmt::write_formation_design_md;
 use crate::output::insights;
@@ -272,12 +273,12 @@ fn write_mc_dv_distribution(out: &mut String, stats: &EnsembleStatistics) {
     let _ = writeln!(out, "### \u{0394}v Distribution (m/s)\n");
     let _ = writeln!(out, "| Metric | Value |");
     let _ = writeln!(out, "| --- | --- |");
-    let _ = writeln!(out, "| Mean | {:.2} |", dv.mean * 1000.0);
-    let _ = writeln!(out, "| Std | {:.2} |", dv.std_dev * 1000.0);
-    let _ = writeln!(out, "| p05 | {:.2} |", dv.p05 * 1000.0);
-    let _ = writeln!(out, "| p95 | {:.2} |", dv.p95 * 1000.0);
-    let _ = writeln!(out, "| Min | {:.2} |", dv.min * 1000.0);
-    let _ = writeln!(out, "| Max | {:.2} |", dv.max * 1000.0);
+    let _ = writeln!(out, "| Mean | {:.2} |", dv.mean * KM_TO_M);
+    let _ = writeln!(out, "| Std | {:.2} |", dv.std_dev * KM_TO_M);
+    let _ = writeln!(out, "| p05 | {:.2} |", dv.p05 * KM_TO_M);
+    let _ = writeln!(out, "| p95 | {:.2} |", dv.p95 * KM_TO_M);
+    let _ = writeln!(out, "| Min | {:.2} |", dv.min * KM_TO_M);
+    let _ = writeln!(out, "| Max | {:.2} |", dv.max * KM_TO_M);
     let _ = writeln!(out);
 }
 
@@ -312,9 +313,9 @@ fn write_mc_operational_safety(
         let _ = writeln!(
             out,
             "| Min R/C-plane distance (m) | {:.1} | {:.1} | {:.1} |",
-            rc.p05 * 1000.0,
-            rc.p50 * 1000.0,
-            rc.p95 * 1000.0,
+            rc.p05 * KM_TO_M,
+            rc.p50 * KM_TO_M,
+            rc.p95 * KM_TO_M,
         );
         let _ = writeln!(out);
     }
@@ -325,9 +326,9 @@ fn write_mc_operational_safety(
         let _ = writeln!(
             out,
             "| Min 3D distance (m) | {:.1} | {:.1} | {:.1} |",
-            d3d.p05 * 1000.0,
-            d3d.p50 * 1000.0,
-            d3d.p95 * 1000.0,
+            d3d.p05 * KM_TO_M,
+            d3d.p50 * KM_TO_M,
+            d3d.p95 * KM_TO_M,
         );
         let _ = writeln!(out);
     }
@@ -358,9 +359,9 @@ fn write_mc_passive_safety(
         let _ = writeln!(
             out,
             "| Min e/i separation (m) | {:.1} | {:.1} | {:.1} |",
-            ei.p05 * 1000.0,
-            ei.p50 * 1000.0,
-            ei.p95 * 1000.0,
+            ei.p05 * KM_TO_M,
+            ei.p50 * KM_TO_M,
+            ei.p95 * KM_TO_M,
         );
         let _ = writeln!(out);
     }
@@ -394,8 +395,8 @@ fn write_mc_convergence_and_miss(
                     out,
                     "| WP {} | {:.1} | {:.1} |",
                     i + 1,
-                    miss.p50 * 1000.0,
-                    miss.p95 * 1000.0,
+                    miss.p50 * KM_TO_M,
+                    miss.p95 * KM_TO_M,
                 );
             }
         }
