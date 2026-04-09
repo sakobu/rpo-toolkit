@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://github.com/sakobu/roe-rust/docs/schema/pipeline-input.schema.json",
   "title": "PipelineInput",
-  "description": "Canonical mission input for the RPO planner. Used by both the CLI (as JSON file input) and the WebSocket API (as the `mission` field in every request). The server is stateless: send the full definition with every message.",
+  "description": "Canonical mission input for the RPO planner. Used by the CLI (as JSON file input for mission, validate, and mc commands). The WebSocket API uses the same domain types (StateVector, SpacecraftConfig, WaypointMission, etc.) but each message carries only the fields it needs rather than wrapping a full PipelineInput.",
   "type": "object",
   "required": ["chief", "deputy", "waypoints"],
   "properties": {

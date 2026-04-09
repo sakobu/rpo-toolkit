@@ -1,242 +1,83 @@
-//! API error types and conversion to wire-format error messages.
-//!
-//! `ApiError` wraps all rpo-core error types. Each variant converts to
-//! `ServerMessage::Error` with a machine-readable `ErrorCode`, human-readable
-//! message (from `Display`), and per-variant diagnostic `detail` fields.
-//!
-//! rpo-core error enums do NOT implement `Serialize` (they wrap third-party types
-//! that don't). Serialization is handled here via manual field extraction.
+//! Server error types — thin wrappers around rpo-nyx errors.
 
-use std::fmt;
-
-use rpo_core::elements::keplerian_conversions::ConversionError;
-use rpo_core::mission::formation::FormationDesignError;
-use rpo_core::mission::{FreeDriftError, MissionError};
-use rpo_core::propagation::{CovarianceError, LambertError, PropagationError};
+use crate::protocol::{ServerErrorCode, ServerMessage};
+use rpo_core::propagation::lambert::LambertError;
 use rpo_nyx::monte_carlo::MonteCarloError;
 use rpo_nyx::nyx_bridge::NyxBridgeError;
 use rpo_nyx::validation::ValidationError;
+use std::fmt;
 
-use crate::protocol::{ErrorCode, ServerMessage};
-
-/// Unified error type for the API layer.
+/// Errors that can occur during server-side operations.
+///
+/// Each variant wraps the native error type from `rpo-nyx`. Boxed variants
+/// (`NyxBridge`, `MonteCarlo`) reduce enum size since those error types are large.
 #[derive(Debug)]
-pub enum ApiError {
-    /// Mission planning error (boxed to reduce enum size).
-    Mission(Box<MissionError>),
-    /// Propagation error.
-    Propagation(PropagationError),
-    /// Lambert solver error.
+pub enum ServerError {
+    /// Lambert solver failure (convergence, degenerate geometry).
     Lambert(LambertError),
-    /// Nyx validation error.
-    Validation(ValidationError),
-    /// Monte Carlo error (boxed to reduce enum size).
-    MonteCarlo(Box<MonteCarloError>),
-    /// Nyx bridge error (almanac, dynamics, propagation; boxed to reduce enum size).
+    /// Nyx bridge error (almanac load, dynamics setup, propagation).
     NyxBridge(Box<NyxBridgeError>),
-    /// Covariance propagation error.
-    Covariance(CovarianceError),
-    /// Formation design error.
-    FormationDesign(FormationDesignError),
-    /// Invalid client input.
-    InvalidInput(InvalidInputError),
-    /// Operation was cancelled.
+    /// Full-physics validation error.
+    Validation(ValidationError),
+    /// Monte Carlo execution error (propagation, cancelled, zero samples).
+    MonteCarlo(Box<MonteCarloError>),
+    /// Client sent malformed JSON that could not be deserialized.
+    ///
+    /// The `serde_message` field carries the serde error description — a string
+    /// is the appropriate representation here because serde errors are opaque.
+    MalformedJson {
+        /// serde deserialization error message.
+        serde_message: String,
+    },
+    /// Non-Lambert pipeline or classification error.
+    ///
+    /// Wraps the `Display` output of upstream `rpo_nyx::pipeline::PipelineError`
+    /// variants that are not Lambert-specific (e.g., classification failures).
+    PipelineFailure {
+        /// Upstream error description.
+        source_message: String,
+    },
+    /// Operation cancelled by the client.
     Cancelled,
 }
 
-/// Structured error for invalid client input.
-#[derive(Debug)]
-pub enum InvalidInputError {
-    /// JSON deserialization failed.
-    MalformedJson {
-        /// `serde_json` error detail.
-        detail: String,
-    },
-    /// A required field is missing for the requested operation.
-    MissingField {
-        /// Name of the missing field.
-        field: &'static str,
-        /// Operation that requires this field.
-        context: &'static str,
-    },
-    /// Trajectory data is empty when a non-empty trajectory was expected.
-    EmptyTrajectory,
-    /// A required session state is not available.
-    MissingSessionState {
-        /// Name of the missing state (e.g., "chief", "transfer").
-        missing: &'static str,
-        /// Operation that requires this state.
-        context: &'static str,
-    },
-    /// A client-supplied index is out of bounds.
-    IndexOutOfBounds {
-        /// The index the client provided.
-        index: usize,
-        /// Maximum valid index (exclusive upper bound).
-        max: usize,
-        /// Operation that received the invalid index.
-        context: &'static str,
-    },
-}
-
-impl fmt::Display for ApiError {
+impl fmt::Display for ServerError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Mission(e) => write!(f, "{e}"),
-            Self::Propagation(e) => write!(f, "{e}"),
-            Self::Lambert(e) => write!(f, "{e}"),
-            Self::Validation(e) => write!(f, "{e}"),
-            Self::MonteCarlo(e) => write!(f, "{e}"),
-            Self::NyxBridge(e) => write!(f, "{e}"),
-            Self::Covariance(e) => write!(f, "{e}"),
-            Self::FormationDesign(e) => write!(f, "{e}"),
-            Self::InvalidInput(e) => write!(f, "invalid input: {e}"),
-            Self::Cancelled => write!(f, "operation cancelled"),
+            Self::Lambert(e) => write!(f, "Lambert solver error: {e}"),
+            Self::NyxBridge(e) => write!(f, "Nyx bridge error: {e}"),
+            Self::Validation(e) => write!(f, "Validation error: {e}"),
+            Self::MonteCarlo(e) => write!(f, "Monte Carlo error: {e}"),
+            Self::MalformedJson { serde_message } => {
+                write!(f, "Malformed JSON: {serde_message}")
+            }
+            Self::PipelineFailure { source_message } => {
+                write!(f, "Pipeline error: {source_message}")
+            }
+            Self::Cancelled => write!(f, "Operation cancelled"),
         }
     }
 }
 
-impl std::error::Error for ApiError {}
-
-impl fmt::Display for InvalidInputError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+impl std::error::Error for ServerError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
-            Self::MalformedJson { detail } => write!(f, "malformed JSON: {detail}"),
-            Self::MissingField { field, context } => {
-                write!(f, "{field} required for {context}")
-            }
-            Self::EmptyTrajectory => write!(f, "empty chief trajectory"),
-            Self::MissingSessionState { missing, context } => {
-                write!(f, "required session state not available: {missing} needed for {context}")
-            }
-            Self::IndexOutOfBounds {
-                index,
-                max,
-                context,
-            } => {
-                write!(f, "index {index} out of bounds (max {max}) for {context}")
-            }
+            Self::Lambert(e) => Some(e),
+            Self::NyxBridge(e) => Some(e.as_ref()),
+            Self::Validation(e) => Some(e),
+            Self::MonteCarlo(e) => Some(e.as_ref()),
+            Self::MalformedJson { .. }
+            | Self::PipelineFailure { .. }
+            | Self::Cancelled => None,
         }
     }
 }
 
-/// Require an `Option<T>` value, converting `None` to a `MissingField` error.
-///
-/// # Errors
-/// Returns [`ApiError::InvalidInput`] with [`InvalidInputError::MissingField`]
-/// when `value` is `None`.
-pub fn require_field<T>(
-    value: Option<T>,
-    field: &'static str,
-    context: &'static str,
-) -> Result<T, ApiError> {
-    value.ok_or(ApiError::InvalidInput(InvalidInputError::MissingField {
-        field,
-        context,
-    }))
-}
-
-// From impls for each rpo-core error type
-impl From<MissionError> for ApiError {
-    fn from(e: MissionError) -> Self {
-        Self::Mission(Box::new(e))
-    }
-}
-
-impl From<PropagationError> for ApiError {
-    fn from(e: PropagationError) -> Self {
-        Self::Propagation(e)
-    }
-}
-
-impl From<LambertError> for ApiError {
-    fn from(e: LambertError) -> Self {
-        Self::Lambert(e)
-    }
-}
-
-impl From<ValidationError> for ApiError {
-    fn from(e: ValidationError) -> Self {
-        Self::Validation(e)
-    }
-}
-
-impl From<MonteCarloError> for ApiError {
-    fn from(e: MonteCarloError) -> Self {
-        Self::MonteCarlo(Box::new(e))
-    }
-}
-
-impl From<NyxBridgeError> for ApiError {
-    fn from(e: NyxBridgeError) -> Self {
-        Self::NyxBridge(Box::new(e))
-    }
-}
-
-impl From<CovarianceError> for ApiError {
-    fn from(e: CovarianceError) -> Self {
-        Self::Covariance(e)
-    }
-}
-
-impl From<FormationDesignError> for ApiError {
-    fn from(e: FormationDesignError) -> Self {
-        Self::FormationDesign(e)
-    }
-}
-
-impl From<ConversionError> for ApiError {
-    fn from(e: ConversionError) -> Self {
-        Self::Mission(Box::new(MissionError::Conversion(e)))
-    }
-}
-
-impl From<FreeDriftError> for ApiError {
-    fn from(e: FreeDriftError) -> Self {
-        match e {
-            FreeDriftError::Propagation(pe) => Self::Propagation(pe),
-            FreeDriftError::Safety(_) => {
-                Self::InvalidInput(InvalidInputError::EmptyTrajectory)
-            }
-        }
-    }
-}
-
-impl From<rpo_core::pipeline::PipelineError> for ApiError {
-    fn from(e: rpo_core::pipeline::PipelineError) -> Self {
-        use rpo_core::pipeline::PipelineError;
-        match e {
-            PipelineError::Mission(e) => Self::Mission(Box::new(e)),
-            PipelineError::Propagation(e) => Self::Propagation(e),
-            PipelineError::Covariance(e) => Self::Covariance(e),
-            PipelineError::MissingField { field, context } => {
-                Self::InvalidInput(InvalidInputError::MissingField { field, context })
-            }
-            PipelineError::EmptyTrajectory => {
-                Self::InvalidInput(InvalidInputError::EmptyTrajectory)
-            }
-        }
-    }
-}
-
-impl From<rpo_nyx::pipeline::PipelineError> for ApiError {
-    fn from(e: rpo_nyx::pipeline::PipelineError) -> Self {
-        use rpo_nyx::pipeline::PipelineError as NyxPipelineError;
-        match e {
-            NyxPipelineError::Core(core_err) => Self::from(core_err),
-            NyxPipelineError::Lambert(e) => Self::Lambert(e),
-            NyxPipelineError::Validation(e) => Self::Validation(e),
-            NyxPipelineError::MonteCarlo(e) => Self::MonteCarlo(Box::new(e)),
-            NyxPipelineError::NyxBridge(e) => Self::NyxBridge(e),
-        }
-    }
-}
-
-impl ApiError {
-    /// Convert to a `ServerMessage::Error` with per-variant diagnostic fields.
+impl ServerError {
+    /// Convert to a `ServerMessage::Error` with structured diagnostic detail.
     #[must_use]
     pub fn to_server_message(&self, request_id: Option<u64>) -> ServerMessage {
-        let (code, detail) = self.extract_code_and_detail();
+        let (code, detail) = self.code_and_detail();
         ServerMessage::Error {
             request_id,
             code,
@@ -245,147 +86,78 @@ impl ApiError {
         }
     }
 
-    /// Extract machine-readable error code and structured diagnostic detail.
-    fn extract_code_and_detail(&self) -> (ErrorCode, Option<serde_json::Value>) {
+    fn code_and_detail(&self) -> (ServerErrorCode, Option<serde_json::Value>) {
         match self {
-            Self::Mission(inner) => mission_error_detail(inner),
-            Self::Propagation(_) => (ErrorCode::PropagationError, None),
-            Self::Lambert(_) => (ErrorCode::LambertFailure, None),
-            Self::Validation(_) => (ErrorCode::ValidationError, None),
-            Self::MonteCarlo(inner) => monte_carlo_error_detail(inner),
-            Self::NyxBridge(_) => (ErrorCode::NyxBridgeError, None),
-            Self::Covariance(_) => (ErrorCode::CovarianceError, None),
-            Self::FormationDesign(inner) => formation_design_error_detail(inner),
-            Self::InvalidInput(inner) => invalid_input_error_detail(inner),
-            Self::Cancelled => (ErrorCode::Cancelled, None),
+            Self::Lambert(e) => (ServerErrorCode::LambertFailure, lambert_detail(e)),
+            Self::NyxBridge(_) => (ServerErrorCode::NyxBridgeError, None),
+            Self::Validation(_) => (ServerErrorCode::ValidationError, None),
+            Self::MonteCarlo(_) => (ServerErrorCode::MonteCarloError, None),
+            Self::MalformedJson { serde_message } => (
+                ServerErrorCode::InvalidInput,
+                Some(serde_json::json!({ "reason": "malformed_json", "detail": serde_message })),
+            ),
+            Self::PipelineFailure { source_message } => (
+                ServerErrorCode::InvalidInput,
+                Some(serde_json::json!({ "reason": "pipeline_failure", "detail": source_message })),
+            ),
+            Self::Cancelled => (ServerErrorCode::Cancelled, None),
         }
     }
 }
 
-/// Diagnostic detail for [`MissionError`] variants.
-fn mission_error_detail(inner: &MissionError) -> (ErrorCode, Option<serde_json::Value>) {
-    match *inner {
-        MissionError::TargetingConvergence {
-            final_error_km,
-            iterations,
-        } => (
-            ErrorCode::TargetingConvergence,
-            Some(serde_json::json!({
-                "final_error_km": final_error_km,
-                "iterations": iterations,
-            })),
-        ),
-        MissionError::EmptyWaypoints => (
-            ErrorCode::InvalidInput,
-            Some(serde_json::json!({ "reason": "no waypoints provided" })),
-        ),
-        MissionError::InvalidReplanIndex {
-            index,
-            num_waypoints,
-        } => (
-            ErrorCode::InvalidInput,
-            Some(serde_json::json!({
-                "reason": "replan index out of bounds",
-                "index": index,
-                "num_waypoints": num_waypoints,
-            })),
-        ),
-        MissionError::TofOptimizationFailure {
-            min_tof,
-            max_tof,
-            num_starts,
-        } => (
-            ErrorCode::MissionError,
-            Some(serde_json::json!({
-                "reason": "tof_optimization_failure",
-                "min_tof_s": min_tof,
-                "max_tof_s": max_tof,
-                "num_starts": num_starts,
-            })),
-        ),
-        _ => (ErrorCode::MissionError, None),
+/// Extract structured diagnostic detail from Lambert errors.
+fn lambert_detail(err: &LambertError) -> Option<serde_json::Value> {
+    match err {
+        LambertError::IzzoConvergenceFailure { details } => {
+            Some(serde_json::json!({ "reason": "convergence_failure", "details": details }))
+        }
+        LambertError::InvalidInput { details } => {
+            Some(serde_json::json!({ "reason": "invalid_input", "details": details }))
+        }
+        _ => None,
     }
 }
 
-/// Diagnostic detail for [`MonteCarloError`] variants.
-fn monte_carlo_error_detail(inner: &MonteCarloError) -> (ErrorCode, Option<serde_json::Value>) {
-    use rpo_core::mission::monte_carlo::MonteCarloError as CoreMcError;
-    match inner {
-        MonteCarloError::Core(CoreMcError::Cancelled) => (ErrorCode::Cancelled, None),
-        MonteCarloError::Core(CoreMcError::ZeroSamples) => (
-            ErrorCode::InvalidInput,
-            Some(serde_json::json!({ "reason": "num_samples must be > 0" })),
-        ),
-        _ => (ErrorCode::MonteCarloError, None),
+// ---- From impls for ergonomic `?` ----
+
+impl From<LambertError> for ServerError {
+    fn from(e: LambertError) -> Self {
+        Self::Lambert(e)
     }
 }
 
-/// Diagnostic detail for [`FormationDesignError`] variants.
-fn formation_design_error_detail(
-    inner: &FormationDesignError,
-) -> (ErrorCode, Option<serde_json::Value>) {
-    match inner {
-        FormationDesignError::SingularGeometry { mean_arg_lat_rad } => (
-            ErrorCode::FormationDesignError,
-            Some(serde_json::json!({
-                "reason": "singular_geometry",
-                "mean_arg_lat_rad": mean_arg_lat_rad,
-            })),
-        ),
-        FormationDesignError::SeparationUnachievable {
-            requested_km,
-            achievable_km,
-        } => (
-            ErrorCode::FormationDesignError,
-            Some(serde_json::json!({
-                "reason": "separation_unachievable",
-                "requested_km": requested_km,
-                "achievable_km": achievable_km,
-            })),
-        ),
-        FormationDesignError::InsufficientSampling {
-            total_samples,
-            required_per_orbit,
-        } => (
-            ErrorCode::FormationDesignError,
-            Some(serde_json::json!({
-                "reason": "insufficient_sampling",
-                "total_samples": total_samples,
-                "required_per_orbit": required_per_orbit,
-            })),
-        ),
-        _ => (ErrorCode::FormationDesignError, None),
+impl From<NyxBridgeError> for ServerError {
+    fn from(e: NyxBridgeError) -> Self {
+        Self::NyxBridge(Box::new(e))
     }
 }
 
-/// Diagnostic detail for [`InvalidInputError`] variants.
-fn invalid_input_error_detail(
-    inner: &InvalidInputError,
-) -> (ErrorCode, Option<serde_json::Value>) {
-    match inner {
-        InvalidInputError::MalformedJson { detail } => (
-            ErrorCode::InvalidInput,
-            Some(serde_json::json!({ "reason": "malformed_json", "detail": detail })),
-        ),
-        InvalidInputError::MissingField { field, context } => (
-            ErrorCode::InvalidInput,
-            Some(serde_json::json!({ "reason": "missing_field", "field": field, "context": context })),
-        ),
-        InvalidInputError::EmptyTrajectory => (
-            ErrorCode::InvalidInput,
-            Some(serde_json::json!({ "reason": "empty_trajectory" })),
-        ),
-        InvalidInputError::MissingSessionState { missing, context } => (
-            ErrorCode::MissingSessionState,
-            Some(serde_json::json!({ "missing": missing, "context": context })),
-        ),
-        InvalidInputError::IndexOutOfBounds {
-            index,
-            max,
-            context,
-        } => (
-            ErrorCode::InvalidInput,
-            Some(serde_json::json!({ "reason": "index_out_of_bounds", "index": index, "max": max, "context": context })),
-        ),
+impl From<ValidationError> for ServerError {
+    fn from(e: ValidationError) -> Self {
+        Self::Validation(e)
+    }
+}
+
+impl From<MonteCarloError> for ServerError {
+    fn from(e: MonteCarloError) -> Self {
+        Self::MonteCarlo(Box::new(e))
+    }
+}
+
+/// Convert nyx pipeline errors (from `compute_transfer`) into `ServerError`.
+///
+/// `rpo_nyx::pipeline::PipelineError` has a `Lambert(LambertError)` variant
+/// which maps to `ServerError::Lambert`. All other variants (classification
+/// failures, propagation errors) are input problems and map to `PipelineFailure`.
+impl From<rpo_nyx::pipeline::PipelineError> for ServerError {
+    fn from(e: rpo_nyx::pipeline::PipelineError) -> Self {
+        match e {
+            rpo_nyx::pipeline::PipelineError::Lambert(lambert_err) => {
+                Self::Lambert(lambert_err)
+            }
+            other => Self::PipelineFailure {
+                source_message: other.to_string(),
+            },
+        }
     }
 }

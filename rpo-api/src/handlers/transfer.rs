@@ -1,27 +1,50 @@
-//! Transfer computation handler: Lambert transfer + perch handoff states.
+//! Lambert transfer handler — synchronous, ~100ms.
 
-use rpo_core::pipeline::TransferResult;
+use crate::error::ServerError;
+use rpo_core::mission::config::{MissionConfig, ProximityConfig};
+use rpo_core::mission::types::PerchGeometry;
+use rpo_core::pipeline::types::{PipelineInput, PropagatorChoice, TransferResult};
+use rpo_core::propagation::lambert::LambertConfig;
+use rpo_core::types::state::StateVector;
 use rpo_nyx::pipeline::compute_transfer;
 
-use crate::error::ApiError;
-use crate::session::Session;
-
-/// Compute Lambert transfer and store the result in the session.
+/// Handle a `ComputeTransfer` message.
 ///
-/// Assembles a [`PipelineInput`](rpo_core::pipeline::PipelineInput) from the
-/// current session state, runs classification + Lambert solving, and stores
-/// the result. The stored transfer is the starting point for waypoint planning.
-///
-/// Pure function — runs in microseconds (proximity) to ~100ms (far-field Lambert).
+/// Constructs a `PipelineInput` from the self-contained message fields and
+/// delegates to `rpo_nyx::pipeline::compute_transfer()`. Unused pipeline
+/// fields (waypoints, config, etc.) are set to defaults — `compute_transfer`
+/// only reads the transfer-related fields.
 ///
 /// # Errors
 ///
-/// Returns [`ApiError`] if session states are missing, or classification/Lambert fails.
+/// - [`ServerError::Lambert`] if the Lambert solver fails (convergence, degenerate
+///   geometry, non-positive TOF).
+/// - [`ServerError::PipelineFailure`] if classification fails (mission planning error).
 pub fn handle_compute_transfer(
-    session: &mut Session,
-) -> Result<TransferResult, ApiError> {
-    let input = session.assemble_pipeline_input()?;
-    let result = compute_transfer(&input)?;
-    session.store_transfer(result.clone());
-    Ok(result)
+    chief: StateVector,
+    deputy: StateVector,
+    perch: PerchGeometry,
+    proximity: ProximityConfig,
+    lambert_tof_s: f64,
+    lambert_config: LambertConfig,
+) -> Result<TransferResult, ServerError> {
+    let input = PipelineInput {
+        chief,
+        deputy,
+        perch,
+        lambert_tof_s,
+        lambert_config,
+        proximity,
+        waypoints: vec![],
+        config: MissionConfig::default(),
+        propagator: PropagatorChoice::default(),
+        chief_config: None,
+        deputy_config: None,
+        navigation_accuracy: None,
+        maneuver_uncertainty: None,
+        monte_carlo: None,
+        cola: None,
+        safety_requirements: None,
+    };
+    Ok(compute_transfer(&input)?)
 }

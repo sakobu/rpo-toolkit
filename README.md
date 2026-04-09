@@ -1,6 +1,6 @@
 # RPO Toolkit
 
-Astrodynamics toolkit for rendezvous and proximity operations in Rust. Five crates, two engines: an analytical engine that compiles to WebAssembly for interactive mission design, and a numerical engine wrapping nyx-space for full-physics validation and Monte Carlo analysis. 537 tests.
+RPO Toolkit is a Rust astrodynamics stack for spacecraft rendezvous and proximity operations that combines a browser-deployable analytical engine for real-time mission design with a nyx-space-backed numerical engine for full-physics validation and Monte Carlo analysis.
 
 ## Architecture
 
@@ -27,7 +27,7 @@ rpo-nyx (AGPL-3.0)  <--  rpo-cli (AGPL-3.0)
 
 ```bash
 cargo build                     # build workspace
-cargo test                      # 537 tests across 5 crates (+ 21 ignored full-physics; 558 total with -- --include-ignored)
+cargo test                      # 479 tests across 5 crates (+ 25 ignored full-physics; 504 total with -- --include-ignored)
 ```
 
 Run an example mission (CLI):
@@ -220,11 +220,11 @@ All input/output types have full TypeScript definitions.
 - [API Reference](docs/API.md) -- WebSocket protocol, message types, error codes
 - [Input Schema](docs/schema/pipeline-input.schema.json) -- shared JSON schema for `PipelineInput`
 
-The CLI provides batch execution and shell-composable plumbing for scripting. The WebSocket API serves interactive sessions with progress streaming and incremental replanning. The WASM crate exposes the full analytical engine to the browser with auto-generated TypeScript definitions.
+The CLI provides batch execution and shell-composable plumbing for scripting. The WebSocket API is a stateless backend for the 4 nyx-dependent operations (Lambert transfer, drag extraction, validation, Monte Carlo) with progress streaming. The WASM crate exposes the full analytical engine to the browser with auto-generated TypeScript definitions.
 
 ## Testing
 
-537 tests across 5 crates (359 rpo-core, 110 rpo-nyx, 45 rpo-api, 12 rpo-wasm, 11 rpo-cli). 21 full-physics tests are `#[ignore]` by default (require ANISE kernels, ~50 MB cached download).
+479 tests across 5 crates (357 rpo-core, 110 rpo-nyx, 12 rpo-api, 12 rpo-wasm, 11 rpo-cli). 25 full-physics tests are `#[ignore]` by default (require ANISE kernels, ~50 MB cached download).
 
 ```bash
 cargo test                      # full suite (5 crates)
@@ -246,8 +246,7 @@ Every module traces to specific equations in these papers; see inline doc-commen
 ## Roadmap
 
 1. **R3F frontend** -- React Three Fiber 3D visualization: orbit arcs, RIC-frame relative motion, maneuver arrows, eclipse timeline, covariance ellipses.
-2. **API migration** -- Replace stateful WebSocket session with stateless endpoints; analytical operations move to WASM, server handles only Lambert/validate/MC/drag.
-3. **Extended orbit regimes** -- GEO/HEO validation, finite burns.
+2. **Extended orbit regimes** -- GEO/HEO validation, finite burns.
 
 ## License
 

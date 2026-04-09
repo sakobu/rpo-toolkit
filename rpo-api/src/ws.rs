@@ -1,106 +1,118 @@
-//! WebSocket upgrade handler and per-connection message loop.
-//!
-//! Each WebSocket connection spawns a single tokio task that uses `tokio::select!`
-//! to concurrently handle incoming messages and background job progress/results.
-//! The connection owns a [`Session`] that holds mutable state across messages.
+//! Stateless WebSocket handler — dispatches 4 nyx operations + cancel.
 
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
-
+use crate::error::ServerError;
+use crate::handlers;
+use crate::handlers::mc::McJobInput;
+use crate::handlers::validate::ValidateJobInput;
+use crate::protocol::{ClientMessage, ProgressUpdate, ServerMessage};
 use anise::prelude::Almanac;
 use axum::extract::ws::{Message, WebSocket};
+use rpo_core::mission::monte_carlo::types::MonteCarloReport;
+use rpo_core::mission::types::ValidationReport;
+use rpo_core::propagation::propagator::DragConfig;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 use tokio::time::{interval, Duration};
+use tracing::{debug, error, info, warn};
 
-use crate::error::ApiError;
-use crate::handlers;
-use crate::protocol::{ClientMessage, ProgressUpdate, ServerMessage};
-use crate::session::Session;
+/// Progress updates are fire-and-forget (`try_send`); buffer handles short bursts
+/// without blocking the sender. Handlers send ~3 messages per job; 32 provides
+/// ample margin without wasting memory.
+const PROGRESS_CHANNEL_CAPACITY: usize = 32;
 
-/// Active background job state.
+/// Only one background job is active at a time; capacity > 1 handles the edge
+/// case where a result arrives between cancel and result-channel read.
+const RESULT_CHANNEL_CAPACITY: usize = 4;
+
+/// WebSocket proxies typically time out at 60s; 30s keeps the connection alive
+/// with margin. Heartbeats are only sent while a background job is active.
+const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(30);
+
+/// Tracks a spawned background job for cancellation and result collection.
 struct ActiveJob {
-    /// The `request_id` this job is associated with.
+    /// Correlation ID from the client request.
     request_id: u64,
-    /// Cancel flag — set to true to request cooperative cancellation.
+    /// Cooperative cancellation flag — set to `true` to request stop.
     cancel: Arc<AtomicBool>,
-    /// Join handle for the spawned blocking task.
+    /// Handle to the spawned blocking task (kept alive).
     _handle: JoinHandle<()>,
 }
 
-/// Result from a background job, sent via channel.
+/// Result from a completed background job, sent back via channel.
 enum JobResult {
+    /// Drag extraction completed.
+    Drag {
+        request_id: u64,
+        result: Result<DragConfig, ServerError>,
+    },
     /// Validation completed.
     Validation {
         request_id: u64,
-        result: Result<Box<rpo_core::mission::ValidationReport>, ApiError>,
+        result: Result<Box<ValidationReport>, ServerError>,
     },
     /// Monte Carlo completed.
     MonteCarlo {
         request_id: u64,
-        result: Result<Box<rpo_core::mission::MonteCarloReport>, ApiError>,
-    },
-    /// Drag extraction completed.
-    Drag {
-        request_id: u64,
-        result: Result<rpo_core::propagation::DragConfig, ApiError>,
+        result: Result<Box<MonteCarloReport>, ServerError>,
     },
 }
 
-/// Handle a WebSocket connection.
+/// Main per-connection WebSocket handler.
 ///
-/// Runs a `tokio::select!` loop that processes:
-/// 1. Incoming WebSocket messages from the client
-/// 2. Progress updates from background tasks
-/// 3. Final results from background tasks
+/// Runs the message loop until the client disconnects. Holds no persistent
+/// state — each incoming message is self-contained.
 pub async fn handle_ws(mut ws: WebSocket, almanac: Arc<Almanac>) {
-    let (progress_tx, mut progress_rx) = mpsc::channel::<ProgressUpdate>(256);
-    let (result_tx, mut result_rx) = mpsc::channel::<JobResult>(4);
+    info!("WebSocket connected");
+
+    let (progress_tx, mut progress_rx) = mpsc::channel::<ProgressUpdate>(PROGRESS_CHANNEL_CAPACITY);
+    let (result_tx, mut result_rx) = mpsc::channel::<JobResult>(RESULT_CHANNEL_CAPACITY);
     let mut active_job: Option<ActiveJob> = None;
-    let mut session = Session::default();
-    let mut heartbeat = interval(Duration::from_secs(30));
-    heartbeat.tick().await; // consume the immediate first tick
+    let mut heartbeat = interval(HEARTBEAT_INTERVAL);
+    // tokio::time::interval fires the first tick immediately; this is harmless
+    // because heartbeats are only sent when active_job.is_some() (which is false
+    // on a fresh connection).
     let mut heartbeat_seq: u64 = 0;
 
     loop {
         tokio::select! {
-            // Incoming WebSocket message
+            // ---- Incoming client message ----
             msg = ws.recv() => {
+                let Some(msg) = msg else {
+                    info!("WebSocket disconnected");
+                    break;
+                };
                 let msg = match msg {
-                    Some(Ok(msg)) => msg,
-                    Some(Err(e)) => {
-                        tracing::warn!("WebSocket recv error: {e}");
+                    Ok(m) => m,
+                    Err(e) => {
+                        debug!("WebSocket recv error: {e}");
                         break;
                     }
-                    None => break, // Connection closed
                 };
-
                 match msg {
                     Message::Text(text) => {
                         handle_text_message(
                             &text,
                             &mut ws,
                             &almanac,
-                            &mut active_job,
-                            &mut session,
                             &progress_tx,
                             &result_tx,
+                            &mut active_job,
                         ).await;
                     }
-                    Message::Close(_) => break,
-                    _ => {
-                        let err = ServerMessage::Error {
-                            request_id: None,
-                            code: crate::protocol::ErrorCode::InvalidInput,
-                            message: "expected text frame".into(),
-                            detail: None,
+                    Message::Binary(_) => {
+                        let err = ServerError::MalformedJson {
+                            serde_message: "binary frames are not supported; send JSON text".to_owned(),
                         };
-                        send_message(&mut ws, &err).await;
+                        send_message(&mut ws, err.to_server_message(None)).await;
                     }
+                    Message::Close(_) => break,
+                    _ => {} // Ping/Pong handled by axum
                 }
             }
 
-            // Progress from background job
+            // ---- Progress from background job ----
             Some(progress) = progress_rx.recv() => {
                 if let Some(job) = &active_job {
                     let msg = ServerMessage::Progress {
@@ -109,822 +121,240 @@ pub async fn handle_ws(mut ws: WebSocket, almanac: Arc<Almanac>) {
                         detail: progress.detail,
                         fraction: progress.fraction,
                     };
-                    send_message(&mut ws, &msg).await;
+                    send_message(&mut ws, msg).await;
                 }
             }
 
-            // Result from background job
+            // ---- Result from background job ----
             Some(result) = result_rx.recv() => {
-                let msg = match result {
-                    JobResult::Validation { request_id, result } => {
-                        match result {
-                            Ok(report) => ServerMessage::ValidationResult { request_id, report },
-                            Err(ApiError::Cancelled) => ServerMessage::Cancelled { request_id },
-                            Err(e) => e.to_server_message(Some(request_id)),
-                        }
-                    }
-                    JobResult::MonteCarlo { request_id, result } => {
-                        match result {
-                            Ok(report) => ServerMessage::MonteCarloResult { request_id, report },
-                            Err(ApiError::Cancelled) => ServerMessage::Cancelled { request_id },
-                            Err(e) => e.to_server_message(Some(request_id)),
-                        }
-                    }
-                    JobResult::Drag { request_id, result } => {
-                        match result {
-                            Ok(drag) => {
-                                session.store_drag(drag);
-                                ServerMessage::DragResult { request_id, drag }
-                            }
-                            Err(e) => e.to_server_message(Some(request_id)),
-                        }
-                    }
+                let response = match result {
+                    JobResult::Drag { request_id, result } => match result {
+                        Ok(drag) => ServerMessage::DragResult { request_id, drag },
+                        Err(ServerError::Cancelled) => ServerMessage::Cancelled { request_id },
+                        Err(e) => e.to_server_message(Some(request_id)),
+                    },
+                    JobResult::Validation { request_id, result } => match result {
+                        Ok(report) => ServerMessage::ValidationResult { request_id, report },
+                        Err(ServerError::Cancelled) => ServerMessage::Cancelled { request_id },
+                        Err(e) => e.to_server_message(Some(request_id)),
+                    },
+                    JobResult::MonteCarlo { request_id, result } => match result {
+                        Ok(report) => ServerMessage::MonteCarloResult { request_id, report },
+                        Err(ServerError::Cancelled) => ServerMessage::Cancelled { request_id },
+                        Err(e) => e.to_server_message(Some(request_id)),
+                    },
                 };
-                send_message(&mut ws, &msg).await;
+                send_message(&mut ws, response).await;
                 active_job = None;
                 heartbeat_seq = 0;
+                heartbeat.reset();
             }
 
-            // Heartbeat during long-running operations
-            _ = heartbeat.tick(), if active_job.is_some() => {
-                heartbeat_seq += 1;
-                let msg = ServerMessage::Heartbeat { seq: heartbeat_seq };
-                send_message(&mut ws, &msg).await;
+            // ---- Heartbeat during long operations ----
+            _ = heartbeat.tick() => {
+                if active_job.is_some() {
+                    heartbeat_seq += 1;
+                    send_message(&mut ws, ServerMessage::Heartbeat { seq: heartbeat_seq }).await;
+                }
             }
         }
     }
 
-    // Cleanup: cancel any active background job
+    // Cancel any active job on disconnect
     if let Some(job) = active_job.take() {
         job.cancel.store(true, Ordering::Relaxed);
+        info!("Cancelled active job on disconnect");
     }
-
-    tracing::info!("WebSocket connection closed");
 }
 
-/// Process a text WebSocket message.
+/// Dispatch a JSON text message to the appropriate handler.
+#[allow(clippy::too_many_lines)]
 async fn handle_text_message(
     text: &str,
     ws: &mut WebSocket,
     almanac: &Arc<Almanac>,
-    active_job: &mut Option<ActiveJob>,
-    session: &mut Session,
     progress_tx: &mpsc::Sender<ProgressUpdate>,
     result_tx: &mpsc::Sender<JobResult>,
+    active_job: &mut Option<ActiveJob>,
 ) {
-    let client_msg: ClientMessage = match serde_json::from_str(text) {
-        Ok(msg) => msg,
+    let msg: ClientMessage = match serde_json::from_str(text) {
+        Ok(m) => m,
         Err(e) => {
-            let err = ApiError::InvalidInput(crate::error::InvalidInputError::MalformedJson {
-                detail: e.to_string(),
-            });
-            send_message(ws, &err.to_server_message(None)).await;
+            let err = ServerError::MalformedJson {
+                serde_message: e.to_string(),
+            };
+            send_message(ws, err.to_server_message(None)).await;
             return;
         }
     };
 
-    match client_msg {
-        // State-setting messages
-        ClientMessage::SetStates { .. }
-        | ClientMessage::SetSpacecraft { .. }
-        | ClientMessage::SetSafetyRequirements { .. }
-        | ClientMessage::Reset { .. } => {
-            handle_state_msg(ws, session, active_job, client_msg).await;
-        }
-
-        // Planning messages
-        ClientMessage::Classify { .. }
-        | ClientMessage::ComputeTransfer { .. }
-        | ClientMessage::SetWaypoints { .. }
-        | ClientMessage::SelectPlan { .. } => {
-            handle_plan_msg(ws, session, client_msg).await;
-        }
-
-        // Config update (large arm, separate function)
-        ClientMessage::UpdateConfig { .. } => {
-            handle_update_config_msg(ws, session, client_msg).await;
-        }
-
-        // Trajectory and safety query messages
-        ClientMessage::GetTrajectory { .. }
-        | ClientMessage::GetFreeDriftTrajectory { .. }
-        | ClientMessage::GetPoca { .. }
-        | ClientMessage::RunCola { .. } => {
-            handle_trajectory_query_msg(ws, session, client_msg).await;
-        }
-
-        // Analysis query messages (formation, covariance, eclipse, session)
-        ClientMessage::GetFormationDesign { .. }
-        | ClientMessage::GetSafeAlternative { .. }
-        | ClientMessage::AcceptWaypointEnrichment { .. }
-        | ClientMessage::GetCovariance { .. }
-        | ClientMessage::GetEclipse { .. }
-        | ClientMessage::GetSession { .. } => {
-            handle_analysis_query_msg(ws, session, client_msg).await;
-        }
-
-        // Background job: drag extraction
-        ClientMessage::ExtractDrag { .. } => {
-            handle_extract_drag_msg(ws, session, active_job, almanac, result_tx, client_msg)
-                .await;
-        }
-
-        // Background jobs: validation, Monte Carlo, cancel
-        ClientMessage::Validate { .. }
-        | ClientMessage::RunMc { .. }
-        | ClientMessage::Cancel { .. } => {
-            handle_background_msg(
-                ws, session, active_job, almanac, progress_tx, result_tx, client_msg,
-            )
-            .await;
-        }
-    }
-}
-
-/// Handle state-setting messages.
-async fn handle_state_msg(
-    ws: &mut WebSocket,
-    session: &mut Session,
-    active_job: &mut Option<ActiveJob>,
-    msg: ClientMessage,
-) {
     match msg {
-        ClientMessage::SetStates {
+        // ---- Synchronous: ComputeTransfer (~100ms) ----
+        ClientMessage::ComputeTransfer {
             request_id,
             chief,
             deputy,
-        } => {
-            cancel_active_job(active_job);
-            session.set_states(chief, deputy);
-            let msg = ServerMessage::StateUpdated {
-                request_id,
-                updated: vec!["chief".into(), "deputy".into()],
-                invalidated: vec!["transfer".into(), "drag_config".into(), "mission".into(), "selected_variant".into()],
-            };
-            send_message(ws, &msg).await;
-        }
-
-        ClientMessage::SetSpacecraft {
-            request_id,
-            chief_config,
-            deputy_config,
-        } => {
-            let updated_fields = session.update_spacecraft(chief_config, deputy_config);
-            let invalidated = if updated_fields.is_empty() {
-                vec![]
-            } else {
-                vec!["drag_config".into()]
-            };
-            let msg = ServerMessage::StateUpdated {
-                request_id,
-                updated: updated_fields.into_iter().map(Into::into).collect(),
-                invalidated,
-            };
-            send_message(ws, &msg).await;
-        }
-
-        ClientMessage::SetSafetyRequirements {
-            request_id,
-            requirements,
-        } => {
-            session.set_safety_requirements(requirements);
-            send_message(
-                ws,
-                &ServerMessage::StateUpdated {
-                    request_id,
-                    updated: vec!["safety_requirements".into()],
-                    invalidated: vec!["mission".into(), "selected_variant".into()],
-                },
-            )
-            .await;
-        }
-
-        ClientMessage::Reset { request_id } => {
-            cancel_active_job(active_job);
-            session.reset();
-            let msg = ServerMessage::StateUpdated {
-                request_id,
-                updated: vec![],
-                invalidated: vec!["all".into()],
-            };
-            send_message(ws, &msg).await;
-        }
-
-        _ => unreachable!(),
-    }
-}
-
-/// Handle planning messages.
-async fn handle_plan_msg(
-    ws: &mut WebSocket,
-    session: &mut Session,
-    msg: ClientMessage,
-) {
-    match msg {
-        ClientMessage::Classify { request_id } => {
-            match handlers::handle_classify(session) {
-                Ok(phase) => {
-                    send_message(ws, &ServerMessage::ClassifyResult { request_id, phase }).await;
-                }
-                Err(e) => {
-                    send_message(ws, &e.to_server_message(Some(request_id))).await;
-                }
-            }
-        }
-
-        ClientMessage::ComputeTransfer {
-            request_id,
             perch,
+            proximity,
             lambert_tof_s,
             lambert_config,
         } => {
-            if let Some(p) = perch {
-                session.perch = p;
-            }
-            if let Some(tof) = lambert_tof_s {
-                session.lambert_tof_s = tof;
-            }
-            if let Some(lc) = lambert_config {
-                session.lambert_config = lc;
-            }
-
-            match handlers::handle_compute_transfer(session) {
-                Ok(result) => {
-                    send_message(
-                        ws,
-                        &ServerMessage::TransferComputed {
-                            request_id,
-                            result: Box::new(result),
-                        },
-                    )
-                    .await;
-                }
-                Err(e) => {
-                    send_message(ws, &e.to_server_message(Some(request_id))).await;
-                }
-            }
-        }
-
-        ClientMessage::SetWaypoints {
-            request_id,
-            waypoints,
-            changed_from,
-        } => {
-            let (cached_baseline, cached_enriched) = session.take_cached_missions();
-            session.set_waypoints(waypoints);
-            match handlers::handle_set_waypoints(
-                session,
-                changed_from,
-                cached_baseline,
-                cached_enriched,
+            let response = match handlers::handle_compute_transfer(
+                chief, deputy, perch, proximity, lambert_tof_s, lambert_config,
             ) {
-                Ok(response) => {
-                    send_message(
-                        ws,
-                        &ServerMessage::PlanResult {
-                            request_id,
-                            baseline: Box::new(response.baseline),
-                            enriched: response.enriched.map(Box::new),
-                            baseline_formation: response.baseline_formation.map(Box::new),
-                            enriched_formation: response.enriched_formation.map(Box::new),
-                        },
-                    )
-                    .await;
-                }
-                Err(e) => {
-                    send_message(ws, &e.to_server_message(Some(request_id))).await;
-                }
-            }
-        }
-
-        ClientMessage::SelectPlan {
-            request_id,
-            variant,
-        } => {
-            match handlers::handle_select_plan(session, variant) {
-                Ok(selected) => {
-                    send_message(
-                        ws,
-                        &ServerMessage::PlanSelected {
-                            request_id,
-                            variant: selected,
-                        },
-                    )
-                    .await;
-                }
-                Err(e) => {
-                    send_message(ws, &e.to_server_message(Some(request_id))).await;
-                }
-            }
-        }
-
-        _ => unreachable!(),
-    }
-}
-
-/// Handle config update message (propagator toggle + config replan).
-async fn handle_update_config_msg(
-    ws: &mut WebSocket,
-    session: &mut Session,
-    msg: ClientMessage,
-) {
-    let ClientMessage::UpdateConfig {
-        request_id,
-        config,
-        propagator,
-        proximity,
-        navigation_accuracy,
-        maneuver_uncertainty,
-    } = msg
-    else {
-        unreachable!()
-    };
-
-    let mut propagator_changed = false;
-    if let Some(toggle) = propagator {
-        match handlers::resolve_propagator_toggle(toggle, session.drag_config) {
-            Ok(choice) => {
-                session.set_propagator(choice);
-                propagator_changed = true;
-            }
-            Err(e) => {
-                send_message(ws, &e.to_server_message(Some(request_id))).await;
-                return;
-            }
-        }
-    }
-
-    let update = handlers::ConfigUpdate {
-        config,
-        propagator_changed,
-        proximity,
-        navigation_accuracy,
-        maneuver_uncertainty,
-    };
-
-    match handlers::handle_update_config(session, update) {
-        Ok(Some(response)) => {
-            send_message(
-                ws,
-                &ServerMessage::PlanResult {
+                Ok(result) => ServerMessage::TransferResult {
                     request_id,
-                    baseline: Box::new(response.baseline),
-                    enriched: response.enriched.map(Box::new),
-                    baseline_formation: response.baseline_formation.map(Box::new),
-                    enriched_formation: response.enriched_formation.map(Box::new),
+                    result: Box::new(result),
                 },
-            )
-            .await;
+                Err(e) => e.to_server_message(Some(request_id)),
+            };
+            send_message(ws, response).await;
         }
-        Ok(None) => {
-            send_message(
-                ws,
-                &ServerMessage::StateUpdated {
-                    request_id,
-                    updated: vec!["config".into()],
-                    invalidated: vec![],
-                },
-            )
-            .await;
-        }
-        Err(e) => {
-            send_message(ws, &e.to_server_message(Some(request_id))).await;
-        }
-    }
-}
 
-/// Handle trajectory and safety query messages.
-async fn handle_trajectory_query_msg(
-    ws: &mut WebSocket,
-    session: &mut Session,
-    msg: ClientMessage,
-) {
-    match msg {
-        ClientMessage::GetTrajectory {
+        // ---- Background: ExtractDrag (~3s) ----
+        // Cancel flag is stored on ActiveJob but handle_extract_drag does not
+        // check it — drag extraction is short (~3s) and CPU-bound, so
+        // cancellation is best-effort.
+        ClientMessage::ExtractDrag {
             request_id,
-            legs,
-            max_points,
+            chief,
+            deputy,
+            chief_config,
+            deputy_config,
         } => {
-            match handlers::handle_get_trajectory(session, legs.as_deref(), max_points) {
-                Ok(leg_data) => {
-                    send_message(
-                        ws,
-                        &ServerMessage::TrajectoryData {
-                            request_id,
-                            legs: leg_data,
-                        },
-                    )
-                    .await;
-                }
-                Err(e) => {
-                    send_message(ws, &e.to_server_message(Some(request_id))).await;
-                }
-            }
+            cancel_active_job(active_job);
+            let almanac = Arc::clone(almanac);
+            let tx = result_tx.clone();
+            let cancel = Arc::new(AtomicBool::new(false));
+            let cancel_clone = Arc::clone(&cancel);
+            let handle = tokio::task::spawn_blocking(move || {
+                let result =
+                    handlers::handle_extract_drag(&chief, &deputy, &chief_config, &deputy_config, &almanac);
+                let _ = tx.blocking_send(JobResult::Drag { request_id, result });
+            });
+            *active_job = Some(ActiveJob {
+                request_id,
+                cancel: cancel_clone,
+                _handle: handle,
+            });
         }
 
-        ClientMessage::GetFreeDriftTrajectory {
-            request_id,
-            legs,
-            max_points,
-        } => {
-            match handlers::handle_get_free_drift(session, legs.as_deref(), max_points) {
-                Ok(response) => {
-                    send_message(
-                        ws,
-                        &ServerMessage::FreeDriftData {
-                            request_id,
-                            legs: response.legs,
-                            analyses: response.analyses,
-                        },
-                    )
-                    .await;
-                }
-                Err(e) => {
-                    send_message(ws, &e.to_server_message(Some(request_id))).await;
-                }
-            }
-        }
-
-        ClientMessage::GetPoca { request_id, legs } => {
-            match handlers::handle_get_poca(session, legs.as_deref()) {
-                Ok(points) => {
-                    send_message(
-                        ws,
-                        &ServerMessage::PocaData {
-                            request_id,
-                            points,
-                        },
-                    )
-                    .await;
-                }
-                Err(e) => {
-                    send_message(ws, &e.to_server_message(Some(request_id))).await;
-                }
-            }
-        }
-
-        ClientMessage::RunCola {
-            request_id,
-            ref config,
-        } => {
-            match handlers::handle_run_cola(session, config) {
-                Ok(eval) => {
-                    send_message(
-                        ws,
-                        &ServerMessage::ColaResult {
-                            request_id,
-                            maneuvers: eval.maneuvers,
-                            secondary_conjunctions: eval.secondary_conjunctions,
-                            skipped: eval.skipped,
-                        },
-                    )
-                    .await;
-                }
-                Err(e) => {
-                    send_message(ws, &e.to_server_message(Some(request_id))).await;
-                }
-            }
-        }
-
-        _ => unreachable!(),
-    }
-}
-
-/// Handle analysis query messages (formation, covariance, eclipse, session).
-///
-/// Each variant delegates to a handler and maps the result to a `ServerMessage`;
-/// the function body is a flat dispatcher with no algorithmic complexity.
-#[allow(clippy::too_many_lines)]
-async fn handle_analysis_query_msg(
-    ws: &mut WebSocket,
-    session: &mut Session,
-    msg: ClientMessage,
-) {
-    match msg {
-        ClientMessage::GetFormationDesign { request_id } => {
-            match handlers::handle_get_formation_design(session) {
-                Ok(report) => {
-                    send_message(
-                        ws,
-                        &ServerMessage::FormationDesignResult {
-                            request_id,
-                            report: Box::new(report),
-                        },
-                    )
-                    .await;
-                }
-                Err(e) => {
-                    send_message(ws, &e.to_server_message(Some(request_id))).await;
-                }
-            }
-        }
-
-        ClientMessage::GetSafeAlternative {
-            request_id,
-            waypoint_index,
-        } => {
-            match handlers::handle_get_safe_alternative(session, waypoint_index) {
-                Ok(enriched) => {
-                    send_message(
-                        ws,
-                        &ServerMessage::SafeAlternativeResult {
-                            request_id,
-                            enriched: Box::new(enriched),
-                        },
-                    )
-                    .await;
-                }
-                Err(e) => {
-                    send_message(ws, &e.to_server_message(Some(request_id))).await;
-                }
-            }
-        }
-
-        ClientMessage::GetCovariance { request_id } => {
-            match handlers::handle_get_covariance(session) {
-                Ok(report) => {
-                    send_message(
-                        ws,
-                        &ServerMessage::CovarianceData {
-                            request_id,
-                            report: Box::new(report),
-                        },
-                    )
-                    .await;
-                }
-                Err(e) => {
-                    send_message(ws, &e.to_server_message(Some(request_id))).await;
-                }
-            }
-        }
-
-        ClientMessage::GetEclipse { request_id } => {
-            match handlers::handle_get_eclipse(session) {
-                Ok(eclipse) => {
-                    send_message(
-                        ws,
-                        &ServerMessage::EclipseData {
-                            request_id,
-                            transfer: eclipse.transfer,
-                            mission: eclipse.mission,
-                        },
-                    )
-                    .await;
-                }
-                Err(e) => {
-                    send_message(ws, &e.to_server_message(Some(request_id))).await;
-                }
-            }
-        }
-
-        ClientMessage::AcceptWaypointEnrichment {
-            request_id,
-            waypoint_index,
-        } => {
-            match handlers::handle_accept_waypoint_enrichment(session, waypoint_index) {
-                Ok(result) => {
-                    send_message(
-                        ws,
-                        &ServerMessage::WaypointEnrichmentAccepted {
-                            request_id,
-                            result: Box::new(result),
-                        },
-                    )
-                    .await;
-                }
-                Err(e) => {
-                    send_message(ws, &e.to_server_message(Some(request_id))).await;
-                }
-            }
-        }
-
-        ClientMessage::GetSession { request_id } => {
-            let summary = session.to_summary();
-            send_message(
-                ws,
-                &ServerMessage::SessionState {
-                    request_id,
-                    summary,
-                },
-            )
-            .await;
-        }
-
-        _ => unreachable!(),
-    }
-}
-
-/// Handle drag extraction background job.
-async fn handle_extract_drag_msg(
-    ws: &mut WebSocket,
-    session: &mut Session,
-    active_job: &mut Option<ActiveJob>,
-    almanac: &Arc<Almanac>,
-    result_tx: &mpsc::Sender<JobResult>,
-    msg: ClientMessage,
-) {
-    let ClientMessage::ExtractDrag { request_id } = msg else {
-        unreachable!()
-    };
-
-    cancel_active_job(active_job);
-
-    let (chief, deputy) = match session.transfer.as_ref() {
-        Some(t) => (t.perch_chief.clone(), t.perch_deputy.clone()),
-        None => match (session.require_chief(), session.require_deputy()) {
-            (Ok(c), Ok(d)) => (c.clone(), d.clone()),
-            (Err(e), _) | (_, Err(e)) => {
-                send_message(ws, &e.to_server_message(Some(request_id))).await;
-                return;
-            }
-        },
-    };
-    let chief_config = session.chief_config().resolve();
-    let deputy_config = session.deputy_config().resolve();
-
-    let cancel = Arc::new(AtomicBool::new(false));
-    let alm = almanac.clone();
-    let tx = result_tx.clone();
-    let handle = tokio::task::spawn_blocking(move || {
-        let result =
-            handlers::handle_extract_drag(&chief, &deputy, &chief_config, &deputy_config, &alm);
-        let _ = tx.blocking_send(JobResult::Drag { request_id, result });
-    });
-    *active_job = Some(ActiveJob {
-        request_id,
-        cancel,
-        _handle: handle,
-    });
-}
-
-/// Handle background job messages (validation, Monte Carlo, cancel).
-async fn handle_background_msg(
-    ws: &mut WebSocket,
-    session: &mut Session,
-    active_job: &mut Option<ActiveJob>,
-    almanac: &Arc<Almanac>,
-    progress_tx: &mpsc::Sender<ProgressUpdate>,
-    result_tx: &mpsc::Sender<JobResult>,
-    msg: ClientMessage,
-) {
-    match msg {
+        // ---- Background: Validate (seconds) ----
         ClientMessage::Validate {
             request_id,
+            mission,
+            chief,
+            deputy,
+            chief_config,
+            deputy_config,
             samples_per_leg,
-            auto_drag,
+            cola_burns,
         } => {
             cancel_active_job(active_job);
+            let almanac = Arc::clone(almanac);
+            let ptx = progress_tx.clone();
+            let tx = result_tx.clone();
+            let cancel = Arc::new(AtomicBool::new(false));
+            let cancel_clone = Arc::clone(&cancel);
 
-            let request = match build_validate_request(session, samples_per_leg, auto_drag) {
-                Ok(r) => r,
-                Err(e) => {
-                    send_message(ws, &e.to_server_message(Some(request_id))).await;
-                    return;
-                }
+            let job_input = ValidateJobInput {
+                mission,
+                chief,
+                deputy,
+                chief_config,
+                deputy_config,
+                samples_per_leg,
+                cola_burn_inputs: cola_burns,
             };
 
-            let cancel = Arc::new(AtomicBool::new(false));
-            let alm = almanac.clone();
-            let ptx = progress_tx.clone();
-            let rtx = result_tx.clone();
-            let cancel_clone = cancel.clone();
             let handle = tokio::task::spawn_blocking(move || {
-                let result = handlers::handle_validate(request, &alm, &ptx, &cancel_clone);
+                let result = handlers::handle_validate(job_input, &almanac, &ptx, &cancel);
                 let result = result.map(Box::new);
-                let _ = rtx.blocking_send(JobResult::Validation { request_id, result });
+                let _ = tx.blocking_send(JobResult::Validation { request_id, result });
             });
             *active_job = Some(ActiveJob {
                 request_id,
-                cancel,
+                cancel: cancel_clone,
                 _handle: handle,
             });
         }
 
+        // ---- Background: Monte Carlo (minutes) ----
         ClientMessage::RunMc {
             request_id,
+            mission,
+            chief,
+            deputy,
+            chief_config,
+            deputy_config,
+            mission_config,
+            propagator,
+            drag_config,
             monte_carlo,
-            auto_drag,
+            covariance_report,
         } => {
             cancel_active_job(active_job);
-
-            if let Some(mc) = monte_carlo {
-                session.set_monte_carlo_config(mc);
-            }
-
-            let request = match build_mc_request(session, auto_drag) {
-                Ok(r) => r,
-                Err(e) => {
-                    send_message(ws, &e.to_server_message(Some(request_id))).await;
-                    return;
-                }
-            };
-
-            let cancel = Arc::new(AtomicBool::new(false));
-            let alm = almanac.clone();
+            let almanac = Arc::clone(almanac);
             let ptx = progress_tx.clone();
-            let rtx = result_tx.clone();
-            let cancel_clone = cancel.clone();
+            let tx = result_tx.clone();
+            let cancel = Arc::new(AtomicBool::new(false));
+            let cancel_clone = Arc::clone(&cancel);
             let handle = tokio::task::spawn_blocking(move || {
-                let result = handlers::handle_mc(request, &alm, &ptx, &cancel_clone);
+                let input = McJobInput {
+                    mission: &mission,
+                    chief: &chief,
+                    deputy: &deputy,
+                    chief_config: &chief_config,
+                    deputy_config: &deputy_config,
+                    mission_config: &mission_config,
+                    propagator_choice: propagator,
+                    drag_config,
+                    mc_config: &monte_carlo,
+                    covariance_report: covariance_report.as_ref(),
+                };
+                let result = handlers::handle_mc(&input, &almanac, &ptx, &cancel);
                 let result = result.map(Box::new);
-                let _ = rtx.blocking_send(JobResult::MonteCarlo { request_id, result });
+                let _ = tx.blocking_send(JobResult::MonteCarlo { request_id, result });
             });
             *active_job = Some(ActiveJob {
                 request_id,
-                cancel,
+                cancel: cancel_clone,
                 _handle: handle,
             });
         }
 
+        // ---- Cancel ----
         ClientMessage::Cancel { request_id } => {
-            if let Some(job) = &active_job {
-                let cancelled_id = request_id.unwrap_or(job.request_id);
+            if let Some(job) = active_job.take() {
+                let rid = request_id.unwrap_or(job.request_id);
                 job.cancel.store(true, Ordering::Relaxed);
-                send_message(
-                    ws,
-                    &ServerMessage::Cancelled {
-                        request_id: cancelled_id,
-                    },
-                )
-                .await;
-                *active_job = None;
+                send_message(ws, ServerMessage::Cancelled { request_id: rid }).await;
+            } else if let Some(rid) = request_id {
+                // No active job to cancel — still acknowledge
+                send_message(ws, ServerMessage::Cancelled { request_id: rid }).await;
             }
         }
-
-        _ => unreachable!(),
     }
 }
 
-/// Build a [`ValidateRequest`](handlers::ValidateRequest) from session state.
-fn build_validate_request(
-    session: &Session,
-    samples_per_leg: Option<u32>,
-    auto_drag: bool,
-) -> Result<handlers::ValidateRequest, ApiError> {
-    let mission = session.require_active_mission()?.clone();
-    let transfer = session.require_transfer()?.clone();
-
-    let safety = session.config.safety;
-    Ok(handlers::ValidateRequest {
-        mission,
-        perch_chief: transfer.perch_chief.clone(),
-        perch_deputy: transfer.perch_deputy.clone(),
-        chief_config: session.chief_config().resolve(),
-        deputy_config: session.deputy_config().resolve(),
-        samples_per_leg: samples_per_leg.unwrap_or(50),
-        auto_drag,
-        waypoints: session.waypoints.clone(),
-        config: session.config.clone(),
-        propagator: session.resolve_propagation_model(),
-        transfer,
-        safety,
-        cola: None,
-    })
-}
-
-/// Build an [`McRequest`](handlers::McRequest) from session state.
-fn build_mc_request(
-    session: &Session,
-    auto_drag: bool,
-) -> Result<handlers::McRequest, ApiError> {
-    let mission = session.require_active_mission()?.clone();
-    let transfer = session.require_transfer()?.clone();
-    let mc_config = *session.require_monte_carlo_config()?;
-
-    Ok(handlers::McRequest {
-        mission,
-        perch_chief: transfer.perch_chief.clone(),
-        perch_deputy: transfer.perch_deputy.clone(),
-        chief_config: session.chief_config().resolve(),
-        deputy_config: session.deputy_config().resolve(),
-        mc_config,
-        mission_config: session.config.clone(),
-        propagator: session.resolve_propagation_model(),
-        navigation_accuracy: session.navigation_accuracy,
-        maneuver_uncertainty: session.maneuver_uncertainty,
-        auto_drag,
-        waypoints: session.waypoints.clone(),
-        transfer,
-    })
-}
-
-/// Cancel the active background job, if any.
+/// Cancel any active background job by setting its cancel flag.
 fn cancel_active_job(active_job: &mut Option<ActiveJob>) {
     if let Some(job) = active_job.take() {
         job.cancel.store(true, Ordering::Relaxed);
+        warn!(request_id = job.request_id, "Cancelled active job for new request");
     }
 }
 
 /// Serialize and send a `ServerMessage` over the WebSocket.
-async fn send_message(ws: &mut WebSocket, msg: &ServerMessage) {
-    match serde_json::to_string(msg) {
+async fn send_message(ws: &mut WebSocket, msg: ServerMessage) {
+    match serde_json::to_string(&msg) {
         Ok(json) => {
             if let Err(e) = ws.send(Message::Text(json.into())).await {
-                tracing::warn!("WebSocket send error: {e}");
+                error!("Failed to send WebSocket message: {e}");
             }
         }
         Err(e) => {
-            tracing::error!("Failed to serialize ServerMessage: {e}");
+            error!("Failed to serialize ServerMessage: {e}");
         }
     }
 }
