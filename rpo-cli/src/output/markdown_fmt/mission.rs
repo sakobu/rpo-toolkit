@@ -8,8 +8,9 @@ use rpo_core::pipeline::{PipelineInput, PipelineOutput};
 use rpo_core::propagation::{DragConfig, PropagationModel};
 
 use crate::output::common::{
-    determine_verdict, fmt_bounded_motion_residual, fmt_duration, fmt_m,
-    fmt_m_s, fmt_roe_component, fmt_velocity_target, KM_TO_M, SafetyTier, VerdictResult,
+    analytical_overestimate_pct, determine_verdict, fmt_bounded_motion_residual, fmt_duration,
+    fmt_m, fmt_m_s, fmt_roe_component, fmt_velocity_target, margin_ratio, KM_TO_M, SafetyTier,
+    VerdictResult,
 };
 use crate::output::formation_fmt::write_formation_design_md;
 use crate::output::insights;
@@ -18,7 +19,7 @@ use super::helpers::{
     propagator_label, status_emoji, write_cola_callout, write_drag_table, write_insights,
     ReportContext,
 };
-use crate::output::thresholds::safety as safety_thresh;
+use crate::output::thresholds::{insight as insight_thresh, safety as safety_thresh};
 
 /// How to render the overall passive safety result.
 ///
@@ -414,16 +415,11 @@ fn write_summary_block_mission(
             if let Some(ref ana) = report.analytical_safety {
                 let ana_3d = ana.operational.min_distance_3d_km;
                 let num_3d = safety.operational.min_distance_3d_km;
-                if ana_3d > 0.0 && num_3d > 0.0 {
-                    let delta_pct = (ana_3d - num_3d) / num_3d * 100.0;
-                    if delta_pct
-                        > crate::output::thresholds::insight::SIGNIFICANT_DELTA_PCT
-                    {
-                        let _ = writeln!(
-                            out,
-                            "| Analytical bias | overestimated by {delta_pct:.0}% | \u{2014} | \u{26a0}\u{fe0f} |",
-                        );
-                    }
+                if let Some(delta_pct) = analytical_overestimate_pct(ana_3d, num_3d) {
+                    let _ = writeln!(
+                        out,
+                        "| Analytical bias | overestimated by {delta_pct:.0}% | \u{2014} | \u{26a0}\u{fe0f} |",
+                    );
                 }
             }
         }
@@ -486,7 +482,7 @@ fn write_transfer_section(out: &mut String, output: &PipelineOutput, input: &Pip
                 out,
                 "| Shadow time | {} ({:.1}% of transfer) |",
                 fmt_duration(te.summary.total_shadow_duration_s),
-                te.summary.time_in_shadow_fraction * 100.0,
+                te.summary.time_in_shadow_fraction * insight_thresh::PERCENT_PER_UNIT,
             );
         }
         let _ = writeln!(out);
@@ -533,7 +529,7 @@ fn write_lambert_solution(
     let _ = writeln!(
         out,
         "| \u{0394}v/v_circ | {:.1}% |",
-        lambert.total_dv_km_s / v_circ * 100.0,
+        lambert.total_dv_km_s / v_circ * insight_thresh::PERCENT_PER_UNIT,
     );
     let _ = writeln!(out);
 }
@@ -1063,7 +1059,7 @@ fn write_eclipse_section(out: &mut String, output: &PipelineOutput) {
             out,
             "| Total shadow time | {} ({:.1}% of waypoint phase) |",
             fmt_duration(eclipse.summary.total_shadow_duration_s),
-            eclipse.summary.time_in_shadow_fraction * 100.0,
+            eclipse.summary.time_in_shadow_fraction * insight_thresh::PERCENT_PER_UNIT,
         );
         let _ = writeln!(
             out,
@@ -1082,7 +1078,7 @@ fn write_eclipse_section(out: &mut String, output: &PipelineOutput) {
                     out,
                     "| Combined (transfer + waypoint) | {} ({:.1}% of full mission) |",
                     fmt_duration(total_shadow),
-                    total_shadow / total_duration * 100.0,
+                    total_shadow / total_duration * insight_thresh::PERCENT_PER_UNIT,
                 );
             }
         }
@@ -1328,10 +1324,8 @@ fn write_safety_comparison(
         None => (v.num_3d_km, v.num_ei_km, SafetyAnnotationMode::Standard),
     };
 
-    let noncons_3d = v.ana_3d_km > 0.0
-        && cmp_3d < v.ana_3d_km * crate::output::thresholds::fidelity::NONCONSERVATIVE_RATIO;
-    let noncons_ei = v.ana_ei_km > 0.0
-        && cmp_ei < v.ana_ei_km * crate::output::thresholds::fidelity::NONCONSERVATIVE_RATIO;
+    let noncons_3d = analytical_overestimate_pct(v.ana_3d_km, cmp_3d).is_some();
+    let noncons_ei = analytical_overestimate_pct(v.ana_ei_km, cmp_ei).is_some();
 
     if let Some(pre_cola) = &report.pre_cola_numerical_safety {
         write_safety_comparison_with_cola(out, &v, pre_cola, &sc, noncons_3d, noncons_ei);
@@ -1459,20 +1453,15 @@ fn write_safety_annotations(out: &mut String, ctx: &SafetyAnnotationCtx<'_>) {
             crate::output::thresholds::insight::SIGNIFICANT_DELTA_PCT,
         );
     }
-    if ctx.noncons_3d && ctx.num_3d_km > 0.0 {
-        let delta_pct = (ctx.ana_3d_km - ctx.num_3d_km) / ctx.num_3d_km * 100.0;
-        let margin_ratio = if ctx.config.min_distance_3d_km > 0.0 {
-            ctx.num_3d_km / ctx.config.min_distance_3d_km
-        } else {
-            f64::INFINITY
-        };
+    if let Some(delta_pct) = analytical_overestimate_pct(ctx.ana_3d_km, ctx.num_3d_km) {
+        let ratio = margin_ratio(ctx.num_3d_km, ctx.config.min_distance_3d_km);
         match ctx.mode {
             SafetyAnnotationMode::PreCola => {
                 let _ = writeln!(
                     out,
                     "\n> Analytical overestimated min 3D distance by {delta_pct:.0}% \
                      relative to Nyx pre-COLA trajectory ({:.0}m \u{2192} {:.0}m). \
-                     Numerical margin ({margin_ratio:.1}\u{00d7} threshold) governs.\n",
+                     Numerical margin ({ratio:.1}\u{00d7} threshold) governs.\n",
                     ctx.ana_3d_km * KM_TO_M, ctx.num_3d_km * KM_TO_M,
                 );
             }
@@ -1480,7 +1469,7 @@ fn write_safety_annotations(out: &mut String, ctx: &SafetyAnnotationCtx<'_>) {
                 let _ = writeln!(
                     out,
                     "\n> Analytical overestimated min 3D distance by {delta_pct:.0}% relative to Nyx. \
-                     Numerical margin ({margin_ratio:.1}\u{00d7} threshold) governs.\n",
+                     Numerical margin ({ratio:.1}\u{00d7} threshold) governs.\n",
                 );
             }
         }
@@ -1522,7 +1511,7 @@ fn write_eclipse_validation(
             let _ = writeln!(
                 out,
                 "| | {:.1}% of max eclipse; acceptable for mission planning |",
-                ev.max_timing_error_s / max_eclipse_s * 100.0,
+                ev.max_timing_error_s / max_eclipse_s * insight_thresh::PERCENT_PER_UNIT,
             );
         }
     }

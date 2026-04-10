@@ -10,7 +10,7 @@ use crate::output::common::{
 };
 use crate::output::formation_fmt::write_formation_design_md;
 use crate::output::insights;
-use crate::output::thresholds::rate as rate_thresh;
+use crate::output::thresholds::{insight as insight_thresh, rate as rate_thresh};
 
 use super::helpers::{status_emoji, write_cola_callout, write_drag_table, write_insights};
 
@@ -110,7 +110,7 @@ fn write_mc_summary_table(
     let _ = writeln!(
         out,
         "| Collision probability | {:.1}% ({:.0}/{}) | 0 | {} |",
-        stats.collision_probability * 100.0,
+        stats.collision_probability * insight_thresh::PERCENT_PER_UNIT,
         coll_n,
         report.config.num_samples,
         status_emoji(stats.collision_probability <= rate_thresh::ZERO_VIOLATIONS),
@@ -130,7 +130,7 @@ fn write_mc_summary_table(
     let _ = writeln!(
         out,
         "| e/i violations | {:.1}% ({:.0}/{}) | \u{2014} | {} |",
-        stats.ei_violation_rate * 100.0,
+        stats.ei_violation_rate * insight_thresh::PERCENT_PER_UNIT,
         ei_n,
         report.config.num_samples,
         if stats.ei_violation_rate > rate_thresh::ZERO_VIOLATIONS {
@@ -144,7 +144,7 @@ fn write_mc_summary_table(
     let _ = writeln!(
         out,
         "| Convergence | {:.1}% ({:.0}/{}) | \u{2014} | {} |",
-        stats.convergence_rate * 100.0,
+        stats.convergence_rate * insight_thresh::PERCENT_PER_UNIT,
         conv_n,
         report.config.num_samples,
         status_emoji(
@@ -307,7 +307,7 @@ fn write_mc_operational_safety(
     let _ = writeln!(
         out,
         "| Keep-out violations | {:.1}% ({:.0}/{}) |",
-        stats.keepout_violation_rate * 100.0,
+        stats.keepout_violation_rate * insight_thresh::PERCENT_PER_UNIT,
         (stats.keepout_violation_rate * n).round(),
         report.config.num_samples,
     );
@@ -353,7 +353,7 @@ fn write_mc_passive_safety(
     let _ = writeln!(
         out,
         "| e/i violations | {:.1}% ({:.0}/{}) |",
-        stats.ei_violation_rate * 100.0,
+        stats.ei_violation_rate * insight_thresh::PERCENT_PER_UNIT,
         ei_n,
         report.config.num_samples,
     );
@@ -385,7 +385,7 @@ fn write_mc_convergence_and_miss(
     let _ = writeln!(
         out,
         "**{:.1}%** ({:.0}/{}), {} failures\n",
-        stats.convergence_rate * 100.0,
+        stats.convergence_rate * insight_thresh::PERCENT_PER_UNIT,
         conv_n,
         report.config.num_samples,
         report.num_failures,
@@ -430,7 +430,7 @@ fn write_mc_diagnostics(
         let _ = writeln!(
             out,
             "| 3\u{03c3} containment | {:.1}% |",
-            cov.terminal_3sigma_containment * 100.0,
+            cov.terminal_3sigma_containment * insight_thresh::PERCENT_PER_UNIT,
         );
         let sr = &cov.sigma_ratio_ric;
         let _ = writeln!(

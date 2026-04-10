@@ -8,7 +8,9 @@ use rpo_core::mission::{
     EnsembleStatistics, LegValidationSummary, MonteCarloReport, SafetyConfig, ValidationReport,
 };
 
-use super::common::{waypoint_miss_growth_ratio, KM_TO_M};
+use super::common::{
+    analytical_overestimate_pct, margin_ratio, waypoint_miss_growth_ratio, KM_TO_M,
+};
 use super::thresholds::insight as insight_thresh;
 
 /// Severity level for cross-tier insights.
@@ -69,47 +71,29 @@ pub fn validation_insights(
     // Track whether the 3D overestimate insight already covered e/i margins
     let mut covered_ei = false;
 
-    // Compare analytical vs numerical 3D distance
     if let Some(ref analytical) = report.analytical_safety {
         let ana_3d = analytical.operational.min_distance_3d_km;
-        if ana_3d > 0.0 {
-            let delta_pct = (ana_3d - num_3d) / num_3d * 100.0;
-            if delta_pct > insight_thresh::SIGNIFICANT_DELTA_PCT {
-                // Compute margin ratios: numerical value / threshold
-                let d3d_ratio = if config.min_distance_3d_km > 0.0 {
-                    num_3d / config.min_distance_3d_km
-                } else {
-                    f64::INFINITY
-                };
-                let ei_ratio = if config.min_ei_separation_km > 0.0 {
-                    num_ei / config.min_ei_separation_km
-                } else {
-                    f64::INFINITY
-                };
+        if let Some(delta_pct) = analytical_overestimate_pct(ana_3d, num_3d) {
+            let d3d_ratio = margin_ratio(num_3d, config.min_distance_3d_km);
+            let ei_ratio = margin_ratio(num_ei, config.min_ei_separation_km);
 
-                let ei_qualifier = if ei_ratio < insight_thresh::TIGHT_MARGIN_FACTOR {
-                    "tighter at"
-                } else {
-                    ""
-                };
-                let ei_part = if ei_qualifier.is_empty() {
-                    format!("e/i margin is {ei_ratio:.1}\u{00d7}")
-                } else {
-                    format!("e/i margin is {ei_qualifier} {ei_ratio:.1}\u{00d7}")
-                };
+            let ei_part = if ei_ratio < insight_thresh::TIGHT_MARGIN_FACTOR {
+                format!("e/i margin is tighter at {ei_ratio:.1}\u{00d7}")
+            } else {
+                format!("e/i margin is {ei_ratio:.1}\u{00d7}")
+            };
 
-                insights.push(Insight {
-                    severity: Severity::Warning,
-                    message: format!(
-                        "Analytical overestimates 3D distance by {delta_pct:.0}% relative to {nyx_label} \
-                         ({:.0}m \u{2192} {:.0}m). \
-                         Numerical 3D margin is {d3d_ratio:.1}\u{00d7} threshold; {ei_part}.",
-                        ana_3d * KM_TO_M,
-                        num_3d * KM_TO_M,
-                    ),
-                });
-                covered_ei = true;
-            }
+            insights.push(Insight {
+                severity: Severity::Warning,
+                message: format!(
+                    "Analytical overestimates 3D distance by {delta_pct:.0}% relative to {nyx_label} \
+                     ({:.0}m \u{2192} {:.0}m). \
+                     Numerical 3D margin is {d3d_ratio:.1}\u{00d7} threshold; {ei_part}.",
+                    ana_3d * KM_TO_M,
+                    num_3d * KM_TO_M,
+                ),
+            });
+            covered_ei = true;
         }
     }
 
@@ -210,20 +194,17 @@ fn cola_effectiveness_insights(
         // Analytical overestimation (info)
         if let Some(ana) = eff.analytical_post_cola_poca_km {
             let nyx_min = eff.nyx_post_cola_min_distance_km;
-            if nyx_min > 0.0 {
-                let overestimate_pct = (ana - nyx_min) / nyx_min * 100.0;
-                if overestimate_pct > insight_thresh::SIGNIFICANT_DELTA_PCT {
-                    insights.push(Insight {
-                        severity: Severity::Info,
-                        message: format!(
-                            "COLA analytical POCA ({:.0}m) overestimates Nyx post-COLA minimum \
-                             ({:.0}m) by {overestimate_pct:.0}%. \
-                             Analytical COLA effectiveness estimates are non-conservative.",
-                            ana * KM_TO_M,
-                            nyx_min * KM_TO_M,
-                        ),
-                    });
-                }
+            if let Some(overestimate_pct) = analytical_overestimate_pct(ana, nyx_min) {
+                insights.push(Insight {
+                    severity: Severity::Info,
+                    message: format!(
+                        "COLA analytical POCA ({:.0}m) overestimates Nyx post-COLA minimum \
+                         ({:.0}m) by {overestimate_pct:.0}%. \
+                         Analytical COLA effectiveness estimates are non-conservative.",
+                        ana * KM_TO_M,
+                        nyx_min * KM_TO_M,
+                    ),
+                });
             }
         }
     }
@@ -303,7 +284,7 @@ pub fn mc_insights(
             message: format!(
                 "{:.1}% collision probability ({:.0}/{} samples violate {:.0}m keep-out). \
                  Review waypoint design urgently.",
-                stats.collision_probability * 100.0,
+                stats.collision_probability * insight_thresh::PERCENT_PER_UNIT,
                 n,
                 report.config.num_samples,
                 config.min_distance_3d_km * KM_TO_M,
@@ -334,7 +315,7 @@ pub fn mc_insights(
                 severity: Severity::Critical,
                 message: format!(
                     "{:.0}% e/i violation rate{p05_part}. Operational safety is also compromised.",
-                    stats.ei_violation_rate * 100.0,
+                    stats.ei_violation_rate * insight_thresh::PERCENT_PER_UNIT,
                 ),
             });
         } else {
@@ -345,7 +326,7 @@ pub fn mc_insights(
                      Operational safety holds (0 collisions, 0 keep-out violations). \
                      If free-drift contingency is required, consider increasing \
                      R-bar or cross-track offsets in waypoint design.",
-                    stats.ei_violation_rate * 100.0,
+                    stats.ei_violation_rate * insight_thresh::PERCENT_PER_UNIT,
                 ),
             });
         }
@@ -353,7 +334,7 @@ pub fn mc_insights(
 
     // Convergence < 100%
     if stats.convergence_rate < 1.0 {
-        let fail_pct = (1.0 - stats.convergence_rate) * 100.0;
+        let fail_pct = (1.0 - stats.convergence_rate) * insight_thresh::PERCENT_PER_UNIT;
         insights.push(Insight {
             severity: Severity::Warning,
             message: format!(

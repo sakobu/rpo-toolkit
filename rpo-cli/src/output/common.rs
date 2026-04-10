@@ -618,6 +618,63 @@ pub fn determine_mc_verdict(report: &MonteCarloReport) -> VerdictResult {
     result
 }
 
+/// Overestimation percentage when the numerical trajectory is non-conservative
+/// relative to the analytical prediction, or `None` when either input is
+/// non-positive or the overestimate is within
+/// [`insight_thresh::SIGNIFICANT_DELTA_PCT`] percent.
+///
+/// The returned value is `(ana_km - num_km) / num_km * 100`, matching the
+/// "analytical overestimates by X%" framing used in every insight and
+/// annotation message in this crate. Because both the boolean gate and the
+/// displayed percentage come from a single expression, the Safety Comparison
+/// table footnote and the insight list cannot drift out of sync.
+///
+/// # Arguments
+/// - `ana_km` — analytical safety metric in kilometers (3D distance or e/i separation)
+/// - `num_km` — numerical (Nyx) safety metric in kilometers, same quantity as `ana_km`
+///
+/// # Returns
+/// - `None` when `ana_km <= 0`, `num_km <= 0`, or the overestimate is within
+///   the dead band (i.e. not exceeding [`insight_thresh::SIGNIFICANT_DELTA_PCT`])
+/// - `Some(delta_pct)` where `delta_pct > SIGNIFICANT_DELTA_PCT`
+///
+/// # Single source of truth
+/// - `validation_insights` 3D overestimate warning (`insights.rs`)
+/// - `cola_effectiveness_insights` analytical overestimation info (`insights.rs`)
+/// - validate leg table "Analytical bias" row (`markdown_fmt/mission.rs`)
+/// - Safety Comparison table `\*` footnote and post-table annotation
+///   (`markdown_fmt/mission.rs`, both the 3D and e/i rows)
+#[must_use]
+pub(crate) fn analytical_overestimate_pct(ana_km: f64, num_km: f64) -> Option<f64> {
+    if ana_km <= 0.0 || num_km <= 0.0 {
+        return None;
+    }
+    let delta_pct = (ana_km - num_km) / num_km * insight_thresh::PERCENT_PER_UNIT;
+    (delta_pct > insight_thresh::SIGNIFICANT_DELTA_PCT).then_some(delta_pct)
+}
+
+/// Ratio of a measured safety metric to its configured threshold.
+///
+/// Returns [`f64::INFINITY`] when the threshold is non-positive, so callers
+/// can render the ratio unconditionally without a divide-by-zero branch.
+/// Both inputs carry the `_km` suffix by convention but the helper is
+/// unit-agnostic — any two quantities with matching units work.
+///
+/// # Arguments
+/// - `value_km` — measured safety metric (e.g. numerical 3D distance or e/i separation)
+/// - `threshold_km` — configured minimum from [`SafetyConfig`]
+///
+/// # Returns
+/// `value_km / threshold_km` when `threshold_km > 0.0`, else `f64::INFINITY`.
+#[must_use]
+pub(crate) fn margin_ratio(value_km: f64, threshold_km: f64) -> f64 {
+    if threshold_km > 0.0 {
+        value_km / threshold_km
+    } else {
+        f64::INFINITY
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -693,6 +750,66 @@ mod tests {
     fn waypoint_miss_growth_ratio_none_when_first_is_zero() {
         let stats = stats_with_waypoint_medians(&[Some(0.0), Some(0.005)]);
         assert!(waypoint_miss_growth_ratio(&stats).is_none());
+    }
+
+    #[test]
+    fn analytical_overestimate_pct_respects_ten_percent_boundary() {
+        // SIGNIFICANT_DELTA_PCT = 10.0 means the predicate fires when
+        //   (ana - num) / num > 0.10
+        // i.e. num < ana / 1.10 ≈ 0.9091 × ana. This test pins that
+        // boundary so the boolean gate and the rendered delta_pct stay
+        // in lockstep at all four call sites in the crate.
+        let ana_km = 100.0;
+
+        // Well inside the non-conservative region.
+        assert!(analytical_overestimate_pct(ana_km, 80.0).is_some());
+        assert!(analytical_overestimate_pct(ana_km, 90.0).is_some());
+
+        // Dead band just above 0.9091 × ana — predicate must fire here.
+        assert!(
+            analytical_overestimate_pct(ana_km, 90.5).is_some(),
+            "num = 0.905 × ana → delta_pct ≈ 10.5% must fire",
+        );
+        assert!(
+            analytical_overestimate_pct(ana_km, 90.9).is_some(),
+            "num = 0.909 × ana → delta_pct ≈ 10.01% must fire",
+        );
+
+        // Just above the correct boundary — predicate must NOT fire.
+        assert!(
+            analytical_overestimate_pct(ana_km, 91.0).is_none(),
+            "num = 0.910 × ana → delta_pct ≈ 9.89% must not fire",
+        );
+        assert!(analytical_overestimate_pct(ana_km, 100.0).is_none());
+        assert!(analytical_overestimate_pct(ana_km, 110.0).is_none());
+
+        // Guards — non-positive inputs must never fire.
+        assert!(analytical_overestimate_pct(0.0, 50.0).is_none());
+        assert!(analytical_overestimate_pct(-1.0, 50.0).is_none());
+        assert!(analytical_overestimate_pct(100.0, 0.0).is_none());
+        assert!(analytical_overestimate_pct(100.0, -1.0).is_none());
+
+        // 110 vs 100 → delta_pct = 10.0 exactly. Strict inequality at
+        // SIGNIFICANT_DELTA_PCT means exactly 10% does not fire.
+        assert!(analytical_overestimate_pct(110.0, 100.0).is_none());
+    }
+
+    #[test]
+    fn analytical_overestimate_pct_returns_exact_delta() {
+        // 120 vs 100 → (120 - 100) / 100 * 100 = 20%. Callers use this
+        // value directly to render "overestimates by {delta_pct:.0}%",
+        // so the helper must return the computed number, not just a
+        // boolean flag.
+        let delta = analytical_overestimate_pct(120.0, 100.0)
+            .expect("20% overestimate must exceed the 10% threshold");
+        assert!((delta - 20.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn margin_ratio_returns_infinity_for_zero_threshold() {
+        assert_eq!(margin_ratio(5.0, 2.0), 2.5);
+        assert!(margin_ratio(5.0, 0.0).is_infinite());
+        assert!(margin_ratio(5.0, -1.0).is_infinite());
     }
 
     #[test]
