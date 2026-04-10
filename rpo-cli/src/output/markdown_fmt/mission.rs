@@ -1252,123 +1252,177 @@ fn write_cola_validation_detail(
     );
 }
 
+/// Safety comparison numbers (analytical + numerical) in a single bundle.
+///
+/// Avoids threading seven floats through helper function signatures. The
+/// `_km` suffixes are kept on every field per the project's mandatory unit
+/// naming rules (see `CLAUDE.md#naming-rules`), which means clippy's
+/// `struct_field_names` lint fires here and is allowed locally.
+#[allow(clippy::struct_field_names)]
+struct SafetyComparisonValues {
+    ana_rc_km: f64,
+    ana_3d_km: f64,
+    ana_ei_km: f64,
+    num_rc_km: f64,
+    num_3d_km: f64,
+    num_ei_km: f64,
+}
+
+impl SafetyComparisonValues {
+    fn from_report(report: &ValidationReport) -> Self {
+        Self {
+            ana_rc_km: report
+                .analytical_safety
+                .as_ref()
+                .map_or(0.0, |s| s.operational.min_rc_separation_km),
+            ana_3d_km: report
+                .analytical_safety
+                .as_ref()
+                .map_or(0.0, |s| s.operational.min_distance_3d_km),
+            ana_ei_km: report
+                .analytical_safety
+                .as_ref()
+                .map_or(0.0, |s| s.passive.min_ei_separation_km),
+            num_rc_km: report.numerical_safety.operational.min_rc_separation_km,
+            num_3d_km: report.numerical_safety.operational.min_distance_3d_km,
+            num_ei_km: report.numerical_safety.passive.min_ei_separation_km,
+        }
+    }
+}
+
 fn write_safety_comparison(
     out: &mut String,
     report: &ValidationReport,
     config: &rpo_core::mission::MissionConfig,
 ) {
     let sc = config.safety.unwrap_or_default();
+    let v = SafetyComparisonValues::from_report(report);
 
-    let ana_rc = report
-        .analytical_safety
-        .as_ref()
-        .map_or(0.0, |s| s.operational.min_rc_separation_km);
-    let ana_3d = report
-        .analytical_safety
-        .as_ref()
-        .map_or(0.0, |s| s.operational.min_distance_3d_km);
-    let ana_ei = report
-        .analytical_safety
-        .as_ref()
-        .map_or(0.0, |s| s.passive.min_ei_separation_km);
+    // Prefer pre-COLA numerical safety as the analytical comparison baseline —
+    // analytical propagation does not model COLA burns, so pre-COLA is the
+    // apples-to-apples pair. When no COLA burn was applied, fall back to the
+    // single numerical baseline. Mirrors `validation_insights` in insights.rs
+    // so the rendered markdown and the insight list agree on both the delta
+    // percentage and the "Nyx" label.
+    let (cmp_3d, cmp_ei, annotation_mode) = match &report.pre_cola_numerical_safety {
+        Some(pre) => (
+            pre.operational.min_distance_3d_km,
+            pre.passive.min_ei_separation_km,
+            SafetyAnnotationMode::PreCola,
+        ),
+        None => (v.num_3d_km, v.num_ei_km, SafetyAnnotationMode::Standard),
+    };
 
-    let num_rc = report.numerical_safety.operational.min_rc_separation_km;
-    let num_3d = report.numerical_safety.operational.min_distance_3d_km;
-    let num_ei = report.numerical_safety.passive.min_ei_separation_km;
-
-    let noncons_3d = ana_3d > 0.0
-        && num_3d < ana_3d * crate::output::thresholds::fidelity::NONCONSERVATIVE_RATIO;
-    let noncons_ei = ana_ei > 0.0
-        && num_ei < ana_ei * crate::output::thresholds::fidelity::NONCONSERVATIVE_RATIO;
+    let noncons_3d = v.ana_3d_km > 0.0
+        && cmp_3d < v.ana_3d_km * crate::output::thresholds::fidelity::NONCONSERVATIVE_RATIO;
+    let noncons_ei = v.ana_ei_km > 0.0
+        && cmp_ei < v.ana_ei_km * crate::output::thresholds::fidelity::NONCONSERVATIVE_RATIO;
 
     if let Some(pre_cola) = &report.pre_cola_numerical_safety {
-        // ── 3-column layout (COLA active) ──
-        let _ = writeln!(
-            out,
-            "### Safety Comparison (Analytical vs Numerical + COLA)\n",
-        );
-        let _ = writeln!(
-            out,
-            "> Numerical columns: pre-COLA is the baseline Nyx trajectory without COLA impulses;\n\
-             > post-COLA reflects the trajectory with COLA burns injected.\n",
-        );
-        let _ = writeln!(
-            out,
-            "| Metric | Analytical | Numerical (pre-COLA) | Numerical (post-COLA) | Threshold |",
-        );
-        let _ = writeln!(out, "| --- | --- | --- | --- | --- |");
-
-        let pre_rc = pre_cola.operational.min_rc_separation_km;
-        let pre_3d = pre_cola.operational.min_distance_3d_km;
-        let pre_ei = pre_cola.passive.min_ei_separation_km;
-
-        let _ = writeln!(
-            out,
-            "| Min R/C-plane distance (m) | {:.1} | {:.1} | {:.1} | \u{2014} |",
-            ana_rc * KM_TO_M, pre_rc * KM_TO_M, num_rc * KM_TO_M,
-        );
-        let _ = writeln!(
-            out,
-            "| 3D distance (m) | {:.1} | {:.1} | {:.1} | {:.0}{} |",
-            ana_3d * KM_TO_M, pre_3d * KM_TO_M, num_3d * KM_TO_M,
-            sc.min_distance_3d_km * KM_TO_M, if noncons_3d { " \\*" } else { "" },
-        );
-        let _ = writeln!(
-            out,
-            "| e/i separation (m) | {:.1} | {:.1} | {:.1} | {:.0}{} |",
-            ana_ei * KM_TO_M, pre_ei * KM_TO_M, num_ei * KM_TO_M,
-            sc.min_ei_separation_km * KM_TO_M, if noncons_ei { " \\*" } else { "" },
-        );
-        let _ = writeln!(out);
-        write_safety_annotations(out, &SafetyAnnotationCtx {
-            noncons_3d,
-            noncons_ei,
-            ana_3d_km: ana_3d,
-            num_3d_km: num_3d,
-            config: &sc,
-            mode: SafetyAnnotationMode::PostCola,
-        });
+        write_safety_comparison_with_cola(out, &v, pre_cola, &sc, noncons_3d, noncons_ei);
     } else {
-        // ── 2-column layout (no COLA) ──
-        let _ = writeln!(out, "### Safety Comparison (Analytical vs Numerical)\n");
-        let _ = writeln!(out, "| Metric | Analytical | Numerical | Threshold |");
-        let _ = writeln!(out, "| --- | --- | --- | --- |");
-
-        let _ = writeln!(
-            out,
-            "| Min R/C-plane distance (m) | {:.1} | {:.1} | \u{2014} |",
-            ana_rc * KM_TO_M, num_rc * KM_TO_M,
-        );
-        let _ = writeln!(
-            out,
-            "| 3D distance (m) | {:.1} | {:.1} | {:.0}{} |",
-            ana_3d * KM_TO_M, num_3d * KM_TO_M,
-            sc.min_distance_3d_km * KM_TO_M, if noncons_3d { " \\*" } else { "" },
-        );
-        let _ = writeln!(
-            out,
-            "| e/i separation (m) | {:.1} | {:.1} | {:.0}{} |",
-            ana_ei * KM_TO_M, num_ei * KM_TO_M,
-            sc.min_ei_separation_km * KM_TO_M, if noncons_ei { " \\*" } else { "" },
-        );
-        let _ = writeln!(out);
-        write_safety_annotations(out, &SafetyAnnotationCtx {
-            noncons_3d,
-            noncons_ei,
-            ana_3d_km: ana_3d,
-            num_3d_km: num_3d,
-            config: &sc,
-            mode: SafetyAnnotationMode::Standard,
-        });
+        write_safety_comparison_without_cola(out, &v, &sc, noncons_3d, noncons_ei);
     }
+
+    write_safety_annotations(out, &SafetyAnnotationCtx {
+        noncons_3d,
+        noncons_ei,
+        ana_3d_km: v.ana_3d_km,
+        num_3d_km: cmp_3d,
+        config: &sc,
+        mode: annotation_mode,
+    });
+}
+
+/// 3-column safety comparison table (analytical / pre-COLA / post-COLA).
+fn write_safety_comparison_with_cola(
+    out: &mut String,
+    v: &SafetyComparisonValues,
+    pre_cola: &rpo_core::mission::SafetyMetrics,
+    sc: &rpo_core::mission::SafetyConfig,
+    noncons_3d: bool,
+    noncons_ei: bool,
+) {
+    let _ = writeln!(
+        out,
+        "### Safety Comparison (Analytical vs Numerical + COLA)\n",
+    );
+    let _ = writeln!(
+        out,
+        "> Numerical columns: pre-COLA is the baseline Nyx trajectory without COLA impulses;\n\
+         > post-COLA reflects the trajectory with COLA burns injected.\n",
+    );
+    let _ = writeln!(
+        out,
+        "| Metric | Analytical | Numerical (pre-COLA) | Numerical (post-COLA) | Threshold |",
+    );
+    let _ = writeln!(out, "| --- | --- | --- | --- | --- |");
+
+    let pre_rc = pre_cola.operational.min_rc_separation_km;
+    let pre_3d = pre_cola.operational.min_distance_3d_km;
+    let pre_ei = pre_cola.passive.min_ei_separation_km;
+
+    let _ = writeln!(
+        out,
+        "| Min R/C-plane distance (m) | {:.1} | {:.1} | {:.1} | \u{2014} |",
+        v.ana_rc_km * KM_TO_M, pre_rc * KM_TO_M, v.num_rc_km * KM_TO_M,
+    );
+    let _ = writeln!(
+        out,
+        "| 3D distance (m) | {:.1} | {:.1} | {:.1} | {:.0}{} |",
+        v.ana_3d_km * KM_TO_M, pre_3d * KM_TO_M, v.num_3d_km * KM_TO_M,
+        sc.min_distance_3d_km * KM_TO_M, if noncons_3d { " \\*" } else { "" },
+    );
+    let _ = writeln!(
+        out,
+        "| e/i separation (m) | {:.1} | {:.1} | {:.1} | {:.0}{} |",
+        v.ana_ei_km * KM_TO_M, pre_ei * KM_TO_M, v.num_ei_km * KM_TO_M,
+        sc.min_ei_separation_km * KM_TO_M, if noncons_ei { " \\*" } else { "" },
+    );
+    let _ = writeln!(out);
+}
+
+/// 2-column safety comparison table (analytical / numerical), used when no
+/// COLA burn was injected.
+fn write_safety_comparison_without_cola(
+    out: &mut String,
+    v: &SafetyComparisonValues,
+    sc: &rpo_core::mission::SafetyConfig,
+    noncons_3d: bool,
+    noncons_ei: bool,
+) {
+    let _ = writeln!(out, "### Safety Comparison (Analytical vs Numerical)\n");
+    let _ = writeln!(out, "| Metric | Analytical | Numerical | Threshold |");
+    let _ = writeln!(out, "| --- | --- | --- | --- |");
+
+    let _ = writeln!(
+        out,
+        "| Min R/C-plane distance (m) | {:.1} | {:.1} | \u{2014} |",
+        v.ana_rc_km * KM_TO_M, v.num_rc_km * KM_TO_M,
+    );
+    let _ = writeln!(
+        out,
+        "| 3D distance (m) | {:.1} | {:.1} | {:.0}{} |",
+        v.ana_3d_km * KM_TO_M, v.num_3d_km * KM_TO_M,
+        sc.min_distance_3d_km * KM_TO_M, if noncons_3d { " \\*" } else { "" },
+    );
+    let _ = writeln!(
+        out,
+        "| e/i separation (m) | {:.1} | {:.1} | {:.0}{} |",
+        v.ana_ei_km * KM_TO_M, v.num_ei_km * KM_TO_M,
+        sc.min_ei_separation_km * KM_TO_M, if noncons_ei { " \\*" } else { "" },
+    );
+    let _ = writeln!(out);
 }
 
 /// Whether safety annotations reference a COLA trajectory.
 enum SafetyAnnotationMode {
     /// No COLA burns — Nyx label is just "Nyx".
     Standard,
-    /// COLA burns injected — Nyx label includes "post-COLA".
-    PostCola,
+    /// COLA burns injected — analytical comparison uses the pre-COLA baseline
+    /// (apples-to-apples, since analytical propagation does not model COLA).
+    /// Nyx label includes "pre-COLA".
+    PreCola,
 }
 
 /// Context for writing non-conservative footnotes and 3D overestimation annotations.
@@ -1398,11 +1452,11 @@ fn write_safety_annotations(out: &mut String, ctx: &SafetyAnnotationCtx<'_>) {
             f64::INFINITY
         };
         match ctx.mode {
-            SafetyAnnotationMode::PostCola => {
+            SafetyAnnotationMode::PreCola => {
                 let _ = writeln!(
                     out,
                     "\n> Analytical overestimated min 3D distance by {delta_pct:.0}% \
-                     relative to Nyx post-COLA trajectory ({:.0}m \u{2192} {:.0}m). \
+                     relative to Nyx pre-COLA trajectory ({:.0}m \u{2192} {:.0}m). \
                      Numerical margin ({margin_ratio:.1}\u{00d7} threshold) governs.\n",
                     ctx.ana_3d_km * KM_TO_M, ctx.num_3d_km * KM_TO_M,
                 );
@@ -1464,6 +1518,11 @@ fn write_eclipse_validation(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use nalgebra::Vector3;
+    use rpo_core::mission::{
+        MissionConfig, OperationalSafety, PassiveSafety, SafetyConfig, SafetyMetrics,
+        ValidationReport,
+    };
     use rpo_core::pipeline::to_propagation_model;
     use rpo_nyx::pipeline::execute_mission;
     use std::path::PathBuf;
@@ -1473,6 +1532,154 @@ mod tests {
             .parent()
             .unwrap()
             .join("examples")
+    }
+
+    /// Build a minimal [`SafetyMetrics`] with only the fields exercised by
+    /// `write_safety_comparison`: 3D distance and e/i separation.
+    fn make_safety(min_3d_km: f64, min_ei_km: f64) -> SafetyMetrics {
+        SafetyMetrics {
+            operational: OperationalSafety {
+                min_rc_separation_km: 0.0,
+                min_distance_3d_km: min_3d_km,
+                min_rc_leg_index: 0,
+                min_rc_elapsed_s: 0.0,
+                min_rc_ric_position_km: Vector3::zeros(),
+                min_3d_leg_index: 0,
+                min_3d_elapsed_s: 0.0,
+                min_3d_ric_position_km: Vector3::zeros(),
+            },
+            passive: PassiveSafety {
+                min_ei_separation_km: min_ei_km,
+                de_magnitude: 0.0,
+                di_magnitude: 0.0,
+                ei_phase_angle_rad: 0.0,
+            },
+        }
+    }
+
+    /// Build a synthetic [`ValidationReport`] where pre-COLA vs post-COLA
+    /// denominators produce distinct rounded percentages, matching the
+    /// fixture used in `insights::tests::validation_report_with_pre_cola`.
+    fn validation_report_with_pre_cola(
+        analytical_3d_km: f64,
+        pre_cola_3d_km: f64,
+        post_cola_3d_km: f64,
+    ) -> ValidationReport {
+        ValidationReport {
+            leg_points: vec![],
+            max_position_error_km: 0.1,
+            mean_position_error_km: 0.05,
+            rms_position_error_km: 0.07,
+            max_velocity_error_km_s: 0.001,
+            analytical_safety: Some(make_safety(analytical_3d_km, 0.170)),
+            numerical_safety: make_safety(post_cola_3d_km, 0.170),
+            pre_cola_numerical_safety: Some(make_safety(pre_cola_3d_km, 0.170)),
+            chief_config: rpo_core::types::SpacecraftConfig::CUBESAT_6U,
+            deputy_config: rpo_core::types::SpacecraftConfig::CUBESAT_6U,
+            eclipse_validation: None,
+            cola_effectiveness: vec![],
+            leg_summaries: vec![],
+        }
+    }
+
+    /// Build a synthetic [`ValidationReport`] without a pre-COLA baseline,
+    /// so the fallback 2-column layout is exercised.
+    fn validation_report_without_pre_cola(
+        analytical_3d_km: f64,
+        numerical_3d_km: f64,
+    ) -> ValidationReport {
+        ValidationReport {
+            leg_points: vec![],
+            max_position_error_km: 0.1,
+            mean_position_error_km: 0.05,
+            rms_position_error_km: 0.07,
+            max_velocity_error_km_s: 0.001,
+            analytical_safety: Some(make_safety(analytical_3d_km, 0.170)),
+            numerical_safety: make_safety(numerical_3d_km, 0.170),
+            pre_cola_numerical_safety: None,
+            chief_config: rpo_core::types::SpacecraftConfig::CUBESAT_6U,
+            deputy_config: rpo_core::types::SpacecraftConfig::CUBESAT_6U,
+            eclipse_validation: None,
+            cola_effectiveness: vec![],
+            leg_summaries: vec![],
+        }
+    }
+
+    /// Mission config with a safety block whose thresholds match
+    /// `insights::tests::default_config` so the two test suites stay in sync.
+    fn mission_config_with_safety() -> MissionConfig {
+        MissionConfig {
+            safety: Some(SafetyConfig {
+                min_distance_3d_km: 0.050,
+                min_ei_separation_km: 0.100,
+            }),
+            ..MissionConfig::default()
+        }
+    }
+
+    #[test]
+    fn mission_safety_comparison_uses_pre_cola_when_available() {
+        // Mirrors the Task 2 insight test (see
+        // `insights::tests::validation_insights_compares_analytical_against_pre_cola_when_available`).
+        //   analytical = 0.200 km
+        //   pre-COLA  (correct denominator): (0.200 - 0.120)/0.120 * 100 = 66.7% -> "67%"
+        //   post-COLA (wrong  denominator): (0.200 - 0.080)/0.080 * 100 = 150.0% -> "150%"
+        // The comparison-table annotation must match the insight: 67% and pre-COLA.
+        let report = validation_report_with_pre_cola(
+            /* analytical_3d_km = */ 0.200,
+            /* pre_cola_3d_km  = */ 0.120,
+            /* post_cola_3d_km = */ 0.080,
+        );
+        let config = mission_config_with_safety();
+
+        let mut md = String::new();
+        write_safety_comparison(&mut md, &report, &config);
+
+        assert!(
+            md.contains("67%"),
+            "expected 67% delta (pre-COLA denominator), got:\n{md}",
+        );
+        assert!(
+            md.contains("Nyx pre-COLA trajectory"),
+            "expected 'Nyx pre-COLA trajectory' label, got:\n{md}",
+        );
+        assert!(
+            !md.contains("150%"),
+            "must not compute 150% (post-COLA denominator), got:\n{md}",
+        );
+        assert!(
+            !md.contains("post-COLA trajectory"),
+            "must not use 'post-COLA trajectory' label when pre-COLA is available, got:\n{md}",
+        );
+    }
+
+    #[test]
+    fn mission_safety_comparison_fallback_without_pre_cola() {
+        // No pre-COLA baseline — the 2-column layout and "Nyx" (plain) label
+        // must be used, with the post-COLA denominator driving the percentage.
+        //   (0.200 - 0.100) / 0.100 * 100 = 100% -> "100%"
+        let report = validation_report_without_pre_cola(0.200, 0.100);
+        let config = mission_config_with_safety();
+
+        let mut md = String::new();
+        write_safety_comparison(&mut md, &report, &config);
+
+        assert!(
+            md.contains("relative to Nyx."),
+            "expected plain 'Nyx.' label in fallback, got:\n{md}",
+        );
+        assert!(
+            !md.contains("pre-COLA"),
+            "must not mention pre-COLA in fallback, got:\n{md}",
+        );
+        assert!(
+            !md.contains("post-COLA"),
+            "must not mention post-COLA in fallback, got:\n{md}",
+        );
+        assert!(
+            md.contains("100%"),
+            "expected 100% delta against numerical, got:\n{md}",
+        );
     }
 
     #[test]

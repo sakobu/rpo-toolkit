@@ -36,6 +36,12 @@ pub struct Insight {
 /// Returns a list of [`Insight`] values with appropriate severity levels.
 /// Each insight message is a complete sentence suitable for display as a
 /// blockquote or colored callout.
+///
+/// When `report.pre_cola_numerical_safety` is populated, both the
+/// analytical-vs-numerical overestimate comparison AND the downstream
+/// tight-margin warnings use the pre-COLA baseline. The pre-COLA values
+/// are the apples-to-apples comparison because analytical propagation
+/// does not model COLA burns.
 #[must_use]
 pub fn validation_insights(
     report: &ValidationReport,
@@ -589,9 +595,20 @@ mod tests {
         };
 
         let insights = validation_insights(&report, &default_config());
+        let msg = &insights
+            .iter()
+            .find(|i| i.message.contains("overestimates 3D"))
+            .expect("expected non-conservative 3D insight")
+            .message;
+
+        // Fallback label must be plain "Nyx" (not "Nyx pre-COLA trajectory")
         assert!(
-            insights.iter().any(|i| i.message.contains("overestimates 3D")),
-            "expected non-conservative 3D insight, got: {insights:?}"
+            msg.contains("relative to Nyx ("),
+            "expected plain 'Nyx' label followed by '(', got: {msg}"
+        );
+        assert!(
+            !msg.contains("pre-COLA"),
+            "must not mention pre-COLA when not available, got: {msg}"
         );
     }
 
