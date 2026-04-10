@@ -9,7 +9,7 @@ use rpo_core::mission::{
 };
 
 use super::common::{waypoint_miss_growth_ratio, KM_TO_M};
-use super::thresholds::{insight as insight_thresh, mc as mc_thresh};
+use super::thresholds::insight as insight_thresh;
 
 /// Severity level for cross-tier insights.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -284,53 +284,6 @@ fn leg_error_growth_insight(
     })
 }
 
-/// Compare `stats.min_rc_distance_km.p05` against the 3D keep-out threshold.
-///
-/// Returns a CRITICAL insight when the 5th-percentile R/C-plane separation
-/// falls below the configured 3D keep-out (5% of dispersed trajectories
-/// are inside the keep-out sphere), a WARNING when it falls below half
-/// the threshold (within a conservative operational buffer), or `None`
-/// when the signal is clean or the aggregate is not populated.
-///
-/// The fractions come from [`mc_thresh::RC_PLANE_P05_CRITICAL_FRACTION`]
-/// and [`mc_thresh::RC_PLANE_P05_WARNING_FRACTION`].
-fn mc_rc_plane_insight(
-    stats: &EnsembleStatistics,
-    safety: &SafetyConfig,
-) -> Option<Insight> {
-    let rc = stats.min_rc_distance_km.as_ref()?;
-    let p05_km = rc.p05;
-    let threshold_km = safety.min_distance_3d_km;
-    let critical_km = threshold_km * mc_thresh::RC_PLANE_P05_CRITICAL_FRACTION;
-    let warning_km = threshold_km * mc_thresh::RC_PLANE_P05_WARNING_FRACTION;
-
-    if p05_km < critical_km {
-        Some(Insight {
-            severity: Severity::Critical,
-            message: format!(
-                "R/C-plane p05 separation ({:.0}m) is below the 3D keep-out ({:.0}m) \
-                 \u{2014} 5% of dispersed trajectories breach safety.",
-                p05_km * KM_TO_M,
-                threshold_km * KM_TO_M,
-            ),
-        })
-    } else if p05_km < warning_km {
-        Some(Insight {
-            severity: Severity::Warning,
-            message: format!(
-                "R/C-plane p05 separation ({:.0}m) is below {:.0}\u{00d7} the 3D keep-out \
-                 ({:.0}m) \u{2014} 5% of dispersed trajectories are within a \
-                 conservative safety buffer.",
-                p05_km * KM_TO_M,
-                mc_thresh::RC_PLANE_P05_WARNING_FRACTION,
-                threshold_km * KM_TO_M,
-            ),
-        })
-    } else {
-        None
-    }
-}
-
 /// Generate insights from Monte Carlo results.
 ///
 /// Returns a list of [`Insight`] values with appropriate severity levels.
@@ -410,11 +363,6 @@ pub fn mc_insights(
         });
     }
 
-    // R/C-plane p05 vs 3D keep-out — placed near other safety flags.
-    if let Some(insight) = mc_rc_plane_insight(stats, config) {
-        insights.push(insight);
-    }
-
     // Dv spread ratio
     let dv = &stats.total_dv_km_s;
     if dv.p05 > 0.0 {
@@ -473,9 +421,9 @@ mod tests {
     use super::*;
     use nalgebra::Vector3;
     use rpo_core::mission::{
-        AvoidanceManeuver, ColaEffectivenessEntry, CorrectionType, EnsembleStatistics,
-        MonteCarloConfig, MonteCarloMode, MonteCarloReport, OperationalSafety, PassiveSafety,
-        PercentileStats, SafetyMetrics, ValidationReport,
+        AvoidanceManeuver, ColaEffectivenessEntry, CorrectionType, DispersionConfig,
+        EnsembleStatistics, MonteCarloConfig, MonteCarloMode, MonteCarloReport, OperationalSafety,
+        PassiveSafety, PercentileStats, SafetyMetrics, ValidationReport,
     };
 
     fn make_safety(min_3d_km: f64, min_ei_km: f64) -> SafetyMetrics {
@@ -692,6 +640,79 @@ mod tests {
         );
     }
 
+    fn mc_report_with_tight_rc_plane(
+        rc_p05_km: f64,
+        min_3d_p05_km: f64,
+    ) -> MonteCarloReport {
+        let stats = EnsembleStatistics {
+            total_dv_km_s: PercentileStats {
+                p05: 0.008,
+                p95: 0.009,
+                ..PercentileStats::default()
+            },
+            min_rc_distance_km: Some(PercentileStats {
+                p05: rc_p05_km,
+                ..PercentileStats::default()
+            }),
+            min_3d_distance_km: Some(PercentileStats {
+                p05: min_3d_p05_km,
+                ..PercentileStats::default()
+            }),
+            min_ei_separation_km: None,
+            waypoint_miss_km: vec![],
+            collision_probability: 0.0,
+            convergence_rate: 1.0,
+            ei_violation_rate: 0.0,
+            keepout_violation_rate: 0.0,
+            dispersion_envelope: vec![],
+        };
+        MonteCarloReport {
+            config: MonteCarloConfig {
+                num_samples: 100,
+                dispersions: DispersionConfig::default(),
+                mode: MonteCarloMode::ClosedLoop,
+                seed: Some(42),
+                trajectory_steps: 50,
+            },
+            nominal_dv_km_s: 0.008,
+            nominal_safety: None,
+            statistics: stats,
+            samples: vec![],
+            num_failures: 0,
+            elapsed_wall_s: 10.0,
+            covariance_cross_check: None,
+        }
+    }
+
+    #[test]
+    fn mc_insights_does_not_compare_rc_plane_p05_against_3d_keepout() {
+        // Build an EnsembleStatistics with a very tight R/C-plane p05 (15 m)
+        // but a healthy 3D p05 (131.6 m) — matches the audit's mc.md scenario.
+        // No insight should reference 'R/C-plane' or 'breach safety'.
+        let report = mc_report_with_tight_rc_plane(
+            /* rc_p05_km = */ 0.015,
+            /* min_3d_p05_km = */ 0.1316,
+        );
+        let config = SafetyConfig {
+            min_distance_3d_km: 0.050,
+            min_ei_separation_km: 0.100,
+        };
+
+        let insights = mc_insights(&report, &config);
+        for insight in &insights {
+            assert!(
+                !insight.message.contains("R/C-plane"),
+                "R/C-plane insight must be removed: {}",
+                insight.message
+            );
+            assert!(
+                !insight.message.contains("breach safety"),
+                "'breach safety' phrasing must be removed: {}",
+                insight.message
+            );
+        }
+    }
+
     #[test]
     fn cola_overestimation_produces_info_insight() {
         let report = ValidationReport {
@@ -753,68 +774,6 @@ mod tests {
             !insights.iter().any(|i| i.message.contains("overestimates Nyx post-COLA")),
             "should not produce overestimation insight when within threshold"
         );
-    }
-
-    fn stats_with_rc_p05(p05_km: f64) -> EnsembleStatistics {
-        EnsembleStatistics {
-            total_dv_km_s: PercentileStats::default(),
-            min_rc_distance_km: Some(PercentileStats {
-                p05: p05_km,
-                ..Default::default()
-            }),
-            min_3d_distance_km: None,
-            min_ei_separation_km: None,
-            waypoint_miss_km: vec![],
-            collision_probability: 0.0,
-            convergence_rate: 1.0,
-            ei_violation_rate: 0.0,
-            keepout_violation_rate: 0.0,
-            dispersion_envelope: vec![],
-        }
-    }
-
-    #[test]
-    fn mc_rc_plane_none_when_absent() {
-        let stats = EnsembleStatistics {
-            total_dv_km_s: PercentileStats::default(),
-            min_rc_distance_km: None,
-            min_3d_distance_km: None,
-            min_ei_separation_km: None,
-            waypoint_miss_km: vec![],
-            collision_probability: 0.0,
-            convergence_rate: 1.0,
-            ei_violation_rate: 0.0,
-            keepout_violation_rate: 0.0,
-            dispersion_envelope: vec![],
-        };
-        let config = default_config(); // min_distance_3d_km = 0.050
-        assert!(mc_rc_plane_insight(&stats, &config).is_none());
-    }
-
-    #[test]
-    fn mc_rc_plane_none_when_above_both_thresholds() {
-        // 60 m > 0.5 * 50 m = 25 m warning → clean.
-        let stats = stats_with_rc_p05(0.060);
-        let config = default_config();
-        assert!(mc_rc_plane_insight(&stats, &config).is_none());
-    }
-
-    #[test]
-    fn mc_rc_plane_warning_between_half_and_full_threshold() {
-        // 30 m is inside the 50 m keep-out but above 25 m (half) — WARNING band.
-        let stats = stats_with_rc_p05(0.030);
-        let config = default_config();
-        let insight = mc_rc_plane_insight(&stats, &config).expect("insight");
-        assert_eq!(insight.severity, Severity::Warning);
-    }
-
-    #[test]
-    fn mc_rc_plane_critical_below_half_threshold() {
-        // 20 m is below 25 m (half of the 50 m keep-out) — CRITICAL.
-        let stats = stats_with_rc_p05(0.020);
-        let config = default_config();
-        let insight = mc_rc_plane_insight(&stats, &config).expect("insight");
-        assert_eq!(insight.severity, Severity::Critical);
     }
 
     fn make_avoidance_maneuver(leg_index: usize, post_poca_km: f64) -> AvoidanceManeuver {

@@ -8,16 +8,6 @@ pub mod mc {
     pub const CONVERGENCE_EXACT_TOL: f64 = f64::EPSILON;
     /// Convergence rate below which the verdict degrades to CAUTION.
     pub const CONVERGENCE_ALERT: f64 = 0.95;
-    /// Fraction of the 3D keep-out threshold below which the R/C-plane p05
-    /// triggers a WARNING insight. At 1.0, the p05 equals or falls
-    /// below the 3D keep-out — 5% of dispersed trajectories breach the
-    /// safety margin but not deeply.
-    pub const RC_PLANE_P05_WARNING_FRACTION: f64 = 1.0;
-    /// Fraction of the 3D keep-out threshold below which the R/C-plane p05
-    /// triggers a CRITICAL insight. At 0.5, the p05 is deep inside the
-    /// keep-out (5% of dispersions penetrate to less than half the
-    /// configured safety margin) — a severe passive-safety violation.
-    pub const RC_PLANE_P05_CRITICAL_FRACTION: f64 = 0.5;
 }
 
 /// Safety comparison thresholds.
