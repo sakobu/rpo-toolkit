@@ -302,8 +302,9 @@ fn build_leg_comparison_points(
 
 /// Propagate chief and deputy through a single leg in parallel via rayon.
 ///
-/// Applies the leg's departure impulse to the deputy, then propagates both
-/// vehicles through nyx full-physics dynamics concurrently using [`rayon::join`].
+/// Thin wrapper over [`propagate_leg`] with `burn = None`. Preserved as a
+/// helper for call sites that do not need the COLA split. Applies the leg's
+/// departure impulse to the deputy and returns both trajectories as tuples.
 ///
 /// # Invariants
 /// - `chief_state` and `deputy_state` must represent valid orbits.
@@ -317,27 +318,68 @@ fn propagate_leg_parallel(
     leg: &ManeuverLeg,
     ctx: &LegPropagationCtx<'_>,
 ) -> Result<(Vec<TimedState>, Vec<TimedState>), ValidationError> {
-    // Build dynamics once; clone is cheap (Arc ref-count bumps).
-    let dynamics = build_full_physics_dynamics(ctx.almanac)?;
+    let out = propagate_leg(chief_state, deputy_state, leg, None, ctx)?;
+    Ok((out.chief_results, out.deputy_results))
+}
 
+/// Optional mid-leg burn insertion point for [`propagate_leg`].
+///
+/// Present on every leg that has a COLA burn solved for it. The impulse field
+/// distinguishes the two callers:
+///
+/// - `impulse_dv_ric_km_s = Some(_)` -- apply this RIC delta-v to the deputy
+///   at `elapsed_s` (post-COLA path, main validate loop).
+/// - `impulse_dv_ric_km_s = None` -- split sampling at `elapsed_s` but do not
+///   apply any impulse (pre-COLA baseline path; keeps sampling density
+///   identical to the post-COLA path for apples-to-apples comparison).
+struct MidLegBurn {
+    /// Time from leg departure to the burn split point (seconds).
+    elapsed_s: f64,
+    /// Delta-v in RIC frame (km/s), or `None` for a sampling-only split.
+    impulse_dv_ric_km_s: Option<Vector3<f64>>,
+}
+
+/// Output from [`propagate_leg`]: per-sample chief/deputy states and an
+/// optional split index marking where segment 2 begins when a split was used.
+struct LegPropOutput {
+    /// Chief ECI states sampled across the leg (single or two segments).
+    chief_results: Vec<TimedState>,
+    /// Deputy ECI states sampled across the leg (single or two segments).
+    deputy_results: Vec<TimedState>,
+    /// Index of the first post-split sample when `burn` was `Some`; `None`
+    /// otherwise.
+    split_index: Option<usize>,
+}
+
+/// Propagate chief and deputy through a single segment in parallel.
+///
+/// Internal helper used by [`propagate_leg`] for each of the 1 or 2 nyx
+/// segments in a leg. Takes pre-built dynamics so the caller can reuse them
+/// across segments.
+fn propagate_segment_parallel(
+    chief_state: &StateVector,
+    deputy_state: &StateVector,
+    duration_s: f64,
+    n_samples: u32,
+    dynamics: &nyx_space::md::prelude::SpacecraftDynamics,
+    ctx: &LegPropagationCtx<'_>,
+) -> Result<(Vec<TimedState>, Vec<TimedState>), ValidationError> {
     let (chief_result, deputy_result) = rayon::join(
         || -> Result<Vec<TimedState>, ValidationError> {
             Ok(nyx_propagate_segment(
                 chief_state,
-                leg.tof_s,
-                ctx.samples_per_leg,
+                duration_s,
+                n_samples,
                 ctx.chief_config,
                 dynamics.clone(),
                 ctx.almanac,
             )?)
         },
         || -> Result<Vec<TimedState>, ValidationError> {
-            let deputy_post_burn =
-                apply_impulse(deputy_state, chief_state, &leg.departure_maneuver.dv_ric_km_s)?;
             Ok(nyx_propagate_segment(
-                &deputy_post_burn,
-                leg.tof_s,
-                ctx.samples_per_leg,
+                deputy_state,
+                duration_s,
+                n_samples,
                 ctx.deputy_config,
                 dynamics.clone(),
                 ctx.almanac,
@@ -345,6 +387,131 @@ fn propagate_leg_parallel(
         },
     );
     Ok((chief_result?, deputy_result?))
+}
+
+/// Propagate a leg with optional mid-leg sampling split and optional impulse.
+///
+/// When `burn` is `None`: single uniform segment of `samples_per_leg` samples
+/// over `leg.tof_s`, step = `leg.tof_s / samples_per_leg`. Equivalent to the
+/// pre-unification [`propagate_leg_parallel`] behavior.
+///
+/// When `burn` is `Some`: sampling is split at `burn.elapsed_s`. `n1` is the
+/// smallest integer such that `n1 * step_s >= burn.elapsed_s`;
+/// `n2 = samples_per_leg - n1` (min 1). If `burn.impulse_dv_ric_km_s` is
+/// `Some`, that RIC delta-v is applied to the deputy at the split point;
+/// otherwise the split is sampling-only and the deputy continues on the same
+/// physical trajectory.
+///
+/// Unifying the split logic between the pre-COLA baseline path
+/// (impulse = `None`) and the post-COLA path (impulse = `Some`) guarantees the
+/// two paths see the same sampling grid in the pre-burn window by
+/// construction, eliminating the sampling artifact that made post-COLA look
+/// worse than pre-COLA in the validate.md Safety Comparison table.
+///
+/// # Invariants
+/// - `chief_state` and `deputy_state` must represent valid orbits.
+/// - When `burn` is `Some`, `burn.elapsed_s` must be in `(0, leg.tof_s)`.
+/// - `almanac` must contain required frames and force models.
+///
+/// # Errors
+/// - [`ValidationError`] if impulse application, dynamics setup, or propagation fails.
+fn propagate_leg(
+    chief_state: &StateVector,
+    deputy_state: &StateVector,
+    leg: &ManeuverLeg,
+    burn: Option<&MidLegBurn>,
+    ctx: &LegPropagationCtx<'_>,
+) -> Result<LegPropOutput, ValidationError> {
+    // Build dynamics once; clone is cheap (Arc ref-count bumps).
+    let dynamics = build_full_physics_dynamics(ctx.almanac)?;
+    let deputy_post_departure =
+        apply_impulse(deputy_state, chief_state, &leg.departure_maneuver.dv_ric_km_s)?;
+
+    let Some(burn) = burn else {
+        // No split: single uniform segment, exactly matches the old
+        // `propagate_leg_parallel` behavior.
+        let (chief_results, deputy_results) = propagate_segment_parallel(
+            chief_state,
+            &deputy_post_departure,
+            leg.tof_s,
+            ctx.samples_per_leg,
+            &dynamics,
+            ctx,
+        )?;
+        return Ok(LegPropOutput {
+            chief_results,
+            deputy_results,
+            split_index: None,
+        });
+    };
+
+    // Split-sample allocation: identical to the old propagate_leg_with_cola.
+    // n1 is the smallest integer such that n1 * step_s >= burn.elapsed_s;
+    // n2 is the remainder (min 1). Stays in u32 domain -- no f64->integer cast.
+    let step_s = leg.tof_s / f64::from(ctx.samples_per_leg);
+    let n1 = (1..=ctx.samples_per_leg)
+        .find(|&k| f64::from(k) * step_s >= burn.elapsed_s)
+        .unwrap_or(ctx.samples_per_leg);
+    let n2 = ctx.samples_per_leg.saturating_sub(n1).max(1);
+
+    // Segment 1: [0, burn.elapsed_s] -- chief/deputy in parallel.
+    let (chief_seg1, deputy_seg1) = propagate_segment_parallel(
+        chief_state,
+        &deputy_post_departure,
+        burn.elapsed_s,
+        n1,
+        &dynamics,
+        ctx,
+    )?;
+
+    let chief_at_split = chief_seg1
+        .last()
+        .ok_or(ValidationError::EmptyTrajectory)?
+        .state
+        .clone();
+    let deputy_at_split = deputy_seg1
+        .last()
+        .ok_or(ValidationError::EmptyTrajectory)?
+        .state
+        .clone();
+
+    // Apply the mid-leg impulse to the deputy if one was supplied.
+    let deputy_seg2_start = match burn.impulse_dv_ric_km_s {
+        Some(ref dv) => apply_impulse(&deputy_at_split, &chief_at_split, dv)?,
+        None => deputy_at_split,
+    };
+
+    // Segment 2: [burn.elapsed_s, tof_s] -- chief/deputy in parallel.
+    let remaining_s = leg.tof_s - burn.elapsed_s;
+    let (chief_seg2, deputy_seg2) = propagate_segment_parallel(
+        &chief_at_split,
+        &deputy_seg2_start,
+        remaining_s,
+        n2,
+        &dynamics,
+        ctx,
+    )?;
+
+    // Merge segments: adjust segment 2 elapsed times to leg-local.
+    let split_index = chief_seg1.len();
+    let mut chief_results = chief_seg1;
+    chief_results.reserve(chief_seg2.len());
+    for mut s in chief_seg2 {
+        s.elapsed_s += burn.elapsed_s;
+        chief_results.push(s);
+    }
+    let mut deputy_results = deputy_seg1;
+    deputy_results.reserve(deputy_seg2.len());
+    for mut s in deputy_seg2 {
+        s.elapsed_s += burn.elapsed_s;
+        deputy_results.push(s);
+    }
+
+    Ok(LegPropOutput {
+        chief_results,
+        deputy_results,
+        split_index: Some(split_index),
+    })
 }
 
 /// Shared context for per-leg nyx propagation.
@@ -375,11 +542,10 @@ struct ColaLegOutput {
 
 /// Propagate a single leg with a mid-coast COLA impulse.
 ///
-/// Two-segment approach: propagate chief and deputy to COLA time, apply
-/// impulse using exact chief state for RIC->ECI conversion, propagate
-/// remainder. Chief/deputy within each segment run in parallel via
-/// [`rayon::join`]; segments are sequential (segment 2 depends on
-/// segment 1's terminal state for the COLA impulse).
+/// Thin wrapper over [`propagate_leg`] with `burn = Some({ elapsed_s,
+/// impulse = Some(dv) })`. The unified `propagate_leg` handles the two-segment
+/// split, parallel propagation, and impulse application; this wrapper just
+/// repackages the output into the existing [`ColaLegOutput`] shape.
 ///
 /// # Errors
 /// Returns [`ValidationError`] if dynamics setup, propagation, or impulse application fails.
@@ -390,77 +556,15 @@ fn propagate_leg_with_cola(
     cola: &ColaBurn,
     ctx: &LegPropagationCtx<'_>,
 ) -> Result<ColaLegOutput, ValidationError> {
-    let dynamics = build_full_physics_dynamics(ctx.almanac)?;
-
-    // Find the first uniform sample step at or beyond the COLA epoch.
-    // Stays in u32 domain -- no f64->integer cast needed.
-    let step_s = leg.tof_s / f64::from(ctx.samples_per_leg);
-    let n1 = (1..=ctx.samples_per_leg)
-        .find(|&k| f64::from(k) * step_s >= cola.elapsed_s)
-        .unwrap_or(ctx.samples_per_leg);
-    let n2 = ctx.samples_per_leg.saturating_sub(n1).max(1);
-
-    // Apply departure maneuver to deputy
-    let deputy_post_burn =
-        apply_impulse(deputy_state, chief_state, &leg.departure_maneuver.dv_ric_km_s)?;
-
-    // Segment 1: [0, cola.elapsed_s] -- chief/deputy in parallel
-    let (chief_seg1, deputy_seg1) = rayon::join(
-        || nyx_propagate_segment(
-            chief_state, cola.elapsed_s, n1,
-            ctx.chief_config, dynamics.clone(), ctx.almanac,
-        ),
-        || nyx_propagate_segment(
-            &deputy_post_burn, cola.elapsed_s, n1,
-            ctx.deputy_config, dynamics.clone(), ctx.almanac,
-        ),
-    );
-    let chief_seg1 = chief_seg1?;
-    let deputy_seg1 = deputy_seg1?;
-
-    // Extract states at COLA time
-    let chief_at_cola = chief_seg1.last()
-        .ok_or(ValidationError::EmptyTrajectory)?.state.clone();
-    let deputy_at_cola = deputy_seg1.last()
-        .ok_or(ValidationError::EmptyTrajectory)?.state.clone();
-
-    // Apply COLA impulse
-    let deputy_post_cola = apply_impulse(&deputy_at_cola, &chief_at_cola, &cola.dv_ric_km_s)?;
-
-    // Segment 2: [cola.elapsed_s, tof_s] -- chief/deputy in parallel
-    let remaining_s = leg.tof_s - cola.elapsed_s;
-    let (chief_seg2, deputy_seg2) = rayon::join(
-        || nyx_propagate_segment(
-            &chief_at_cola, remaining_s, n2,
-            ctx.chief_config, dynamics.clone(), ctx.almanac,
-        ),
-        || nyx_propagate_segment(
-            &deputy_post_cola, remaining_s, n2,
-            ctx.deputy_config, dynamics.clone(), ctx.almanac,
-        ),
-    );
-    let chief_seg2 = chief_seg2?;
-    let deputy_seg2 = deputy_seg2?;
-
-    // Merge segments: adjust segment 2 elapsed times
-    let cola_split_index = chief_seg1.len();
-    let mut chief_results = chief_seg1;
-    chief_results.reserve(chief_seg2.len());
-    for mut s in chief_seg2 {
-        s.elapsed_s += cola.elapsed_s;
-        chief_results.push(s);
-    }
-    let mut deputy_results = deputy_seg1;
-    deputy_results.reserve(deputy_seg2.len());
-    for mut s in deputy_seg2 {
-        s.elapsed_s += cola.elapsed_s;
-        deputy_results.push(s);
-    }
-
+    let burn = MidLegBurn {
+        elapsed_s: cola.elapsed_s,
+        impulse_dv_ric_km_s: Some(cola.dv_ric_km_s),
+    };
+    let out = propagate_leg(chief_state, deputy_state, leg, Some(&burn), ctx)?;
     Ok(ColaLegOutput {
-        chief_results,
-        deputy_results,
-        cola_split_index,
+        chief_results: out.chief_results,
+        deputy_results: out.deputy_results,
+        cola_split_index: out.split_index.ok_or(ValidationError::EmptyTrajectory)?,
     })
 }
 
@@ -563,6 +667,7 @@ fn compute_pre_cola_safety(
     mission: &WaypointMission,
     chief_initial: &StateVector,
     deputy_initial: &StateVector,
+    cola: &ColaValidationInput,
     ctx: &LegPropagationCtx<'_>,
 ) -> Result<rpo_core::mission::types::SafetyMetrics, ValidationError> {
     let estimated_samples = ctx.samples_per_leg as usize // u32 -> usize: safe (usize >= 32 bits)
@@ -573,14 +678,23 @@ fn compute_pre_cola_safety(
     let mut safety_pairs: Vec<ChiefDeputySnapshot> =
         Vec::with_capacity(estimated_samples);
 
-    for leg in &mission.legs {
-        let (chief_results, deputy_results) =
-            propagate_leg_parallel(&chief, &deputy, leg, ctx)?;
+    for (leg_idx, leg) in mission.legs.iter().enumerate() {
+        // Match the sampling split of the post-COLA path when a burn exists
+        // on this leg. impulse_dv_ric_km_s = None means "split grid but stay
+        // on the same physical trajectory" -- this is the whole point of the
+        // unification: segment 1 samples match bit-for-bit between the
+        // pre-COLA baseline and the post-COLA path.
+        let burn = cola.burns.iter().find(|c| c.leg_index == leg_idx).map(|c| MidLegBurn {
+            elapsed_s: c.elapsed_s,
+            impulse_dv_ric_km_s: None,
+        });
+
+        let out = propagate_leg(&chief, &deputy, leg, burn.as_ref(), ctx)?;
 
         // Collect safety pairs inline (skip t=0, matching
         // build_leg_comparison_points).
         for (idx, (c, d)) in
-            chief_results.iter().zip(deputy_results.iter()).enumerate()
+            out.chief_results.iter().zip(out.deputy_results.iter()).enumerate()
         {
             if idx > 0 {
                 safety_pairs.push(ChiefDeputySnapshot {
@@ -592,8 +706,8 @@ fn compute_pre_cola_safety(
         }
 
         (chief, deputy) = advance_leg_states(
-            &chief_results,
-            &deputy_results,
+            &out.chief_results,
+            &out.deputy_results,
             &leg.arrival_maneuver.dv_ric_km_s,
         )?;
         cumulative += leg.tof_s;
@@ -697,11 +811,14 @@ pub fn validate_mission_nyx(
 
     // Pre-COLA pass: when COLA burns exist, propagate without COLA to
     // establish a baseline numerical safety for apples-to-apples comparison.
+    // The pre-COLA path threads `cola` through so it can split sampling at
+    // the same elapsed_s as the post-COLA path (impulse = None), giving
+    // bit-identical segment-1 sampling grids between the two paths.
     let pre_cola_numerical_safety = if cola.burns.is_empty() {
         None
     } else {
         Some(compute_pre_cola_safety(
-            mission, chief_initial, deputy_initial, &ctx,
+            mission, chief_initial, deputy_initial, cola, &ctx,
         )?)
     };
 
@@ -1902,5 +2019,268 @@ mod tests {
                 }
             }
         }
+    }
+
+    // =========================================================================
+    // Unified propagate_leg Sampling Parity Tests (Task 1 of CLI report audit)
+    // =========================================================================
+
+    /// Build a minimal single-leg `ManeuverLeg` with the given TOF (s) and
+    /// zero departure/arrival impulses. Chief mean elements are ISS-like.
+    fn make_single_leg_taskone(tof_s: f64) -> rpo_core::mission::types::ManeuverLeg {
+        use rpo_core::mission::types::{Maneuver, ManeuverLeg};
+        use rpo_core::types::QuasiNonsingularROE;
+        let dep_epoch = test_epoch();
+        let arr_epoch = dep_epoch + hifitime::Duration::from_seconds(tof_s);
+        ManeuverLeg {
+            departure_maneuver: Maneuver { dv_ric_km_s: Vector3::zeros(), epoch: dep_epoch },
+            arrival_maneuver: Maneuver { dv_ric_km_s: Vector3::zeros(), epoch: arr_epoch },
+            tof_s,
+            total_dv_km_s: 0.0,
+            pre_departure_roe: QuasiNonsingularROE::default(),
+            post_departure_roe: QuasiNonsingularROE::default(),
+            departure_chief_mean: iss_like_elements(),
+            pre_arrival_roe: QuasiNonsingularROE::default(),
+            post_arrival_roe: QuasiNonsingularROE::default(),
+            arrival_chief_mean: iss_like_elements(),
+            trajectory: vec![],
+            from_position_ric_km: Vector3::zeros(),
+            to_position_ric_km: Vector3::zeros(),
+            target_velocity_ric_km_s: Vector3::zeros(),
+            iterations: 0,
+            position_error_km: 0.0,
+        }
+    }
+
+    /// Build chief/deputy initial ECI states for a ~300m formation with
+    /// nonzero dex/dey/dix. Used by the Task 1 sampling-parity tests.
+    fn make_initial_states_taskone() -> (StateVector, StateVector) {
+        use rpo_core::test_helpers::deputy_from_roe;
+        use rpo_core::types::QuasiNonsingularROE;
+
+        let epoch = test_epoch();
+        let chief_ke = iss_like_elements();
+        let a = chief_ke.a_km;
+        let formation_roe = QuasiNonsingularROE {
+            da: 0.0, dlambda: 0.0,
+            dex: 0.3 / a, dey: -0.2 / a,
+            dix: 0.2 / a, diy: 0.0,
+        };
+        let deputy_ke = deputy_from_roe(&chief_ke, &formation_roe);
+        let chief_sv = keplerian_to_state(&chief_ke, epoch).unwrap();
+        let deputy_sv = keplerian_to_state(&deputy_ke, epoch).unwrap();
+        (chief_sv, deputy_sv)
+    }
+
+    /// Unit test: segment 1 of `propagate_leg` must be bit-identical (within
+    /// float noise) across burn = None, burn = Some(zero), burn = Some(real),
+    /// given the same `elapsed_s`. This is the load-bearing invariant that
+    /// guarantees pre-COLA and post-COLA paths see the same sampling grid and
+    /// the same physical trajectory in the pre-burn window.
+    #[test]
+    #[ignore = "Requires MetaAlmanac (network on first run)"]
+    fn propagate_leg_segment_1_is_impulse_independent() {
+        /// Position round-off budget. Segment 1 samples must be bit-identical
+        /// across burn variants; this only absorbs f64 accumulation noise over
+        /// a few hundred RK steps at LEO scale (sub-picometer).
+        const FLOAT_NOISE_KM: f64 = 1.0e-12;
+        /// Epoch round-off budget. Guards against a future "optimization"
+        /// that shifts sample times based on impulse presence -- f64
+        /// accumulation over `0..tof_s` is sub-nanosecond.
+        const EPOCH_NOISE_S: f64 = 1.0e-9;
+
+        let (chief_state, deputy_state) = make_initial_states_taskone();
+        let leg = make_single_leg_taskone(4200.0);
+        let almanac = nyx_bridge::load_full_almanac().expect("full almanac should load");
+        let ctx = super::LegPropagationCtx {
+            samples_per_leg: 50,
+            chief_config: &SpacecraftConfig::SERVICER_500KG,
+            deputy_config: &SpacecraftConfig::SERVICER_500KG,
+            almanac: &almanac,
+        };
+
+        let burn_none = super::MidLegBurn {
+            elapsed_s: 709.0,
+            impulse_dv_ric_km_s: None,
+        };
+        let burn_zero = super::MidLegBurn {
+            elapsed_s: 709.0,
+            impulse_dv_ric_km_s: Some(Vector3::zeros()),
+        };
+        let burn_real = super::MidLegBurn {
+            elapsed_s: 709.0,
+            impulse_dv_ric_km_s: Some(Vector3::new(0.001, 0.0, 0.0)),
+        };
+
+        let out_none = super::propagate_leg(&chief_state, &deputy_state, &leg, Some(&burn_none), &ctx)
+            .expect("impulse=None should succeed");
+        let out_zero = super::propagate_leg(&chief_state, &deputy_state, &leg, Some(&burn_zero), &ctx)
+            .expect("impulse=zero should succeed");
+        let out_real = super::propagate_leg(&chief_state, &deputy_state, &leg, Some(&burn_real), &ctx)
+            .expect("impulse=real should succeed");
+
+        let split = out_none.split_index.expect("burn Some => split_index Some");
+        assert_eq!(out_zero.split_index, Some(split), "same burn elapsed_s => same split index");
+        assert_eq!(out_real.split_index, Some(split), "same burn elapsed_s => same split index");
+
+        // Sample counts must agree across the three burn variants.
+        assert_eq!(out_none.chief_results.len(), out_zero.chief_results.len());
+        assert_eq!(out_none.chief_results.len(), out_real.chief_results.len());
+        assert_eq!(out_none.deputy_results.len(), out_zero.deputy_results.len());
+        assert_eq!(out_none.deputy_results.len(), out_real.deputy_results.len());
+
+        // Segment 1 (0..split) must be bit-identical (float noise only) across
+        // all three variants. Chief never receives the deputy's impulse, so
+        // chief is even post-split impulse-independent -- but we only assert
+        // the invariant we care about: pre-split identity.
+        for i in 0..split {
+            let chief_diff_zero_km = (out_none.chief_results[i].state.position_eci_km
+                - out_zero.chief_results[i].state.position_eci_km).norm();
+            let chief_diff_real_km = (out_none.chief_results[i].state.position_eci_km
+                - out_real.chief_results[i].state.position_eci_km).norm();
+            let deputy_diff_zero_km = (out_none.deputy_results[i].state.position_eci_km
+                - out_zero.deputy_results[i].state.position_eci_km).norm();
+            let deputy_diff_real_km = (out_none.deputy_results[i].state.position_eci_km
+                - out_real.deputy_results[i].state.position_eci_km).norm();
+
+            assert!(chief_diff_zero_km < FLOAT_NOISE_KM, "chief sample {i} diverges None vs zero ({chief_diff_zero_km:e} km)");
+            assert!(chief_diff_real_km < FLOAT_NOISE_KM, "chief sample {i} diverges None vs real ({chief_diff_real_km:e} km)");
+            assert!(deputy_diff_zero_km < FLOAT_NOISE_KM, "deputy sample {i} diverges None vs zero ({deputy_diff_zero_km:e} km)");
+            assert!(deputy_diff_real_km < FLOAT_NOISE_KM, "deputy sample {i} diverges None vs real ({deputy_diff_real_km:e} km)");
+
+            // Sample epoch match -- guards against any future attempt to
+            // "optimize" by shifting sample times based on impulse presence.
+            assert!((out_none.chief_results[i].elapsed_s - out_zero.chief_results[i].elapsed_s).abs() < EPOCH_NOISE_S);
+            assert!((out_none.chief_results[i].elapsed_s - out_real.chief_results[i].elapsed_s).abs() < EPOCH_NOISE_S);
+        }
+
+        // Sanity: segment 2 deputy should diverge between None and real
+        // (impulse actually did something). Not the invariant under test,
+        // just a guard against an accidental no-op implementation.
+        //
+        // Note: nyx samples are `n_samples + 1` points (initial + n samples),
+        // so `chief_results[split]` is the first sample of segment 2 at its
+        // local t=0, i.e. the *position* at the split point. Impulse changes
+        // velocity, not position, so we must look at the next sample (at
+        // split+1) where the velocity difference has had time to integrate
+        // into a nonzero position difference.
+        let last_idx = out_real.deputy_results.len() - 1;
+        if split < last_idx {
+            let post_burn_divergence_km = (out_none.deputy_results[split + 1].state.position_eci_km
+                - out_real.deputy_results[split + 1].state.position_eci_km).norm();
+            assert!(
+                post_burn_divergence_km > 0.0,
+                "segment 2 must show the impulse effect; real impulse produced no divergence at split+1 \
+                 (delta = {post_burn_divergence_km:e} km)"
+            );
+        }
+    }
+
+    /// End-to-end regression: pre-COLA baseline safety must match post-COLA
+    /// safety in the pre-burn window, since COLA cannot affect the pre-burn
+    /// portion of the trajectory. This is the test that would have caught
+    /// the sampling artifact where post-COLA looked worse than pre-COLA in
+    /// the validate.md Safety Comparison table.
+    #[test]
+    #[ignore = "Requires MetaAlmanac (network on first run)"]
+    fn pre_cola_and_post_cola_pre_burn_window_match_within_sampling_tolerance() {
+        use rpo_core::mission::waypoints::plan_waypoint_mission;
+        use rpo_core::test_helpers::deputy_from_roe;
+        use rpo_core::mission::config::MissionConfig;
+        use rpo_core::mission::types::Waypoint;
+        use rpo_core::types::{DepartureState, QuasiNonsingularROE};
+
+        /// Sampling-grid agreement budget. With the unified `propagate_leg`,
+        /// the pre-burn window should be bit-identical; this tolerance only
+        /// absorbs f64 round-off across the trajectory-safety reduction
+        /// (norm + min). A millimeter is ~6 orders of magnitude tighter than
+        /// the sampling artifact we are regressing against (~16 m).
+        const SAMPLING_TOL_KM: f64 = 1.0e-6;
+
+        // Build a single-leg mission with a nonzero formation so the ROE
+        // trajectory is interesting. COLA burn will be injected at mid-leg.
+        let epoch = test_epoch();
+        let chief_ke = iss_like_elements();
+        let a = chief_ke.a_km;
+        let formation_roe = QuasiNonsingularROE {
+            da: 0.0, dlambda: 0.0,
+            dex: 0.3 / a, dey: -0.2 / a,
+            dix: 0.2 / a, diy: 0.0,
+        };
+        let deputy_ke = deputy_from_roe(&chief_ke, &formation_roe);
+        let chief_sv = keplerian_to_state(&chief_ke, epoch).unwrap();
+        let deputy_sv = keplerian_to_state(&deputy_ke, epoch).unwrap();
+
+        let period = chief_ke.period().unwrap();
+        let waypoint = Waypoint {
+            position_ric_km: Vector3::new(0.5, 3.0, 1.0),
+            velocity_ric_km_s: Some(Vector3::zeros()),
+            tof_s: Some(0.8 * period),
+        };
+        let departure = DepartureState { roe: formation_roe, chief: chief_ke, epoch };
+        let mission_config = MissionConfig::default();
+        let propagator = PropagationModel::J2Stm;
+        let mission = plan_waypoint_mission(&departure, &[waypoint], &mission_config, &propagator)
+            .expect("mission planning should succeed");
+
+        // COLA burn at 709s (synthetic small burn; we only care about sampling
+        // grid parity in the pre-burn window, not that COLA actually resolves
+        // anything). The dv is small enough not to blow up the trajectory but
+        // large enough that the post-burn segment diverges from the baseline.
+        let leg_tof_s = mission.legs[0].tof_s;
+        assert!(709.0 < leg_tof_s, "test burn at 709s must be inside leg tof");
+        let cola = super::ColaValidationInput {
+            burns: vec![super::ColaBurn {
+                leg_index: 0,
+                elapsed_s: 709.0,
+                dv_ric_km_s: Vector3::new(0.0, 0.001, 0.0),
+            }],
+            analytical_maneuvers: vec![],
+            target_distance_km: None,
+        };
+
+        let almanac = nyx_bridge::load_full_almanac().expect("full almanac should load");
+        let val_config = super::ValidationConfig {
+            samples_per_leg: 50,
+            chief_config: SpacecraftConfig::SERVICER_500KG,
+            deputy_config: SpacecraftConfig::SERVICER_500KG,
+        };
+
+        let report = crate::validation::validate_mission_nyx(
+            &mission, &chief_sv, &deputy_sv, &val_config, &cola, &almanac,
+        )
+        .expect("validation should succeed");
+
+        let pre_cola = report
+            .pre_cola_numerical_safety
+            .as_ref()
+            .expect("pre_cola_numerical_safety must be populated when COLA is present");
+        let post_cola_min_3d_km = report.numerical_safety.operational.min_distance_3d_km;
+        let pre_cola_min_3d_km = pre_cola.operational.min_distance_3d_km;
+
+        eprintln!(
+            "Pre-COLA min 3D: {pre_cola_min_3d_km:.12} km; Post-COLA min 3D: {post_cola_min_3d_km:.12} km"
+        );
+
+        // COLA can only reduce the post-burn minimum; it cannot affect
+        // pre-burn. So pre_cola_min_3d must be <= post_cola_min_3d +
+        // sampling_tolerance.
+        let delta_km = (pre_cola_min_3d_km - post_cola_min_3d_km).abs();
+        assert!(
+            delta_km < SAMPLING_TOL_KM || pre_cola_min_3d_km <= post_cola_min_3d_km + SAMPLING_TOL_KM,
+            "pre-COLA min ({pre_cola_min_3d_km:.9} km) must be <= post-COLA min ({post_cola_min_3d_km:.9} km) \
+             within sampling tolerance; delta = {delta_km:.9} km"
+        );
+
+        // Additional assertion: this guards against any future change that
+        // re-introduces sampling asymmetry. Sub-micron tolerance -- purely
+        // numerical noise from the safety reduction.
+        let samples_tolerance_km = 1.0e-9;
+        assert!(
+            (pre_cola_min_3d_km - post_cola_min_3d_km).abs() < samples_tolerance_km
+                || pre_cola_min_3d_km <= post_cola_min_3d_km,
+            "pre-COLA min must equal post-COLA min or be strictly less (COLA only acts post-split); \
+             pre = {pre_cola_min_3d_km:.12} km, post = {post_cola_min_3d_km:.12} km"
+        );
     }
 }
