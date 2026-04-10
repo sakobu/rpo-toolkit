@@ -430,6 +430,14 @@ impl McBaseline {
 ///
 /// Returns a [`VerdictResult`] with verdict category and human-readable reason.
 /// If validation data is provided, uses numerical safety; otherwise uses analytical.
+///
+/// After the primary verdict is constructed, the free-drift analysis is
+/// walked to surface abort-case passive safety collapse: any leg whose
+/// free-drift e/i minimum is below `min_ei_separation_km *
+/// ABORT_EI_COLLAPSE_RATIO` is appended to the verdict reason. This keeps
+/// the "non-governing for guided ops" softening honest — if the departure
+/// burn is lost on one of those legs, the free-drift e/i would collapse
+/// to sub-metre values.
 #[must_use]
 pub fn determine_verdict(
     output: &PipelineOutput,
@@ -438,7 +446,7 @@ pub fn determine_verdict(
 ) -> VerdictResult {
     let enrichment_active = output.formation_design.is_some();
 
-    if let Some(report) = validation {
+    let mut verdict = if let Some(report) = validation {
         let assessment = assess_safety(&report.numerical_safety, config);
         if assessment.overall_pass {
             VerdictResult {
@@ -483,7 +491,40 @@ pub fn determine_verdict(
             verdict: Verdict::Feasible,
             reason: Cow::Borrowed("no safety configured"),
         }
+    };
+
+    let abort_threshold_km = config.min_ei_separation_km * insight_thresh::ABORT_EI_COLLAPSE_RATIO;
+    if abort_threshold_km > 0.0 {
+        if let Some(ref free_drift) = output.safety.free_drift {
+            let collapsed: Vec<usize> = free_drift
+                .iter()
+                .enumerate()
+                .filter(|(_, fd)| fd.safety.passive.min_ei_separation_km < abort_threshold_km)
+                .map(|(i, _)| i + 1) // 1-based leg numbers for humans
+                .collect();
+
+            if !collapsed.is_empty() {
+                let leg_list = if let [single] = collapsed.as_slice() {
+                    format!("leg {single}")
+                } else {
+                    format!(
+                        "legs {}",
+                        collapsed
+                            .iter()
+                            .map(ToString::to_string)
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    )
+                };
+                verdict.reason = Cow::Owned(format!(
+                    "{} (abort-case passive safety marginal on {leg_list})",
+                    verdict.reason,
+                ));
+            }
+        }
     }
+
+    verdict
 }
 
 /// Ratio of last-to-first waypoint p50 miss distance, or `None` if not computable.
@@ -578,8 +619,12 @@ mod tests {
     use super::*;
     use nalgebra::Vector3;
     use rpo_core::mission::{
-        MonteCarloConfig, MonteCarloMode, MonteCarloReport, PercentileStats,
+        FormationDesignReport, FreeDriftAnalysis, MonteCarloConfig, MonteCarloMode,
+        MonteCarloReport, OperationalSafety, PassiveSafety, PercentileStats,
+        PerchEnrichmentResult, SafetyConfig, SafetyMetrics, WaypointMission,
     };
+    use rpo_core::pipeline::SafetyAnalysis;
+    use rpo_core::types::QuasiNonsingularROE;
 
     fn stats_with_waypoint_medians(medians: &[Option<f64>]) -> EnsembleStatistics {
         EnsembleStatistics {
@@ -711,5 +756,138 @@ mod tests {
     fn fmt_velocity_target_dominant_radial() {
         let v = Vector3::new(0.002, 0.0001, 0.0);
         assert_eq!(fmt_velocity_target(&v), "+2.0 R");
+    }
+
+    // ── Verdict helpers & tests ─────────────────────────────────────────
+
+    /// Build a `SafetyMetrics` with the given 3D distance and e/i separation.
+    fn safety_metrics_with(min_distance_3d_km: f64, min_ei_separation_km: f64) -> SafetyMetrics {
+        SafetyMetrics {
+            operational: OperationalSafety {
+                min_rc_separation_km: min_distance_3d_km,
+                min_distance_3d_km,
+                min_rc_leg_index: 0,
+                min_rc_elapsed_s: 0.0,
+                min_rc_ric_position_km: Vector3::zeros(),
+                min_3d_leg_index: 0,
+                min_3d_elapsed_s: 0.0,
+                min_3d_ric_position_km: Vector3::zeros(),
+            },
+            passive: PassiveSafety {
+                min_ei_separation_km,
+                de_magnitude: 0.0,
+                di_magnitude: 0.0,
+                ei_phase_angle_rad: 0.0,
+            },
+        }
+    }
+
+    /// Build a `FreeDriftAnalysis` whose passive e/i separation equals
+    /// `min_ei_separation_km`. Used only for verdict tests — trajectory is
+    /// empty because `determine_verdict` does not walk it.
+    fn free_drift_analysis_with_ei(min_ei_separation_km: f64) -> FreeDriftAnalysis {
+        FreeDriftAnalysis {
+            trajectory: vec![],
+            safety: safety_metrics_with(1.0, min_ei_separation_km),
+            bounded_motion_residual: 0.0,
+        }
+    }
+
+    /// Minimal `PipelineOutput` with enrichment active and numerical safety
+    /// passing under 3D distance but failing under e/i separation — the
+    /// configuration that triggers the `OperationallyFeasible` branch in
+    /// `determine_verdict`.
+    fn pipeline_output_passing_3d_with_enrichment() -> PipelineOutput {
+        use rpo_core::mission::MissionPhase;
+        use rpo_core::types::KeplerianElements;
+
+        let placeholder_elements = KeplerianElements {
+            a_km: 6786.0,
+            e: 0.0001,
+            i_rad: 51.6_f64.to_radians(),
+            raan_rad: 0.0,
+            aop_rad: 0.0,
+            mean_anomaly_rad: 0.0,
+        };
+        let placeholder_roe = QuasiNonsingularROE::default();
+
+        let mission = WaypointMission {
+            legs: vec![],
+            total_dv_km_s: 0.0,
+            total_duration_s: 0.0,
+            // 3D distance passes (1 km > 0.050 threshold), e/i fails
+            // (0.001 km < 0.100 threshold). Triggers OperationallyFeasible
+            // when enrichment is active.
+            safety: Some(safety_metrics_with(1.0, 0.001)),
+            covariance: None,
+            eclipse: None,
+        };
+
+        let formation_design = FormationDesignReport {
+            perch: PerchEnrichmentResult::Baseline(placeholder_roe),
+            waypoints: vec![],
+            transit_safety: vec![],
+            mission_min_ei_separation_km: None,
+            drift_prediction: None,
+        };
+
+        PipelineOutput {
+            phase: MissionPhase::Proximity {
+                roe: placeholder_roe,
+                chief_elements: placeholder_elements,
+                deputy_elements: placeholder_elements,
+                separation_km: 0.0,
+                delta_r_over_r: 0.0,
+            },
+            transfer: None,
+            transfer_eclipse: None,
+            perch_roe: placeholder_roe,
+            mission,
+            total_dv_km_s: 0.0,
+            total_duration_s: 0.0,
+            auto_drag_config: None,
+            covariance: None,
+            monte_carlo: None,
+            safety: SafetyAnalysis {
+                free_drift: None,
+                poca: None,
+                free_drift_poca: None,
+                cola: None,
+                secondary_conjunctions: None,
+                cola_skipped: None,
+            },
+            formation_design: Some(formation_design),
+        }
+    }
+
+    #[test]
+    fn determine_verdict_flags_abort_case_passive_safety_collapse() {
+        // Build a PipelineOutput whose numerical safety passes, enrichment
+        // active, but whose free_drift analysis shows leg 2 with
+        // min_ei_separation_km essentially zero (0.0002 km = 0.2 m,
+        // threshold = 0.100 km = 100 m, ratio = 0.002).
+        let mut output = pipeline_output_passing_3d_with_enrichment();
+        output.safety.free_drift = Some(vec![
+            free_drift_analysis_with_ei(0.120),  // leg 1: healthy (120 m)
+            free_drift_analysis_with_ei(0.0002), // leg 2: collapsed (0.2 m)
+            free_drift_analysis_with_ei(0.0001), // leg 3: collapsed (0.1 m)
+        ]);
+        let config = SafetyConfig {
+            min_distance_3d_km: 0.050,
+            min_ei_separation_km: 0.100,
+        };
+
+        let verdict = determine_verdict(&output, &config, None);
+
+        assert!(
+            verdict.reason.to_lowercase().contains("abort"),
+            "verdict reason must surface abort-case collapse; got: {}",
+            verdict.reason,
+        );
+        assert!(
+            verdict.reason.contains("leg 2") || verdict.reason.contains("legs 2"),
+            "verdict reason must identify the offending leg(s); got: {}",
+            verdict.reason,
+        );
     }
 }

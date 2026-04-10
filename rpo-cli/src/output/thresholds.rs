@@ -29,6 +29,14 @@ pub mod rate {
 pub mod insight {
     /// Flag when numerical metric is < 2x the configured safety threshold.
     pub const TIGHT_MARGIN_FACTOR: f64 = 2.0;
+    /// Fraction of the configured e/i separation threshold below which
+    /// abort-case passive safety is considered collapsed. When any leg's
+    /// free-drift e/i falls below
+    /// `min_ei_separation_km * ABORT_EI_COLLAPSE_RATIO`, the top-line verdict
+    /// surfaces the marginal abort case. Chosen at 0.1 (one order of
+    /// magnitude below the enforced threshold) to flag only severe
+    /// collapses, not borderline cases.
+    pub const ABORT_EI_COLLAPSE_RATIO: f64 = 0.1;
     /// Flag when numerical safety is >10% smaller than analytical.
     pub const SIGNIFICANT_DELTA_PCT: f64 = 10.0;
     /// Flag when MC Dv spread ratio (p95/p05) exceeds this.
