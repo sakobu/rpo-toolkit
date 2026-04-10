@@ -4,10 +4,12 @@
 //! and return structured [`Insight`] values with [`Severity`] levels.
 //! Used by both terminal and markdown output paths.
 
-use rpo_core::mission::{MonteCarloReport, SafetyConfig, ValidationReport};
+use rpo_core::mission::{
+    EnsembleStatistics, LegValidationSummary, MonteCarloReport, SafetyConfig, ValidationReport,
+};
 
-use super::common::KM_TO_M;
-use super::thresholds::insight as insight_thresh;
+use super::common::{waypoint_miss_growth_ratio, KM_TO_M};
+use super::thresholds::{insight as insight_thresh, mc as mc_thresh};
 
 /// Severity level for cross-tier insights.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -75,10 +77,15 @@ pub fn validation_insights(
                     format!("e/i margin is {ei_qualifier} {ei_ratio:.1}\u{00d7}")
                 };
 
+                let nyx_label = if report.pre_cola_numerical_safety.is_some() {
+                    "Nyx post-COLA trajectory"
+                } else {
+                    "Nyx"
+                };
                 insights.push(Insight {
                     severity: Severity::Warning,
                     message: format!(
-                        "Analytical overestimates 3D distance by {delta_pct:.0}% relative to Nyx \
+                        "Analytical overestimates 3D distance by {delta_pct:.0}% relative to {nyx_label} \
                          ({:.0}m \u{2192} {:.0}m). \
                          Numerical 3D margin is {d3d_ratio:.1}\u{00d7} threshold; {ei_part}.",
                         ana_3d * KM_TO_M,
@@ -90,7 +97,7 @@ pub fn validation_insights(
         }
     }
 
-    if let Some(growth_insight) = leg_error_growth_insight(&report.leg_points) {
+    if let Some(growth_insight) = leg_error_growth_insight(&report.leg_summaries) {
         insights.push(growth_insight);
     }
 
@@ -124,8 +131,53 @@ pub fn validation_insights(
         });
     }
 
-    // COLA effectiveness: critical when nyx min distance fails to meet target threshold
-    for eff in &report.cola_effectiveness {
+    cola_effectiveness_insights(&report.cola_effectiveness, &mut insights);
+
+    insights
+}
+
+/// Warn when the analytical COLA solver left any leg's POCA below the
+/// configured target distance.
+///
+/// Distinct from [`cola_effectiveness_insights`], which only fires on
+/// Nyx-confirmed failure (`eff.threshold_met == Some(false)`). This
+/// function emits a WARNING *before* full-physics validation runs, so
+/// mission-tier reports (which never see Nyx output) still surface
+/// analytical-only failures.
+///
+/// Returns a vec of WARNING insights, one per offending leg. Empty when
+/// all analytical POCAs meet or exceed `target_distance_km`, or when
+/// `maneuvers` is empty.
+#[must_use]
+pub fn cola_analytical_miss_insights(
+    maneuvers: &[rpo_core::mission::AvoidanceManeuver],
+    target_distance_km: f64,
+) -> Vec<Insight> {
+    let mut insights = Vec::new();
+    for m in maneuvers {
+        if m.post_avoidance_poca_km < target_distance_km {
+            insights.push(Insight {
+                severity: Severity::Warning,
+                message: format!(
+                    "COLA burn on leg {} analytical POCA {:.0}m below target {:.0}m \
+                     \u{2014} solver failed before full-physics validation.",
+                    m.leg_index + 1,
+                    m.post_avoidance_poca_km * KM_TO_M,
+                    target_distance_km * KM_TO_M,
+                ),
+            });
+        }
+    }
+    insights
+}
+
+/// COLA effectiveness insights: threshold failures (critical) and analytical overestimation (info).
+fn cola_effectiveness_insights(
+    effectiveness: &[rpo_core::mission::ColaEffectivenessEntry],
+    insights: &mut Vec<Insight>,
+) {
+    for eff in effectiveness {
+        // Threshold failure (critical)
         if eff.threshold_met == Some(false) {
             let nyx_m = eff.nyx_post_cola_min_distance_km * KM_TO_M;
             let target_m = eff.target_distance_km.unwrap_or(0.0) * KM_TO_M;
@@ -138,35 +190,43 @@ pub fn validation_insights(
                 ),
             });
         }
-    }
 
-    insights
+        // Analytical overestimation (info)
+        if let Some(ana) = eff.analytical_post_cola_poca_km {
+            let nyx_min = eff.nyx_post_cola_min_distance_km;
+            if nyx_min > 0.0 {
+                let overestimate_pct = (ana - nyx_min) / nyx_min * 100.0;
+                if overestimate_pct > insight_thresh::SIGNIFICANT_DELTA_PCT {
+                    insights.push(Insight {
+                        severity: Severity::Info,
+                        message: format!(
+                            "COLA analytical POCA ({:.0}m) overestimates Nyx post-COLA minimum \
+                             ({:.0}m) by {overestimate_pct:.0}%. \
+                             Analytical COLA effectiveness estimates are non-conservative.",
+                            ana * KM_TO_M,
+                            nyx_min * KM_TO_M,
+                        ),
+                    });
+                }
+            }
+        }
+    }
 }
 
 /// Check per-leg position error growth and produce an extrapolation insight.
+///
+/// Uses pre-computed [`LegValidationSummary`] to avoid redundant post-COLA
+/// filtering of raw points.
 fn leg_error_growth_insight(
-    leg_points: &[Vec<rpo_core::mission::ValidationPoint>],
+    summaries: &[LegValidationSummary],
 ) -> Option<Insight> {
-    if leg_points.len() < 2 {
+    if summaries.len() < 2 {
         return None;
     }
 
-    // Filter post-COLA points: their "error" reflects intentional trajectory change,
-    // not model fidelity. Consistent with core's compute_report_statistics.
-    let leg_rms: Vec<f64> = leg_points
+    let leg_rms: Vec<f64> = summaries
         .iter()
-        .map(|points| {
-            let n = points.iter().filter(|p| !p.post_cola).count();
-            if n == 0 {
-                return 0.0;
-            }
-            let sum_sq: f64 = points
-                .iter()
-                .filter(|p| !p.post_cola)
-                .map(|p| p.position_error_km.powi(2))
-                .sum();
-            (sum_sq / f64::from(u32::try_from(n).unwrap_or(u32::MAX))).sqrt()
-        })
+        .map(|s| s.rms_position_error_km)
         .collect();
 
     let first_rms = leg_rms[0];
@@ -206,6 +266,53 @@ fn leg_error_growth_insight(
             rms = rms_strs.join(" \u{2192} "),
         ),
     })
+}
+
+/// Compare `stats.min_rc_distance_km.p05` against the 3D keep-out threshold.
+///
+/// Returns a CRITICAL insight when the 5th-percentile R/C-plane separation
+/// falls below the configured 3D keep-out (5% of dispersed trajectories
+/// are inside the keep-out sphere), a WARNING when it falls below half
+/// the threshold (within a conservative operational buffer), or `None`
+/// when the signal is clean or the aggregate is not populated.
+///
+/// The fractions come from [`mc_thresh::RC_PLANE_P05_CRITICAL_FRACTION`]
+/// and [`mc_thresh::RC_PLANE_P05_WARNING_FRACTION`].
+fn mc_rc_plane_insight(
+    stats: &EnsembleStatistics,
+    safety: &SafetyConfig,
+) -> Option<Insight> {
+    let rc = stats.min_rc_distance_km.as_ref()?;
+    let p05_km = rc.p05;
+    let threshold_km = safety.min_distance_3d_km;
+    let critical_km = threshold_km * mc_thresh::RC_PLANE_P05_CRITICAL_FRACTION;
+    let warning_km = threshold_km * mc_thresh::RC_PLANE_P05_WARNING_FRACTION;
+
+    if p05_km < critical_km {
+        Some(Insight {
+            severity: Severity::Critical,
+            message: format!(
+                "R/C-plane p05 separation ({:.0}m) is below the 3D keep-out ({:.0}m) \
+                 \u{2014} 5% of dispersed trajectories breach safety.",
+                p05_km * KM_TO_M,
+                threshold_km * KM_TO_M,
+            ),
+        })
+    } else if p05_km < warning_km {
+        Some(Insight {
+            severity: Severity::Warning,
+            message: format!(
+                "R/C-plane p05 separation ({:.0}m) is below {:.0}\u{00d7} the 3D keep-out \
+                 ({:.0}m) \u{2014} 5% of dispersed trajectories are within a \
+                 conservative safety buffer.",
+                p05_km * KM_TO_M,
+                mc_thresh::RC_PLANE_P05_WARNING_FRACTION,
+                threshold_km * KM_TO_M,
+            ),
+        })
+    } else {
+        None
+    }
 }
 
 /// Generate insights from Monte Carlo results.
@@ -287,6 +394,11 @@ pub fn mc_insights(
         });
     }
 
+    // R/C-plane p05 vs 3D keep-out — placed near other safety flags.
+    if let Some(insight) = mc_rc_plane_insight(stats, config) {
+        insights.push(insight);
+    }
+
     // Dv spread ratio
     let dv = &stats.total_dv_km_s;
     if dv.p05 > 0.0 {
@@ -304,32 +416,40 @@ pub fn mc_insights(
         }
     }
 
-    // Per-waypoint miss growth
+    if let Some(insight) = mc_waypoint_growth_insight(stats) {
+        insights.push(insight);
+    }
+
+    insights
+}
+
+/// Render the per-waypoint miss growth insight when the ratio exceeds the alert.
+///
+/// Uses the shared [`waypoint_miss_growth_ratio`] helper so the verdict
+/// and the insight list stay in sync.
+fn mc_waypoint_growth_insight(stats: &EnsembleStatistics) -> Option<Insight> {
+    let ratio = waypoint_miss_growth_ratio(stats)?;
+    if ratio <= insight_thresh::ERROR_GROWTH_RATIO_ALERT {
+        return None;
+    }
     let miss_medians: Vec<f64> = stats
         .waypoint_miss_km
         .iter()
         .filter_map(|opt| opt.as_ref().map(|s| s.p50))
         .collect();
-    if miss_medians.len() >= 2 {
-        let first = miss_medians[0];
-        let last = miss_medians[miss_medians.len() - 1];
-        if first > 0.0 && last / first > insight_thresh::ERROR_GROWTH_RATIO_ALERT {
-            insights.push(Insight {
-                severity: Severity::Info,
-                message: format!(
-                    "Waypoint miss distance grows {:.1}\u{00d7} from WP 1 ({:.0}m p50) \
-                     to WP {} ({:.0}m p50). Later waypoints accumulate more dispersion \
-                     \u{2014} consider tighter tolerances or additional intermediate waypoints.",
-                    last / first,
-                    first * KM_TO_M,
-                    miss_medians.len(),
-                    last * KM_TO_M,
-                ),
-            });
-        }
-    }
-
-    insights
+    let first = miss_medians[0];
+    let last = miss_medians[miss_medians.len() - 1];
+    Some(Insight {
+        severity: Severity::Info,
+        message: format!(
+            "Waypoint miss distance grows {ratio:.1}\u{00d7} from WP 1 ({:.0}m p50) \
+             to WP {} ({:.0}m p50). Later waypoints accumulate more dispersion \
+             \u{2014} consider tighter tolerances or additional intermediate waypoints.",
+            first * KM_TO_M,
+            miss_medians.len(),
+            last * KM_TO_M,
+        ),
+    })
 }
 
 #[cfg(test)]
@@ -337,8 +457,9 @@ mod tests {
     use super::*;
     use nalgebra::Vector3;
     use rpo_core::mission::{
-        EnsembleStatistics, MonteCarloConfig, MonteCarloMode, MonteCarloReport,
-        OperationalSafety, PassiveSafety, PercentileStats, SafetyMetrics, ValidationReport,
+        AvoidanceManeuver, ColaEffectivenessEntry, CorrectionType, EnsembleStatistics,
+        MonteCarloConfig, MonteCarloMode, MonteCarloReport, OperationalSafety, PassiveSafety,
+        PercentileStats, SafetyMetrics, ValidationReport,
     };
 
     fn make_safety(min_3d_km: f64, min_ei_km: f64) -> SafetyMetrics {
@@ -379,10 +500,12 @@ mod tests {
             max_velocity_error_km_s: 0.001,
             analytical_safety: Some(make_safety(0.200, 0.170)),
             numerical_safety: make_safety(0.100, 0.170),
+            pre_cola_numerical_safety: None,
             chief_config: rpo_core::types::SpacecraftConfig::CUBESAT_6U,
             deputy_config: rpo_core::types::SpacecraftConfig::CUBESAT_6U,
             eclipse_validation: None,
             cola_effectiveness: vec![],
+            leg_summaries: vec![],
         };
 
         let insights = validation_insights(&report, &default_config());
@@ -470,5 +593,175 @@ mod tests {
             insights.is_empty(),
             "expected no insights for clean run, got: {insights:?}"
         );
+    }
+
+    #[test]
+    fn cola_overestimation_produces_info_insight() {
+        let report = ValidationReport {
+            leg_points: vec![],
+            leg_summaries: vec![],
+            max_position_error_km: 0.1,
+            mean_position_error_km: 0.05,
+            rms_position_error_km: 0.07,
+            max_velocity_error_km_s: 0.001,
+            analytical_safety: Some(make_safety(0.200, 0.170)),
+            numerical_safety: make_safety(0.200, 0.170),
+            pre_cola_numerical_safety: None,
+            chief_config: rpo_core::types::SpacecraftConfig::CUBESAT_6U,
+            deputy_config: rpo_core::types::SpacecraftConfig::CUBESAT_6U,
+            eclipse_validation: None,
+            cola_effectiveness: vec![ColaEffectivenessEntry {
+                leg_index: 2,
+                analytical_post_cola_poca_km: Some(0.281),
+                nyx_post_cola_min_distance_km: 0.122,
+                target_distance_km: Some(0.100),
+                threshold_met: Some(true),
+            }],
+        };
+
+        let insights = validation_insights(&report, &default_config());
+        assert!(
+            insights.iter().any(|i| matches!(i.severity, Severity::Info)
+                && i.message.contains("overestimates Nyx post-COLA")),
+            "expected COLA overestimation insight, got: {insights:?}"
+        );
+    }
+
+    #[test]
+    fn cola_no_overestimation_when_within_threshold() {
+        let report = ValidationReport {
+            leg_points: vec![],
+            leg_summaries: vec![],
+            max_position_error_km: 0.1,
+            mean_position_error_km: 0.05,
+            rms_position_error_km: 0.07,
+            max_velocity_error_km_s: 0.001,
+            analytical_safety: Some(make_safety(0.200, 0.170)),
+            numerical_safety: make_safety(0.200, 0.170),
+            pre_cola_numerical_safety: None,
+            chief_config: rpo_core::types::SpacecraftConfig::CUBESAT_6U,
+            deputy_config: rpo_core::types::SpacecraftConfig::CUBESAT_6U,
+            eclipse_validation: None,
+            cola_effectiveness: vec![ColaEffectivenessEntry {
+                leg_index: 2,
+                analytical_post_cola_poca_km: Some(0.110),
+                nyx_post_cola_min_distance_km: 0.105, // ~5% overestimate
+                target_distance_km: Some(0.100),
+                threshold_met: Some(true),
+            }],
+        };
+
+        let insights = validation_insights(&report, &default_config());
+        assert!(
+            !insights.iter().any(|i| i.message.contains("overestimates Nyx post-COLA")),
+            "should not produce overestimation insight when within threshold"
+        );
+    }
+
+    fn stats_with_rc_p05(p05_km: f64) -> EnsembleStatistics {
+        EnsembleStatistics {
+            total_dv_km_s: PercentileStats::default(),
+            min_rc_distance_km: Some(PercentileStats {
+                p05: p05_km,
+                ..Default::default()
+            }),
+            min_3d_distance_km: None,
+            min_ei_separation_km: None,
+            waypoint_miss_km: vec![],
+            collision_probability: 0.0,
+            convergence_rate: 1.0,
+            ei_violation_rate: 0.0,
+            keepout_violation_rate: 0.0,
+            dispersion_envelope: vec![],
+        }
+    }
+
+    #[test]
+    fn mc_rc_plane_none_when_absent() {
+        let stats = EnsembleStatistics {
+            total_dv_km_s: PercentileStats::default(),
+            min_rc_distance_km: None,
+            min_3d_distance_km: None,
+            min_ei_separation_km: None,
+            waypoint_miss_km: vec![],
+            collision_probability: 0.0,
+            convergence_rate: 1.0,
+            ei_violation_rate: 0.0,
+            keepout_violation_rate: 0.0,
+            dispersion_envelope: vec![],
+        };
+        let config = default_config(); // min_distance_3d_km = 0.050
+        assert!(mc_rc_plane_insight(&stats, &config).is_none());
+    }
+
+    #[test]
+    fn mc_rc_plane_none_when_above_both_thresholds() {
+        // 60 m > 0.5 * 50 m = 25 m warning → clean.
+        let stats = stats_with_rc_p05(0.060);
+        let config = default_config();
+        assert!(mc_rc_plane_insight(&stats, &config).is_none());
+    }
+
+    #[test]
+    fn mc_rc_plane_warning_between_half_and_full_threshold() {
+        // 30 m is inside the 50 m keep-out but above 25 m (half) — WARNING band.
+        let stats = stats_with_rc_p05(0.030);
+        let config = default_config();
+        let insight = mc_rc_plane_insight(&stats, &config).expect("insight");
+        assert_eq!(insight.severity, Severity::Warning);
+    }
+
+    #[test]
+    fn mc_rc_plane_critical_below_half_threshold() {
+        // 20 m is below 25 m (half of the 50 m keep-out) — CRITICAL.
+        let stats = stats_with_rc_p05(0.020);
+        let config = default_config();
+        let insight = mc_rc_plane_insight(&stats, &config).expect("insight");
+        assert_eq!(insight.severity, Severity::Critical);
+    }
+
+    fn make_avoidance_maneuver(leg_index: usize, post_poca_km: f64) -> AvoidanceManeuver {
+        AvoidanceManeuver {
+            epoch: hifitime::Epoch::from_gregorian_utc_at_midnight(2026, 1, 1),
+            dv_ric_km_s: Vector3::new(0.0, 0.0001, 0.0),
+            maneuver_location_rad: 0.0,
+            post_avoidance_poca_km: post_poca_km,
+            fuel_cost_km_s: 0.0001,
+            correction_type: CorrectionType::InPlane,
+            leg_index,
+        }
+    }
+
+    #[test]
+    fn cola_analytical_miss_fires_on_under_target() {
+        // 0.281 km post-COLA POCA, 0.300 km target → warning.
+        let maneuvers = vec![make_avoidance_maneuver(2, 0.281)];
+        let insights = cola_analytical_miss_insights(&maneuvers, 0.300);
+        assert_eq!(insights.len(), 1);
+        assert_eq!(insights[0].severity, Severity::Warning);
+        assert!(insights[0].message.contains("leg 3"));
+        assert!(insights[0].message.contains("281m"));
+        assert!(insights[0].message.contains("300m"));
+    }
+
+    #[test]
+    fn cola_analytical_miss_silent_when_above_target() {
+        // 0.305 km post-COLA POCA, 0.300 km target → no insight.
+        let maneuvers = vec![make_avoidance_maneuver(0, 0.305)];
+        let insights = cola_analytical_miss_insights(&maneuvers, 0.300);
+        assert!(insights.is_empty());
+    }
+
+    #[test]
+    fn cola_analytical_miss_fires_on_multiple_legs() {
+        let maneuvers = vec![
+            make_avoidance_maneuver(0, 0.305), // above — ignored
+            make_avoidance_maneuver(1, 0.200), // below
+            make_avoidance_maneuver(3, 0.290), // below
+        ];
+        let insights = cola_analytical_miss_insights(&maneuvers, 0.300);
+        assert_eq!(insights.len(), 2);
+        assert!(insights[0].message.contains("leg 2"));
+        assert!(insights[1].message.contains("leg 4"));
     }
 }

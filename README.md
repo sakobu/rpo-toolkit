@@ -199,7 +199,7 @@ import init, {
 await init();
 
 // Classify: proximity or far-field?
-const phase = classify_separation(chief, deputy, { max_delta_r_over_r: 0.005 });
+const phase = classify_separation(chief, deputy, { roe_threshold: 0.005 });
 
 // Plan waypoints (analytical -- runs in the browser, no server needed)
 const mission = plan_waypoint_mission(

@@ -34,8 +34,9 @@ pub use safety::{
 pub use targeting::{optimize_tof, solve_leg, ArrivalVelocityStrategy};
 pub use types::{
     ColaEffectivenessEntry, EclipseIntervalComparison, EclipseValidation, EclipseValidationPoint,
-    Maneuver, ManeuverLeg, MissionPhase, MissionPlan, OperationalSafety, PassiveSafety,
-    PerchGeometry, SafetyMetrics, ValidationPoint, ValidationReport, Waypoint, WaypointMission,
+    LegValidationSummary, Maneuver, ManeuverLeg, MissionPhase, MissionPlan, OperationalSafety,
+    PassiveSafety, PerchGeometry, SafetyMetrics, ValidationPoint, ValidationReport, Waypoint,
+    WaypointMission,
 };
 pub use covariance::propagate_mission_covariance;
 pub use monte_carlo::{

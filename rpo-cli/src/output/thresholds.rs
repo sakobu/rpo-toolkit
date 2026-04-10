@@ -2,12 +2,22 @@
 //!
 //! Presentation-layer thresholds only. Core algorithm tolerances live in rpo-core.
 
-/// Monte Carlo convergence thresholds for verdict determination.
+/// Monte Carlo convergence and safety thresholds for verdict/insight logic.
 pub mod mc {
     /// Tolerance for treating convergence rate as exactly 1.0 (all samples converged).
     pub const CONVERGENCE_EXACT_TOL: f64 = f64::EPSILON;
     /// Convergence rate below which the verdict degrades to CAUTION.
     pub const CONVERGENCE_ALERT: f64 = 0.95;
+    /// Fraction of the 3D keep-out threshold below which the R/C-plane p05
+    /// triggers a WARNING insight. At 1.0, the p05 equals or falls
+    /// below the 3D keep-out — 5% of dispersed trajectories breach the
+    /// safety margin but not deeply.
+    pub const RC_PLANE_P05_WARNING_FRACTION: f64 = 1.0;
+    /// Fraction of the 3D keep-out threshold below which the R/C-plane p05
+    /// triggers a CRITICAL insight. At 0.5, the p05 is deep inside the
+    /// keep-out (5% of dispersions penetrate to less than half the
+    /// configured safety margin) — a severe passive-safety violation.
+    pub const RC_PLANE_P05_CRITICAL_FRACTION: f64 = 0.5;
 }
 
 /// Safety comparison thresholds.
@@ -35,4 +45,24 @@ pub mod insight {
     pub const DV_SPREAD_RATIO_ALERT: f64 = 1.2;
     /// Flag when per-leg RMS growth ratio exceeds this.
     pub const ERROR_GROWTH_RATIO_ALERT: f64 = 3.0;
+}
+
+/// Velocity target display thresholds.
+pub mod velocity {
+    /// Fraction of total velocity magnitude a single RIC component must exceed
+    /// to be displayed as the dominant direction (e.g., "+1.0 I").
+    /// Below this threshold, only magnitude is shown.
+    pub const DOMINANT_COMPONENT_FRACTION: f64 = 0.7;
+
+    /// Velocity magnitude (km/s) below which the vector is treated as zero for display.
+    /// 1e-12 km/s = 1e-9 m/s = 1 nm/s — well below any physically meaningful maneuver.
+    pub const ZERO_MAGNITUDE_KM_S: f64 = 1e-12;
+}
+
+/// Safety display thresholds.
+pub mod safety {
+    /// e/i separation (metres) below which phase angle is not displayed.
+    /// At sub-millimetre separations the geometry is too small for the angle
+    /// to carry meaningful information.
+    pub const MIN_EI_SEPARATION_FOR_PHASE_DISPLAY_M: f64 = 0.05;
 }

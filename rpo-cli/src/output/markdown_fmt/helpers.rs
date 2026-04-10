@@ -6,6 +6,19 @@ use rpo_core::propagation::{DragConfig, PropagationModel};
 use crate::output::common::{cola_dv_summary, fmt_m_s};
 use crate::output::insights;
 
+/// Which report tier a shared formatter is writing into.
+///
+/// Used by cross-report formatters to vary guidance text (e.g. "run
+/// `validate`" is self-referential inside a validate report and should
+/// instead point at a section downstream).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum ReportContext {
+    /// Writing into a `mission` report.
+    Mission,
+    /// Writing into a `validate` report.
+    Validate,
+}
+
 pub(super) fn propagator_label(propagator: &PropagationModel, auto_drag: bool) -> &'static str {
     match propagator {
         PropagationModel::J2Stm => "J2 STM",

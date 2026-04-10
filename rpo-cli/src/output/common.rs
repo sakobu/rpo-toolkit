@@ -1,5 +1,6 @@
 //! Shared output helpers.
 
+use std::borrow::Cow;
 use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
@@ -9,8 +10,8 @@ use indicatif::{ProgressBar, ProgressStyle};
 use serde::Serialize;
 
 use rpo_core::mission::{
-    assess_safety, AvoidanceManeuver, ColaConfig, EiAlignment, MonteCarloReport, SafetyConfig,
-    SafetyRequirements, ValidationReport,
+    assess_safety, AvoidanceManeuver, ColaConfig, EiAlignment, EnsembleStatistics, MonteCarloReport,
+    SafetyConfig, SafetyRequirements, ValidationReport,
 };
 use rpo_core::pipeline::{
     resolve_propagator, to_propagation_model, PipelineInput, PipelineOutput, TransferResult,
@@ -21,7 +22,7 @@ use rpo_nyx::nyx_bridge::extract_dmf_rates;
 
 use crate::error::CliError;
 
-use super::thresholds::{mc as mc_thresh, rate as rate_thresh};
+use super::thresholds::{insight as insight_thresh, mc as mc_thresh, rate as rate_thresh};
 
 /// Whether analytical safety is the governing tier or a baseline for comparison.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -116,7 +117,7 @@ pub struct VerdictResult {
     /// The verdict category.
     pub verdict: Verdict,
     /// Human-readable reason for the verdict.
-    pub reason: &'static str,
+    pub reason: Cow<'static, str>,
 }
 
 // ── Status / spinner ────────────────────────────────────────────────────
@@ -269,6 +270,9 @@ pub(crate) const KM_TO_M: f64 = 1000.0;
 /// ROE component below which the value is treated as effectively zero for display.
 const ROE_DISPLAY_ZERO_THRESHOLD: f64 = 1e-15;
 
+/// RIC frame component labels for display, ordered [Radial, In-track, Cross-track].
+const RIC_COMPONENT_LABELS: [&str; 3] = ["R", "I", "C"];
+
 /// Format a value stored in km/s as m/s with given decimal places.
 ///
 /// Example: `fmt_m_s(0.5432, 1)` returns `"543.2 m/s"`.
@@ -349,47 +353,38 @@ pub fn fmt_duration(s: f64) -> String {
 }
 
 
-// ── Per-leg error stats ────────────────────────────────────────────────
+// ── Velocity target formatting ──────────────────────────────────────────
 
-/// Per-leg position error statistics (km).
-// All fields carry the `_km` unit suffix per our naming rules.
-// Clippy's `struct_field_names` lint fires on the shared suffix, but
-// removing it would violate the project's unit-suffix convention.
-#[allow(clippy::struct_field_names)]
-pub struct LegErrorStats {
-    /// Maximum position error (km).
-    pub max_km: f64,
-    /// Mean position error (km).
-    pub mean_km: f64,
-    /// RMS position error (km).
-    pub rms_km: f64,
-}
-
-/// Compute max/mean/RMS position errors for a single leg in a single pass.
+/// Format a velocity target vector for the waypoint table.
 ///
-/// Returns `None` if `points` is empty.
+/// - Zero vector → "—"
+/// - Single dominant component (≥ 70% of magnitude) → signed value + direction tag (e.g. "+1.0 I")
+/// - No dominant component → magnitude only (e.g. "1.4")
+///
+/// All values displayed in m/s.
 #[must_use]
-pub fn compute_leg_error_stats(
-    points: &[rpo_core::mission::ValidationPoint],
-) -> Option<LegErrorStats> {
-    // Filter post-COLA points: their "error" reflects intentional trajectory change,
-    // not model fidelity. Consistent with core's compute_report_statistics.
-    let (count, max, sum, sum_sq) = points.iter().filter(|p| !p.post_cola).fold(
-        (0u32, 0.0_f64, 0.0_f64, 0.0_f64),
-        |(n, mx, s, sq), p| {
-            let e = p.position_error_km;
-            (n + 1, mx.max(e), s + e, sq + e * e)
-        },
-    );
-    if count == 0 {
-        return None;
+pub fn fmt_velocity_target(v: &nalgebra::Vector3<f64>) -> String {
+    use super::thresholds::velocity::{DOMINANT_COMPONENT_FRACTION, ZERO_MAGNITUDE_KM_S};
+
+    let mag = v.norm();
+    if mag < ZERO_MAGNITUDE_KM_S {
+        return "\u{2014}".to_string();
     }
-    let n = f64::from(count);
-    Some(LegErrorStats {
-        max_km: max,
-        mean_km: sum / n,
-        rms_km: (sum_sq / n).sqrt(),
-    })
+
+    let abs_components = [v.x.abs(), v.y.abs(), v.z.abs()];
+    let values = [v.x, v.y, v.z];
+
+    for (i, &abs_val) in abs_components.iter().enumerate() {
+        if abs_val / mag >= DOMINANT_COMPONENT_FRACTION {
+            let sign = if values[i] >= 0.0 { "+" } else { "-" };
+            let val_m_s = abs_val * KM_TO_M;
+            return format!("{sign}{val_m_s:.1} {}", RIC_COMPONENT_LABELS[i]);
+        }
+    }
+
+    // No single dominant component — show magnitude only
+    let mag_m_s = mag * KM_TO_M;
+    format!("{mag_m_s:.1}")
 }
 
 // ── COLA helpers ────────────────────────────────────────────────────────
@@ -446,29 +441,77 @@ pub fn determine_verdict(
     if let Some(report) = validation {
         let assessment = assess_safety(&report.numerical_safety, config);
         if assessment.overall_pass {
-            VerdictResult { verdict: Verdict::Feasible, reason: "safety margins satisfied, Nyx full-physics" }
+            VerdictResult {
+                verdict: Verdict::Feasible,
+                reason: Cow::Borrowed("safety margins satisfied, Nyx full-physics"),
+            }
         } else if enrichment_active && assessment.distance_3d_pass {
             VerdictResult {
                 verdict: Verdict::OperationallyFeasible,
-                reason: "3D distance passes (Nyx); e/i below threshold (non-governing for guided ops)",
+                reason: Cow::Borrowed(
+                    "3D distance passes (Nyx); e/i below threshold (non-governing for guided ops)",
+                ),
             }
         } else {
-            VerdictResult { verdict: Verdict::Caution, reason: "safety margins violated, Nyx full-physics" }
+            VerdictResult {
+                verdict: Verdict::Caution,
+                reason: Cow::Borrowed("safety margins violated, Nyx full-physics"),
+            }
         }
     } else if let Some(ref safety) = output.mission.safety {
         let assessment = assess_safety(safety, config);
         if assessment.overall_pass {
-            VerdictResult { verdict: Verdict::Feasible, reason: "analytical safety margins satisfied" }
+            VerdictResult {
+                verdict: Verdict::Feasible,
+                reason: Cow::Borrowed("analytical safety margins satisfied"),
+            }
         } else if enrichment_active && assessment.distance_3d_pass {
             VerdictResult {
                 verdict: Verdict::OperationallyFeasible,
-                reason: "3D distance passes; e/i below threshold (non-governing for guided ops)",
+                reason: Cow::Borrowed(
+                    "3D distance passes; e/i below threshold (non-governing for guided ops)",
+                ),
             }
         } else {
-            VerdictResult { verdict: Verdict::Caution, reason: "analytical safety margins violated" }
+            VerdictResult {
+                verdict: Verdict::Caution,
+                reason: Cow::Borrowed("analytical safety margins violated"),
+            }
         }
     } else {
-        VerdictResult { verdict: Verdict::Feasible, reason: "no safety configured" }
+        VerdictResult {
+            verdict: Verdict::Feasible,
+            reason: Cow::Borrowed("no safety configured"),
+        }
+    }
+}
+
+/// Ratio of last-to-first waypoint p50 miss distance, or `None` if not computable.
+///
+/// Walks `stats.waypoint_miss_km`, filtering `None` entries, and returns
+/// `last.p50 / first.p50` when at least two waypoints have data and the
+/// first median is strictly positive. Returns `None` otherwise — callers
+/// must treat `None` as "no growth signal", not "zero growth".
+///
+/// Used by [`determine_mc_verdict`] (to append growth text to the verdict
+/// reason) and by `insights::mc_insights` (to emit the existing growth
+/// insight). Keeping the walk in one place prevents the two consumers
+/// from drifting.
+pub(super) fn waypoint_miss_growth_ratio(stats: &EnsembleStatistics) -> Option<f64> {
+    let medians: Vec<f64> = stats
+        .waypoint_miss_km
+        .iter()
+        .filter_map(|opt| opt.as_ref().map(|s| s.p50))
+        .collect();
+    if medians.len() < 2 {
+        return None;
+    }
+    let first = medians[0];
+    let last = medians[medians.len() - 1];
+    if first > 0.0 {
+        Some(last / first)
+    } else {
+        None
     }
 }
 
@@ -478,6 +521,10 @@ pub fn determine_verdict(
 /// - **FEASIBLE (100%):** all converged, no collisions, no keep-out violations.
 /// - **FEASIBLE (acceptable):** convergence >= 95%, no collisions.
 /// - **CAUTION:** otherwise.
+///
+/// When per-waypoint position-error growth exceeds
+/// [`insight_thresh::ERROR_GROWTH_RATIO_ALERT`], the ratio is appended to
+/// the verdict reason string — growth alone never flips the verdict tier.
 ///
 /// Returns a [`VerdictResult`] with verdict category and reason.
 #[must_use]
@@ -489,28 +536,180 @@ pub fn determine_mc_verdict(report: &MonteCarloReport) -> VerdictResult {
 
     let ei_degraded = stats.ei_violation_rate > rate_thresh::ZERO_VIOLATIONS;
 
-    if all_converged && no_collisions && no_keepout {
+    let mut result = if all_converged && no_collisions && no_keepout {
         VerdictResult {
             verdict: if ei_degraded { Verdict::OperationallyFeasible } else { Verdict::Feasible },
-            reason: if ei_degraded {
+            reason: Cow::Borrowed(if ei_degraded {
                 "operational safety holds; passive abort safety degraded under dispersion"
             } else {
                 "all safety margins satisfied"
-            },
+            }),
         }
     } else if stats.convergence_rate >= mc_thresh::CONVERGENCE_ALERT && no_collisions {
         VerdictResult {
             verdict: if ei_degraded { Verdict::OperationallyFeasible } else { Verdict::Feasible },
-            reason: if ei_degraded {
+            reason: Cow::Borrowed(if ei_degraded {
                 "convergence acceptable; passive abort safety degraded"
             } else {
                 "convergence acceptable, no collisions"
-            },
+            }),
         }
     } else {
         VerdictResult {
             verdict: Verdict::Caution,
-            reason: "review safety and convergence above",
+            reason: Cow::Borrowed("review safety and convergence above"),
         }
+    };
+
+    if let Some(ratio) = waypoint_miss_growth_ratio(stats) {
+        if ratio > insight_thresh::ERROR_GROWTH_RATIO_ALERT {
+            result.reason = Cow::Owned(format!(
+                "{} (position error growth across waypoints: {ratio:.1}\u{00d7})",
+                result.reason,
+            ));
+        }
+    }
+
+    result
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use nalgebra::Vector3;
+    use rpo_core::mission::{
+        MonteCarloConfig, MonteCarloMode, MonteCarloReport, PercentileStats,
+    };
+
+    fn stats_with_waypoint_medians(medians: &[Option<f64>]) -> EnsembleStatistics {
+        EnsembleStatistics {
+            total_dv_km_s: PercentileStats::default(),
+            min_rc_distance_km: None,
+            min_3d_distance_km: None,
+            min_ei_separation_km: None,
+            waypoint_miss_km: medians
+                .iter()
+                .map(|m| {
+                    m.map(|p50| PercentileStats {
+                        p50,
+                        ..Default::default()
+                    })
+                })
+                .collect(),
+            collision_probability: 0.0,
+            convergence_rate: 1.0,
+            ei_violation_rate: 0.0,
+            keepout_violation_rate: 0.0,
+            dispersion_envelope: vec![],
+        }
+    }
+
+    fn clean_report(stats: EnsembleStatistics) -> MonteCarloReport {
+        MonteCarloReport {
+            config: MonteCarloConfig {
+                num_samples: 100,
+                dispersions: Default::default(),
+                mode: MonteCarloMode::ClosedLoop,
+                seed: Some(42),
+                trajectory_steps: 50,
+            },
+            nominal_dv_km_s: 0.0,
+            nominal_safety: None,
+            statistics: stats,
+            samples: vec![],
+            num_failures: 0,
+            elapsed_wall_s: 0.0,
+            covariance_cross_check: None,
+        }
+    }
+
+    #[test]
+    fn waypoint_miss_growth_ratio_none_for_insufficient_data() {
+        let stats = stats_with_waypoint_medians(&[]);
+        assert!(waypoint_miss_growth_ratio(&stats).is_none());
+        let stats = stats_with_waypoint_medians(&[Some(0.001)]);
+        assert!(waypoint_miss_growth_ratio(&stats).is_none());
+    }
+
+    #[test]
+    fn waypoint_miss_growth_ratio_skips_none_entries() {
+        // First median 1 m, last median 5 m, intermediate None must not break walking.
+        let stats =
+            stats_with_waypoint_medians(&[Some(0.001), None, Some(0.003), Some(0.005)]);
+        let ratio = waypoint_miss_growth_ratio(&stats).expect("ratio");
+        assert!((ratio - 5.0).abs() < 1e-12);
+    }
+
+    #[test]
+    fn waypoint_miss_growth_ratio_none_when_first_is_zero() {
+        let stats = stats_with_waypoint_medians(&[Some(0.0), Some(0.005)]);
+        assert!(waypoint_miss_growth_ratio(&stats).is_none());
+    }
+
+    #[test]
+    fn determine_mc_verdict_appends_growth_when_above_alert() {
+        // First 1m, last 5m → 5.0× > 3.0 threshold.
+        let stats = stats_with_waypoint_medians(&[Some(0.001), Some(0.005)]);
+        let report = clean_report(stats);
+        let verdict = determine_mc_verdict(&report);
+        assert!(verdict.verdict.is_feasible());
+        assert!(
+            verdict.reason.contains("position error growth"),
+            "reason should include growth text, got: {}",
+            verdict.reason
+        );
+        assert!(
+            verdict.reason.contains("5.0"),
+            "reason should include 5.0 ratio, got: {}",
+            verdict.reason
+        );
+    }
+
+    #[test]
+    fn determine_mc_verdict_omits_growth_when_below_alert() {
+        // First 1m, last 2m → 2.0× ≤ 3.0 threshold.
+        let stats = stats_with_waypoint_medians(&[Some(0.001), Some(0.002)]);
+        let report = clean_report(stats);
+        let verdict = determine_mc_verdict(&report);
+        assert!(!verdict.reason.contains("position error growth"));
+    }
+
+    #[test]
+    fn fmt_velocity_target_zero() {
+        assert_eq!(fmt_velocity_target(&Vector3::zeros()), "\u{2014}");
+    }
+
+    #[test]
+    fn fmt_velocity_target_dominant_positive_intrack() {
+        // 100% in-track: 0.001 km/s = 1.0 m/s
+        let v = Vector3::new(0.0, 0.001, 0.0);
+        assert_eq!(fmt_velocity_target(&v), "+1.0 I");
+    }
+
+    #[test]
+    fn fmt_velocity_target_dominant_negative_intrack() {
+        let v = Vector3::new(0.0, -0.001, 0.0);
+        assert_eq!(fmt_velocity_target(&v), "-1.0 I");
+    }
+
+    #[test]
+    fn fmt_velocity_target_no_dominant() {
+        // Three roughly equal components — none reaches 70%
+        let v = Vector3::new(0.001, 0.001, 0.001);
+        let mag_m_s = v.norm() * KM_TO_M;
+        assert_eq!(fmt_velocity_target(&v), format!("{mag_m_s:.1}"));
+    }
+
+    #[test]
+    fn fmt_velocity_target_dominant_crosstrack() {
+        // ~98% cross-track
+        let v = Vector3::new(0.0002, 0.0, 0.001);
+        assert_eq!(fmt_velocity_target(&v), "+1.0 C");
+    }
+
+    #[test]
+    fn fmt_velocity_target_dominant_radial() {
+        let v = Vector3::new(0.002, 0.0001, 0.0);
+        assert_eq!(fmt_velocity_target(&v), "+2.0 R");
     }
 }

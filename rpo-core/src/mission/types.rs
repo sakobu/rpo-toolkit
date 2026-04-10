@@ -337,6 +337,28 @@ pub struct ColaEffectivenessEntry {
     pub threshold_met: Option<bool>,
 }
 
+/// Pre-computed per-leg validation error statistics.
+///
+/// Post-COLA points are excluded: they reflect intentional trajectory change,
+/// not model fidelity. One entry per leg, aligned with `ValidationReport::leg_points`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "wasm", derive(tsify_next::Tsify))]
+#[cfg_attr(feature = "wasm", tsify(into_wasm_abi, from_wasm_abi))]
+pub struct LegValidationSummary {
+    /// Maximum position error for this leg (km), post-COLA points excluded.
+    pub max_position_error_km: f64,
+    /// Mean position error for this leg (km), post-COLA points excluded.
+    pub mean_position_error_km: f64,
+    /// RMS position error for this leg (km), post-COLA points excluded.
+    pub rms_position_error_km: f64,
+    /// Maximum velocity error for this leg (km/s), post-COLA points excluded.
+    pub max_velocity_error_km_s: f64,
+    /// Number of points used in statistics (excluding post-COLA).
+    pub num_points: u32,
+    /// Number of post-COLA points excluded from statistics.
+    pub num_post_cola_excluded: u32,
+}
+
 /// Aggregate validation results for a mission.
 ///
 /// Defined in rpo-core for WASM serialization. Values are populated by
@@ -359,6 +381,10 @@ pub struct ValidationReport {
     pub analytical_safety: Option<SafetyMetrics>,
     /// Safety metrics recomputed from nyx trajectory
     pub numerical_safety: SafetyMetrics,
+    /// Safety metrics from nyx trajectory without COLA impulses (pre-COLA baseline).
+    /// `None` when no COLA burns were injected during validation.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub pre_cola_numerical_safety: Option<SafetyMetrics>,
     /// Chief spacecraft configuration used
     pub chief_config: SpacecraftConfig,
     /// Deputy spacecraft configuration used
@@ -371,6 +397,10 @@ pub struct ValidationReport {
     /// Empty when no COLA burns were injected.
     #[serde(skip_serializing_if = "Vec::is_empty", default)]
     pub cola_effectiveness: Vec<ColaEffectivenessEntry>,
+    /// Pre-computed per-leg error statistics (post-COLA points excluded).
+    /// One entry per leg, aligned with `leg_points`.
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    pub leg_summaries: Vec<LegValidationSummary>,
 }
 
 impl ValidationReport {

@@ -35,12 +35,18 @@ pub fn mc_to_markdown(
     if output.safety.cola.as_ref().is_some_and(|c| !c.is_empty()) {
         let _ = writeln!(
             out,
-            "> **Note:** MC samples use the baseline (pre-COLA) trajectory. \
-             COLA burns are not injected into Monte Carlo dispersions.\n",
+            "> **Note:** MC samples propagate the baseline (pre-COLA) trajectory. \
+             COLA burns are not injected into Monte Carlo dispersions, so these safety \
+             statistics reflect the mission *before* avoidance maneuvers are applied. \
+             Because COLA can reduce the minimum 3D distance in some geometries, treat \
+             MC safety margins as **optimistic** when COLA is active. Run `validate` for \
+             a full-physics pre-COLA vs post-COLA effectiveness comparison on the nominal \
+             trajectory.\n",
         );
     }
 
     write_mc_baseline_section(&mut out, baseline, output, &sc);
+    super::mission::write_maneuver_schedule(&mut out, output);
     if derived_drag.is_some() {
         let _ = writeln!(
             out,
@@ -65,7 +71,13 @@ pub fn mc_to_markdown(
         );
     }
 
-    let insight_lines = insights::mc_insights(report, &sc);
+    let mut insight_lines = insights::mc_insights(report, &sc);
+    if let (Some(cola), Some(cola_config)) = (&output.safety.cola, &input.cola) {
+        insight_lines.extend(insights::cola_analytical_miss_insights(
+            cola,
+            cola_config.target_distance_km,
+        ));
+    }
     write_insights(&mut out, &insight_lines);
 
     write_mc_diagnostics(&mut out, report, derived_drag);

@@ -22,7 +22,7 @@ use rpo_core::mission::types::{
 };
 use super::eclipse::{EclipseSample, build_eclipse_validation};
 use super::errors::ValidationError;
-use super::statistics::{find_closest_analytical_ric, compute_report_statistics};
+use super::statistics::{compute_leg_summaries, find_closest_analytical_ric, compute_report_statistics};
 
 /// Configuration for nyx full-physics validation.
 ///
@@ -498,6 +498,34 @@ fn compute_post_cola_min_distance(
         .reduce(f64::min)
 }
 
+/// Record COLA effectiveness for a leg that had a COLA burn injected.
+///
+/// Computes the post-COLA minimum distance from propagation results and pushes
+/// a [`ColaEffectivenessEntry`] comparing against the analytical prediction.
+///
+/// # Invariants
+/// - `out` must contain results from a COLA-split propagation (two segments)
+/// - `cola.analytical_maneuvers` may be empty (produces `None` for the analytical field)
+fn collect_cola_effectiveness(
+    out: &ColaLegOutput,
+    leg_idx: usize,
+    cola: &ColaValidationInput,
+    effectiveness: &mut Vec<ColaEffectivenessEntry>,
+) {
+    if let Some(nyx_min) = compute_post_cola_min_distance(
+        &out.chief_results, &out.deputy_results, out.cola_split_index,
+    ) {
+        let analytical = cola.analytical_maneuvers.iter().find(|m| m.leg_index == leg_idx);
+        effectiveness.push(ColaEffectivenessEntry {
+            leg_index: leg_idx,
+            analytical_post_cola_poca_km: analytical.map(|m| m.post_avoidance_poca_km),
+            nyx_post_cola_min_distance_km: nyx_min,
+            target_distance_km: cola.target_distance_km,
+            threshold_met: cola.target_distance_km.map(|t| nyx_min >= t),
+        });
+    }
+}
+
 /// Look up the ANISE Earth frame for eclipse queries, if eclipse data is present.
 fn lookup_earth_frame(
     almanac: &Arc<Almanac>,
@@ -520,6 +548,63 @@ fn lookup_earth_frame(
 /// `analyze_trajectory_safety` processes a flat trajectory and always leaves
 /// leg indices at 0. This function derives the correct leg index from elapsed
 /// time and the per-leg durations.
+/// Propagate the full mission without COLA impulses to compute baseline safety.
+///
+/// Runs a complete mission loop using [`propagate_leg_parallel`] for every leg,
+/// collecting only safety pairs (no comparison points, eclipse, or COLA data).
+/// This must be a full loop rather than per-leg branching because downstream
+/// legs' initial states depend on whether COLA was applied in earlier legs.
+///
+/// # Invariants
+/// - `mission.legs` must be non-empty
+/// - `chief_initial` and `deputy_initial` must have valid epochs
+/// - `ctx` must reference a valid almanac and spacecraft configurations
+fn compute_pre_cola_safety(
+    mission: &WaypointMission,
+    chief_initial: &StateVector,
+    deputy_initial: &StateVector,
+    ctx: &LegPropagationCtx<'_>,
+) -> Result<rpo_core::mission::types::SafetyMetrics, ValidationError> {
+    let estimated_samples = ctx.samples_per_leg as usize // u32 -> usize: safe (usize >= 32 bits)
+        * mission.legs.len();
+    let mut chief = chief_initial.clone();
+    let mut deputy = deputy_initial.clone();
+    let mut cumulative = 0.0_f64;
+    let mut safety_pairs: Vec<ChiefDeputySnapshot> =
+        Vec::with_capacity(estimated_samples);
+
+    for leg in &mission.legs {
+        let (chief_results, deputy_results) =
+            propagate_leg_parallel(&chief, &deputy, leg, ctx)?;
+
+        // Collect safety pairs inline (skip t=0, matching
+        // build_leg_comparison_points).
+        for (idx, (c, d)) in
+            chief_results.iter().zip(deputy_results.iter()).enumerate()
+        {
+            if idx > 0 {
+                safety_pairs.push(ChiefDeputySnapshot {
+                    elapsed_s: cumulative + c.elapsed_s,
+                    chief: c.state.clone(),
+                    deputy: d.state.clone(),
+                });
+            }
+        }
+
+        (chief, deputy) = advance_leg_states(
+            &chief_results,
+            &deputy_results,
+            &leg.arrival_maneuver.dv_ric_km_s,
+        )?;
+        cumulative += leg.tof_s;
+    }
+
+    let states = build_nyx_safety_states(&safety_pairs)?;
+    let mut safety = analyze_trajectory_safety(&states)?;
+    assign_safety_leg_indices(&mut safety, &mission.legs);
+    Ok(safety)
+}
+
 fn assign_safety_leg_indices(
     safety: &mut rpo_core::mission::types::SafetyMetrics,
     legs: &[ManeuverLeg],
@@ -590,7 +675,7 @@ pub fn validate_mission_nyx(
     let mut leg_points = Vec::with_capacity(mission.legs.len());
     let mut cola_effectiveness: Vec<ColaEffectivenessEntry> =
         Vec::with_capacity(cola.burns.len());
-    let estimated_total_samples = config.samples_per_leg as usize // u32 -> usize: always safe
+    let estimated_total_samples = config.samples_per_leg as usize // u32 -> usize: safe (usize >= 32 bits)
         * mission.legs.len();
     let mut safety_pairs: Vec<ChiefDeputySnapshot> =
         Vec::with_capacity(estimated_total_samples);
@@ -610,6 +695,16 @@ pub fn validate_mission_nyx(
         almanac,
     };
 
+    // Pre-COLA pass: when COLA burns exist, propagate without COLA to
+    // establish a baseline numerical safety for apples-to-apples comparison.
+    let pre_cola_numerical_safety = if cola.burns.is_empty() {
+        None
+    } else {
+        Some(compute_pre_cola_safety(
+            mission, chief_initial, deputy_initial, &ctx,
+        )?)
+    };
+
     for (leg_idx, leg) in mission.legs.iter().enumerate() {
         let primary_cola = cola.burns.iter().find(|c| c.leg_index == leg_idx);
 
@@ -617,28 +712,9 @@ pub fn validate_mission_nyx(
             let out = propagate_leg_with_cola(
                 &chief_state, &deputy_state, leg, burn, &ctx,
             )?;
-            // Extract post-COLA minimum distance for effectiveness comparison.
-            if let Some(nyx_min) = compute_post_cola_min_distance(
-                &out.chief_results,
-                &out.deputy_results,
-                out.cola_split_index,
-            ) {
-                let analytical = cola
-                    .analytical_maneuvers
-                    .iter()
-                    .find(|m| m.leg_index == leg_idx);
-                cola_effectiveness.push(ColaEffectivenessEntry {
-                    leg_index: leg_idx,
-                    analytical_post_cola_poca_km: analytical
-                        .map(|m| m.post_avoidance_poca_km),
-                    nyx_post_cola_min_distance_km: nyx_min,
-                    target_distance_km: cola
-                        .target_distance_km,
-                    threshold_met: cola
-                        .target_distance_km
-                        .map(|t| nyx_min >= t),
-                });
-            }
+            collect_cola_effectiveness(
+                &out, leg_idx, cola, &mut cola_effectiveness,
+            );
             (out.chief_results, out.deputy_results, Some(out.cola_split_index))
         } else {
             let (c, d) = propagate_leg_parallel(
@@ -676,8 +752,9 @@ pub fn validate_mission_nyx(
         build_eclipse_validation(eclipse_data, &eclipse_samples)
     });
 
-    // Compute statistics
-    let stats = compute_report_statistics(&leg_points);
+    // Compute per-leg summaries (single pass), then derive aggregate stats
+    let leg_summaries = compute_leg_summaries(&leg_points);
+    let stats = compute_report_statistics(&leg_summaries);
 
     Ok(ValidationReport {
         leg_points,
@@ -687,10 +764,12 @@ pub fn validate_mission_nyx(
         max_velocity_error_km_s: stats.max_velocity_error_km_s,
         analytical_safety: mission.safety,
         numerical_safety,
+        pre_cola_numerical_safety,
         chief_config: config.chief_config,
         deputy_config: config.deputy_config,
         eclipse_validation,
         cola_effectiveness,
+        leg_summaries,
     })
 }
 

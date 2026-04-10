@@ -8,15 +8,17 @@ use rpo_core::pipeline::{PipelineInput, PipelineOutput};
 use rpo_core::propagation::{DragConfig, PropagationModel};
 
 use crate::output::common::{
-    compute_leg_error_stats, determine_verdict, fmt_bounded_motion_residual, fmt_duration, fmt_m,
-    fmt_m_s, fmt_roe_component, KM_TO_M, SafetyTier, VerdictResult,
+    determine_verdict, fmt_bounded_motion_residual, fmt_duration, fmt_m,
+    fmt_m_s, fmt_roe_component, fmt_velocity_target, KM_TO_M, SafetyTier, VerdictResult,
 };
 use crate::output::formation_fmt::write_formation_design_md;
 use crate::output::insights;
 
 use super::helpers::{
     propagator_label, status_emoji, write_cola_callout, write_drag_table, write_insights,
+    ReportContext,
 };
+use crate::output::thresholds::safety as safety_thresh;
 
 /// How to render the overall passive safety result.
 ///
@@ -70,6 +72,8 @@ pub fn mission_to_markdown(
 
     write_waypoint_section(&mut out, output, input, propagator, auto_drag);
 
+    write_maneuver_schedule(&mut out, output);
+
     if let Some(ref safety) = output.mission.safety {
         let assessment = assess_safety(safety, &sc);
         let outcome = passive_safety_outcome(&assessment, enrichment_active, &vr);
@@ -96,7 +100,7 @@ pub fn mission_to_markdown(
         );
     }
 
-    write_cola_sections(&mut out, output);
+    write_cola_sections(&mut out, output, input, ReportContext::Mission);
 
     write_eclipse_section(&mut out, output);
 
@@ -143,6 +147,8 @@ pub fn validation_to_markdown(
 
     write_waypoint_section(&mut out, output, input, ctx.propagator, ctx.auto_drag);
 
+    write_maneuver_schedule(&mut out, output);
+
     if let Some(ref safety) = output.mission.safety {
         let assessment = assess_safety(safety, &sc);
         let outcome = passive_safety_outcome(&assessment, enrichment_active, &vr);
@@ -169,7 +175,7 @@ pub fn validation_to_markdown(
         );
     }
 
-    write_cola_sections(&mut out, output);
+    write_cola_sections(&mut out, output, input, ReportContext::Validate);
 
     write_eclipse_section(&mut out, output);
     write_validation_section(
@@ -182,13 +188,160 @@ pub fn validation_to_markdown(
     );
 
     // Insights
-    let insight_lines = insights::validation_insights(report, &sc);
+    let mut insight_lines = insights::validation_insights(report, &sc);
+    if let (Some(cola), Some(cola_config)) = (&output.safety.cola, &input.cola) {
+        insight_lines.extend(insights::cola_analytical_miss_insights(
+            cola,
+            cola_config.target_distance_km,
+        ));
+    }
     write_insights(&mut out, &insight_lines);
 
     out
 }
 
 // ── Private helpers ──────────────────────────────────────────────
+
+// ── Maneuver schedule ───────────────────────────────────────────
+
+/// Maneuver type for the consolidated schedule table.
+enum ScheduleEntryKind {
+    /// Lambert transfer departure impulse (ECI frame).
+    LambertDeparture,
+    /// Lambert transfer arrival impulse (ECI frame).
+    LambertArrival,
+    /// Waypoint-leg departure impulse (RIC frame).
+    WaypointDeparture { leg: usize },
+    /// Waypoint-leg arrival impulse (RIC frame).
+    WaypointArrival { leg: usize },
+    /// Collision avoidance maneuver (RIC frame).
+    Cola { leg: usize },
+}
+
+impl std::fmt::Display for ScheduleEntryKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::LambertDeparture => write!(f, "Lambert dep"),
+            Self::LambertArrival => write!(f, "Lambert arr"),
+            Self::WaypointDeparture { leg } => write!(f, "WP{} dep", leg + 1),
+            Self::WaypointArrival { leg } => write!(f, "WP{} arr", leg + 1),
+            Self::Cola { leg } => write!(f, "COLA (L{})", leg + 1),
+        }
+    }
+}
+
+/// A single row in the consolidated maneuver schedule table.
+struct ScheduleEntry {
+    /// Burn epoch (UTC).
+    epoch: hifitime::Epoch,
+    /// Maneuver classification.
+    kind: ScheduleEntryKind,
+    /// RIC Dv components (`None` for Lambert burns which are ECI-only).
+    dv_ric_km_s: Option<nalgebra::Vector3<f64>>,
+    /// Total Dv magnitude (km/s).
+    dv_mag_km_s: f64,
+}
+
+/// Write a consolidated chronological maneuver schedule table.
+///
+/// Collects Lambert, waypoint, and COLA burns from the pipeline output,
+/// sorts by epoch, and renders a single table.
+pub(super) fn write_maneuver_schedule(out: &mut String, output: &PipelineOutput) {
+    let cola_count = output.safety.cola.as_ref().map_or(0, Vec::len);
+    let capacity = output.mission.legs.len() * 2
+        + if output.transfer.is_some() { 2 } else { 0 }
+        + cola_count;
+    let mut entries: Vec<ScheduleEntry> = Vec::with_capacity(capacity);
+
+    // Lambert burns (ECI Dv — no RIC decomposition)
+    if let Some(ref transfer) = output.transfer {
+        entries.push(ScheduleEntry {
+            epoch: transfer.departure_state.epoch,
+            kind: ScheduleEntryKind::LambertDeparture,
+            dv_ric_km_s: None,
+            dv_mag_km_s: transfer.departure_dv_eci_km_s.norm(),
+        });
+        entries.push(ScheduleEntry {
+            epoch: transfer.arrival_state.epoch,
+            kind: ScheduleEntryKind::LambertArrival,
+            dv_ric_km_s: None,
+            dv_mag_km_s: transfer.arrival_dv_eci_km_s.norm(),
+        });
+    }
+
+    // Waypoint departure / arrival burns (RIC Dv)
+    for (i, leg) in output.mission.legs.iter().enumerate() {
+        entries.push(ScheduleEntry {
+            epoch: leg.departure_maneuver.epoch,
+            kind: ScheduleEntryKind::WaypointDeparture { leg: i },
+            dv_ric_km_s: Some(leg.departure_maneuver.dv_ric_km_s),
+            dv_mag_km_s: leg.departure_maneuver.dv_ric_km_s.norm(),
+        });
+        entries.push(ScheduleEntry {
+            epoch: leg.arrival_maneuver.epoch,
+            kind: ScheduleEntryKind::WaypointArrival { leg: i },
+            dv_ric_km_s: Some(leg.arrival_maneuver.dv_ric_km_s),
+            dv_mag_km_s: leg.arrival_maneuver.dv_ric_km_s.norm(),
+        });
+    }
+
+    // COLA burns (RIC Dv)
+    if let Some(ref cola) = output.safety.cola {
+        for m in cola {
+            entries.push(ScheduleEntry {
+                epoch: m.epoch,
+                kind: ScheduleEntryKind::Cola { leg: m.leg_index },
+                dv_ric_km_s: Some(m.dv_ric_km_s),
+                dv_mag_km_s: m.dv_ric_km_s.norm(),
+            });
+        }
+    }
+
+    if entries.is_empty() {
+        return;
+    }
+
+    entries.sort_by_key(|e| e.epoch);
+
+    let _ = writeln!(out, "## Maneuver Schedule\n");
+    let _ = writeln!(
+        out,
+        "| # | Epoch (UTC) | Type | \u{0394}vR (m/s) | \u{0394}vI (m/s) | \u{0394}vC (m/s) | \\|\u{0394}v\\| (m/s) |",
+    );
+    let _ = writeln!(
+        out,
+        "|---|-------------|------|-----------|-----------|-----------|------------|",
+    );
+
+    for (i, entry) in entries.iter().enumerate() {
+        match entry.dv_ric_km_s {
+            Some(v) => {
+                let _ = writeln!(
+                    out,
+                    "| {} | {} | {} | {:.2} | {:.2} | {:.2} | {:.1} |",
+                    i + 1,
+                    entry.epoch,
+                    entry.kind,
+                    v.x * KM_TO_M,
+                    v.y * KM_TO_M,
+                    v.z * KM_TO_M,
+                    entry.dv_mag_km_s * KM_TO_M,
+                );
+            }
+            None => {
+                let _ = writeln!(
+                    out,
+                    "| {} | {} | {} | \u{2014} | \u{2014} | \u{2014} | {:.1} |",
+                    i + 1,
+                    entry.epoch,
+                    entry.kind,
+                    entry.dv_mag_km_s * KM_TO_M,
+                );
+            }
+        }
+    }
+    let _ = writeln!(out);
+}
 
 fn write_summary_block_mission(
     out: &mut String,
@@ -442,15 +595,16 @@ fn write_waypoint_section(
 
     let _ = writeln!(
         out,
-        "| Leg | TOF | \u{0394}v1 (m/s) | \u{0394}v2 (m/s) | Total (m/s) | Label |",
+        "| Leg | TOF | \u{0394}v1 (m/s) | \u{0394}v2 (m/s) | Total (m/s) | v_target | Label |",
     );
-    let _ = writeln!(out, "| --- | --- | --- | --- | --- | --- |");
+    let _ = writeln!(out, "| --- | --- | --- | --- | --- | --- | --- |");
 
     let mut total_dv = 0.0;
     for (i, leg) in output.mission.legs.iter().enumerate() {
         let dv1 = leg.departure_maneuver.dv_ric_km_s.norm();
         let dv2 = leg.arrival_maneuver.dv_ric_km_s.norm();
         total_dv += leg.total_dv_km_s;
+        let v_target = fmt_velocity_target(&leg.target_velocity_ric_km_s);
         let label = input
             .waypoints
             .get(i)
@@ -458,18 +612,19 @@ fn write_waypoint_section(
             .unwrap_or("-");
         let _ = writeln!(
             out,
-            "| {} | {} | {:.2} | {:.2} | {:.2} | {} |",
+            "| {} | {} | {:.2} | {:.2} | {:.2} | {} | {} |",
             i + 1,
             fmt_duration(leg.tof_s),
             dv1 * KM_TO_M,
             dv2 * KM_TO_M,
             leg.total_dv_km_s * KM_TO_M,
+            v_target,
             label,
         );
     }
     let _ = writeln!(
         out,
-        "| **Total** | **{}** | | | **{:.2}** | |",
+        "| **Total** | **{}** | | | **{:.2}** | | |",
         fmt_duration(output.mission.total_duration_s),
         total_dv * KM_TO_M,
     );
@@ -591,7 +746,7 @@ fn write_passive_safety_md(
         (safety.passive.min_ei_separation_km - config.min_ei_separation_km) * KM_TO_M;
     let _ = writeln!(out, "| Margin | {margin_ei:+.1} m |");
     // Phase angle is meaningless when e/i separation is effectively zero
-    if safety.passive.min_ei_separation_km * KM_TO_M >= 0.05 {
+    if safety.passive.min_ei_separation_km * KM_TO_M >= safety_thresh::MIN_EI_SEPARATION_FOR_PHASE_DISPLAY_M {
         let _ = writeln!(
             out,
             "| e/i phase angle | {:.2}\u{00b0} |",
@@ -738,9 +893,15 @@ fn write_poca_section(
     }
 }
 
-fn write_cola_sections(out: &mut String, output: &PipelineOutput) {
+fn write_cola_sections(
+    out: &mut String,
+    output: &PipelineOutput,
+    input: &PipelineInput,
+    context: ReportContext,
+) {
     if let Some(ref cola) = output.safety.cola {
-        write_cola_section(out, cola);
+        let target_distance_km = input.cola.as_ref().map(|c| c.target_distance_km);
+        write_cola_section(out, cola, target_distance_km, context);
     }
     if let Some(ref secondary) = output.safety.secondary_conjunctions {
         write_secondary_conjunction_section(out, secondary);
@@ -750,7 +911,12 @@ fn write_cola_sections(out: &mut String, output: &PipelineOutput) {
     }
 }
 
-fn write_cola_section(out: &mut String, maneuvers: &[rpo_core::mission::AvoidanceManeuver]) {
+fn write_cola_section(
+    out: &mut String,
+    maneuvers: &[rpo_core::mission::AvoidanceManeuver],
+    target_distance_km: Option<f64>,
+    context: ReportContext,
+) {
     let _ = writeln!(out, "## Collision Avoidance (Post-Baseline Adjustment)\n");
     let _ = writeln!(
         out,
@@ -768,26 +934,61 @@ fn write_cola_section(out: &mut String, maneuvers: &[rpo_core::mission::Avoidanc
         out,
         "|-----|-----------|---------|---------------|------------|------|",
     );
+    let mut offending_leg_ids: Vec<usize> = Vec::new();
     for m in maneuvers {
         let correction = match m.correction_type {
             rpo_core::mission::CorrectionType::InPlane => "in-plane",
             rpo_core::mission::CorrectionType::CrossTrack => "cross-track",
             rpo_core::mission::CorrectionType::Combined => "combined",
         };
+        let poca_cell = match target_distance_km {
+            Some(target_km) if m.post_avoidance_poca_km < target_km => {
+                offending_leg_ids.push(m.leg_index + 1);
+                format!(
+                    "{:.1} m \u{26a0}\u{fe0f} (target: {:.0} m)",
+                    m.post_avoidance_poca_km * KM_TO_M,
+                    target_km * KM_TO_M,
+                )
+            }
+            _ => format!("{:.1} m", m.post_avoidance_poca_km * KM_TO_M),
+        };
         let _ = writeln!(
             out,
-            "| {} | [{:.6}, {:.6}, {:.6}] | {:.4} | {:.1} m | {:.2} | {} |",
+            "| {} | [{:.6}, {:.6}, {:.6}] | {:.4} | {} | {:.2} | {} |",
             m.leg_index + 1,
             m.dv_ric_km_s.x,
             m.dv_ric_km_s.y,
             m.dv_ric_km_s.z,
             m.maneuver_location_rad,
-            m.post_avoidance_poca_km * KM_TO_M,
+            poca_cell,
             m.fuel_cost_km_s * KM_TO_M,
             correction,
         );
     }
     let _ = writeln!(out);
+    if !offending_leg_ids.is_empty() {
+        let leg_list = offending_leg_ids
+            .iter()
+            .map(usize::to_string)
+            .collect::<Vec<_>>()
+            .join(", ");
+        let _ = writeln!(
+            out,
+            "> **Analytical COLA solver did not achieve the target separation on \
+             leg(s) {leg_list}.** The full-physics gap will compound this deficit.\n",
+        );
+    }
+    let note = match context {
+        ReportContext::Mission => {
+            "> Post-COLA POCA distances are analytical (J2 STM). Full-physics propagation \
+             typically reduces these margins \u{2014} run `validate` to confirm effectiveness.\n"
+        }
+        ReportContext::Validate => {
+            "> Post-COLA POCA distances are analytical (J2 STM). See Safety Comparison below \
+             for full-physics effectiveness.\n"
+        }
+    };
+    let _ = writeln!(out, "{note}");
 }
 
 fn write_secondary_conjunction_section(
@@ -913,20 +1114,20 @@ fn write_validation_section(
     );
     let _ = writeln!(out);
 
-    // Per-leg error
-    if !report.leg_points.is_empty() {
+    // Per-leg error from pre-computed summaries
+    if !report.leg_summaries.is_empty() {
         let _ = writeln!(out, "### Per-Leg Position Error\n");
         let _ = writeln!(out, "| Leg | Max (m) | Mean (m) | RMS (m) |");
         let _ = writeln!(out, "| --- | --- | --- | --- |");
-        for (i, points) in report.leg_points.iter().enumerate() {
-            if let Some(stats) = compute_leg_error_stats(points) {
+        for (i, summary) in report.leg_summaries.iter().enumerate() {
+            if summary.num_points > 0 {
                 let _ = writeln!(
                     out,
                     "| {} | {:.1} | {:.1} | {:.1} |",
                     i + 1,
-                    stats.max_km * KM_TO_M,
-                    stats.mean_km * KM_TO_M,
-                    stats.rms_km * KM_TO_M,
+                    summary.max_position_error_km * KM_TO_M,
+                    summary.mean_position_error_km * KM_TO_M,
+                    summary.rms_position_error_km * KM_TO_M,
                 );
             }
         }
@@ -1056,88 +1257,164 @@ fn write_safety_comparison(
     report: &ValidationReport,
     config: &rpo_core::mission::MissionConfig,
 ) {
-    if report.cola_validated() {
-        let _ = writeln!(
-            out,
-            "### Safety Comparison (Analytical vs Numerical + COLA)\n",
-        );
-        let _ = writeln!(
-            out,
-            "> Numerical safety reflects the post-COLA trajectory.\n",
-        );
-    } else {
-        let _ = writeln!(out, "### Safety Comparison (Analytical vs Numerical)\n");
-    }
-    let _ = writeln!(out, "| Metric | Analytical | Numerical | Threshold |");
-    let _ = writeln!(out, "| --- | --- | --- | --- |");
-
     let sc = config.safety.unwrap_or_default();
 
     let ana_rc = report
         .analytical_safety
         .as_ref()
         .map_or(0.0, |s| s.operational.min_rc_separation_km);
-    let num_rc = report.numerical_safety.operational.min_rc_separation_km;
-    let _ = writeln!(
-        out,
-        "| Min R/C-plane distance (m) | {:.1} | {:.1} | \u{2014} |",
-        ana_rc * KM_TO_M,
-        num_rc * KM_TO_M,
-    );
-
     let ana_3d = report
         .analytical_safety
         .as_ref()
         .map_or(0.0, |s| s.operational.min_distance_3d_km);
-    let num_3d = report.numerical_safety.operational.min_distance_3d_km;
-    let noncons_3d = ana_3d > 0.0
-        && num_3d < ana_3d * crate::output::thresholds::fidelity::NONCONSERVATIVE_RATIO;
-    let _ = writeln!(
-        out,
-        "| 3D distance (m) | {:.1} | {:.1} | {:.0}{} |",
-        ana_3d * KM_TO_M,
-        num_3d * KM_TO_M,
-        sc.min_distance_3d_km * KM_TO_M,
-        if noncons_3d { " \\*" } else { "" },
-    );
-
     let ana_ei = report
         .analytical_safety
         .as_ref()
         .map_or(0.0, |s| s.passive.min_ei_separation_km);
+
+    let num_rc = report.numerical_safety.operational.min_rc_separation_km;
+    let num_3d = report.numerical_safety.operational.min_distance_3d_km;
     let num_ei = report.numerical_safety.passive.min_ei_separation_km;
+
+    let noncons_3d = ana_3d > 0.0
+        && num_3d < ana_3d * crate::output::thresholds::fidelity::NONCONSERVATIVE_RATIO;
     let noncons_ei = ana_ei > 0.0
         && num_ei < ana_ei * crate::output::thresholds::fidelity::NONCONSERVATIVE_RATIO;
-    let _ = writeln!(
-        out,
-        "| e/i separation (m) | {:.1} | {:.1} | {:.0}{} |",
-        ana_ei * KM_TO_M,
-        num_ei * KM_TO_M,
-        sc.min_ei_separation_km * KM_TO_M,
-        if noncons_ei { " \\*" } else { "" },
-    );
-    let _ = writeln!(out);
 
-    if noncons_3d || noncons_ei {
+    if let Some(pre_cola) = &report.pre_cola_numerical_safety {
+        // ── 3-column layout (COLA active) ──
         let _ = writeln!(
             out,
-            "\\* Numerical margin >10% smaller than analytical",
+            "### Safety Comparison (Analytical vs Numerical + COLA)\n",
+        );
+        let _ = writeln!(
+            out,
+            "> Numerical columns: pre-COLA is the baseline Nyx trajectory without COLA impulses;\n\
+             > post-COLA reflects the trajectory with COLA burns injected.\n",
+        );
+        let _ = writeln!(
+            out,
+            "| Metric | Analytical | Numerical (pre-COLA) | Numerical (post-COLA) | Threshold |",
+        );
+        let _ = writeln!(out, "| --- | --- | --- | --- | --- |");
+
+        let pre_rc = pre_cola.operational.min_rc_separation_km;
+        let pre_3d = pre_cola.operational.min_distance_3d_km;
+        let pre_ei = pre_cola.passive.min_ei_separation_km;
+
+        let _ = writeln!(
+            out,
+            "| Min R/C-plane distance (m) | {:.1} | {:.1} | {:.1} | \u{2014} |",
+            ana_rc * KM_TO_M, pre_rc * KM_TO_M, num_rc * KM_TO_M,
+        );
+        let _ = writeln!(
+            out,
+            "| 3D distance (m) | {:.1} | {:.1} | {:.1} | {:.0}{} |",
+            ana_3d * KM_TO_M, pre_3d * KM_TO_M, num_3d * KM_TO_M,
+            sc.min_distance_3d_km * KM_TO_M, if noncons_3d { " \\*" } else { "" },
+        );
+        let _ = writeln!(
+            out,
+            "| e/i separation (m) | {:.1} | {:.1} | {:.1} | {:.0}{} |",
+            ana_ei * KM_TO_M, pre_ei * KM_TO_M, num_ei * KM_TO_M,
+            sc.min_ei_separation_km * KM_TO_M, if noncons_ei { " \\*" } else { "" },
+        );
+        let _ = writeln!(out);
+        write_safety_annotations(out, &SafetyAnnotationCtx {
+            noncons_3d,
+            noncons_ei,
+            ana_3d_km: ana_3d,
+            num_3d_km: num_3d,
+            config: &sc,
+            mode: SafetyAnnotationMode::PostCola,
+        });
+    } else {
+        // ── 2-column layout (no COLA) ──
+        let _ = writeln!(out, "### Safety Comparison (Analytical vs Numerical)\n");
+        let _ = writeln!(out, "| Metric | Analytical | Numerical | Threshold |");
+        let _ = writeln!(out, "| --- | --- | --- | --- |");
+
+        let _ = writeln!(
+            out,
+            "| Min R/C-plane distance (m) | {:.1} | {:.1} | \u{2014} |",
+            ana_rc * KM_TO_M, num_rc * KM_TO_M,
+        );
+        let _ = writeln!(
+            out,
+            "| 3D distance (m) | {:.1} | {:.1} | {:.0}{} |",
+            ana_3d * KM_TO_M, num_3d * KM_TO_M,
+            sc.min_distance_3d_km * KM_TO_M, if noncons_3d { " \\*" } else { "" },
+        );
+        let _ = writeln!(
+            out,
+            "| e/i separation (m) | {:.1} | {:.1} | {:.0}{} |",
+            ana_ei * KM_TO_M, num_ei * KM_TO_M,
+            sc.min_ei_separation_km * KM_TO_M, if noncons_ei { " \\*" } else { "" },
+        );
+        let _ = writeln!(out);
+        write_safety_annotations(out, &SafetyAnnotationCtx {
+            noncons_3d,
+            noncons_ei,
+            ana_3d_km: ana_3d,
+            num_3d_km: num_3d,
+            config: &sc,
+            mode: SafetyAnnotationMode::Standard,
+        });
+    }
+}
+
+/// Whether safety annotations reference a COLA trajectory.
+enum SafetyAnnotationMode {
+    /// No COLA burns — Nyx label is just "Nyx".
+    Standard,
+    /// COLA burns injected — Nyx label includes "post-COLA".
+    PostCola,
+}
+
+/// Context for writing non-conservative footnotes and 3D overestimation annotations.
+struct SafetyAnnotationCtx<'a> {
+    noncons_3d: bool,
+    noncons_ei: bool,
+    ana_3d_km: f64,
+    num_3d_km: f64,
+    config: &'a rpo_core::mission::SafetyConfig,
+    mode: SafetyAnnotationMode,
+}
+
+/// Write non-conservative footnotes and 3D overestimation annotation.
+fn write_safety_annotations(out: &mut String, ctx: &SafetyAnnotationCtx<'_>) {
+    if ctx.noncons_3d || ctx.noncons_ei {
+        let _ = writeln!(
+            out,
+            "\\* Numerical margin >{:.0}% smaller than analytical",
+            crate::output::thresholds::insight::SIGNIFICANT_DELTA_PCT,
         );
     }
-
-    // Prominent annotation when 3D distance is non-conservative
-    if noncons_3d && num_3d > 0.0 {
-        let delta_pct = (ana_3d - num_3d) / num_3d * 100.0;
-        let margin_ratio = if sc.min_distance_3d_km > 0.0 {
-            num_3d / sc.min_distance_3d_km
+    if ctx.noncons_3d && ctx.num_3d_km > 0.0 {
+        let delta_pct = (ctx.ana_3d_km - ctx.num_3d_km) / ctx.num_3d_km * 100.0;
+        let margin_ratio = if ctx.config.min_distance_3d_km > 0.0 {
+            ctx.num_3d_km / ctx.config.min_distance_3d_km
         } else {
             f64::INFINITY
         };
-        let _ = writeln!(
-            out,
-            "\n> Analytical overestimated min 3D distance by {delta_pct:.0}% relative to Nyx. \
-             Numerical margin ({margin_ratio:.1}\u{00d7} threshold) governs.\n",
-        );
+        match ctx.mode {
+            SafetyAnnotationMode::PostCola => {
+                let _ = writeln!(
+                    out,
+                    "\n> Analytical overestimated min 3D distance by {delta_pct:.0}% \
+                     relative to Nyx post-COLA trajectory ({:.0}m \u{2192} {:.0}m). \
+                     Numerical margin ({margin_ratio:.1}\u{00d7} threshold) governs.\n",
+                    ctx.ana_3d_km * KM_TO_M, ctx.num_3d_km * KM_TO_M,
+                );
+            }
+            SafetyAnnotationMode::Standard => {
+                let _ = writeln!(
+                    out,
+                    "\n> Analytical overestimated min 3D distance by {delta_pct:.0}% relative to Nyx. \
+                     Numerical margin ({margin_ratio:.1}\u{00d7} threshold) governs.\n",
+                );
+            }
+        }
     }
 }
 
