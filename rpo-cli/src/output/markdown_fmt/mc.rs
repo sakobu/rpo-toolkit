@@ -71,13 +71,7 @@ pub fn mc_to_markdown(
         );
     }
 
-    let mut insight_lines = insights::mc_insights(report, &sc);
-    if let (Some(cola), Some(cola_config)) = (&output.safety.cola, &input.cola) {
-        insight_lines.extend(insights::cola_analytical_miss_insights(
-            cola,
-            cola_config.target_distance_km,
-        ));
-    }
+    let insight_lines = insights::mc_insights(report, &sc);
     write_insights(&mut out, &insight_lines);
 
     write_mc_diagnostics(&mut out, report, derived_drag);
@@ -447,5 +441,138 @@ fn write_mc_diagnostics(
 
     if let Some(drag) = derived_drag {
         write_drag_table(out, drag);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use nalgebra::Vector3;
+    use rpo_core::mission::{
+        AvoidanceManeuver, ColaConfig, CorrectionType, MonteCarloConfig, MonteCarloMode,
+        PercentileStats,
+    };
+    use rpo_core::pipeline::PipelineInput;
+    use rpo_nyx::pipeline::execute_mission;
+    use std::path::PathBuf;
+
+    fn examples_dir() -> PathBuf {
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .unwrap()
+            .join("examples")
+    }
+
+    /// Build a minimal [`MonteCarloReport`] with enough structure for the
+    /// `mc_to_markdown` renderer: one sample's worth of ensemble statistics,
+    /// closed-loop mode, no covariance cross-check.
+    fn make_mc_report() -> MonteCarloReport {
+        let stats = EnsembleStatistics {
+            total_dv_km_s: PercentileStats::default(),
+            min_rc_distance_km: None,
+            min_3d_distance_km: None,
+            min_ei_separation_km: None,
+            waypoint_miss_km: vec![],
+            collision_probability: 0.0,
+            convergence_rate: 1.0,
+            ei_violation_rate: 0.0,
+            keepout_violation_rate: 0.0,
+            dispersion_envelope: vec![],
+        };
+        MonteCarloReport {
+            config: MonteCarloConfig {
+                num_samples: 10,
+                dispersions: rpo_core::mission::DispersionConfig::default(),
+                mode: MonteCarloMode::ClosedLoop,
+                seed: Some(42),
+                trajectory_steps: 10,
+            },
+            nominal_dv_km_s: 0.008,
+            nominal_safety: None,
+            statistics: stats,
+            samples: vec![],
+            num_failures: 0,
+            elapsed_wall_s: 1.0,
+            covariance_cross_check: None,
+        }
+    }
+
+    /// Minimal [`McBaseline`] with arbitrary but realistic-looking scalar values.
+    fn make_mc_baseline() -> McBaseline {
+        McBaseline {
+            lambert_dv_km_s: 0.0,
+            lambert_tof_s: 0.0,
+            waypoint_dv_km_s: 0.008,
+            waypoint_duration_s: 12_600.0,
+            num_legs: 3,
+            is_far_field: false,
+        }
+    }
+
+    /// Build a synthetic [`AvoidanceManeuver`] whose `post_avoidance_poca_km`
+    /// is deliberately below the target so that the analytical-miss insight
+    /// *would* fire if the (now-deleted) `cola_analytical_miss_insights` call
+    /// were still present in the MC renderer.
+    fn make_subthreshold_maneuver() -> AvoidanceManeuver {
+        AvoidanceManeuver {
+            epoch: hifitime::Epoch::from_gregorian_utc_at_midnight(2026, 1, 1),
+            dv_ric_km_s: Vector3::new(0.0, 0.0001, 0.0),
+            maneuver_location_rad: 0.0,
+            post_avoidance_poca_km: 0.050,
+            fuel_cost_km_s: 0.0001,
+            correction_type: CorrectionType::InPlane,
+            leg_index: 1,
+        }
+    }
+
+    /// Regression test for Task 3 of the CLI report audit.
+    ///
+    /// The MC renderer previously appended [`insights::cola_analytical_miss_insights`]
+    /// to its insight list whenever both `output.safety.cola` and `input.cola`
+    /// were set. That warning is narratively wrong in `mc.md`: MC samples
+    /// propagate the pre-COLA baseline, so a warning *about* the analytical
+    /// COLA solver belongs in the mission renderer, not here. This test asserts
+    /// that the two phrases produced by `cola_analytical_miss_insights` do not
+    /// appear in the MC markdown even when the output would otherwise trigger
+    /// them.
+    #[test]
+    fn mc_markdown_does_not_leak_cola_analytical_miss_warning() {
+        // Load a real mission input (mission.json already has a `cola` block)
+        // and run execute_mission so we get a fully-populated PipelineOutput.
+        let mut input: PipelineInput = serde_json::from_str(
+            &std::fs::read_to_string(examples_dir().join("mission.json")).unwrap(),
+        )
+        .unwrap();
+
+        let mut output = execute_mission(&input).unwrap();
+
+        // Force-inject a sub-threshold COLA maneuver so the analytical-miss
+        // insight *would* fire if the renderer still called it. This keeps
+        // the test independent of whether mission.json's nominal geometry
+        // actually needs avoidance.
+        output.safety.cola = Some(vec![make_subthreshold_maneuver()]);
+
+        // Ensure `input.cola.target_distance_km` is comfortably above the
+        // injected 0.050 km post-avoidance POCA so the insight is unambiguously
+        // triggered (pre-fix).
+        input.cola = Some(ColaConfig {
+            target_distance_km: 0.300,
+            max_dv_km_s: 0.010,
+        });
+
+        let report = make_mc_report();
+        let baseline = make_mc_baseline();
+
+        let md = mc_to_markdown(&output, &input, &report, &baseline, None);
+
+        assert!(
+            !md.contains("COLA burn on leg"),
+            "MC report must not emit the analytical COLA miss warning \u{2014} \
+             MC never applies COLA to samples. Got:\n{md}",
+        );
+        assert!(
+            !md.contains("solver failed before full-physics validation"),
+            "MC report must not emit the analytical solver-failure phrase. Got:\n{md}",
+        );
     }
 }
