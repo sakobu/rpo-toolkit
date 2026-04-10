@@ -42,8 +42,23 @@ pub fn validation_insights(
     config: &SafetyConfig,
 ) -> Vec<Insight> {
     let mut insights = Vec::new();
-    let num_3d = report.numerical_safety.operational.min_distance_3d_km;
-    let num_ei = report.numerical_safety.passive.min_ei_separation_km;
+
+    // Prefer pre-COLA numerical safety for the analytical comparison — analytical
+    // does not model COLA, so the pre-COLA baseline is the apples-to-apples pair.
+    // When no COLA burn was applied, `pre_cola_numerical_safety` is `None` and we
+    // fall back to the single numerical baseline.
+    let (num_3d, num_ei, nyx_label) = match &report.pre_cola_numerical_safety {
+        Some(pre) => (
+            pre.operational.min_distance_3d_km,
+            pre.passive.min_ei_separation_km,
+            "Nyx pre-COLA trajectory",
+        ),
+        None => (
+            report.numerical_safety.operational.min_distance_3d_km,
+            report.numerical_safety.passive.min_ei_separation_km,
+            "Nyx",
+        ),
+    };
 
     // Track whether the 3D overestimate insight already covered e/i margins
     let mut covered_ei = false;
@@ -77,11 +92,6 @@ pub fn validation_insights(
                     format!("e/i margin is {ei_qualifier} {ei_ratio:.1}\u{00d7}")
                 };
 
-                let nyx_label = if report.pre_cola_numerical_safety.is_some() {
-                    "Nyx post-COLA trajectory"
-                } else {
-                    "Nyx"
-                };
                 insights.push(Insight {
                     severity: Severity::Warning,
                     message: format!(
@@ -488,6 +498,76 @@ mod tests {
             min_distance_3d_km: 0.050,
             min_ei_separation_km: 0.100,
         }
+    }
+
+    fn validation_report_with_pre_cola(
+        analytical_3d_km: f64,
+        pre_cola_3d_km: f64,
+        post_cola_3d_km: f64,
+    ) -> ValidationReport {
+        ValidationReport {
+            leg_points: vec![],
+            max_position_error_km: 0.1,
+            mean_position_error_km: 0.05,
+            rms_position_error_km: 0.07,
+            max_velocity_error_km_s: 0.001,
+            analytical_safety: Some(make_safety(analytical_3d_km, 0.170)),
+            numerical_safety: make_safety(post_cola_3d_km, 0.170),
+            pre_cola_numerical_safety: Some(make_safety(pre_cola_3d_km, 0.170)),
+            chief_config: rpo_core::types::SpacecraftConfig::CUBESAT_6U,
+            deputy_config: rpo_core::types::SpacecraftConfig::CUBESAT_6U,
+            eclipse_validation: None,
+            cola_effectiveness: vec![],
+            leg_summaries: vec![],
+        }
+    }
+
+    #[test]
+    fn validation_insights_compares_analytical_against_pre_cola_when_available() {
+        // Numeric values chosen so the two possible denominators give distinct
+        // rounded percentages:
+        //   pre-COLA  (correct): (0.200 - 0.120) / 0.120 * 100 = 66.7% -> "67%"
+        //   post-COLA (wrong):   (0.200 - 0.080) / 0.080 * 100 = 150.0% -> "150%"
+        // The test asserts we see "67" and not "150" in the insight.
+        //
+        // Note: if a future change surfaces structured numeric fields on
+        // `Insight` (e.g. `delta_pct: f64`), re-tighten this test to assert on
+        // those fields directly instead of the message substring.
+        let report = validation_report_with_pre_cola(
+            /* analytical_3d_km = */ 0.200,
+            /* pre_cola_3d_km = */ 0.120,
+            /* post_cola_3d_km = */ 0.080,
+        );
+        let config = SafetyConfig {
+            min_distance_3d_km: 0.050,
+            min_ei_separation_km: 0.100,
+        };
+
+        let insights = validation_insights(&report, &config);
+        let overestimate_insight = insights
+            .iter()
+            .find(|i| i.message.contains("overestimates"))
+            .expect("should emit overestimate insight");
+
+        // Primary assertion: the label identifies the pre-COLA comparison baseline.
+        assert!(
+            overestimate_insight.message.contains("pre-COLA"),
+            "expected 'pre-COLA' label in insight, got: {}",
+            overestimate_insight.message,
+        );
+
+        // Secondary assertion: the rounded delta percentage confirms we divided
+        // by the pre-COLA value, not the post-COLA value.
+        assert!(
+            overestimate_insight.message.contains("67%"),
+            "expected 67% delta (pre-COLA denominator), got: {}",
+            overestimate_insight.message,
+        );
+        assert!(
+            !overestimate_insight.message.contains("150%"),
+            "must not compute 150% (post-COLA denominator), got: {}",
+            overestimate_insight.message,
+        );
     }
 
     #[test]
