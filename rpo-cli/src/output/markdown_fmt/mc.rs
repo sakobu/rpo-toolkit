@@ -27,7 +27,7 @@ pub fn mc_to_markdown(
     let sc = input.config.safety.unwrap_or_default();
     let stats = &report.statistics;
 
-    let mc_vr = determine_mc_verdict(report);
+    let mc_vr = determine_mc_verdict(report, &sc);
     write_mc_summary_table(&mut out, report, baseline, &sc, &mc_vr);
 
     write_cola_callout(&mut out, output);
@@ -35,18 +35,35 @@ pub fn mc_to_markdown(
     if output.safety.cola.as_ref().is_some_and(|c| !c.is_empty()) {
         let _ = writeln!(
             out,
-            "> **Note:** MC samples propagate the baseline (pre-COLA) trajectory. \
-             COLA burns are not injected into Monte Carlo dispersions, so these safety \
-             statistics reflect the mission *before* avoidance maneuvers are applied. \
-             Because COLA can reduce the minimum 3D distance in some geometries, treat \
-             MC safety margins as **optimistic** when COLA is active. Run `validate` for \
-             a full-physics pre-COLA vs post-COLA effectiveness comparison on the nominal \
-             trajectory.\n",
+            "> **Note:** MC samples propagate the baseline (pre-COLA) trajectory \
+             \u{2014} COLA burns are NOT injected. The safety statistics below describe the \
+             mission *before* avoidance maneuvers are applied. They are the correct view for \
+             assessing \"what happens if COLA is skipped or ineffective\", but they do NOT \
+             reflect the nominal maneuver schedule shown above (which includes the COLA row). \
+             For a full-physics pre- vs post-COLA comparison on the nominal trajectory, run \
+             `validate`.\n",
         );
     }
 
     write_mc_baseline_section(&mut out, baseline, output, &sc);
-    super::mission::write_maneuver_schedule(&mut out, output);
+    // MC uses the MonteCarlo schedule variant (different title, COLA rows
+    // carry a `†` reference marker). The footnote below is mc-specific
+    // because it explains why the marker is there.
+    super::mission::write_maneuver_schedule_with(
+        &mut out,
+        output,
+        super::mission::ScheduleVariant::MonteCarlo,
+    );
+    let has_cola = output.safety.cola.as_ref().is_some_and(|c| !c.is_empty());
+    if has_cola {
+        let _ = writeln!(
+            out,
+            "> \u{2020} COLA row shown for reference only. Monte Carlo samples propagate the \
+             pre-COLA baseline trajectory; this burn is NOT executed in the MC dispersions. The \
+             safety statistics below therefore describe the mission WITHOUT avoidance \
+             maneuvers.\n",
+        );
+    }
     if derived_drag.is_some() {
         let _ = writeln!(
             out,
@@ -95,8 +112,9 @@ fn write_mc_summary_table(
     let _ = writeln!(out, "# Mission Summary\n");
     let _ = writeln!(
         out,
-        "**Verdict: {} ({})** | {} total \u{0394}v | {} duration | {} waypoints\n",
+        "**Verdict: {}{}** ({}) | {} total \u{0394}v | {} duration | {} waypoints\n",
         vr.verdict,
+        vr.qualifier,
         vr.reason,
         fmt_m_s(total_dv_km_s, 1),
         fmt_duration(baseline.lambert_tof_s + baseline.waypoint_duration_s),
@@ -119,7 +137,7 @@ fn write_mc_summary_table(
     if let Some(ref d3d) = stats.min_3d_distance_km {
         let _ = writeln!(
             out,
-            "| Min 3D distance (p05) | {} | {} | {} |",
+            "| Min 3D distance p05 (analytical) | {} | {} | {} |",
             fmt_m(d3d.p05, 1),
             fmt_m(config.min_distance_3d_km, 0),
             status_emoji(d3d.p05 >= config.min_distance_3d_km),
@@ -248,6 +266,14 @@ fn write_mc_config_section(
         "## Monte Carlo ({} samples, {}, seed={seed})\n",
         report.config.num_samples, report.config.mode,
     );
+    // Cross-report interpretability: readers comparing this report's p05
+    // against validate.md's Nyx min would otherwise conclude the two disagree.
+    // MC runs against the J2+Drag analytical STM, not Nyx full physics.
+    let _ = writeln!(
+        out,
+        "> Propagator: J2+Drag STM (analytical). MC statistics are NOT full-physics Nyx \
+         \u{2014} use `validate` for full-physics margins.\n",
+    );
 
     let _ = writeln!(out, "| Parameter | Value |");
     let _ = writeln!(out, "| --- | --- |");
@@ -347,7 +373,7 @@ fn write_mc_passive_safety(
 ) {
     let ei_n = (stats.ei_violation_rate * f64::from(report.config.num_samples)).round();
 
-    let _ = writeln!(out, "### Passive Safety\n");
+    let _ = writeln!(out, "### Passive Safety (Abort-Case e/i, MC Ensemble)\n");
     let _ = writeln!(out, "| Metric | Value |");
     let _ = writeln!(out, "| --- | --- |");
     let _ = writeln!(
@@ -583,6 +609,265 @@ mod tests {
         );
     }
 
+    // ── Report-wording regression tests ─────────────────────────────
+    //
+    // These lock the load-bearing phrasing from the 2026-04-10 CLI report
+    // wording cleanup (mc.md findings).
+
+    /// Build a `SafetyMetrics` fixture with the given 3D distance and e/i
+    /// separation. Used by the wording regression tests below to synthesize
+    /// `nominal_safety` values that trigger the nominal-vs-dispersion
+    /// branching in `determine_mc_verdict`.
+    fn make_safety_fixture(
+        min_3d_km: f64,
+        min_ei_km: f64,
+    ) -> rpo_core::mission::SafetyMetrics {
+        rpo_core::mission::SafetyMetrics {
+            operational: rpo_core::mission::OperationalSafety {
+                min_rc_separation_km: min_3d_km,
+                min_distance_3d_km: min_3d_km,
+                min_rc_leg_index: 0,
+                min_rc_elapsed_s: 0.0,
+                min_rc_ric_position_km: Vector3::zeros(),
+                min_3d_leg_index: 0,
+                min_3d_elapsed_s: 0.0,
+                min_3d_ric_position_km: Vector3::zeros(),
+            },
+            passive: rpo_core::mission::PassiveSafety {
+                min_ei_separation_km: min_ei_km,
+                de_magnitude: 0.0,
+                di_magnitude: 0.0,
+                ei_phase_angle_rad: 0.0,
+            },
+        }
+    }
+
+    /// Build a [`MonteCarloReport`] fixture with a failing nominal e/i, the
+    /// 100% violation-rate ensemble, and waypoint miss medians that match
+    /// the real audit dataset (WP1 = 90 m p50, WP3 = 381 m p50, 1379 m p95).
+    fn mc_report_with_nominal_failure() -> MonteCarloReport {
+        let stats = EnsembleStatistics {
+            total_dv_km_s: PercentileStats {
+                p05: 0.00811,
+                p50: 0.00830,
+                p95: 0.00854,
+                mean: 0.00831,
+                std_dev: 0.00014,
+                min: 0.00806,
+                max: 0.00877,
+                ..PercentileStats::default()
+            },
+            min_rc_distance_km: Some(PercentileStats {
+                p05: 0.0155,
+                p50: 0.0789,
+                p95: 0.1296,
+                ..PercentileStats::default()
+            }),
+            min_3d_distance_km: Some(PercentileStats {
+                p05: 0.1316,
+                p50: 0.2367,
+                p95: 0.5285,
+                ..PercentileStats::default()
+            }),
+            min_ei_separation_km: Some(PercentileStats {
+                p05: 0.0,
+                p50: 0.0068,
+                p95: 0.0320,
+                ..PercentileStats::default()
+            }),
+            waypoint_miss_km: vec![
+                Some(PercentileStats { p05: 0.0, p50: 0.0895, p95: 0.2317, ..PercentileStats::default() }),
+                Some(PercentileStats { p05: 0.0, p50: 0.1634, p95: 0.5286, ..PercentileStats::default() }),
+                Some(PercentileStats { p05: 0.0, p50: 0.3807, p95: 1.3787, ..PercentileStats::default() }),
+            ],
+            collision_probability: 0.0,
+            convergence_rate: 1.0,
+            ei_violation_rate: 1.0,
+            keepout_violation_rate: 0.0,
+            dispersion_envelope: vec![],
+        };
+        MonteCarloReport {
+            config: MonteCarloConfig {
+                num_samples: 100,
+                dispersions: rpo_core::mission::DispersionConfig::default(),
+                mode: MonteCarloMode::ClosedLoop,
+                seed: Some(42),
+                trajectory_steps: 50,
+            },
+            nominal_dv_km_s: 0.00831,
+            // Nominal e/i = 2.2 m → already fails the 100 m threshold.
+            nominal_safety: Some(make_safety_fixture(0.188, 0.0022)),
+            statistics: stats,
+            samples: vec![],
+            num_failures: 0,
+            elapsed_wall_s: 71.0,
+            covariance_cross_check: None,
+        }
+    }
+
+    fn mc_baseline_realistic() -> McBaseline {
+        McBaseline {
+            lambert_dv_km_s: 0.5432,
+            lambert_tof_s: 3600.0,
+            waypoint_dv_km_s: 0.0082,
+            waypoint_duration_s: 12_600.0,
+            num_legs: 3,
+            is_far_field: true,
+        }
+    }
+
+    /// Set up an `(input, output)` pair based on `examples/mission.json`
+    /// with a COLA maneuver force-injected so the Note block and `†`
+    /// marker fire. Safety config carries the 100 m e/i threshold.
+    fn mission_with_cola_injected() -> (PipelineInput, rpo_core::pipeline::PipelineOutput) {
+        let mut input: PipelineInput = serde_json::from_str(
+            &std::fs::read_to_string(examples_dir().join("mission.json")).unwrap(),
+        )
+        .unwrap();
+        input.cola = Some(ColaConfig {
+            target_distance_km: 0.300,
+            max_dv_km_s: 0.010,
+        });
+        let mut output = execute_mission(&input).unwrap();
+        // Force-inject a COLA maneuver regardless of whether the nominal
+        // geometry triggers one, so the Note block and `†` marker always
+        // fire in these wording tests.
+        output.safety.cola = Some(vec![AvoidanceManeuver {
+            epoch: hifitime::Epoch::from_gregorian_utc_at_midnight(2024, 1, 1),
+            dv_ric_km_s: Vector3::new(-0.000_688, 0.0, 0.000_468),
+            maneuver_location_rad: 1.79,
+            post_avoidance_poca_km: 0.281,
+            fuel_cost_km_s: 0.000_83,
+            correction_type: CorrectionType::Combined,
+            leg_index: 2,
+        }]);
+        (input, output)
+    }
+
+    #[test]
+    fn mc_report_verdict_attributes_nominal_failure_not_dispersion() {
+        let (input, output) = mission_with_cola_injected();
+        let report = mc_report_with_nominal_failure();
+        let baseline = mc_baseline_realistic();
+        let md = mc_to_markdown(&output, &input, &report, &baseline, None);
+
+        assert!(
+            md.contains("consistent with the 2.2 m nominal"),
+            "MC verdict must attribute e/i failure to the nominal; got:\n{md}"
+        );
+        assert!(
+            !md.contains("degraded under dispersion"),
+            "MC verdict must not blame dispersion when the nominal already fails; got:\n{md}"
+        );
+        assert!(
+            md.contains("MC ensemble inherits this"),
+            "e/i insight must name nominal inheritance; got:\n{md}"
+        );
+    }
+
+    #[test]
+    fn mc_report_uses_waypoint_miss_dispersion_metric_name() {
+        let (input, output) = mission_with_cola_injected();
+        let report = mc_report_with_nominal_failure();
+        let baseline = mc_baseline_realistic();
+        let md = mc_to_markdown(&output, &input, &report, &baseline, None);
+
+        assert!(
+            md.contains("waypoint-miss dispersion"),
+            "MC verdict must use 'waypoint-miss dispersion' metric name; got:\n{md}"
+        );
+        assert!(
+            !md.contains("position error growth"),
+            "legacy 'position error growth' phrasing must not return; got:\n{md}"
+        );
+    }
+
+    #[test]
+    fn mc_report_renames_schedule_header_and_marks_cola_row() {
+        let (input, output) = mission_with_cola_injected();
+        let report = mc_report_with_nominal_failure();
+        let baseline = mc_baseline_realistic();
+        let md = mc_to_markdown(&output, &input, &report, &baseline, None);
+
+        assert!(
+            md.contains("## Nominal Maneuver Schedule (reference)"),
+            "Maneuver Schedule header must be renamed in mc.md; got:\n{md}"
+        );
+        assert!(
+            md.contains("COLA (L3) \u{2020}"),
+            "COLA row must carry the `†` reference marker; got:\n{md}"
+        );
+        assert!(
+            md.contains("COLA row shown for reference only"),
+            "mc.md must carry the COLA footnote; got:\n{md}"
+        );
+    }
+
+    #[test]
+    fn mc_report_note_block_strengthens_wording() {
+        let (input, output) = mission_with_cola_injected();
+        let report = mc_report_with_nominal_failure();
+        let baseline = mc_baseline_realistic();
+        let md = mc_to_markdown(&output, &input, &report, &baseline, None);
+
+        assert!(
+            md.contains("COLA burns are NOT injected"),
+            "Note block must emphasize NOT injected; got:\n{md}"
+        );
+        assert!(
+            !md.contains("treat MC safety margins as **optimistic**"),
+            "legacy 'optimistic' framing must not return; got:\n{md}"
+        );
+    }
+
+    #[test]
+    fn mc_report_config_header_carries_propagator_subtitle() {
+        let (input, output) = mission_with_cola_injected();
+        let report = mc_report_with_nominal_failure();
+        let baseline = mc_baseline_realistic();
+        let md = mc_to_markdown(&output, &input, &report, &baseline, None);
+
+        assert!(
+            md.contains("Propagator: J2+Drag STM (analytical)"),
+            "MC config header must carry the propagator subtitle; got:\n{md}"
+        );
+        assert!(
+            md.contains("Min 3D distance p05 (analytical)"),
+            "MC summary row must label the propagator; got:\n{md}"
+        );
+    }
+
+    #[test]
+    fn mc_report_passive_safety_header_scoped_to_ensemble_abort_case() {
+        let (input, output) = mission_with_cola_injected();
+        let report = mc_report_with_nominal_failure();
+        let baseline = mc_baseline_realistic();
+        let md = mc_to_markdown(&output, &input, &report, &baseline, None);
+
+        assert!(
+            md.contains("### Passive Safety (Abort-Case e/i, MC Ensemble)"),
+            "MC passive safety header must be scoped to abort-case ensemble; got:\n{md}"
+        );
+    }
+
+    #[test]
+    fn mc_report_emits_final_waypoint_p95_over_one_km_insight() {
+        let (input, output) = mission_with_cola_injected();
+        let report = mc_report_with_nominal_failure();
+        let baseline = mc_baseline_realistic();
+        let md = mc_to_markdown(&output, &input, &report, &baseline, None);
+
+        // WP3 p95 = 1.3787 km → triggers the new insight.
+        assert!(
+            md.contains("WP3 p95 miss is 1.38 km"),
+            "mc.md must emit the 'final waypoint p95 > 1 km' insight; got:\n{md}"
+        );
+        assert!(
+            md.contains("re-targeting gate before the WP3 arrival burn"),
+            "insight must suggest a re-targeting gate; got:\n{md}"
+        );
+    }
+
     /// Regression test for Fix 1 of the final CLI report audit polish pass.
     ///
     /// After Task 7 gated the covariance cross-check on `MonteCarloMode::OpenLoop`,
@@ -592,9 +877,9 @@ mod tests {
     /// with a dangling empty heading right before whatever came next (or the end
     /// of the document).
     ///
-    /// This test builds a fully synthetic closed-loop fixture via [`make_mc_report`]
-    /// + [`make_mc_baseline`], passes `derived_drag = None`, and asserts the
-    /// Diagnostics section is omitted entirely.
+    /// This test builds a fully synthetic closed-loop fixture via
+    /// [`make_mc_report`] and [`make_mc_baseline`], passes `derived_drag = None`,
+    /// and asserts the Diagnostics section is omitted entirely.
     #[test]
     fn mc_markdown_has_no_empty_diagnostics_heading_in_closed_loop() {
         let mut input: PipelineInput = serde_json::from_str(

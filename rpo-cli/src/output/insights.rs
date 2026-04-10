@@ -9,7 +9,7 @@ use rpo_core::mission::{
 };
 
 use super::common::{
-    analytical_overestimate_pct, margin_ratio, waypoint_miss_growth_ratio, KM_TO_M,
+    analytical_overestimate, margin_ratio, waypoint_miss_growth, KM_TO_M,
 };
 use super::thresholds::insight as insight_thresh;
 
@@ -73,24 +73,43 @@ pub fn validation_insights(
 
     if let Some(ref analytical) = report.analytical_safety {
         let ana_3d = analytical.operational.min_distance_3d_km;
-        if let Some(delta_pct) = analytical_overestimate_pct(ana_3d, num_3d) {
+        if let Some(ovr) = analytical_overestimate(ana_3d, num_3d) {
             let d3d_ratio = margin_ratio(num_3d, config.min_distance_3d_km);
-            let ei_ratio = margin_ratio(num_ei, config.min_ei_separation_km);
+            let num_margin_m = (num_3d - config.min_distance_3d_km) * KM_TO_M;
 
-            let ei_part = if ei_ratio < insight_thresh::TIGHT_MARGIN_FACTOR {
-                format!("e/i margin is tighter at {ei_ratio:.1}\u{00d7}")
+            // e/i qualifier: if Nyx e/i is below threshold, describe it as
+            // "X m against Y m (Z% — failing)" rather than an ambiguous ratio
+            // that inverts the sense of margin for a failing value.
+            let ei_m = num_ei * KM_TO_M;
+            let ei_thr_m = config.min_ei_separation_km * KM_TO_M;
+            let ei_part = if num_ei < config.min_ei_separation_km {
+                let ei_pct = if ei_thr_m > 0.0 {
+                    ei_m / ei_thr_m * insight_thresh::PERCENT_PER_UNIT
+                } else {
+                    0.0
+                };
+                format!(
+                    "Nyx e/i is {ei_m:.0} m against a {ei_thr_m:.0} m threshold \
+                     ({ei_pct:.0}% \u{2014} failing)"
+                )
             } else {
-                format!("e/i margin is {ei_ratio:.1}\u{00d7}")
+                let ei_ratio = margin_ratio(num_ei, config.min_ei_separation_km);
+                format!("Nyx e/i margin is {ei_ratio:.1}\u{00d7}")
             };
 
             insights.push(Insight {
                 severity: Severity::Warning,
                 message: format!(
-                    "Analytical overestimates 3D distance by {delta_pct:.0}% relative to {nyx_label} \
-                     ({:.0}m \u{2192} {:.0}m). \
-                     Numerical 3D margin is {d3d_ratio:.1}\u{00d7} threshold; {ei_part}.",
+                    "Analytical overestimates min 3D distance: {:.0} m analytical vs {:.0} m \
+                     {nyx_label} (+{:.0} m, ~{:.1}\u{00d7}). The {:.0} m Nyx value \
+                     governs for operations \u{2014} it sits {num_margin_m:.0} m above the \
+                     {:.0} m keep-out ({d3d_ratio:.1}\u{00d7} threshold). {ei_part}.",
                     ana_3d * KM_TO_M,
                     num_3d * KM_TO_M,
+                    ovr.delta_m,
+                    ovr.ratio,
+                    num_3d * KM_TO_M,
+                    config.min_distance_3d_km * KM_TO_M,
                 ),
             });
             covered_ei = true;
@@ -194,15 +213,17 @@ fn cola_effectiveness_insights(
         // Analytical overestimation (info)
         if let Some(ana) = eff.analytical_post_cola_poca_km {
             let nyx_min = eff.nyx_post_cola_min_distance_km;
-            if let Some(overestimate_pct) = analytical_overestimate_pct(ana, nyx_min) {
+            if let Some(ovr) = analytical_overestimate(ana, nyx_min) {
                 insights.push(Insight {
                     severity: Severity::Info,
                     message: format!(
-                        "COLA analytical POCA ({:.0}m) overestimates Nyx post-COLA minimum \
-                         ({:.0}m) by {overestimate_pct:.0}%. \
+                        "COLA analytical POCA overestimates Nyx post-COLA minimum: \
+                         {:.0} m analytical vs {:.0} m Nyx (+{:.0} m, ~{:.1}\u{00d7}). \
                          Analytical COLA effectiveness estimates are non-conservative.",
                         ana * KM_TO_M,
                         nyx_min * KM_TO_M,
+                        ovr.delta_m,
+                        ovr.ratio,
                     ),
                 });
             }
@@ -296,37 +317,52 @@ pub fn mc_insights(
     if stats.ei_violation_rate > 0.0 {
         let has_collisions = stats.collision_probability > 0.0;
         let has_keepout = stats.keepout_violation_rate > 0.0;
+        let rate_pct = stats.ei_violation_rate * insight_thresh::PERCENT_PER_UNIT;
+        let p05_m = stats.min_ei_separation_km.as_ref().map(|ei| ei.p05 * KM_TO_M);
+        let thr_m = config.min_ei_separation_km * KM_TO_M;
 
-        // Include p05 worst-case separation when available
-        let p05_part = stats
-            .min_ei_separation_km
-            .as_ref()
-            .map(|ei| {
-                format!(
-                    " \u{2014} 5th-percentile separation is {:.1}m against {:.0}m threshold",
-                    ei.p05 * KM_TO_M,
-                    config.min_ei_separation_km * KM_TO_M,
-                )
-            })
+        // Distinguish "nominal already fails" from "dispersion-induced" via
+        // a single Option: the presence of the value IS the classification,
+        // so there is no defensive `unwrap_or(0.0)` to silently misrender
+        // "0.0 m nominal" if a refactor breaks the coupling between the
+        // predicate and the value.
+        let nominal_failure_m: Option<f64> =
+            report.nominal_safety.as_ref().and_then(|s| {
+                let ei_km = s.passive.min_ei_separation_km;
+                (ei_km < config.min_ei_separation_km).then_some(ei_km * KM_TO_M)
+            });
+
+        let p05_part = p05_m
+            .map(|m| format!(" (p05 = {m:.1} m vs {thr_m:.0} m)"))
             .unwrap_or_default();
 
         if has_collisions || has_keepout {
             insights.push(Insight {
                 severity: Severity::Critical,
                 message: format!(
-                    "{:.0}% e/i violation rate{p05_part}. Operational safety is also compromised.",
-                    stats.ei_violation_rate * insight_thresh::PERCENT_PER_UNIT,
+                    "{rate_pct:.0}% e/i violation rate{p05_part}. \
+                     Operational safety is also compromised.",
+                ),
+            });
+        } else if let Some(nom_m) = nominal_failure_m {
+            insights.push(Insight {
+                severity: Severity::Warning,
+                message: format!(
+                    "{rate_pct:.0}% e/i violation rate{p05_part}. Nominal e/i separation is \
+                     already {nom_m:.1} m \u{2014} the MC ensemble inherits this, it is not \
+                     dispersion-induced. Operational safety (3D distance) holds (0 collisions, \
+                     0 keep-out violations). If free-drift contingency is required, the nominal \
+                     design \u{2014} not the MC dispersion \u{2014} needs redesign.",
                 ),
             });
         } else {
             insights.push(Insight {
                 severity: Severity::Warning,
                 message: format!(
-                    "{:.0}% e/i violation rate{p05_part}. \
+                    "{rate_pct:.0}% e/i violation rate{p05_part}. \
                      Operational safety holds (0 collisions, 0 keep-out violations). \
                      If free-drift contingency is required, consider increasing \
                      R-bar or cross-track offsets in waypoint design.",
-                    stats.ei_violation_rate * insight_thresh::PERCENT_PER_UNIT,
                 ),
             });
         }
@@ -365,34 +401,71 @@ pub fn mc_insights(
         insights.push(insight);
     }
 
+    if let Some(insight) = mc_waypoint_last_p95_insight(stats) {
+        insights.push(insight);
+    }
+
     insights
+}
+
+/// Insight: the final waypoint's p95 miss exceeds
+/// [`insight_thresh::MC_FINAL_WAYPOINT_P95_ALERT_M`].
+///
+/// Fires only when the last waypoint has a populated `waypoint_miss_km` entry
+/// with `p95` above the cutoff. The message contrasts the last p95 against
+/// WP1 p95 for scale, and suggests operational mitigations (tighter tolerances,
+/// an extra intermediate waypoint, or a re-targeting gate before the arrival
+/// burn). Separate from [`mc_waypoint_growth_insight`], which reports the p50
+/// growth *ratio* regardless of absolute scale.
+///
+/// # Returns
+/// `None` when the ensemble has fewer than two waypoints, any first/last
+/// entry is missing, or the last waypoint's p95 miss is at or below
+/// [`insight_thresh::MC_FINAL_WAYPOINT_P95_ALERT_M`].
+fn mc_waypoint_last_p95_insight(stats: &EnsembleStatistics) -> Option<Insight> {
+    if stats.waypoint_miss_km.len() < 2 {
+        return None;
+    }
+    let last_idx = stats.waypoint_miss_km.len();
+    let last = stats.waypoint_miss_km.last()?.as_ref()?;
+    let last_p95_metres = last.p95 * KM_TO_M;
+    if last_p95_metres <= insight_thresh::MC_FINAL_WAYPOINT_P95_ALERT_M {
+        return None;
+    }
+    let first = stats.waypoint_miss_km.first()?.as_ref()?;
+    let first_p95_metres = first.p95 * KM_TO_M;
+    let last_p95_kilometres = last.p95;
+    Some(Insight {
+        severity: Severity::Info,
+        message: format!(
+            "WP{last_idx} p95 miss is {last_p95_kilometres:.2} km (vs {first_p95_metres:.0} m at \
+             WP1). In 5% of samples, the final waypoint is missed by more than a kilometre in \
+             closed-loop targeting \u{2014} consider tighter tolerances, an additional \
+             intermediate waypoint, or a re-targeting gate before the WP{last_idx} arrival burn.",
+        ),
+    })
 }
 
 /// Render the per-waypoint miss growth insight when the ratio exceeds the alert.
 ///
-/// Uses the shared [`waypoint_miss_growth_ratio`] helper so the verdict
-/// and the insight list stay in sync.
+/// Uses the shared [`waypoint_miss_growth`] helper so the verdict reason
+/// and the insight list stay in sync with a single traversal of
+/// `stats.waypoint_miss_km`.
 fn mc_waypoint_growth_insight(stats: &EnsembleStatistics) -> Option<Insight> {
-    let ratio = waypoint_miss_growth_ratio(stats)?;
-    if ratio <= insight_thresh::ERROR_GROWTH_RATIO_ALERT {
+    let growth = waypoint_miss_growth(stats)?;
+    if growth.ratio <= insight_thresh::ERROR_GROWTH_RATIO_ALERT {
         return None;
     }
-    let miss_medians: Vec<f64> = stats
-        .waypoint_miss_km
-        .iter()
-        .filter_map(|opt| opt.as_ref().map(|s| s.p50))
-        .collect();
-    let first = miss_medians[0];
-    let last = miss_medians[miss_medians.len() - 1];
+    let ratio = growth.ratio;
+    let first_m = growth.first_p50_km * KM_TO_M;
+    let last_m = growth.last_p50_km * KM_TO_M;
+    let last_wp = growth.last_waypoint_index;
     Some(Insight {
         severity: Severity::Info,
         message: format!(
-            "Waypoint miss distance grows {ratio:.1}\u{00d7} from WP 1 ({:.0}m p50) \
-             to WP {} ({:.0}m p50). Later waypoints accumulate more dispersion \
+            "Waypoint miss distance grows {ratio:.1}\u{00d7} from WP 1 ({first_m:.0}m p50) \
+             to WP {last_wp} ({last_m:.0}m p50). Later waypoints accumulate more dispersion \
              \u{2014} consider tighter tolerances or additional intermediate waypoints.",
-            first * KM_TO_M,
-            miss_medians.len(),
-            last * KM_TO_M,
         ),
     })
 }
@@ -459,15 +532,12 @@ mod tests {
 
     #[test]
     fn validation_insights_compares_analytical_against_pre_cola_when_available() {
-        // Numeric values chosen so the two possible denominators give distinct
-        // rounded percentages:
-        //   pre-COLA  (correct): (0.200 - 0.120) / 0.120 * 100 = 66.7% -> "67%"
-        //   post-COLA (wrong):   (0.200 - 0.080) / 0.080 * 100 = 150.0% -> "150%"
-        // The test asserts we see "67" and not "150" in the insight.
-        //
-        // Note: if a future change surfaces structured numeric fields on
-        // `Insight` (e.g. `delta_pct: f64`), re-tighten this test to assert on
-        // those fields directly instead of the message substring.
+        // Numeric values chosen so the two possible baselines give distinct
+        // absolute deltas and ratios:
+        //   pre-COLA  (correct): 200 - 120 =  80 m, 200 / 120 ≈ 1.7×
+        //   post-COLA (wrong):   200 -  80 = 120 m, 200 /  80 = 2.5×
+        // The test asserts the insight uses the pre-COLA numbers, not the
+        // post-COLA ones.
         let report = validation_report_with_pre_cola(
             /* analytical_3d_km = */ 0.200,
             /* pre_cola_3d_km = */ 0.120,
@@ -483,25 +553,37 @@ mod tests {
             .iter()
             .find(|i| i.message.contains("overestimates"))
             .expect("should emit overestimate insight");
+        let msg = &overestimate_insight.message;
 
         // Primary assertion: the label identifies the pre-COLA comparison baseline.
         assert!(
-            overestimate_insight.message.contains("pre-COLA"),
-            "expected 'pre-COLA' label in insight, got: {}",
-            overestimate_insight.message,
+            msg.contains("pre-COLA"),
+            "expected 'pre-COLA' label in insight, got: {msg}",
         );
 
-        // Secondary assertion: the rounded delta percentage confirms we divided
-        // by the pre-COLA value, not the post-COLA value.
+        // Absolute delta uses the pre-COLA denominator: 200 − 120 = 80 m.
         assert!(
-            overestimate_insight.message.contains("67%"),
-            "expected 67% delta (pre-COLA denominator), got: {}",
-            overestimate_insight.message,
+            msg.contains("+80 m"),
+            "expected '+80 m' absolute delta (pre-COLA baseline), got: {msg}",
+        );
+        // Ratio uses the pre-COLA denominator: 200 / 120 ≈ 1.7×.
+        assert!(
+            msg.contains("~1.7"),
+            "expected '~1.7×' ratio (pre-COLA baseline), got: {msg}",
+        );
+        // The wrong (post-COLA) numbers must not appear.
+        assert!(
+            !msg.contains("+120 m"),
+            "must not report +120 m delta (post-COLA baseline), got: {msg}",
         );
         assert!(
-            !overestimate_insight.message.contains("150%"),
-            "must not compute 150% (post-COLA denominator), got: {}",
-            overestimate_insight.message,
+            !msg.contains("~2.5"),
+            "must not report 2.5× ratio (post-COLA baseline), got: {msg}",
+        );
+        // Legacy ambiguous "overestimates by N%" phrasing must not reappear.
+        assert!(
+            !msg.contains("overestimates 3D distance by"),
+            "legacy '% by' phrasing must not reappear, got: {msg}",
         );
     }
 
@@ -526,18 +608,27 @@ mod tests {
         let insights = validation_insights(&report, &default_config());
         let msg = &insights
             .iter()
-            .find(|i| i.message.contains("overestimates 3D"))
+            .find(|i| i.message.contains("overestimates min 3D"))
             .expect("expected non-conservative 3D insight")
             .message;
 
-        // Fallback label must be plain "Nyx" (not "Nyx pre-COLA trajectory")
+        // Fallback label must be plain "Nyx" (not "Nyx pre-COLA trajectory").
         assert!(
-            msg.contains("relative to Nyx ("),
-            "expected plain 'Nyx' label followed by '(', got: {msg}"
+            msg.contains("vs 100 m Nyx "),
+            "expected plain 'Nyx' label in fallback, got: {msg}"
         );
         assert!(
             !msg.contains("pre-COLA"),
             "must not mention pre-COLA when not available, got: {msg}"
+        );
+        // The rewritten template emits absolute delta + ratio.
+        assert!(
+            msg.contains("+100 m"),
+            "expected '+100 m' absolute delta, got: {msg}"
+        );
+        assert!(
+            msg.contains("~2.0"),
+            "expected '~2.0×' ratio, got: {msg}"
         );
     }
 
@@ -558,7 +649,7 @@ mod tests {
         let report = MonteCarloReport {
             config: MonteCarloConfig {
                 num_samples: 100,
-                dispersions: Default::default(),
+                dispersions: rpo_core::mission::DispersionConfig::default(),
                 mode: MonteCarloMode::ClosedLoop,
                 seed: Some(42),
                 trajectory_steps: 50,
@@ -600,7 +691,7 @@ mod tests {
         let report = MonteCarloReport {
             config: MonteCarloConfig {
                 num_samples: 100,
-                dispersions: Default::default(),
+                dispersions: rpo_core::mission::DispersionConfig::default(),
                 mode: MonteCarloMode::ClosedLoop,
                 seed: Some(42),
                 trajectory_steps: 50,

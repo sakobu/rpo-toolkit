@@ -8,9 +8,9 @@ use rpo_core::pipeline::{PipelineInput, PipelineOutput};
 use rpo_core::propagation::{DragConfig, PropagationModel};
 
 use crate::output::common::{
-    analytical_overestimate_pct, determine_verdict, fmt_bounded_motion_residual, fmt_duration,
-    fmt_m, fmt_m_s, fmt_roe_component, fmt_velocity_target, margin_ratio, KM_TO_M, SafetyTier,
-    VerdictResult,
+    analytical_overestimate, determine_verdict, fmt_bounded_motion_residual, fmt_duration, fmt_m,
+    fmt_m_s, fmt_roe_component, fmt_velocity_target, margin_or_shortfall_row, margin_ratio,
+    KM_TO_M, SafetyTier, VerdictResult,
 };
 use crate::output::formation_fmt::write_formation_design_md;
 use crate::output::insights;
@@ -35,6 +35,24 @@ enum PassiveSafetyOutcome {
     AdvisoryEi,
     /// Safety checks fail.
     Fail,
+}
+
+/// Render a list of 1-based leg numbers with correct grammar and Oxford
+/// commas. Single-element variant is singular (`"leg 3"`); multi-element
+/// variants are plural (`"legs 2 and 3"`, `"legs 1, 2, and 3"`).
+///
+/// Delegates the Oxford-comma join to
+/// [`crate::output::common::oxford_join`] so this renderer stays in sync
+/// with the verdict-reason leg enumeration in `common.rs`.
+fn format_leg_list(legs: &[usize]) -> String {
+    match legs {
+        [] => String::new(),
+        [single] => format!("leg {single}"),
+        multi => {
+            let numbers: Vec<String> = multi.iter().map(ToString::to_string).collect();
+            format!("legs {}", crate::output::common::oxford_join(&numbers))
+        }
+    }
 }
 
 /// Determine the passive safety rendering outcome from the assessment and context.
@@ -243,11 +261,64 @@ struct ScheduleEntry {
     dv_mag_km_s: f64,
 }
 
+/// Which report the maneuver schedule is being rendered into.
+///
+/// Controls both the section heading and whether COLA rows carry a
+/// reference-marker suffix. Encoded as an enum so the mission / MC
+/// dispatch is explicit and cannot be accidentally mixed (e.g. mission
+/// heading with MC marker, or vice versa).
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub(super) enum ScheduleVariant {
+    /// Standard mission.md schedule. No COLA-row marker.
+    Mission,
+    /// mc.md schedule. COLA rows carry a `†` suffix because Monte Carlo
+    /// samples propagate the pre-COLA baseline — the burn is shown for
+    /// reference only, not executed in the ensemble.
+    MonteCarlo,
+}
+
+impl ScheduleVariant {
+    /// Full section heading line, including the leading `##`.
+    fn section_title(self) -> &'static str {
+        match self {
+            Self::Mission => "## Maneuver Schedule",
+            Self::MonteCarlo => "## Nominal Maneuver Schedule (reference)",
+        }
+    }
+
+    /// Optional suffix appended to COLA rows' Type cell. `None` means
+    /// no marker; callers match the presence of the marker to the
+    /// footnote they emit beneath the table.
+    fn cola_marker(self) -> Option<&'static str> {
+        match self {
+            Self::Mission => None,
+            Self::MonteCarlo => Some("\u{2020}"),
+        }
+    }
+}
+
+/// Write a consolidated chronological maneuver schedule table in the
+/// default mission-report variant. Thin wrapper around
+/// [`write_maneuver_schedule_with`].
+pub(super) fn write_maneuver_schedule(out: &mut String, output: &PipelineOutput) {
+    write_maneuver_schedule_with(out, output, ScheduleVariant::Mission);
+}
+
 /// Write a consolidated chronological maneuver schedule table.
 ///
 /// Collects Lambert, waypoint, and COLA burns from the pipeline output,
 /// sorts by epoch, and renders a single table.
-pub(super) fn write_maneuver_schedule(out: &mut String, output: &PipelineOutput) {
+///
+/// # Arguments
+/// - `out` — output buffer; the rendered table is appended.
+/// - `output` — pipeline output carrying `transfer`, `mission.legs`,
+///   and `safety.cola` maneuvers.
+/// - `variant` — mission vs MC dispatch (see [`ScheduleVariant`]).
+pub(super) fn write_maneuver_schedule_with(
+    out: &mut String,
+    output: &PipelineOutput,
+    variant: ScheduleVariant,
+) {
     let cola_count = output.safety.cola.as_ref().map_or(0, Vec::len);
     let capacity = output.mission.legs.len() * 2
         + if output.transfer.is_some() { 2 } else { 0 }
@@ -304,7 +375,7 @@ pub(super) fn write_maneuver_schedule(out: &mut String, output: &PipelineOutput)
 
     entries.sort_by_key(|e| e.epoch);
 
-    let _ = writeln!(out, "## Maneuver Schedule\n");
+    let _ = writeln!(out, "{}\n", variant.section_title());
     let _ = writeln!(
         out,
         "| # | Epoch (UTC) | Type | \u{0394}vR (m/s) | \u{0394}vI (m/s) | \u{0394}vC (m/s) | \\|\u{0394}v\\| (m/s) |",
@@ -314,15 +385,23 @@ pub(super) fn write_maneuver_schedule(out: &mut String, output: &PipelineOutput)
         "|---|-------------|------|-----------|-----------|-----------|------------|",
     );
 
+    let cola_marker = variant.cola_marker();
     for (i, entry) in entries.iter().enumerate() {
+        // Mark COLA rows with the configured suffix (e.g. `"†"`) so mc.md can
+        // visually flag the row as "not executed in Monte Carlo samples".
+        let type_cell = match (&entry.kind, cola_marker) {
+            (ScheduleEntryKind::Cola { .. }, Some(mark)) => {
+                format!("{kind} {mark}", kind = entry.kind)
+            }
+            _ => format!("{}", entry.kind),
+        };
         match entry.dv_ric_km_s {
             Some(v) => {
                 let _ = writeln!(
                     out,
-                    "| {} | {} | {} | {:.2} | {:.2} | {:.2} | {:.1} |",
+                    "| {} | {} | {type_cell} | {:.2} | {:.2} | {:.2} | {:.1} |",
                     i + 1,
                     entry.epoch,
-                    entry.kind,
                     v.x * KM_TO_M,
                     v.y * KM_TO_M,
                     v.z * KM_TO_M,
@@ -332,10 +411,9 @@ pub(super) fn write_maneuver_schedule(out: &mut String, output: &PipelineOutput)
             None => {
                 let _ = writeln!(
                     out,
-                    "| {} | {} | {} | \u{2014} | \u{2014} | \u{2014} | {:.1} |",
+                    "| {} | {} | {type_cell} | \u{2014} | \u{2014} | \u{2014} | {:.1} |",
                     i + 1,
                     entry.epoch,
-                    entry.kind,
                     entry.dv_mag_km_s * KM_TO_M,
                 );
             }
@@ -354,8 +432,9 @@ fn write_summary_block_mission(
     let _ = writeln!(out, "# Mission Summary\n");
     let _ = writeln!(
         out,
-        "**Verdict: {}** ({}) | {} total \u{0394}v | {} duration | {} waypoints\n",
+        "**Verdict: {}{}** ({}) | {} total \u{0394}v | {} duration | {} waypoints\n",
         verdict_result.verdict,
+        verdict_result.qualifier,
         verdict_result.reason,
         fmt_m_s(output.total_dv_km_s, 1),
         fmt_duration(output.total_duration_s),
@@ -411,14 +490,23 @@ fn write_summary_block_mission(
                 "| Max position error | {} | \u{2014} | \u{2014} |",
                 fmt_m(report.max_position_error_km, 0),
             );
-            // Analytical bias row: surface non-conservative overestimate prominently
+            // Analytical bias row: absolute delta + ratio (not a single percentage,
+            // which readers routinely misparse as "analytical is 1.65× Nyx" when it
+            // is actually 2.6× Nyx). Uses the same helper as `validation_insights`
+            // so the summary row and the insight list stay in lockstep.
             if let Some(ref ana) = report.analytical_safety {
                 let ana_3d = ana.operational.min_distance_3d_km;
                 let num_3d = safety.operational.min_distance_3d_km;
-                if let Some(delta_pct) = analytical_overestimate_pct(ana_3d, num_3d) {
+                if let Some(ovr) = analytical_overestimate(ana_3d, num_3d) {
                     let _ = writeln!(
                         out,
-                        "| Analytical bias | overestimated by {delta_pct:.0}% | \u{2014} | \u{26a0}\u{fe0f} |",
+                        "| Analytical bias | +{:.0} m optimistic (analytical {:.0} m vs \
+                         Nyx {:.0} m; analytical \u{2248} {:.1}\u{00d7} Nyx) | \u{2014} | \
+                         \u{26a0}\u{fe0f} |",
+                        ovr.delta_m,
+                        ana_3d * KM_TO_M,
+                        num_3d * KM_TO_M,
+                        ovr.ratio,
                     );
                 }
             }
@@ -680,9 +768,11 @@ fn write_safety_section(
         fmt_m(safety.operational.min_distance_3d_km, 1),
         fmt_m(config.min_distance_3d_km, 0),
     );
-    let margin_3d =
-        (safety.operational.min_distance_3d_km - config.min_distance_3d_km) * KM_TO_M;
-    let _ = writeln!(out, "| Margin | {margin_3d:+.1} m |");
+    let _ = writeln!(
+        out,
+        "{}",
+        margin_or_shortfall_row(safety.operational.min_distance_3d_km, config.min_distance_3d_km),
+    );
     let _ = writeln!(
         out,
         "| \u{2014} at | leg {}, t = {} |",
@@ -753,16 +843,32 @@ fn write_passive_safety_md(
         fmt_m(safety.passive.min_ei_separation_km, 1),
         fmt_m(config.min_ei_separation_km, 0),
     );
-    let margin_ei =
-        (safety.passive.min_ei_separation_km - config.min_ei_separation_km) * KM_TO_M;
-    let _ = writeln!(out, "| Margin | {margin_ei:+.1} m |");
-    // Phase angle is meaningless when e/i separation is effectively zero
+    let _ = writeln!(
+        out,
+        "{}",
+        margin_or_shortfall_row(safety.passive.min_ei_separation_km, config.min_ei_separation_km),
+    );
+    // Phase angle is meaningless when e/i separation is effectively zero.
+    // When it IS rendered and the angle is near ±180° we annotate it as
+    // "near anti-parallel" so a reader can see that the e and i vectors
+    // oppose (which is why the norm can collapse from perch-scale to
+    // transit-scale separation).
     if safety.passive.min_ei_separation_km * KM_TO_M >= safety_thresh::MIN_EI_SEPARATION_FOR_PHASE_DISPLAY_M {
-        let _ = writeln!(
-            out,
-            "| e/i phase angle | {:.2}\u{00b0} |",
-            safety.passive.ei_phase_angle_rad.to_degrees(),
-        );
+        let phase_deg = safety.passive.ei_phase_angle_rad.to_degrees();
+        let anti_parallel = (phase_deg.abs() - safety_thresh::ANTIPARALLEL_PHASE_DEG).abs()
+            < safety_thresh::ANTIPARALLEL_TOLERANCE_DEG;
+        if anti_parallel {
+            let _ = writeln!(
+                out,
+                "| e/i phase angle | {phase_deg:.2}\u{00b0} (near anti-parallel \u{2014} \
+                 e and i vectors oppose, so the norm collapses) |",
+            );
+        } else {
+            let _ = writeln!(
+                out,
+                "| e/i phase angle | {phase_deg:.2}\u{00b0} |",
+            );
+        }
     }
     let _ = writeln!(out);
 
@@ -922,6 +1028,20 @@ fn write_cola_sections(
     }
 }
 
+/// A COLA maneuver whose analytical post-burn POCA fell below the
+/// configured target distance. Collected during table rendering so the
+/// callout beneath the table can quote concrete per-leg values (achieved
+/// POCA and fuel cost) instead of a generic "leg(s) X" hedge.
+struct OffendingCola {
+    /// 1-based leg index, matching the rendered table's Leg column.
+    leg_1_based: usize,
+    /// Achieved post-burn POCA in metres (analytical — full-physics
+    /// margins are typically smaller).
+    achieved_poca_m: f64,
+    /// Analytical fuel cost for the burn in m/s.
+    fuel_cost_m_s: f64,
+}
+
 fn write_cola_section(
     out: &mut String,
     maneuvers: &[rpo_core::mission::AvoidanceManeuver],
@@ -945,7 +1065,10 @@ fn write_cola_section(
         out,
         "|-----|-----------|---------|---------------|------------|------|",
     );
-    let mut offending_leg_ids: Vec<usize> = Vec::new();
+    // Track offending legs with their achieved POCA and fuel cost so the
+    // callout below can quote per-leg values instead of a generic "leg(s) X"
+    // hedge that obscures how much margin was actually lost.
+    let mut offending: Vec<OffendingCola> = Vec::new();
     for m in maneuvers {
         let correction = match m.correction_type {
             rpo_core::mission::CorrectionType::InPlane => "in-plane",
@@ -954,7 +1077,11 @@ fn write_cola_section(
         };
         let poca_cell = match target_distance_km {
             Some(target_km) if m.post_avoidance_poca_km < target_km => {
-                offending_leg_ids.push(m.leg_index + 1);
+                offending.push(OffendingCola {
+                    leg_1_based: m.leg_index + 1,
+                    achieved_poca_m: m.post_avoidance_poca_km * KM_TO_M,
+                    fuel_cost_m_s: m.fuel_cost_km_s * KM_TO_M,
+                });
                 format!(
                     "{:.1} m \u{26a0}\u{fe0f} (target: {:.0} m)",
                     m.post_avoidance_poca_km * KM_TO_M,
@@ -977,16 +1104,25 @@ fn write_cola_section(
         );
     }
     let _ = writeln!(out);
-    if !offending_leg_ids.is_empty() {
-        let leg_list = offending_leg_ids
-            .iter()
-            .map(usize::to_string)
-            .collect::<Vec<_>>()
-            .join(", ");
+    if !offending.is_empty() {
+        let target_m = target_distance_km.unwrap_or(0.0) * KM_TO_M;
+        let (leg_desc, per_leg_suffix) = match offending.as_slice() {
+            [OffendingCola { leg_1_based, achieved_poca_m, fuel_cost_m_s }] => (
+                format!("leg {leg_1_based}"),
+                format!(" (achieved {achieved_poca_m:.1} m at cost {fuel_cost_m_s:.2} m/s)"),
+            ),
+            multi => {
+                let leg_list = format_leg_list(
+                    &multi.iter().map(|o| o.leg_1_based).collect::<Vec<_>>(),
+                );
+                (leg_list, String::new())
+            }
+        };
         let _ = writeln!(
             out,
-            "> **Analytical COLA solver did not achieve the target separation on \
-             leg(s) {leg_list}.** The full-physics gap will compound this deficit.\n",
+            "> **Analytical COLA solver did not reach the {target_m:.0} m target on \
+             {leg_desc}**{per_leg_suffix}. Full-physics propagation typically reduces these \
+             margins further \u{2014} run `validate` before relying on this burn.\n",
         );
     }
     let note = match context {
@@ -1200,11 +1336,11 @@ fn write_cola_validation_detail(
     if has_effectiveness {
         let _ = writeln!(
             out,
-            "| Leg | \u{0394}v (m/s) | Type | Analytical Post-COLA POCA | Nyx Post-COLA Min | Threshold Met |",
+            "| Leg | \u{0394}v (m/s) | Type | Analytical Post-COLA POCA | Nyx Post-Burn POCA | Threshold Met |",
         );
         let _ = writeln!(
             out,
-            "| --- | -------- | ---- | ------------------------- | ----------------- | ------------- |",
+            "| --- | -------- | ---- | ------------------------- | ------------------ | ------------- |",
         );
     } else {
         let _ = writeln!(
@@ -1324,8 +1460,8 @@ fn write_safety_comparison(
         None => (v.num_3d_km, v.num_ei_km, SafetyAnnotationMode::Standard),
     };
 
-    let noncons_3d = analytical_overestimate_pct(v.ana_3d_km, cmp_3d).is_some();
-    let noncons_ei = analytical_overestimate_pct(v.ana_ei_km, cmp_ei).is_some();
+    let noncons_3d = analytical_overestimate(v.ana_3d_km, cmp_3d).is_some();
+    let noncons_ei = analytical_overestimate(v.ana_ei_km, cmp_ei).is_some();
 
     if let Some(pre_cola) = &report.pre_cola_numerical_safety {
         write_safety_comparison_with_cola(out, &v, pre_cola, &sc, noncons_3d, noncons_ei);
@@ -1334,7 +1470,6 @@ fn write_safety_comparison(
     }
 
     write_safety_annotations(out, &SafetyAnnotationCtx {
-        noncons_3d,
         noncons_ei,
         ana_3d_km: v.ana_3d_km,
         num_3d_km: cmp_3d,
@@ -1389,6 +1524,26 @@ fn write_safety_comparison_with_cola(
         sc.min_ei_separation_km * KM_TO_M, if noncons_ei { " \\*" } else { "" },
     );
     let _ = writeln!(out);
+
+    // Explanatory footnote: pre-COLA and post-COLA 3D distances are
+    // identical whenever the primary POCA occurs before the COLA burn
+    // fires. Up to the burn epoch the two trajectories are identical, so
+    // the overall minimum is unchanged. Without this note, a reader
+    // comparing the pre-COLA column (70.8 m) against the post-burn POCA
+    // in the COLA Burns table (e.g. 121.9 m) thinks the report is
+    // internally inconsistent.
+    let pre_post_equal =
+        (pre_3d - v.num_3d_km).abs() * KM_TO_M < safety_thresh::POCA_PRE_POST_EQUAL_TOL_M;
+    if pre_post_equal {
+        let _ = writeln!(
+            out,
+            "> Numerical pre-COLA and post-COLA min 3D are identical because the primary POCA \
+             occurs before the COLA burn fires \u{2014} up to the burn epoch the two \
+             trajectories are identical, so the overall minimum is unchanged. The COLA burn \
+             targets a later conjunction; its post-burn effectiveness is reported separately \
+             in \"COLA Burns Injected into Nyx Propagation\" below.\n",
+        );
+    }
 }
 
 /// 2-column safety comparison table (analytical / numerical), used when no
@@ -1434,9 +1589,11 @@ enum SafetyAnnotationMode {
     PreCola,
 }
 
-/// Context for writing non-conservative footnotes and 3D overestimation annotations.
+/// Context for writing non-conservative footnotes and 3D overestimation
+/// annotations. `noncons_3d` is intentionally omitted — the annotation
+/// function recomputes `analytical_overestimate(ana_3d_km, num_3d_km)`
+/// as its single source of truth.
 struct SafetyAnnotationCtx<'a> {
-    noncons_3d: bool,
     noncons_ei: bool,
     ana_3d_km: f64,
     num_3d_km: f64,
@@ -1444,35 +1601,70 @@ struct SafetyAnnotationCtx<'a> {
     mode: SafetyAnnotationMode,
 }
 
-/// Write non-conservative footnotes and 3D overestimation annotation.
+/// Write the non-conservative footnote and the 3D overestimation annotation.
+///
+/// Footnote: when the 3D value is non-conservative, quote the actual margin
+/// reduction (analytical margin vs Nyx margin) as an absolute percentage so
+/// an 85%-level reduction is not hidden behind the prior "`>10% smaller`"
+/// phrasing that understated it by almost an order of magnitude.
+///
+/// Annotation: show the absolute overestimate delta (`+117 m`) AND the
+/// analytical/Nyx ratio (`≈ 2.6× Nyx`). Readers routinely misparse the
+/// older "overestimated by 165%" phrasing as "analytical is 1.65× Nyx",
+/// losing a factor of ~1.6 in their mental model.
 fn write_safety_annotations(out: &mut String, ctx: &SafetyAnnotationCtx<'_>) {
-    if ctx.noncons_3d || ctx.noncons_ei {
+    let threshold_m = ctx.config.min_distance_3d_km * KM_TO_M;
+    let ana_3d_m = ctx.ana_3d_km * KM_TO_M;
+    let num_3d_m = ctx.num_3d_km * KM_TO_M;
+    let ana_margin_m = ana_3d_m - threshold_m;
+    let nyx_margin_m = num_3d_m - threshold_m;
+
+    // Single source of truth. `ctx.noncons_3d` is derived from this same
+    // helper on the same inputs by the caller — we re-compute here so the
+    // Option acts as both the predicate and the struct-carrying value for
+    // this function, avoiding a stringly-coupled boolean path.
+    let overestimate = analytical_overestimate(ctx.ana_3d_km, ctx.num_3d_km);
+
+    match (overestimate.as_ref(), ctx.noncons_ei) {
+        (Some(ovr), _) if ana_margin_m > 0.0 => {
+            let reduction_pct = ((ana_margin_m - nyx_margin_m) / ana_margin_m)
+                * insight_thresh::PERCENT_PER_UNIT;
+            let _ = writeln!(
+                out,
+                "\\* Full-physics 3D margin is {nyx_margin_m:.0} m (vs {ana_margin_m:.0} m \
+                 analytical) \u{2014} a {reduction_pct:.0}% reduction. Analytical 3D distance \
+                 is approximately {:.1}\u{00d7} Nyx. Use the Nyx column as the governing value.",
+                ovr.ratio,
+            );
+        }
+        // e/i is flagged but 3D reduction wording does not apply — emit a
+        // terser footnote so the `\*` marker in the table has a referent.
+        // Fires only when 3D is consistent but e/i disagrees.
+        (None, true) => {
+            let _ = writeln!(
+                out,
+                "\\* Numerical e/i margin is materially smaller than the analytical value \
+                 \u{2014} see the insight list below.",
+            );
+        }
+        _ => {}
+    }
+
+    if let Some(ovr) = overestimate {
+        let thr_ratio = margin_ratio(ctx.num_3d_km, ctx.config.min_distance_3d_km);
+        let nyx_label = match ctx.mode {
+            SafetyAnnotationMode::PreCola => "Nyx pre-COLA trajectory",
+            SafetyAnnotationMode::Standard => "Nyx",
+        };
         let _ = writeln!(
             out,
-            "\\* Numerical margin >{:.0}% smaller than analytical",
-            crate::output::thresholds::insight::SIGNIFICANT_DELTA_PCT,
+            "\n> Analytical overestimates min 3D distance: {ana_3d_m:.0} m analytical vs \
+             {num_3d_m:.0} m {nyx_label} (+{:.0} m, ~{:.1}\u{00d7}). The Nyx value \
+             governs for operations \u{2014} it sits {nyx_margin_m:.0} m above the \
+             {threshold_m:.0} m keep-out ({thr_ratio:.1}\u{00d7} threshold).\n",
+            ovr.delta_m,
+            ovr.ratio,
         );
-    }
-    if let Some(delta_pct) = analytical_overestimate_pct(ctx.ana_3d_km, ctx.num_3d_km) {
-        let ratio = margin_ratio(ctx.num_3d_km, ctx.config.min_distance_3d_km);
-        match ctx.mode {
-            SafetyAnnotationMode::PreCola => {
-                let _ = writeln!(
-                    out,
-                    "\n> Analytical overestimated min 3D distance by {delta_pct:.0}% \
-                     relative to Nyx pre-COLA trajectory ({:.0}m \u{2192} {:.0}m). \
-                     Numerical margin ({ratio:.1}\u{00d7} threshold) governs.\n",
-                    ctx.ana_3d_km * KM_TO_M, ctx.num_3d_km * KM_TO_M,
-                );
-            }
-            SafetyAnnotationMode::Standard => {
-                let _ = writeln!(
-                    out,
-                    "\n> Analytical overestimated min 3D distance by {delta_pct:.0}% relative to Nyx. \
-                     Numerical margin ({ratio:.1}\u{00d7} threshold) governs.\n",
-                );
-            }
-        }
     }
 }
 
@@ -1623,12 +1815,13 @@ mod tests {
 
     #[test]
     fn mission_safety_comparison_uses_pre_cola_when_available() {
-        // Mirrors the Task 2 insight test (see
-        // `insights::tests::validation_insights_compares_analytical_against_pre_cola_when_available`).
+        // Mirrors the insight test in `insights::tests::
+        // validation_insights_compares_analytical_against_pre_cola_when_available`.
         //   analytical = 0.200 km
-        //   pre-COLA  (correct denominator): (0.200 - 0.120)/0.120 * 100 = 66.7% -> "67%"
-        //   post-COLA (wrong  denominator): (0.200 - 0.080)/0.080 * 100 = 150.0% -> "150%"
-        // The comparison-table annotation must match the insight: 67% and pre-COLA.
+        //   pre-COLA  (correct): 200 - 120 =  80 m, 200 / 120 ≈ 1.7×
+        //   post-COLA (wrong):   200 -  80 = 120 m, 200 /  80 = 2.5×
+        // The comparison-table annotation must use the pre-COLA baseline and
+        // absolute-delta + ratio wording.
         let report = validation_report_with_pre_cola(
             /* analytical_3d_km = */ 0.200,
             /* pre_cola_3d_km  = */ 0.120,
@@ -1640,37 +1833,56 @@ mod tests {
         write_safety_comparison(&mut md, &report, &config);
 
         assert!(
-            md.contains("67%"),
-            "expected 67% delta (pre-COLA denominator), got:\n{md}",
-        );
-        assert!(
             md.contains("Nyx pre-COLA trajectory"),
             "expected 'Nyx pre-COLA trajectory' label, got:\n{md}",
         );
         assert!(
-            !md.contains("150%"),
-            "must not compute 150% (post-COLA denominator), got:\n{md}",
+            md.contains("+80 m"),
+            "expected '+80 m' absolute delta (pre-COLA baseline), got:\n{md}",
+        );
+        assert!(
+            md.contains("~1.7"),
+            "expected '~1.7×' ratio (pre-COLA baseline), got:\n{md}",
+        );
+        assert!(
+            !md.contains("+120 m"),
+            "must not report +120 m delta (post-COLA baseline), got:\n{md}",
+        );
+        assert!(
+            !md.contains("~2.5"),
+            "must not report 2.5× ratio (post-COLA baseline), got:\n{md}",
         );
         assert!(
             !md.contains("post-COLA trajectory"),
             "must not use 'post-COLA trajectory' label when pre-COLA is available, got:\n{md}",
+        );
+        // Legacy phrasings must not leak back in.
+        assert!(
+            !md.contains("Numerical margin") && !md.contains("margin) governs"),
+            "legacy 'Numerical margin ... governs' phrasing must not reappear, got:\n{md}",
+        );
+        assert!(
+            !md.contains("overestimated by"),
+            "legacy 'overestimated by N%' phrasing must not reappear, got:\n{md}",
         );
     }
 
     #[test]
     fn mission_safety_comparison_fallback_without_pre_cola() {
         // No pre-COLA baseline — the 2-column layout and "Nyx" (plain) label
-        // must be used, with the post-COLA denominator driving the percentage.
-        //   (0.200 - 0.100) / 0.100 * 100 = 100% -> "100%"
+        // must be used. analytical = 200 m, Nyx = 100 m →
+        //   absolute delta = 100 m, ratio = 2.0×
         let report = validation_report_without_pre_cola(0.200, 0.100);
         let config = mission_config_with_safety();
 
         let mut md = String::new();
         write_safety_comparison(&mut md, &report, &config);
 
+        // Plain "Nyx" label (no "pre-COLA"/"post-COLA") followed by the
+        // absolute delta parenthetical in the new template.
         assert!(
-            md.contains("relative to Nyx."),
-            "expected plain 'Nyx.' label in fallback, got:\n{md}",
+            md.contains("vs 100 m Nyx (+100 m"),
+            "expected plain 'Nyx' label with absolute delta, got:\n{md}",
         );
         assert!(
             !md.contains("pre-COLA"),
@@ -1681,8 +1893,8 @@ mod tests {
             "must not mention post-COLA in fallback, got:\n{md}",
         );
         assert!(
-            md.contains("100%"),
-            "expected 100% delta against numerical, got:\n{md}",
+            md.contains("~2.0"),
+            "expected '~2.0×' ratio, got:\n{md}",
         );
     }
 
@@ -1790,6 +2002,209 @@ mod tests {
         assert!(
             md.contains("| 3D distance | **PASS** |"),
             "missing text PASS in safety detail",
+        );
+    }
+
+    // ── Report-wording regression tests ─────────────────────────────
+    //
+    // These lock the load-bearing phrasing from the 2026-04-10 CLI report
+    // wording cleanup. Each test asserts both the presence of the NEW
+    // wording and the absence of the LEGACY wording so regressions either
+    // direction surface immediately.
+
+    /// End-to-end render from `examples/mission.json` with enrichment
+    /// enabled via `safety_requirements`. Returns the rendered markdown
+    /// along with the input/output/propagator tuple for further assertions.
+    fn render_mission_with_enrichment() -> String {
+        let mut input: PipelineInput = serde_json::from_str(
+            &std::fs::read_to_string(examples_dir().join("mission.json")).unwrap(),
+        )
+        .unwrap();
+        input.safety_requirements = Some(rpo_core::mission::SafetyRequirements {
+            min_separation_km: 0.100,
+            alignment: rpo_core::mission::EiAlignment::default(),
+        });
+        let output = execute_mission(&input).unwrap();
+        let propagator = to_propagation_model(&input.propagator);
+        mission_to_markdown(&output, &input, &propagator, false)
+    }
+
+    #[test]
+    fn mission_report_transit_safety_footnote_names_the_mechanism() {
+        let md = render_mission_with_enrichment();
+        assert!(
+            md.contains("Guided waypoint targeting enforces RIC position and velocity at each waypoint"),
+            "transit safety footnote must name the RIC-targeting mechanism; got:\n{md}"
+        );
+        assert!(
+            !md.contains("FAIL results below are expected for guided operations"),
+            "legacy 'FAIL expected' hand-wave must not return; got:\n{md}"
+        );
+    }
+
+    #[test]
+    fn mission_report_passive_safety_renders_shortfall_row_when_below_threshold() {
+        let md = render_mission_with_enrichment();
+        // V-bar perch geometry has zero e/i separation by construction — the
+        // Passive Safety table must render a Shortfall row, never a negative
+        // Margin row.
+        assert!(
+            md.contains("| Shortfall |"),
+            "Passive Safety must render a Shortfall row for sub-threshold e/i; got:\n{md}"
+        );
+        assert!(
+            !md.contains("| Margin | -"),
+            "negative margins must render as Shortfall, not 'Margin | -X.X m'; got:\n{md}"
+        );
+    }
+
+    #[test]
+    fn mission_report_cola_callout_quotes_per_leg_values_without_leg_hedge() {
+        // examples/mission.json is configured to miss the 300 m COLA target
+        // on leg 3, so the callout must fire.
+        let md = render_mission_with_enrichment();
+        assert!(
+            md.contains("Analytical COLA solver did not reach"),
+            "COLA callout must fire on the leg-3 miss; got:\n{md}"
+        );
+        assert!(
+            !md.contains("leg(s)"),
+            "codegen hedge 'leg(s)' must not appear; got:\n{md}"
+        );
+        assert!(
+            !md.contains("will compound this deficit"),
+            "legacy 'will compound' forecast must not appear; got:\n{md}"
+        );
+        assert!(
+            md.contains("run `validate` before relying on this burn"),
+            "callout must point the operator at `validate`; got:\n{md}"
+        );
+    }
+
+    /// Build a synthetic [`ValidationReport`] mimicking the audit dataset:
+    /// analytical 188 m 3D, Nyx 71 m 3D, against a 50 m keep-out. When
+    /// `cola_miss` is true, injects a COLA effectiveness entry flagged as
+    /// threshold-not-met so the `(AT MARGIN)` qualifier and the CRITICAL
+    /// insight fire.
+    fn synthetic_validation_report(tight_margin: bool, cola_miss: bool) -> ValidationReport {
+        let nyx_3d_km = if tight_margin { 0.071 } else { 0.150 };
+        let cola_effectiveness = if cola_miss {
+            vec![rpo_core::mission::ColaEffectivenessEntry {
+                leg_index: 2,
+                analytical_post_cola_poca_km: Some(0.281),
+                nyx_post_cola_min_distance_km: 0.122,
+                target_distance_km: Some(0.300),
+                threshold_met: Some(false),
+            }]
+        } else {
+            vec![]
+        };
+        ValidationReport {
+            leg_points: vec![],
+            max_position_error_km: 0.300,
+            mean_position_error_km: 0.170,
+            rms_position_error_km: 0.181,
+            max_velocity_error_km_s: 0.0003,
+            analytical_safety: Some(make_safety(0.188, 0.002)),
+            numerical_safety: make_safety(nyx_3d_km, 0.018),
+            pre_cola_numerical_safety: Some(make_safety(nyx_3d_km, 0.018)),
+            chief_config: rpo_core::types::SpacecraftConfig::CUBESAT_6U,
+            deputy_config: rpo_core::types::SpacecraftConfig::CUBESAT_6U,
+            eclipse_validation: None,
+            cola_effectiveness,
+            leg_summaries: vec![],
+        }
+    }
+
+    /// Load `examples/mission.json` with enrichment enabled so that the
+    /// `(AT MARGIN)` verdict qualifier path is reachable (the qualifier only
+    /// downgrades from `OperationallyFeasible`, which in turn requires
+    /// enrichment to be active when e/i fails).
+    fn load_example_mission_with_enrichment() -> (PipelineInput, PipelineOutput, PropagationModel) {
+        let mut input: PipelineInput = serde_json::from_str(
+            &std::fs::read_to_string(examples_dir().join("mission.json")).unwrap(),
+        )
+        .unwrap();
+        input.safety_requirements = Some(rpo_core::mission::SafetyRequirements {
+            min_separation_km: 0.100,
+            alignment: rpo_core::mission::EiAlignment::default(),
+        });
+        let output = execute_mission(&input).unwrap();
+        let propagator = to_propagation_model(&input.propagator);
+        (input, output, propagator)
+    }
+
+    #[test]
+    fn validate_report_emits_at_margin_qualifier_on_tight_margin_and_cola_miss() {
+        let (input, output, propagator) = load_example_mission_with_enrichment();
+        let report = synthetic_validation_report(/* tight */ true, /* cola_miss */ true);
+        let ctx = ValidationContext {
+            propagator: &propagator,
+            auto_drag: true,
+            samples_per_leg: 50,
+            derived_drag: None,
+        };
+        let md = validation_to_markdown(&output, &input, &report, &ctx);
+
+        assert!(
+            md.contains("OPERATIONALLY FEASIBLE (AT MARGIN)"),
+            "verdict must carry '(AT MARGIN)' qualifier; got:\n{md}"
+        );
+        // Legacy column name must never render, regardless of whether the
+        // COLA validation detail section is emitted (it gates on post_cola
+        // leg points which the synthetic fixture does not populate).
+        assert!(
+            !md.contains("Nyx Post-COLA Min"),
+            "legacy 'Nyx Post-COLA Min' column header must be removed; got:\n{md}"
+        );
+    }
+
+    #[test]
+    fn validate_report_safety_comparison_uses_absolute_delta_and_ratio() {
+        let (input, output, propagator) = load_example_mission_with_enrichment();
+        let report = synthetic_validation_report(/* tight */ true, /* cola_miss */ false);
+        let ctx = ValidationContext {
+            propagator: &propagator,
+            auto_drag: true,
+            samples_per_leg: 50,
+            derived_drag: None,
+        };
+        let md = validation_to_markdown(&output, &input, &report, &ctx);
+
+        // 188 analytical - 71 Nyx = 117 m delta, 188/71 ≈ 2.6×.
+        assert!(
+            md.contains("+117 m"),
+            "annotation must show '+117 m' absolute delta; got:\n{md}"
+        );
+        assert!(
+            md.contains("~2.6"),
+            "annotation must show '~2.6×' ratio; got:\n{md}"
+        );
+        assert!(
+            !md.contains("Numerical margin >"),
+            "legacy '>10% smaller' footnote must not return; got:\n{md}"
+        );
+        assert!(
+            !md.contains("Numerical margin ("),
+            "legacy 'Numerical margin (...× threshold) governs' phrasing must not return; got:\n{md}"
+        );
+    }
+
+    #[test]
+    fn validate_report_adds_pre_post_cola_equality_footnote() {
+        let (input, output, propagator) = load_example_mission_with_enrichment();
+        let report = synthetic_validation_report(/* tight */ true, /* cola_miss */ true);
+        let ctx = ValidationContext {
+            propagator: &propagator,
+            auto_drag: true,
+            samples_per_leg: 50,
+            derived_drag: None,
+        };
+        let md = validation_to_markdown(&output, &input, &report, &ctx);
+
+        assert!(
+            md.contains("pre-COLA and post-COLA min 3D are identical"),
+            "Safety Comparison must explain pre/post equality; got:\n{md}"
         );
     }
 }

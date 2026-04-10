@@ -84,16 +84,15 @@ pub mod insight {
     ///
     /// Measurement convention is `(ana_km - num_km) / num_km * 100`,
     /// i.e. the overestimate is expressed as a fraction of the
-    /// *numerical* (ground-truth) value so the insight message
-    /// "Analytical overestimates by X%" reads naturally against the
-    /// Nyx number the operator is looking at. The `10%` threshold is
-    /// empirical: large enough that routine J2-vs-full-physics rounding
-    /// differences do not fire the warning, small enough that any real
-    /// model mismatch surfaces in the Safety Comparison table. Lives at
-    /// the boundary where analytical and numerical tiers begin to
-    /// disagree in an operationally meaningful way. See
-    /// `analytical_overestimate_pct` in `common.rs` for the single
-    /// source-of-truth computation.
+    /// *numerical* (ground-truth) value so the firing boundary stays
+    /// stable regardless of how the result is rendered downstream.
+    /// The `10%` threshold is empirical: large enough that routine
+    /// J2-vs-full-physics rounding differences do not fire the
+    /// warning, small enough that any real model mismatch surfaces in
+    /// the Safety Comparison table. Lives at the boundary where
+    /// analytical and numerical tiers begin to disagree in an
+    /// operationally meaningful way. See `analytical_overestimate`
+    /// in `common.rs` for the single source-of-truth computation.
     pub const SIGNIFICANT_DELTA_PCT: f64 = 10.0;
 
     /// Monte Carlo Δv spread ratio (`p95 / p05`) above which an
@@ -112,12 +111,23 @@ pub mod insight {
     ///
     /// Fires in two places: (1) `leg_error_growth_insight` in
     /// `insights.rs`, which analyzes `LegValidationSummary`, and (2)
-    /// `determine_mc_verdict` / `waypoint_miss_growth_ratio`, which
-    /// look at waypoint miss medians across the ensemble. `3.0` is
-    /// chosen as the point at which linearized-ROE validity is
-    /// visibly degrading over the mission horizon — a real model
-    /// issue rather than accumulated numerical noise. Empirical.
+    /// `determine_mc_verdict` / `waypoint_miss_growth`, which look
+    /// at waypoint miss medians across the ensemble. `3.0` is chosen
+    /// as the point at which linearized-ROE validity is visibly
+    /// degrading over the mission horizon — a real model issue
+    /// rather than accumulated numerical noise. Empirical.
     pub const ERROR_GROWTH_RATIO_ALERT: f64 = 3.0;
+
+    /// Final-waypoint p95 miss (metres) above which the MC report
+    /// emits the "closed-loop targeting degraded" insight. A
+    /// kilometre-scale miss on the arrival waypoint implies a
+    /// failed approach even with COLA active, so the operator
+    /// needs visibility even when the ensemble otherwise reports
+    /// clean statistics. Separate from [`ERROR_GROWTH_RATIO_ALERT`]:
+    /// this is an absolute-scale gate, that one is a ratio gate.
+    /// Empirical; matches the 1 km p95 limit flagged in the CLI
+    /// report audit.
+    pub const MC_FINAL_WAYPOINT_P95_ALERT_M: f64 = 1000.0;
 }
 
 /// Velocity target display thresholds.
@@ -158,4 +168,30 @@ pub mod safety {
     /// renderer suppresses the angle entirely rather than display a
     /// meaningless value.
     pub const MIN_EI_SEPARATION_FOR_PHASE_DISPLAY_M: f64 = 0.05;
+
+    /// Phase angle (degrees) at which the e and i vectors point in
+    /// opposite directions. At this angle the e/i separation norm
+    /// collapses because the two contributions subtract rather than
+    /// add, so the norm can drop from perch-scale to transit-scale
+    /// between neighbouring legs even though neither eccentricity
+    /// nor inclination vector has changed in magnitude.
+    pub const ANTIPARALLEL_PHASE_DEG: f64 = 180.0;
+
+    /// Half-width (degrees) around [`ANTIPARALLEL_PHASE_DEG`] that the
+    /// safety renderer annotates as "near anti-parallel". Chosen so
+    /// the annotation covers the regime where the collapse is visible
+    /// to a reader but the angle is not yet dominated by roundoff.
+    /// Empirical; re-tune if a real case surfaces a phase just
+    /// outside this window.
+    pub const ANTIPARALLEL_TOLERANCE_DEG: f64 = 30.0;
+
+    /// Tolerance (metres) for treating numerical pre-COLA and post-COLA
+    /// min 3D distances as equal in the Safety Comparison footnote.
+    /// Below this level the two values are within float-format and
+    /// integer-metre rounding noise, and the "pre and post are
+    /// identical because the primary POCA fires before the COLA burn"
+    /// footnote fires. Chosen at 5 cm so single-cm render rounding
+    /// does not suppress the footnote and integer-metre display does
+    /// not spuriously trigger it.
+    pub const POCA_PRE_POST_EQUAL_TOL_M: f64 = 0.05;
 }

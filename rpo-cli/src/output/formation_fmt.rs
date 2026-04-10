@@ -160,7 +160,10 @@ fn write_transit_safety_md(out: &mut String, report: &FormationDesignReport) {
     let _ = writeln!(out, "### Transit Safety\n");
     let _ = writeln!(
         out,
-        "> See e/i context above. FAIL results below are expected for guided operations.\n",
+        "> Guided waypoint targeting enforces RIC position and velocity at each waypoint; \
+         it does not constrain e/i geometry. Near-zero transit e/i on intermediate legs is a \
+         property of this targeting mode, not a COLA failure. See e/i context above for the \
+         operational interpretation.\n",
     );
     let _ = writeln!(
         out,
