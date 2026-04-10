@@ -524,8 +524,10 @@ fn propagate_leg(
 /// Shared context for per-leg nyx propagation.
 ///
 /// Groups the sampling density, spacecraft properties, and almanac that
-/// are threaded through both [`propagate_leg_parallel`] and
-/// [`propagate_leg_with_cola`], avoiding parameter sprawl.
+/// are threaded through the per-leg propagators ([`propagate_leg`],
+/// [`propagate_leg_parallel`], [`propagate_leg_with_cola`]) and the
+/// pre-COLA safety pass ([`compute_pre_cola_safety`]), avoiding parameter
+/// sprawl.
 struct LegPropagationCtx<'a> {
     /// Number of intermediate comparison samples per leg.
     samples_per_leg: u32,
@@ -654,15 +656,17 @@ fn lookup_earth_frame(
     }
 }
 
-/// Assign correct leg indices to the safety minimum-distance fields.
-///
-/// `analyze_trajectory_safety` processes a flat trajectory and always leaves
-/// leg indices at 0. This function derives the correct leg index from elapsed
-/// time and the per-leg durations.
 /// Propagate the full mission without COLA impulses to compute baseline safety.
 ///
-/// Runs a complete mission loop using [`propagate_leg_parallel`] for every leg,
-/// collecting only safety pairs (no comparison points, eclipse, or COLA data).
+/// Runs a complete mission loop using the unified [`propagate_leg`] for every
+/// leg, collecting only safety pairs (no comparison points, eclipse, or COLA
+/// data). On legs that carry a COLA burn in the post-COLA path, a sentinel
+/// [`MidLegBurn`] with `impulse_dv_ric_km_s = None` is passed so the sampling
+/// grid is split at the same elapsed time as the post-COLA propagation; the
+/// physical trajectory is unchanged because no impulse is applied. This keeps
+/// the pre-COLA baseline and post-COLA trajectory sample-aligned bit-for-bit
+/// on the shared segment, which the Safety Comparison table relies on.
+///
 /// This must be a full loop rather than per-leg branching because downstream
 /// legs' initial states depend on whether COLA was applied in earlier legs.
 ///
@@ -726,6 +730,11 @@ fn compute_pre_cola_safety(
     Ok(safety)
 }
 
+/// Assign correct leg indices to the safety minimum-distance fields.
+///
+/// [`analyze_trajectory_safety`] processes a flat trajectory and always leaves
+/// leg indices at 0. This function derives the correct leg index from elapsed
+/// time and the per-leg durations.
 fn assign_safety_leg_indices(
     safety: &mut rpo_core::mission::types::SafetyMetrics,
     legs: &[ManeuverLeg],

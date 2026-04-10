@@ -415,6 +415,13 @@ fn write_mc_diagnostics(
     report: &MonteCarloReport,
     derived_drag: Option<&DragConfig>,
 ) {
+    // Skip the section entirely when there is nothing to render. After Task 7
+    // gated the covariance cross-check on `OpenLoop` mode, closed-loop runs
+    // can end up with both fields absent -- emitting an empty "### Diagnostics"
+    // heading is a narrative regression.
+    if report.covariance_cross_check.is_none() && derived_drag.is_none() {
+        return;
+    }
     let _ = writeln!(out, "### Diagnostics\n");
     if let Some(ref cov) = report.covariance_cross_check {
         let _ = writeln!(out, "**Covariance cross-check:**\n");
@@ -573,6 +580,47 @@ mod tests {
         assert!(
             !md.contains("solver failed before full-physics validation"),
             "MC report must not emit the analytical solver-failure phrase. Got:\n{md}",
+        );
+    }
+
+    /// Regression test for Fix 1 of the final CLI report audit polish pass.
+    ///
+    /// After Task 7 gated the covariance cross-check on `MonteCarloMode::OpenLoop`,
+    /// closed-loop runs started producing `report.covariance_cross_check = None`.
+    /// The `write_mc_diagnostics` helper still unconditionally emitted
+    /// `### Diagnostics\n`, so closed-loop reports with no derived drag ended up
+    /// with a dangling empty heading right before whatever came next (or the end
+    /// of the document).
+    ///
+    /// This test builds a fully synthetic closed-loop fixture via [`make_mc_report`]
+    /// + [`make_mc_baseline`], passes `derived_drag = None`, and asserts the
+    /// Diagnostics section is omitted entirely.
+    #[test]
+    fn mc_markdown_has_no_empty_diagnostics_heading_in_closed_loop() {
+        let mut input: PipelineInput = serde_json::from_str(
+            &std::fs::read_to_string(examples_dir().join("mc.json")).unwrap(),
+        )
+        .unwrap();
+        // Strip any COLA config so the renderer doesn't inject unrelated callouts.
+        input.cola = None;
+
+        let mut output = execute_mission(&input).unwrap();
+        output.safety.cola = None;
+
+        let report = make_mc_report(); // closed-loop, covariance_cross_check = None
+        let baseline = make_mc_baseline();
+
+        let md = mc_to_markdown(&output, &input, &report, &baseline, None);
+
+        assert!(
+            !md.contains("### Diagnostics\n\n###"),
+            "closed-loop mc.md must not have a dangling empty Diagnostics heading \
+             followed immediately by another sub-heading; got:\n{md}",
+        );
+        assert!(
+            !md.contains("### Diagnostics"),
+            "Diagnostics section must be omitted entirely when both the covariance \
+             cross-check and the derived-drag table are absent; got:\n{md}",
         );
     }
 }

@@ -516,8 +516,12 @@ pub fn determine_verdict(
                             .join(", ")
                     )
                 };
+                // Use a semicolon separator rather than nesting another
+                // parenthesised clause. The outer verdict renderer wraps
+                // `verdict.reason` in a single pair of parens, so this yields
+                // a flat "(a; b; c)" list instead of "(a (b) (c))".
                 verdict.reason = Cow::Owned(format!(
-                    "{} (abort-case passive safety marginal on {leg_list})",
+                    "{}; abort-case passive safety marginal on {leg_list}",
                     verdict.reason,
                 ));
             }

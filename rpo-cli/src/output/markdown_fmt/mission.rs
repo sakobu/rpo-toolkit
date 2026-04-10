@@ -1262,8 +1262,8 @@ fn write_cola_validation_detail(
     let _ = writeln!(out);
     let _ = writeln!(
         out,
-        "> Nyx propagated the post-COLA trajectory. \
-         Safety comparison above reflects these burns.\n",
+        "> Nyx propagated both the pre-COLA baseline and the post-COLA trajectory; \
+         the Safety Comparison table above shows both side-by-side.\n",
     );
 }
 
