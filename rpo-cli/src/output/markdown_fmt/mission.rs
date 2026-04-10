@@ -492,7 +492,7 @@ fn write_transfer_section(out: &mut String, output: &PipelineOutput, input: &Pip
         let _ = writeln!(out);
     }
 
-    write_perch_roe(out, &output.perch_roe);
+    write_perch_roe(out, &output.perch_roe, output.formation_design.is_some());
 }
 
 fn write_lambert_solution(
@@ -538,8 +538,23 @@ fn write_lambert_solution(
     let _ = writeln!(out);
 }
 
-fn write_perch_roe(out: &mut String, roe: &rpo_core::types::QuasiNonsingularROE) {
-    let _ = writeln!(out, "### Perch ROE\n");
+/// Render the perch ROE table.
+///
+/// `is_enriched` should be `true` when the caller knows the pipeline has
+/// overwritten `output.perch_roe` with an enriched state (i.e.,
+/// `output.formation_design.is_some()`), so the heading matches the
+/// rendered values.
+fn write_perch_roe(
+    out: &mut String,
+    roe: &rpo_core::types::QuasiNonsingularROE,
+    is_enriched: bool,
+) {
+    let heading = if is_enriched {
+        "### Enriched Perch ROE\n"
+    } else {
+        "### Perch ROE\n"
+    };
+    let _ = writeln!(out, "{heading}");
     let _ = writeln!(out, "| Element | Value | Description |");
     let _ = writeln!(out, "| --- | --- | --- |");
     let _ = writeln!(
@@ -1679,6 +1694,75 @@ mod tests {
         assert!(
             md.contains("100%"),
             "expected 100% delta against numerical, got:\n{md}",
+        );
+    }
+
+    /// Load `examples/mission.json` and drive the real pipeline, returning
+    /// the `(input, output, propagator)` tuple used by report-rendering tests.
+    ///
+    /// Mirrors the pattern in `mission_markdown_contains_expected_sections`.
+    /// The default `examples/mission.json` does not enable enrichment, so
+    /// `output.formation_design` is `None` on return.
+    fn load_example_mission() -> (PipelineInput, PipelineOutput, PropagationModel) {
+        let input: PipelineInput = serde_json::from_str(
+            &std::fs::read_to_string(examples_dir().join("mission.json")).unwrap(),
+        )
+        .unwrap();
+        let output = execute_mission(&input).unwrap();
+        let propagator = to_propagation_model(&input.propagator);
+        (input, output, propagator)
+    }
+
+    /// Build a minimal synthetic [`rpo_core::mission::FormationDesignReport`]
+    /// sufficient to toggle `output.formation_design.is_some()` in rendering
+    /// tests. Uses the `Baseline` perch variant with empty leg vectors so
+    /// `write_formation_design_md` stays on its cheapest code path.
+    fn synthetic_formation_design_report() -> rpo_core::mission::FormationDesignReport {
+        rpo_core::mission::FormationDesignReport {
+            perch: rpo_core::mission::PerchEnrichmentResult::Baseline(
+                rpo_core::types::QuasiNonsingularROE::default(),
+            ),
+            waypoints: Vec::new(),
+            transit_safety: Vec::new(),
+            mission_min_ei_separation_km: None,
+            drift_prediction: None,
+        }
+    }
+
+    #[test]
+    fn perch_roe_heading_says_enriched_when_formation_design_present() {
+        let (input, mut output, propagator) = load_example_mission();
+        output.formation_design = Some(synthetic_formation_design_report());
+
+        let md = mission_to_markdown(&output, &input, &propagator, false);
+
+        assert!(
+            md.contains("### Enriched Perch ROE"),
+            "heading must reflect that the rendered values are enriched when formation_design is present; got:\n{md}",
+        );
+        assert!(
+            !md.contains("\n### Perch ROE\n"),
+            "unqualified heading must not appear when enrichment is active; got:\n{md}",
+        );
+    }
+
+    #[test]
+    fn perch_roe_heading_stays_bare_when_formation_design_absent() {
+        let (input, output, propagator) = load_example_mission();
+        assert!(
+            output.formation_design.is_none(),
+            "baseline example must not enable enrichment",
+        );
+
+        let md = mission_to_markdown(&output, &input, &propagator, false);
+
+        assert!(
+            md.contains("### Perch ROE"),
+            "baseline heading stays when no enrichment; got:\n{md}",
+        );
+        assert!(
+            !md.contains("### Enriched Perch ROE"),
+            "must not claim enrichment when None; got:\n{md}",
         );
     }
 
