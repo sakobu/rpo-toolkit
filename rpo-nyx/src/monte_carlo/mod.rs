@@ -15,6 +15,7 @@ use std::time::Instant;
 use rayon::prelude::*;
 
 use rpo_core::mission::monte_carlo::MonteCarloError as CoreMonteCarloError;
+use rpo_core::mission::monte_carlo::MonteCarloMode;
 
 use execution::{collect_ensemble_statistics, run_single_sample};
 use statistics::compute_covariance_cross_check;
@@ -189,11 +190,19 @@ pub fn run_monte_carlo(
         input.mission_config.safety.as_ref(),
     )?;
 
-    // Covariance validation (if provided)
-    let covariance_cross_check = input
-        .covariance_report
-        .map(|cov_report| compute_covariance_cross_check(cov_report, &statistics, &trajectories))
-        .transpose()?;
+    // Covariance validation: only meaningful in open-loop mode. Closed-loop
+    // retargeting actively suppresses the empirical dispersion, so an
+    // open-loop linear covariance comparison is apples-to-oranges by design —
+    // skip it.
+    let covariance_cross_check = match config.mode {
+        MonteCarloMode::OpenLoop => input
+            .covariance_report
+            .map(|cov_report| {
+                compute_covariance_cross_check(cov_report, &statistics, &trajectories)
+            })
+            .transpose()?,
+        MonteCarloMode::ClosedLoop => None,
+    };
 
     Ok(rpo_core::mission::monte_carlo::MonteCarloReport {
         config: *config,
@@ -746,6 +755,56 @@ mod tests {
             cv.min_mahalanobis_distance >= 0.0,
             "Mahalanobis distance should be non-negative, got {}",
             cv.min_mahalanobis_distance
+        );
+    }
+
+    /// Regression test for Task 7 of the CLI report audit.
+    ///
+    /// `compute_covariance_cross_check` is a linear open-loop diagnostic: it
+    /// compares empirical MC dispersion against a single-step Phi P Phi^T
+    /// prediction. In closed-loop mode the retargeting loop actively
+    /// suppresses empirical dispersion, so the cross-check always reads
+    /// "suppressed by retargeting" and carries no information. The gate
+    /// should short-circuit the compute call on `config.mode == ClosedLoop`,
+    /// regardless of whether a `covariance_report` was provided.
+    #[test]
+    #[ignore = "requires MetaAlmanac (network on first run)"]
+    fn closed_loop_mc_run_does_not_compute_covariance_cross_check() {
+        use rpo_core::mission::covariance::propagate_mission_covariance;
+        use rpo_core::propagation::covariance::ric_accuracy_to_roe_covariance;
+        use rpo_core::propagation::covariance::types::NavigationAccuracy;
+
+        let (chief, deputy, mission, mc_config, mission_config, propagator, almanac) =
+            build_mc_test_fixtures(5, MonteCarloMode::ClosedLoop, default_state_dispersions());
+
+        let nav = NavigationAccuracy::default();
+        let chief_ke = rpo_core::test_helpers::iss_like_elements();
+        let initial_cov =
+            ric_accuracy_to_roe_covariance(&nav, &chief_ke).expect("covariance init should work");
+        let cov_report =
+            propagate_mission_covariance(&mission, &initial_cov, &nav, None, &propagator, 20)
+                .expect("covariance propagation should succeed");
+
+        let input = MonteCarloInput {
+            nominal_mission: &mission,
+            initial_chief: &chief,
+            initial_deputy: &deputy,
+            config: &mc_config,
+            mission_config: &mission_config,
+            chief_config: &SpacecraftConfig::SERVICER_500KG,
+            deputy_config: &SpacecraftConfig::SERVICER_500KG,
+            propagator: &propagator,
+            almanac: &almanac,
+            covariance_report: Some(&cov_report),
+            control: None,
+        };
+
+        let report = run_monte_carlo(&input).expect("closed-loop MC run must succeed");
+
+        assert!(
+            report.covariance_cross_check.is_none(),
+            "closed-loop MC must not compute the open-loop covariance cross-check; got: {:?}",
+            report.covariance_cross_check,
         );
     }
 }

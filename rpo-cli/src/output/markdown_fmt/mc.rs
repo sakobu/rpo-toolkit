@@ -428,7 +428,7 @@ fn write_mc_diagnostics(
         let sr = &cov.sigma_ratio_ric;
         let _ = writeln!(
             out,
-            "| Sigma ratio (R / I / C) | {:.2} / {:.2} / {:.2} *(closed-loop: suppressed by retargeting)* |",
+            "| Sigma ratio (R / I / C) | {:.2} / {:.2} / {:.2} |",
             sr[0], sr[1], sr[2],
         );
         let _ = writeln!(
