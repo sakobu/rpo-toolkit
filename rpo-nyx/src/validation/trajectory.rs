@@ -445,6 +445,13 @@ fn propagate_leg(
         });
     };
 
+    debug_assert!(
+        burn.elapsed_s > 0.0 && burn.elapsed_s < leg.tof_s,
+        "propagate_leg: burn elapsed_s {} must be within (0, tof_s = {})",
+        burn.elapsed_s,
+        leg.tof_s,
+    );
+
     // Split-sample allocation: identical to the old propagate_leg_with_cola.
     // n1 is the smallest integer such that n1 * step_s >= burn.elapsed_s;
     // n2 is the remainder (min 1). Stays in u32 domain -- no f64->integer cast.
@@ -2027,7 +2034,7 @@ mod tests {
 
     /// Build a minimal single-leg `ManeuverLeg` with the given TOF (s) and
     /// zero departure/arrival impulses. Chief mean elements are ISS-like.
-    fn make_single_leg_taskone(tof_s: f64) -> rpo_core::mission::types::ManeuverLeg {
+    fn make_zero_dv_iss_leg(tof_s: f64) -> rpo_core::mission::types::ManeuverLeg {
         use rpo_core::mission::types::{Maneuver, ManeuverLeg};
         use rpo_core::types::QuasiNonsingularROE;
         let dep_epoch = test_epoch();
@@ -2052,9 +2059,9 @@ mod tests {
         }
     }
 
-    /// Build chief/deputy initial ECI states for a ~300m formation with
-    /// nonzero dex/dey/dix. Used by the Task 1 sampling-parity tests.
-    fn make_initial_states_taskone() -> (StateVector, StateVector) {
+    /// Build chief/deputy initial ECI states for an ISS-like ~300m formation
+    /// with nonzero `dex`/`dey`/`dix`. Used by the sampling-parity tests.
+    fn make_iss_like_formation_states() -> (StateVector, StateVector) {
         use rpo_core::test_helpers::deputy_from_roe;
         use rpo_core::types::QuasiNonsingularROE;
 
@@ -2089,8 +2096,8 @@ mod tests {
         /// accumulation over `0..tof_s` is sub-nanosecond.
         const EPOCH_NOISE_S: f64 = 1.0e-9;
 
-        let (chief_state, deputy_state) = make_initial_states_taskone();
-        let leg = make_single_leg_taskone(4200.0);
+        let (chief_state, deputy_state) = make_iss_like_formation_states();
+        let leg = make_zero_dv_iss_leg(4200.0);
         let almanac = nyx_bridge::load_full_almanac().expect("full almanac should load");
         let ctx = super::LegPropagationCtx {
             samples_per_leg: 50,
@@ -2190,12 +2197,19 @@ mod tests {
         use rpo_core::mission::types::Waypoint;
         use rpo_core::types::{DepartureState, QuasiNonsingularROE};
 
-        /// Sampling-grid agreement budget. With the unified `propagate_leg`,
+        /// Sampling-grid regression guard. With the unified `propagate_leg`,
         /// the pre-burn window should be bit-identical; this tolerance only
         /// absorbs f64 round-off across the trajectory-safety reduction
         /// (norm + min). A millimeter is ~6 orders of magnitude tighter than
         /// the sampling artifact we are regressing against (~16 m).
-        const SAMPLING_TOL_KM: f64 = 1.0e-6;
+        const SAMPLING_REGRESSION_TOL_KM: f64 = 1.0e-6;
+
+        /// Post-refactor numerical-noise floor. With unified sampling the
+        /// pre-burn window should be bit-identical; this absorbs only the
+        /// f64 accumulation that remains in `analyze_trajectory_safety`'s
+        /// norm + min reduction. 1e-9 km = 1 micron, which is ~7 orders of
+        /// magnitude tighter than the ~16 m artifact the unification removes.
+        const NUMERICAL_NOISE_TOL_KM: f64 = 1.0e-9;
 
         // Build a single-leg mission with a nonzero formation so the ROE
         // trajectory is interesting. COLA burn will be injected at mid-leg.
@@ -2267,17 +2281,17 @@ mod tests {
         // sampling_tolerance.
         let delta_km = (pre_cola_min_3d_km - post_cola_min_3d_km).abs();
         assert!(
-            delta_km < SAMPLING_TOL_KM || pre_cola_min_3d_km <= post_cola_min_3d_km + SAMPLING_TOL_KM,
+            delta_km < SAMPLING_REGRESSION_TOL_KM
+                || pre_cola_min_3d_km <= post_cola_min_3d_km + SAMPLING_REGRESSION_TOL_KM,
             "pre-COLA min ({pre_cola_min_3d_km:.9} km) must be <= post-COLA min ({post_cola_min_3d_km:.9} km) \
              within sampling tolerance; delta = {delta_km:.9} km"
         );
 
         // Additional assertion: this guards against any future change that
-        // re-introduces sampling asymmetry. Sub-micron tolerance -- purely
+        // re-introduces sampling asymmetry. Micron-scale tolerance -- purely
         // numerical noise from the safety reduction.
-        let samples_tolerance_km = 1.0e-9;
         assert!(
-            (pre_cola_min_3d_km - post_cola_min_3d_km).abs() < samples_tolerance_km
+            (pre_cola_min_3d_km - post_cola_min_3d_km).abs() < NUMERICAL_NOISE_TOL_KM
                 || pre_cola_min_3d_km <= post_cola_min_3d_km,
             "pre-COLA min must equal post-COLA min or be strictly less (COLA only acts post-split); \
              pre = {pre_cola_min_3d_km:.12} km, post = {post_cola_min_3d_km:.12} km"
