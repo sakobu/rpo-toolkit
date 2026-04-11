@@ -146,10 +146,19 @@ impl ValidationContext {
 /// Parameter bundle for [`plan_and_validate`], keeping the argument count
 /// manageable while still allowing every knob to vary per call site.
 ///
-/// Note: the formation ROE is no longer a field here — it lives on
-/// `ValidationContext` as the single source of truth (see C-4), so
-/// `plan_mission` reads `ctx.formation_roe` directly and cannot drift
+/// # Field ownership convention
+///
+/// Large / non-`Copy` inputs are borrowed (`waypoints`, `config`,
+/// `propagator`, `cola_input`). Small `Copy` scalars are owned
+/// (`chief_config`, `deputy_config`, `samples_per_leg`). The formation
+/// ROE is deliberately *not* a field here — it lives on
+/// [`ValidationContext`] as the single source of truth (see Phase 1
+/// C-4), so `plan_mission` reads `ctx.formation_roe` and cannot drift
 /// away from the ROE that produced `ctx.deputy_state`.
+///
+/// Future additions should follow the same rule: if a new field is a
+/// borrowed reference or a large owned value, borrow it; if it is a
+/// `Copy` scalar or small fixed-size type, own it.
 pub(super) struct PlanAndValidateInput<'a> {
     /// Target waypoints for the mission.
     pub(super) waypoints: &'a [Waypoint],
