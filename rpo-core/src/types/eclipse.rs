@@ -201,7 +201,11 @@ mod tests {
         let json = serde_json::to_string(&snapshot).expect("serialize");
         let deserialized: CelestialSnapshot =
             serde_json::from_str(&json).expect("deserialize");
-        assert_eq!(deserialized.sun_distance_km, snapshot.sun_distance_km);
+        assert_eq!(
+            deserialized.sun_distance_km.to_bits(),
+            snapshot.sun_distance_km.to_bits(),
+            "sun_distance_km must roundtrip bitwise"
+        );
         assert_eq!(deserialized.eclipse_state, snapshot.eclipse_state);
     }
 

@@ -241,8 +241,8 @@ mod tests {
             "diy should be nonzero after enrichment"
         );
         assert_eq!(
-            result.roe.dey.signum(),
-            result.roe.diy.signum(),
+            result.roe.dey.is_sign_positive(),
+            result.roe.diy.is_sign_positive(),
             "dey and diy should have same sign for Parallel alignment"
         );
     }
@@ -287,8 +287,8 @@ mod tests {
         assert!(result.roe.dey.abs() > 0.0, "dey should be nonzero");
         assert!(result.roe.diy.abs() > 0.0, "diy should be nonzero");
         assert_eq!(
-            result.roe.dey.signum(),
-            result.roe.diy.signum(),
+            result.roe.dey.is_sign_positive(),
+            result.roe.diy.is_sign_positive(),
             "dey and diy should have same sign for Parallel"
         );
     }

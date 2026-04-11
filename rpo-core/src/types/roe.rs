@@ -112,10 +112,19 @@ mod tests {
     }
 
     /// When all included components are zero, norm = 0.
+    ///
+    /// `dimensionless_norm` performs only `.abs()` and `.max()` on zero
+    /// inputs, so the result is structurally a zero in the IEEE 754 sense
+    /// (no arithmetic, no rounding). `FpCategory::Zero` matches both `+0.0`
+    /// and `-0.0` directly, avoiding a float `==` comparison.
     #[test]
     fn dimensionless_norm_zero_roe() {
         let roe = QuasiNonsingularROE::default();
-        assert_eq!(roe.dimensionless_norm(), 0.0, "zero ROE: expected norm = 0");
+        let norm = roe.dimensionless_norm();
+        assert!(
+            matches!(norm.classify(), std::num::FpCategory::Zero),
+            "zero ROE: expected structural zero norm, got {norm}"
+        );
     }
 
     /// Norm picks the correct maximum when δa is the largest.
