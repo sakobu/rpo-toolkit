@@ -5,10 +5,20 @@
 //! in [`super::trajectory`] and [`super::eclipse`] would otherwise duplicate
 //! line-for-line. Kept internal to the `validation` module via `pub(super)`.
 //!
-//! Paper symbol fidelity: the QNS ROE components (`dex`/`dey`/`dix`/`diy`,
-//! from D'Amico Eq. 2.2) are deliberately 3-character identifiers that
-//! trigger `clippy::similar_names`; a scoped allow preserves the paper
-//! traceability.
+//! # Paper traceability
+//!
+//! `iss_formation_roe` constructs a [`QuasiNonsingularROE`] per
+//! **D'Amico Eq. 2.2** (QNS ROE definition). The km-scale input convention
+//! is motivated by **D'Amico Eq. 2.17** (ROE→RIC mapping `T * ROE = r_ric`,
+//! which scales the dimensionless ROE components by `a`): callers can
+//! specify the *target* RIC-frame separation in km and the function
+//! divides by `a` to yield dimensionless ROE. This matches how the rest
+//! of the codebase reports formations for humans (meters / kilometers)
+//! while keeping the stored ROE dimensionless.
+//!
+//! The QNS ROE components (`dex`/`dey`/`dix`/`diy`, 3-character paper
+//! identifiers) trigger `clippy::similar_names`; a scoped allow preserves
+//! the paper traceability.
 #![allow(clippy::similar_names)]
 
 use std::sync::Arc;
@@ -191,23 +201,28 @@ pub(super) fn plan_and_validate(
 
 /// Build a formation ROE keyed to the ISS-like chief's semi-major axis.
 ///
-/// The raw values are the desired RIC-scale components in km (e.g. `0.3`
-/// means 300 m), which are divided by `a` to produce the dimensionless
-/// QNS ROE components. `da` and `dlambda` are always zero — tests that
-/// need non-trivial drift should build the struct directly instead.
+/// The four arguments are the *target* RIC-frame separation scale in km
+/// — the function divides each by the chief's `a` to produce the
+/// dimensionless QNS ROE components (`dex`, `dey`, `dix`, `diy`) per
+/// D'Amico Eq. 2.2. For example, passing `0.3` for `de_radial_km` means
+/// "target 300 m of radial eccentricity separation", which becomes
+/// `dex = 0.3 / a` in the returned ROE.
+///
+/// `da` and `dlambda` are always zero — drift tests that need non-trivial
+/// `da`/`dlambda` should build the struct directly instead.
 pub(super) fn iss_formation_roe(
-    dex_km: f64,
-    dey_km: f64,
-    dix_km: f64,
-    diy_km: f64,
+    de_radial_km: f64,
+    de_tangential_km: f64,
+    di_normal_km: f64,
+    di_phase_km: f64,
 ) -> QuasiNonsingularROE {
     let a = iss_like_elements().a_km;
     QuasiNonsingularROE {
         da: 0.0,
         dlambda: 0.0,
-        dex: dex_km / a,
-        dey: dey_km / a,
-        dix: dix_km / a,
-        diy: diy_km / a,
+        dex: de_radial_km / a,
+        dey: de_tangential_km / a,
+        dix: di_normal_km / a,
+        diy: di_phase_km / a,
     }
 }
