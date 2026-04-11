@@ -914,7 +914,7 @@ mod tests {
         TEST_F64_EPOCH_NOISE_S, TEST_F64_POSITION_NOISE_KM, TEST_INTEGRATOR_RESTART_TOL_KM,
         TEST_SAMPLING_REGRESSION_TOL_KM,
     };
-    use rpo_core::elements::keplerian_conversions::keplerian_to_state;
+
     use crate::nyx_bridge;
     use rpo_core::mission::config::MissionConfig;
     use rpo_core::mission::types::Waypoint;
@@ -1937,56 +1937,57 @@ mod tests {
     #[test]
     #[ignore = "Requires MetaAlmanac (network on first run)"]
     fn pre_cola_and_post_cola_pre_burn_window_match_within_sampling_tolerance() {
-        use rpo_core::mission::waypoints::plan_waypoint_mission;
-        use rpo_core::test_helpers::deputy_from_roe;
         use rpo_core::mission::config::MissionConfig;
         use rpo_core::mission::types::Waypoint;
-        use rpo_core::types::{DepartureState, QuasiNonsingularROE};
-        use test_scenario::DEFAULT_VALIDATION_SAMPLES_PER_LEG;
+
+        use test_scenario::{
+            iss_formation_roe, plan_mission, DEFAULT_VALIDATION_SAMPLES_PER_LEG,
+            PlanAndValidateInput, ValidationContext,
+        };
+
+        // Mid-coast COLA burn time, prime-ish to avoid coinciding with sampling grid points.
+        const MID_COAST_BURN_ELAPSED_S: f64 = 709.0;
 
         // Build a single-leg mission with a nonzero formation so the ROE
         // trajectory is interesting. COLA burn will be injected at mid-leg.
-        let epoch = test_epoch();
-        let chief_ke = iss_like_elements();
-        let a = chief_ke.a_km;
-        let formation_roe = QuasiNonsingularROE {
-            da: 0.0, dlambda: 0.0,
-            dex: 0.3 / a, dey: -0.2 / a,
-            dix: 0.2 / a, diy: 0.0,
-        };
-        let deputy_ke = deputy_from_roe(&chief_ke, &formation_roe);
-        let chief_sv = keplerian_to_state(&chief_ke, epoch).unwrap();
-        let deputy_sv = keplerian_to_state(&deputy_ke, epoch).unwrap();
+        let formation = iss_formation_roe(0.3, -0.2, 0.2, 0.0);
+        let ctx = ValidationContext::iss_with_formation(&formation);
 
-        let period = chief_ke.period().unwrap();
+        let period = ctx.chief_elements.period().unwrap();
         let waypoint = Waypoint {
             position_ric_km: Vector3::new(0.5, 3.0, 1.0),
             velocity_ric_km_s: Some(Vector3::zeros()),
             tof_s: Some(0.8 * period),
         };
-        let departure = DepartureState { roe: formation_roe, chief: chief_ke, epoch };
-        let mission_config = MissionConfig::default();
-        let propagator = PropagationModel::J2Stm;
-        let mission = plan_waypoint_mission(&departure, &[waypoint], &mission_config, &propagator)
-            .expect("mission planning should succeed");
 
-        // COLA burn at 709s (synthetic small burn; we only care about sampling
-        // grid parity in the pre-burn window, not that COLA actually resolves
-        // anything). The dv is small enough not to blow up the trajectory but
-        // large enough that the post-burn segment diverges from the baseline.
+        let default_cola = super::ColaValidationInput::default();
+        let propagator = PropagationModel::J2Stm;
+        let input = PlanAndValidateInput {
+            waypoints: &[waypoint],
+            config: &MissionConfig::default(),
+            propagator: &propagator,
+            chief_config: SpacecraftConfig::SERVICER_500KG,
+            deputy_config: SpacecraftConfig::SERVICER_500KG,
+            samples_per_leg: DEFAULT_VALIDATION_SAMPLES_PER_LEG,
+            cola_input: &default_cola,
+        };
+        let mission = plan_mission(&ctx, &input);
+
+        // COLA burn at MID_COAST_BURN_ELAPSED_S. The dv is small enough not to
+        // blow up the trajectory but large enough that the post-burn segment
+        // diverges from the baseline.
         let leg_tof_s = mission.legs[0].tof_s;
-        assert!(709.0 < leg_tof_s, "test burn at 709s must be inside leg tof");
+        assert!(MID_COAST_BURN_ELAPSED_S < leg_tof_s, "burn time must be inside leg tof");
         let cola = super::ColaValidationInput {
             burns: vec![super::ColaBurn {
                 leg_index: 0,
-                elapsed_s: 709.0,
+                elapsed_s: MID_COAST_BURN_ELAPSED_S,
                 dv_ric_km_s: Vector3::new(0.0, 0.001, 0.0),
             }],
             analytical_maneuvers: vec![],
             target_distance_km: None,
         };
 
-        let almanac = nyx_bridge::load_full_almanac().expect("full almanac should load");
         let val_config = super::ValidationConfig {
             samples_per_leg: DEFAULT_VALIDATION_SAMPLES_PER_LEG,
             chief_config: SpacecraftConfig::SERVICER_500KG,
@@ -1994,7 +1995,12 @@ mod tests {
         };
 
         let report = crate::validation::validate_mission_nyx(
-            &mission, &chief_sv, &deputy_sv, &val_config, &cola, &almanac,
+            &mission,
+            &ctx.chief_state,
+            &ctx.deputy_state,
+            &val_config,
+            &cola,
+            &ctx.almanac,
         )
         .expect("validation should succeed");
 
@@ -2004,10 +2010,6 @@ mod tests {
             .expect("pre_cola_numerical_safety must be populated when COLA is present");
         let post_cola_min_3d_km = report.numerical_safety.operational.min_distance_3d_km;
         let pre_cola_min_3d_km = pre_cola.operational.min_distance_3d_km;
-
-        eprintln!(
-            "Pre-COLA min 3D: {pre_cola_min_3d_km:.12} km; Post-COLA min 3D: {post_cola_min_3d_km:.12} km"
-        );
 
         // COLA can only reduce the post-burn minimum; it cannot affect
         // pre-burn. So pre_cola_min_3d must be <= post_cola_min_3d +
@@ -2020,9 +2022,6 @@ mod tests {
              within sampling tolerance; delta = {delta_km:.9} km"
         );
 
-        // Additional assertion: this guards against any future change that
-        // re-introduces sampling asymmetry. Micron-scale tolerance -- purely
-        // numerical noise from the safety reduction.
         assert!(
             (pre_cola_min_3d_km - post_cola_min_3d_km).abs() < TEST_F64_POSITION_NOISE_KM
                 || pre_cola_min_3d_km <= post_cola_min_3d_km,
