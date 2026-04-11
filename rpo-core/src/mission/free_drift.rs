@@ -248,6 +248,24 @@ mod tests {
     /// δix coupling contributes O(1e-9) to the residual.
     const DEGENERATION_TOL: f64 = 1e-8;
 
+    /// Angular offset from the singularity (equator or pole) for near-degenerate
+    /// residual tests. At 0.001°, sin(2·0.001°) ≈ 3.5e-5 so the δix coupling
+    /// contributes O(1e-9) to the bounded-motion residual — well below
+    /// `DEGENERATION_TOL`.
+    const SINGULARITY_OFFSET_DEG: f64 = 0.001;
+
+    /// δa numerator (km) for degeneration fixtures. The degeneracy relation
+    /// `residual ≈ δa/7` is scale-invariant in δa, so any nonzero value works;
+    /// this picks a round number that makes `da = 100 / a_km` ≈ 1.4e-2 for
+    /// the D'Amico Table 2.1 chief.
+    const DEGEN_FIXTURE_DA_KM: f64 = 100.0;
+
+    /// δix numerator (km) for degeneration fixtures. Arbitrary nonzero value
+    /// chosen to keep the `γ·sin(2i)·δix` coupling term well above the
+    /// numerical noise floor while the sin(2i) factor drives the residual
+    /// toward δa/7.
+    const DEGEN_FIXTURE_DIX_KM: f64 = 200.0;
+
     fn test_epoch() -> Epoch {
         Epoch::from_gregorian_str("2024-01-01T00:00:00 UTC").unwrap()
     }
@@ -344,11 +362,13 @@ mod tests {
     #[test]
     fn test_near_equatorial_residual() {
         let mut chief = damico_table21_chief();
-        chief.i_rad = 0.001_f64.to_radians(); // near-equatorial
+        chief.i_rad = SINGULARITY_OFFSET_DEG.to_radians();
 
-        let mut roe = QuasiNonsingularROE::default();
-        roe.da = 100.0 / chief.a_km;
-        roe.dix = 200.0 / chief.a_km;
+        let roe = QuasiNonsingularROE {
+            da: DEGEN_FIXTURE_DA_KM / chief.a_km,
+            dix: DEGEN_FIXTURE_DIX_KM / chief.a_km,
+            ..Default::default()
+        };
 
         let residual = bounded_motion_residual(&roe, &chief).expect("residual");
         let expected = roe.da / BOUNDED_MOTION_DA_DIVISOR;
@@ -363,11 +383,13 @@ mod tests {
     #[test]
     fn test_near_polar_residual() {
         let mut chief = damico_table21_chief();
-        chief.i_rad = std::f64::consts::FRAC_PI_2 - 0.001_f64.to_radians(); // near-polar
+        chief.i_rad = std::f64::consts::FRAC_PI_2 - SINGULARITY_OFFSET_DEG.to_radians();
 
-        let mut roe = QuasiNonsingularROE::default();
-        roe.da = 100.0 / chief.a_km;
-        roe.dix = 200.0 / chief.a_km;
+        let roe = QuasiNonsingularROE {
+            da: DEGEN_FIXTURE_DA_KM / chief.a_km,
+            dix: DEGEN_FIXTURE_DIX_KM / chief.a_km,
+            ..Default::default()
+        };
 
         let residual = bounded_motion_residual(&roe, &chief).expect("residual");
         let expected = roe.da / BOUNDED_MOTION_DA_DIVISOR;

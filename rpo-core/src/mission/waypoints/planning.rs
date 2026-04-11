@@ -699,9 +699,9 @@ mod tests {
 
         assert_eq!(replanned.legs.len(), 2);
         // Both kept legs should be identical to original
-        for i in 0..2 {
+        for (i, (kept, leg)) in kept_dvs.iter().zip(replanned.legs.iter()).enumerate() {
             assert!(
-                (kept_dvs[i] - replanned.legs[i].total_dv_km_s).abs() < SCALAR_ROUNDTRIP_TOL,
+                (kept - leg.total_dv_km_s).abs() < SCALAR_ROUNDTRIP_TOL,
                 "Kept leg {i} should be identical"
             );
         }
