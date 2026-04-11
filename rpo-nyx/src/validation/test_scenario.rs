@@ -200,10 +200,9 @@ pub(super) fn validate_planned(
 pub(super) fn plan_and_validate(
     ctx: &ValidationContext,
     input: &PlanAndValidateInput<'_>,
-) -> (WaypointMission, ValidationReport) {
+) -> ValidationReport {
     let mission = plan_mission(ctx, input);
-    let report = validate_planned(ctx, &mission, input);
-    (mission, report)
+    validate_planned(ctx, &mission, input)
 }
 
 /// Build a formation ROE keyed to the ISS-like chief's semi-major axis.

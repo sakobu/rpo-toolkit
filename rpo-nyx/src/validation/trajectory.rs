@@ -1177,7 +1177,7 @@ mod tests {
             tof_s: Some(0.8 * period),
         }];
 
-        let (_, report) = plan_and_validate(
+        let report = plan_and_validate(
             &ctx,
             &PlanAndValidateInput {
                 waypoints: &waypoints,
@@ -1259,7 +1259,7 @@ mod tests {
             },
         ];
 
-        let (_, report) = plan_and_validate(
+        let report = plan_and_validate(
             &ctx,
             &PlanAndValidateInput {
                 waypoints: &waypoints,
@@ -1365,7 +1365,7 @@ mod tests {
         let default_cola = super::ColaValidationInput::default();
 
         let drag_propagator = PropagationModel::J2DragStm { drag };
-        let (_, drag_report) = plan_and_validate(
+        let drag_report = plan_and_validate(
             &ctx,
             &PlanAndValidateInput {
                 waypoints: &waypoints,
@@ -1379,7 +1379,7 @@ mod tests {
         );
 
         let j2_propagator = PropagationModel::J2Stm;
-        let (_, j2_report) = plan_and_validate(
+        let j2_report = plan_and_validate(
             &ctx,
             &PlanAndValidateInput {
                 waypoints: &waypoints,
@@ -1470,7 +1470,7 @@ mod tests {
             ..MissionConfig::default()
         };
 
-        let (_, report) = plan_and_validate(
+        let report = plan_and_validate(
             &ctx,
             &PlanAndValidateInput {
                 waypoints: &waypoints,
