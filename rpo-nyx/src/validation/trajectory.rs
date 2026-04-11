@@ -910,6 +910,10 @@ pub fn validate_mission_nyx(
 mod tests {
     use nalgebra::Vector3;
 
+    use rpo_core::constants::{
+        TEST_F64_EPOCH_NOISE_S, TEST_F64_POSITION_NOISE_KM, TEST_INTEGRATOR_RESTART_TOL_KM,
+        TEST_SAMPLING_REGRESSION_TOL_KM,
+    };
     use rpo_core::elements::keplerian_conversions::keplerian_to_state;
     use crate::nyx_bridge;
     use rpo_core::mission::config::MissionConfig;
@@ -1163,11 +1167,6 @@ mod tests {
     use crate::nyx_bridge::TimedState;
     use rpo_core::types::state::StateVector;
 
-    /// Tolerance for exact distance comparisons in synthetic axis-aligned test geometries.
-    /// Computed norms are exact to machine precision; this guards against floating-point
-    /// representation noise only.
-    const SYNTHETIC_DISTANCE_TOL: f64 = 1e-12;
-
     /// Build a `TimedState` with the given ECI position (km) and elapsed time (s).
     fn make_timed_state(elapsed_s: f64, position_eci_km: Vector3<f64>) -> TimedState {
         TimedState {
@@ -1212,7 +1211,7 @@ mod tests {
         let expected_min = 0.8;
         let actual = min_dist.unwrap();
         assert!(
-            (actual - expected_min).abs() < SYNTHETIC_DISTANCE_TOL,
+            (actual - expected_min).abs() < TEST_F64_POSITION_NOISE_KM,
             "min distance should be {expected_min}, got {actual}",
         );
     }
@@ -1243,7 +1242,7 @@ mod tests {
         assert!(min_dist.is_some());
         let actual = min_dist.unwrap();
         assert!(
-            (actual - 0.5).abs() < SYNTHETIC_DISTANCE_TOL,
+            (actual - 0.5).abs() < TEST_F64_POSITION_NOISE_KM,
             "3D norm should be 0.5, got {actual}",
         );
     }
@@ -1301,11 +1300,6 @@ mod tests {
     /// miss the true minimum), (b) nonlinear dynamics divergence from the linearized
     /// avoidance solution, and (c) unmodeled perturbations (SRP, third-body).
     const COLA_EFFECTIVENESS_THRESHOLD_FRACTION: f64 = 0.50;
-
-    /// Integrator restart tolerance (km) for `propagate_leg_with_cola_zero_dv_matches_single_segment`:
-    /// two independent nyx segment propagations vs one continuous propagation accumulate
-    /// different rounding noise. 1 m is well within operational significance.
-    const RESTART_TOL_KM: f64 = 0.001;
 
     /// COLA sample-split fraction for `propagate_leg_with_cola_sample_split`,
     /// expressed as an integer percentage so the expected split count can be
@@ -1750,12 +1744,12 @@ mod tests {
         eprintln!("Zero-COLA vs baseline: chief dpos={chief_pos_diff:.6} km, deputy dpos={deputy_pos_diff:.6} km");
 
         assert!(
-            chief_pos_diff < RESTART_TOL_KM,
-            "chief final position diverged: {chief_pos_diff:.6} km (expected < {RESTART_TOL_KM})"
+            chief_pos_diff < TEST_INTEGRATOR_RESTART_TOL_KM,
+            "chief final position diverged: {chief_pos_diff:.6} km (expected < {TEST_INTEGRATOR_RESTART_TOL_KM})"
         );
         assert!(
-            deputy_pos_diff < RESTART_TOL_KM,
-            "deputy final position diverged: {deputy_pos_diff:.6} km (expected < {RESTART_TOL_KM})"
+            deputy_pos_diff < TEST_INTEGRATOR_RESTART_TOL_KM,
+            "deputy final position diverged: {deputy_pos_diff:.6} km (expected < {TEST_INTEGRATOR_RESTART_TOL_KM})"
         );
     }
 
@@ -2016,15 +2010,6 @@ mod tests {
     #[test]
     #[ignore = "Requires MetaAlmanac (network on first run)"]
     fn propagate_leg_segment_1_is_impulse_independent() {
-        /// Position round-off budget. Segment 1 samples must be bit-identical
-        /// across burn variants; this only absorbs f64 accumulation noise over
-        /// a few hundred RK steps at LEO scale (sub-picometer).
-        const FLOAT_NOISE_KM: f64 = 1.0e-12;
-        /// Epoch round-off budget. Guards against a future "optimization"
-        /// that shifts sample times based on impulse presence -- f64
-        /// accumulation over `0..tof_s` is sub-nanosecond.
-        const EPOCH_NOISE_S: f64 = 1.0e-9;
-
         let (chief_state, deputy_state) = make_iss_like_formation_states();
         let leg = make_zero_dv_iss_leg(4200.0);
         let almanac = nyx_bridge::load_full_almanac().expect("full almanac should load");
@@ -2079,15 +2064,15 @@ mod tests {
             let deputy_diff_real_km = (out_none.deputy_results[i].state.position_eci_km
                 - out_real.deputy_results[i].state.position_eci_km).norm();
 
-            assert!(chief_diff_zero_km < FLOAT_NOISE_KM, "chief sample {i} diverges None vs zero ({chief_diff_zero_km:e} km)");
-            assert!(chief_diff_real_km < FLOAT_NOISE_KM, "chief sample {i} diverges None vs real ({chief_diff_real_km:e} km)");
-            assert!(deputy_diff_zero_km < FLOAT_NOISE_KM, "deputy sample {i} diverges None vs zero ({deputy_diff_zero_km:e} km)");
-            assert!(deputy_diff_real_km < FLOAT_NOISE_KM, "deputy sample {i} diverges None vs real ({deputy_diff_real_km:e} km)");
+            assert!(chief_diff_zero_km < TEST_F64_POSITION_NOISE_KM, "chief sample {i} diverges None vs zero ({chief_diff_zero_km:e} km)");
+            assert!(chief_diff_real_km < TEST_F64_POSITION_NOISE_KM, "chief sample {i} diverges None vs real ({chief_diff_real_km:e} km)");
+            assert!(deputy_diff_zero_km < TEST_F64_POSITION_NOISE_KM, "deputy sample {i} diverges None vs zero ({deputy_diff_zero_km:e} km)");
+            assert!(deputy_diff_real_km < TEST_F64_POSITION_NOISE_KM, "deputy sample {i} diverges None vs real ({deputy_diff_real_km:e} km)");
 
             // Sample epoch match -- guards against any future attempt to
             // "optimize" by shifting sample times based on impulse presence.
-            assert!((out_none.chief_results[i].elapsed_s - out_zero.chief_results[i].elapsed_s).abs() < EPOCH_NOISE_S);
-            assert!((out_none.chief_results[i].elapsed_s - out_real.chief_results[i].elapsed_s).abs() < EPOCH_NOISE_S);
+            assert!((out_none.chief_results[i].elapsed_s - out_zero.chief_results[i].elapsed_s).abs() < TEST_F64_EPOCH_NOISE_S);
+            assert!((out_none.chief_results[i].elapsed_s - out_real.chief_results[i].elapsed_s).abs() < TEST_F64_EPOCH_NOISE_S);
         }
 
         // Sanity: segment 2 deputy should diverge between None and real
@@ -2125,20 +2110,6 @@ mod tests {
         use rpo_core::mission::config::MissionConfig;
         use rpo_core::mission::types::Waypoint;
         use rpo_core::types::{DepartureState, QuasiNonsingularROE};
-
-        /// Sampling-grid regression guard. With the unified `propagate_leg`,
-        /// the pre-burn window should be bit-identical; this tolerance only
-        /// absorbs f64 round-off across the trajectory-safety reduction
-        /// (norm + min). A millimeter is ~6 orders of magnitude tighter than
-        /// the sampling artifact we are regressing against (~16 m).
-        const SAMPLING_REGRESSION_TOL_KM: f64 = 1.0e-6;
-
-        /// Post-refactor numerical-noise floor. With unified sampling the
-        /// pre-burn window should be bit-identical; this absorbs only the
-        /// f64 accumulation that remains in `analyze_trajectory_safety`'s
-        /// norm + min reduction. 1e-9 km = 1 micron, which is ~7 orders of
-        /// magnitude tighter than the ~16 m artifact the unification removes.
-        const NUMERICAL_NOISE_TOL_KM: f64 = 1.0e-9;
 
         // Build a single-leg mission with a nonzero formation so the ROE
         // trajectory is interesting. COLA burn will be injected at mid-leg.
@@ -2210,8 +2181,8 @@ mod tests {
         // sampling_tolerance.
         let delta_km = (pre_cola_min_3d_km - post_cola_min_3d_km).abs();
         assert!(
-            delta_km < SAMPLING_REGRESSION_TOL_KM
-                || pre_cola_min_3d_km <= post_cola_min_3d_km + SAMPLING_REGRESSION_TOL_KM,
+            delta_km < TEST_SAMPLING_REGRESSION_TOL_KM
+                || pre_cola_min_3d_km <= post_cola_min_3d_km + TEST_SAMPLING_REGRESSION_TOL_KM,
             "pre-COLA min ({pre_cola_min_3d_km:.9} km) must be <= post-COLA min ({post_cola_min_3d_km:.9} km) \
              within sampling tolerance; delta = {delta_km:.9} km"
         );
@@ -2220,7 +2191,7 @@ mod tests {
         // re-introduces sampling asymmetry. Micron-scale tolerance -- purely
         // numerical noise from the safety reduction.
         assert!(
-            (pre_cola_min_3d_km - post_cola_min_3d_km).abs() < NUMERICAL_NOISE_TOL_KM
+            (pre_cola_min_3d_km - post_cola_min_3d_km).abs() < TEST_F64_POSITION_NOISE_KM
                 || pre_cola_min_3d_km <= post_cola_min_3d_km,
             "pre-COLA min must equal post-COLA min or be strictly less (COLA only acts post-split); \
              pre = {pre_cola_min_3d_km:.12} km, post = {post_cola_min_3d_km:.12} km"

@@ -245,6 +245,7 @@ pub(crate) fn compute_covariance_cross_check(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rpo_core::constants::TEST_F64_SQRT_ACCUMULATION_TOL;
     use rpo_core::mission::monte_carlo::Distribution;
     use super::super::sampling::sample_distribution;
     use rpo_core::propagation::covariance::types::{
@@ -255,10 +256,6 @@ mod tests {
     use nalgebra::SMatrix;
     use rand::SeedableRng;
     use rand_chacha::ChaCha20Rng;
-
-    /// Mean computation tolerance for NaN-filtered percentile test.
-    /// Mean of [1, 2, 3, 4, 5] = 3.0 exactly in f64; 1e-10 is conservative.
-    const MEAN_EXACT_TOL: f64 = 1e-10;
 
     // --- Percentile reduction fixture values ------------------------------
     // Hoisted constants for the `percentile_single_value` and
@@ -426,7 +423,7 @@ mod tests {
         assert_eq!(stats.max.to_bits(), NAN_FILTER_FINITE_MAX.to_bits());
         assert_eq!(stats.p50.to_bits(), NAN_FILTER_FINITE_MEDIAN.to_bits());
         assert!(
-            (stats.mean - NAN_FILTER_FINITE_MEAN).abs() < MEAN_EXACT_TOL,
+            (stats.mean - NAN_FILTER_FINITE_MEAN).abs() < TEST_F64_SQRT_ACCUMULATION_TOL,
             "mean should be {NAN_FILTER_FINITE_MEAN}, got {}",
             stats.mean
         );

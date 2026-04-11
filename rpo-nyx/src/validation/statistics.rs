@@ -163,18 +163,9 @@ pub(super) fn compute_leg_summaries(
 mod tests {
     use nalgebra::Vector3;
 
+    use rpo_core::constants::{TEST_F64_EXACT_ARITHMETIC_TOL, TEST_F64_SQRT_ACCUMULATION_TOL};
     use rpo_core::mission::types::ValidationPoint;
     use rpo_core::types::RICState;
-
-    /// Tolerance for exact-arithmetic statistics (max, mean, sum).
-    /// These involve only addition/comparison of representable f64 values,
-    /// so agreement to machine epsilon is expected.
-    const EXACT_ARITHMETIC_TOL: f64 = 1e-15;
-
-    /// Tolerance for RMS computation.
-    /// `sqrt` introduces ~1 ULP of floating-point error beyond the exact sum,
-    /// so we allow a slightly wider tolerance than exact arithmetic.
-    const RMS_COMPUTATION_TOL: f64 = 1e-12;
 
     /// Verify `compute_report_statistics` derives correct aggregates from leg summaries.
     ///
@@ -208,22 +199,22 @@ mod tests {
         let stats = super::compute_report_statistics(&summaries);
 
         assert!(
-            (stats.max_position_error_km - 3.0).abs() < EXACT_ARITHMETIC_TOL,
+            (stats.max_position_error_km - 3.0).abs() < TEST_F64_EXACT_ARITHMETIC_TOL,
             "max_pos = {}, expected 3.0", stats.max_position_error_km
         );
         // Global mean = (2.0*3 + 1.5*2) / 5 = 9.0/5 = 1.8
         assert!(
-            (stats.mean_position_error_km - 1.8).abs() < EXACT_ARITHMETIC_TOL,
+            (stats.mean_position_error_km - 1.8).abs() < TEST_F64_EXACT_ARITHMETIC_TOL,
             "mean_pos = {}, expected 1.8", stats.mean_position_error_km
         );
         // Global rms = sqrt((14/3*3 + 2.5*2) / 5) = sqrt((14+5)/5) = sqrt(19/5)
         let expected_rms = (19.0_f64 / 5.0).sqrt();
         assert!(
-            (stats.rms_position_error_km - expected_rms).abs() < RMS_COMPUTATION_TOL,
+            (stats.rms_position_error_km - expected_rms).abs() < TEST_F64_SQRT_ACCUMULATION_TOL,
             "rms_pos = {}, expected {expected_rms}", stats.rms_position_error_km
         );
         assert!(
-            (stats.max_velocity_error_km_s - 0.03).abs() < EXACT_ARITHMETIC_TOL,
+            (stats.max_velocity_error_km_s - 0.03).abs() < TEST_F64_EXACT_ARITHMETIC_TOL,
             "max_vel = {}, expected 0.03", stats.max_velocity_error_km_s
         );
 
@@ -292,17 +283,17 @@ mod tests {
         assert_eq!(summaries.len(), 3);
 
         // Leg 0
-        assert!((summaries[0].max_position_error_km - 3.0).abs() < EXACT_ARITHMETIC_TOL);
-        assert!((summaries[0].mean_position_error_km - 2.0).abs() < EXACT_ARITHMETIC_TOL);
+        assert!((summaries[0].max_position_error_km - 3.0).abs() < TEST_F64_EXACT_ARITHMETIC_TOL);
+        assert!((summaries[0].mean_position_error_km - 2.0).abs() < TEST_F64_EXACT_ARITHMETIC_TOL);
         let expected_rms_0 = (14.0_f64 / 3.0).sqrt();
-        assert!((summaries[0].rms_position_error_km - expected_rms_0).abs() < RMS_COMPUTATION_TOL);
-        assert!((summaries[0].max_velocity_error_km_s - 0.03).abs() < EXACT_ARITHMETIC_TOL);
+        assert!((summaries[0].rms_position_error_km - expected_rms_0).abs() < TEST_F64_SQRT_ACCUMULATION_TOL);
+        assert!((summaries[0].max_velocity_error_km_s - 0.03).abs() < TEST_F64_EXACT_ARITHMETIC_TOL);
         assert_eq!(summaries[0].num_points, 3);
         assert_eq!(summaries[0].num_post_cola_excluded, 0);
 
         // Leg 1: post-COLA excluded
-        assert!((summaries[1].max_position_error_km - 2.0).abs() < EXACT_ARITHMETIC_TOL);
-        assert!((summaries[1].mean_position_error_km - 1.5).abs() < EXACT_ARITHMETIC_TOL);
+        assert!((summaries[1].max_position_error_km - 2.0).abs() < TEST_F64_EXACT_ARITHMETIC_TOL);
+        assert!((summaries[1].mean_position_error_km - 1.5).abs() < TEST_F64_EXACT_ARITHMETIC_TOL);
         assert_eq!(summaries[1].num_points, 2);
         assert_eq!(summaries[1].num_post_cola_excluded, 1);
 
