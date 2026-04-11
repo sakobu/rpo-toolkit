@@ -1718,7 +1718,7 @@ mod tests {
         // Plan the mission once (no nyx validation yet) so we can compute
         // POCA + assess COLA off the planned trajectory.
         let default_cola = super::ColaValidationInput::default();
-        let mut input = PlanAndValidateInput {
+        let plan_input = PlanAndValidateInput {
             waypoints: &waypoints,
             config: &config,
             propagator: &propagator,
@@ -1727,7 +1727,7 @@ mod tests {
             samples_per_leg: DEFAULT_VALIDATION_SAMPLES_PER_LEG,
             cola_input: &default_cola,
         };
-        let mission = plan_mission(&ctx, &input);
+        let mission = plan_mission(&ctx, &plan_input);
 
         // COLA assessment: target distance intentionally modest. Budget
         // generous (1 km/s) because tight formations require large ROE
@@ -1773,8 +1773,11 @@ mod tests {
 
         // Now validate the (same) planned mission against nyx, passing the
         // populated COLA input so the report carries effectiveness data.
-        input.cola_input = &cola_input;
-        let report = validate_planned(&ctx, &mission, &input);
+        let validate_input = PlanAndValidateInput {
+            cola_input: &cola_input,
+            ..plan_input
+        };
+        let report = validate_planned(&ctx, &mission, &validate_input);
 
         // Assert effectiveness data is populated, then check each entry.
         assert!(
