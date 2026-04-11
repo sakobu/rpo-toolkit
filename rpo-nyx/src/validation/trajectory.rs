@@ -1337,7 +1337,7 @@ mod tests {
 
         let formation_roe = iss_formation_roe(0.3, -0.2, 0.2, 0.0);
         let ctx = ValidationContext::iss_with_formation(&formation_roe);
-        let period = ctx.chief_ke.period().unwrap();
+        let period = ctx.chief_elements.period().unwrap();
         let waypoints = [Waypoint {
             position_ric_km: Vector3::new(0.5, 3.0, 1.0),
             velocity_ric_km_s: Some(Vector3::zeros()),
@@ -1405,7 +1405,7 @@ mod tests {
 
         let formation_roe = iss_formation_roe(0.3, -0.2, 0.2, 0.0);
         let ctx = ValidationContext::iss_with_formation(&formation_roe);
-        let period = ctx.chief_ke.period().unwrap();
+        let period = ctx.chief_elements.period().unwrap();
         let tof = 0.75 * period;
         let waypoints = [
             Waypoint {
@@ -1488,8 +1488,8 @@ mod tests {
 
         // Step 1: Extract DMF rates (uses the shared almanac from `ctx`).
         let drag = nyx_bridge::extract_dmf_rates(
-            &ctx.chief_sv,
-            &ctx.deputy_sv,
+            &ctx.chief_state,
+            &ctx.deputy_state,
             &chief_config,
             &deputy_config,
             &ctx.almanac,
@@ -1518,7 +1518,7 @@ mod tests {
         );
 
         // Step 2: plan & validate with both propagators, sharing scaffolding.
-        let period = ctx.chief_ke.period().unwrap();
+        let period = ctx.chief_elements.period().unwrap();
         let waypoints = [Waypoint {
             position_ric_km: Vector3::new(0.0, 5.0, 0.0),
             velocity_ric_km_s: Some(Vector3::zeros()),
@@ -1608,7 +1608,7 @@ mod tests {
         let formation_roe = iss_formation_roe(0.5, 0.0, 0.0, 0.5);
         let ctx = ValidationContext::iss_with_formation(&formation_roe);
 
-        let period = ctx.chief_ke.period().unwrap();
+        let period = ctx.chief_elements.period().unwrap();
         let tof = 0.75 * period;
         let waypoints = [
             Waypoint {
@@ -1859,7 +1859,7 @@ mod tests {
 
         // Waypoint: along-track displacement, ~0.8 period.
         // Along-track (T) motion is cheapest for near-circular chief orbits.
-        let period = ctx.chief_ke.period().unwrap();
+        let period = ctx.chief_elements.period().unwrap();
         let waypoints = [Waypoint {
             position_ric_km: Vector3::new(0.0, 0.5, 0.0),
             velocity_ric_km_s: Some(Vector3::zeros()),

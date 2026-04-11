@@ -643,7 +643,7 @@ mod tests {
 
         let formation_roe = iss_formation_roe(0.3, -0.2, 0.2, 0.0);
         let ctx = ValidationContext::iss_with_formation(&formation_roe);
-        let period = ctx.chief_ke.period().unwrap();
+        let period = ctx.chief_elements.period().unwrap();
         let tof = 0.75 * period;
         let waypoints = [
             Waypoint {

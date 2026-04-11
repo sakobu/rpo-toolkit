@@ -49,13 +49,13 @@ use super::trajectory::{ColaValidationInput, ValidationConfig};
 /// [`plan_and_validate`] (possibly multiple times for comparison tests).
 pub(super) struct ValidationContext {
     pub(super) epoch: Epoch,
-    pub(super) chief_ke: KeplerianElements,
-    pub(super) chief_sv: StateVector,
-    pub(super) deputy_sv: StateVector,
+    pub(super) chief_elements: KeplerianElements,
+    pub(super) chief_state: StateVector,
+    pub(super) deputy_state: StateVector,
     pub(super) almanac: Arc<Almanac>,
-    /// QNS ROE from which `deputy_sv` was derived. Stored here so that
+    /// QNS ROE from which `deputy_state` was derived. Stored here so that
     /// `plan_mission` has a single source of truth and cannot silently
-    /// construct a `DepartureState.roe` that disagrees with `deputy_sv`.
+    /// construct a `DepartureState.roe` that disagrees with `deputy_state`.
     /// Populated by every constructor; never mutated.
     pub(super) formation_roe: QuasiNonsingularROE,
 }
@@ -66,31 +66,31 @@ impl ValidationContext {
     /// first use in a test session hits the network.
     pub(super) fn iss_with_formation(formation_roe: &QuasiNonsingularROE) -> Self {
         let epoch = test_epoch();
-        let chief_ke = iss_like_elements();
-        let deputy_ke = deputy_from_roe(&chief_ke, formation_roe);
-        let chief_sv = keplerian_to_state(&chief_ke, epoch).unwrap();
-        let deputy_sv = keplerian_to_state(&deputy_ke, epoch).unwrap();
+        let chief_elements = iss_like_elements();
+        let deputy_elements = deputy_from_roe(&chief_elements, formation_roe);
+        let chief_state = keplerian_to_state(&chief_elements, epoch).unwrap();
+        let deputy_state = keplerian_to_state(&deputy_elements, epoch).unwrap();
         let almanac = nyx_bridge::load_full_almanac().expect("full almanac should load");
 
-        // Hardening invariant: `deputy_sv` was derived from `formation_roe`
+        // Hardening invariant: `deputy_state` was derived from `formation_roe`
         // via `deputy_from_roe` + `keplerian_to_state`. Re-run that
         // derivation and confirm the result agrees with the stored
-        // `deputy_sv` within f64 position noise. Today this passes by
+        // `deputy_state` within f64 position noise. Today this passes by
         // construction, but the assert locks in the invariant so a future
-        // refactor that decouples `deputy_sv` from `formation_roe` cannot
+        // refactor that decouples `deputy_state` from `formation_roe` cannot
         // merge without tripping this check.
         debug_assert!({
-            let roundtrip_ke = deputy_from_roe(&chief_ke, formation_roe);
-            let roundtrip_sv = keplerian_to_state(&roundtrip_ke, epoch).unwrap();
-            (roundtrip_sv.position_eci_km - deputy_sv.position_eci_km).norm()
+            let roundtrip_elements = deputy_from_roe(&chief_elements, formation_roe);
+            let roundtrip_state = keplerian_to_state(&roundtrip_elements, epoch).unwrap();
+            (roundtrip_state.position_eci_km - deputy_state.position_eci_km).norm()
                 < rpo_core::constants::TEST_F64_POSITION_NOISE_KM
         });
 
         Self {
             epoch,
-            chief_ke,
-            chief_sv,
-            deputy_sv,
+            chief_elements,
+            chief_state,
+            deputy_state,
             almanac,
             formation_roe: *formation_roe,
         }
@@ -101,15 +101,15 @@ impl ValidationContext {
     /// same orbit but have distinct ballistic coefficients.
     pub(super) fn iss_colocated() -> Self {
         let epoch = test_epoch();
-        let chief_ke = iss_like_elements();
-        let chief_sv = keplerian_to_state(&chief_ke, epoch).unwrap();
-        let deputy_sv = chief_sv.clone();
+        let chief_elements = iss_like_elements();
+        let chief_state = keplerian_to_state(&chief_elements, epoch).unwrap();
+        let deputy_state = chief_state.clone();
         let almanac = nyx_bridge::load_full_almanac().expect("full almanac should load");
         Self {
             epoch,
-            chief_ke,
-            chief_sv,
-            deputy_sv,
+            chief_elements,
+            chief_state,
+            deputy_state,
             almanac,
             formation_roe: QuasiNonsingularROE::zeros(),
         }
@@ -122,7 +122,7 @@ impl ValidationContext {
 /// Note: the formation ROE is no longer a field here — it lives on
 /// `ValidationContext` as the single source of truth (see C-4), so
 /// `plan_mission` reads `ctx.formation_roe` directly and cannot drift
-/// away from the ROE that produced `ctx.deputy_sv`.
+/// away from the ROE that produced `ctx.deputy_state`.
 pub(super) struct PlanAndValidateInput<'a> {
     /// Target waypoints for the mission.
     pub(super) waypoints: &'a [Waypoint],
@@ -150,7 +150,7 @@ pub(super) fn plan_mission(
 ) -> WaypointMission {
     let departure = DepartureState {
         roe: ctx.formation_roe,
-        chief: ctx.chief_ke,
+        chief: ctx.chief_elements,
         epoch: ctx.epoch,
     };
     plan_waypoint_mission(
@@ -178,8 +178,8 @@ pub(super) fn validate_planned(
     };
     super::validate_mission_nyx(
         mission,
-        &ctx.chief_sv,
-        &ctx.deputy_sv,
+        &ctx.chief_state,
+        &ctx.deputy_state,
         &val_config,
         input.cola_input,
         &ctx.almanac,
