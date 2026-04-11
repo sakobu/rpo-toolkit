@@ -632,14 +632,9 @@ mod tests {
         use rpo_core::types::SpacecraftConfig;
 
         use test_scenario::{
-            iss_formation_roe, plan_mission, validate_planned, PlanAndValidateInput,
-            ValidationContext,
+            iss_formation_roe, plan_mission, validate_planned,
+            DEFAULT_VALIDATION_SAMPLES_PER_LEG, PlanAndValidateInput, ValidationContext,
         };
-
-        /// nyx sample count per leg for the eclipse validation scenario.
-        /// 50 gives enough resolution for per-interval comparisons while
-        /// keeping the full-physics run under ~10 s on a laptop.
-        const SAMPLES_PER_LEG: u32 = 50;
 
         let formation_roe = iss_formation_roe(0.3, -0.2, 0.2, 0.0);
         let ctx = ValidationContext::iss_with_formation(&formation_roe);
@@ -669,7 +664,7 @@ mod tests {
             propagator: &PropagationModel::J2Stm,
             chief_config: SpacecraftConfig::SERVICER_500KG,
             deputy_config: SpacecraftConfig::SERVICER_500KG,
-            samples_per_leg: SAMPLES_PER_LEG,
+            samples_per_leg: DEFAULT_VALIDATION_SAMPLES_PER_LEG,
             cola_input: &crate::validation::ColaValidationInput::default(),
         };
 

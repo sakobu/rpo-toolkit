@@ -40,6 +40,11 @@ use crate::nyx_bridge;
 
 use super::trajectory::{ColaValidationInput, ValidationConfig};
 
+/// Default nyx sample count per mission leg used by the full-physics
+/// validation tests. 50 samples gives enough resolution to characterize
+/// per-sample position error without making runs prohibitively slow.
+pub(super) const DEFAULT_VALIDATION_SAMPLES_PER_LEG: u32 = 50;
+
 /// Bootstrap state common to every full-physics validation test: the chief
 /// Keplerian elements, derived deputy Keplerian elements, ECI state vectors
 /// at a shared epoch, and the loaded (possibly network-backed) almanac.

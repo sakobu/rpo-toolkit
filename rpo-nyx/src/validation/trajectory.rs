@@ -1316,11 +1316,6 @@ mod tests {
     /// two segments, so the total can exceed `samples_per_leg` by at most this many.
     const COLA_TOTAL_SAMPLE_SLOP: usize = 4;
 
-    /// Default nyx sample count per mission leg used by the full-physics
-    /// validation tests. 50 samples gives enough resolution to characterize
-    /// per-sample position error without making runs prohibitively slow.
-    const DEFAULT_VALIDATION_SAMPLES_PER_LEG: u32 = 50;
-
     /// Single-leg transfer with nonzero initial ROE and mixed-axis waypoint,
     /// validated against nyx full-physics propagation.
     ///
@@ -1332,7 +1327,8 @@ mod tests {
     #[ignore = "requires MetaAlmanac (network on first run)"]
     fn validate_full_physics_single_leg() {
         use test_scenario::{
-            iss_formation_roe, plan_and_validate, PlanAndValidateInput, ValidationContext,
+            iss_formation_roe, plan_and_validate, DEFAULT_VALIDATION_SAMPLES_PER_LEG,
+            PlanAndValidateInput, ValidationContext,
         };
 
         let formation_roe = iss_formation_roe(0.3, -0.2, 0.2, 0.0);
@@ -1400,7 +1396,8 @@ mod tests {
     #[ignore = "requires MetaAlmanac (network on first run)"]
     fn validate_full_physics_multi_waypoint() {
         use test_scenario::{
-            iss_formation_roe, plan_and_validate, PlanAndValidateInput, ValidationContext,
+            iss_formation_roe, plan_and_validate, DEFAULT_VALIDATION_SAMPLES_PER_LEG,
+            PlanAndValidateInput, ValidationContext,
         };
 
         let formation_roe = iss_formation_roe(0.3, -0.2, 0.2, 0.0);
@@ -1476,7 +1473,10 @@ mod tests {
     #[test]
     #[ignore = "requires MetaAlmanac (network on first run)"]
     fn validate_drag_stm_vs_nyx_drag() {
-        use test_scenario::{plan_and_validate, PlanAndValidateInput, ValidationContext};
+        use test_scenario::{
+            plan_and_validate, DEFAULT_VALIDATION_SAMPLES_PER_LEG, PlanAndValidateInput,
+            ValidationContext,
+        };
 
         let ctx = ValidationContext::iss_colocated();
         let chief_config = SpacecraftConfig::SERVICER_500KG;
@@ -1601,7 +1601,8 @@ mod tests {
         use rpo_core::mission::config::SafetyConfig;
 
         use test_scenario::{
-            iss_formation_roe, plan_and_validate, PlanAndValidateInput, ValidationContext,
+            iss_formation_roe, plan_and_validate, DEFAULT_VALIDATION_SAMPLES_PER_LEG,
+            PlanAndValidateInput, ValidationContext,
         };
 
         // Perpendicular e/i vectors: dex along ex, diy along iy -> meaningful separation.
@@ -1671,6 +1672,7 @@ mod tests {
         use rpo_core::mission::config::MissionConfig;
         use rpo_core::mission::types::Waypoint;
         use rpo_core::types::{DepartureState, QuasiNonsingularROE};
+        use test_scenario::DEFAULT_VALIDATION_SAMPLES_PER_LEG;
 
         let epoch = test_epoch();
         let chief_ke = iss_like_elements();
@@ -1700,7 +1702,7 @@ mod tests {
             .expect("mission planning should succeed");
 
         let almanac = nyx_bridge::load_full_almanac().expect("full almanac should load");
-        let samples: u32 = 50;
+        let samples: u32 = DEFAULT_VALIDATION_SAMPLES_PER_LEG;
         let leg = &mission.legs[0];
 
         let ctx = super::LegPropagationCtx {
@@ -1759,6 +1761,7 @@ mod tests {
         use rpo_core::mission::config::MissionConfig;
         use rpo_core::mission::types::Waypoint;
         use rpo_core::types::{DepartureState, QuasiNonsingularROE};
+        use test_scenario::DEFAULT_VALIDATION_SAMPLES_PER_LEG;
 
         let epoch = test_epoch();
         let chief_ke = iss_like_elements();
@@ -1788,7 +1791,7 @@ mod tests {
             .expect("mission planning should succeed");
 
         let almanac = nyx_bridge::load_full_almanac().expect("full almanac should load");
-        let samples: u32 = 50;
+        let samples: u32 = DEFAULT_VALIDATION_SAMPLES_PER_LEG;
         let leg = &mission.legs[0];
 
         let ctx = super::LegPropagationCtx {
@@ -1847,8 +1850,8 @@ mod tests {
         use rpo_core::mission::{assess_cola, ClosestApproach, ColaAssessment, ColaConfig};
 
         use test_scenario::{
-            iss_formation_roe, plan_mission, validate_planned, PlanAndValidateInput,
-            ValidationContext,
+            iss_formation_roe, plan_mission, validate_planned,
+            DEFAULT_VALIDATION_SAMPLES_PER_LEG, PlanAndValidateInput, ValidationContext,
         };
 
         // Deputy: formation sized so POCA ~ 0.1 km (below 0.2 km threshold).
@@ -2004,11 +2007,13 @@ mod tests {
     #[test]
     #[ignore = "Requires MetaAlmanac (network on first run)"]
     fn propagate_leg_segment_1_is_impulse_independent() {
+        use test_scenario::DEFAULT_VALIDATION_SAMPLES_PER_LEG;
+
         let (chief_state, deputy_state) = make_iss_like_formation_states();
         let leg = make_zero_dv_iss_leg(4200.0);
         let almanac = nyx_bridge::load_full_almanac().expect("full almanac should load");
         let ctx = super::LegPropagationCtx {
-            samples_per_leg: 50,
+            samples_per_leg: DEFAULT_VALIDATION_SAMPLES_PER_LEG,
             chief_config: &SpacecraftConfig::SERVICER_500KG,
             deputy_config: &SpacecraftConfig::SERVICER_500KG,
             almanac: &almanac,
@@ -2104,6 +2109,7 @@ mod tests {
         use rpo_core::mission::config::MissionConfig;
         use rpo_core::mission::types::Waypoint;
         use rpo_core::types::{DepartureState, QuasiNonsingularROE};
+        use test_scenario::DEFAULT_VALIDATION_SAMPLES_PER_LEG;
 
         // Build a single-leg mission with a nonzero formation so the ROE
         // trajectory is interesting. COLA burn will be injected at mid-leg.
@@ -2149,7 +2155,7 @@ mod tests {
 
         let almanac = nyx_bridge::load_full_almanac().expect("full almanac should load");
         let val_config = super::ValidationConfig {
-            samples_per_leg: 50,
+            samples_per_leg: DEFAULT_VALIDATION_SAMPLES_PER_LEG,
             chief_config: SpacecraftConfig::SERVICER_500KG,
             deputy_config: SpacecraftConfig::SERVICER_500KG,
         };
