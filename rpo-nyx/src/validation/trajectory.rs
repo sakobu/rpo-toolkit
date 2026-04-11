@@ -1504,86 +1504,90 @@ mod tests {
     #[test]
     #[ignore = "requires MetaAlmanac (network on first run)"]
     fn propagate_leg_with_cola_zero_dv_matches_single_segment() {
-        use rpo_core::mission::waypoints::plan_waypoint_mission;
-        use rpo_core::test_helpers::deputy_from_roe;
         use rpo_core::mission::config::MissionConfig;
         use rpo_core::mission::types::Waypoint;
-        use rpo_core::types::{DepartureState, QuasiNonsingularROE};
-        use test_scenario::DEFAULT_VALIDATION_SAMPLES_PER_LEG;
 
-        let epoch = test_epoch();
-        let chief_ke = iss_like_elements();
-        let a = chief_ke.a_km;
-
-        let formation_roe = QuasiNonsingularROE {
-            da: 0.0, dlambda: 0.0,
-            dex: 0.3 / a, dey: -0.2 / a,
-            dix: 0.2 / a, diy: 0.0,
+        use test_scenario::{
+            iss_formation_roe, leg_propagation_ctx_from_scenario, plan_mission,
+            DEFAULT_VALIDATION_SAMPLES_PER_LEG, PlanAndValidateInput, ValidationContext,
         };
-        let deputy_ke = deputy_from_roe(&chief_ke, &formation_roe);
 
-        let chief_sv = keplerian_to_state(&chief_ke, epoch).unwrap();
-        let deputy_sv = keplerian_to_state(&deputy_ke, epoch).unwrap();
+        let formation = iss_formation_roe(0.3, -0.2, 0.2, 0.0);
+        let ctx = ValidationContext::iss_with_formation(&formation);
 
-        let period = chief_ke.period().unwrap();
+        let period = ctx.chief_elements.period().unwrap();
         let waypoint = Waypoint {
             position_ric_km: Vector3::new(0.5, 3.0, 1.0),
             velocity_ric_km_s: Some(Vector3::zeros()),
             tof_s: Some(0.8 * period),
         };
 
-        let departure = DepartureState { roe: formation_roe, chief: chief_ke, epoch };
-        let config = MissionConfig::default();
+        let default_cola = super::ColaValidationInput::default();
         let propagator = PropagationModel::J2Stm;
-        let mission = plan_waypoint_mission(&departure, &[waypoint], &config, &propagator)
-            .expect("mission planning should succeed");
-
-        let almanac = nyx_bridge::load_full_almanac().expect("full almanac should load");
-        let samples: u32 = DEFAULT_VALIDATION_SAMPLES_PER_LEG;
+        let input = PlanAndValidateInput {
+            waypoints: &[waypoint],
+            config: &MissionConfig::default(),
+            propagator: &propagator,
+            chief_config: SpacecraftConfig::SERVICER_500KG,
+            deputy_config: SpacecraftConfig::SERVICER_500KG,
+            samples_per_leg: DEFAULT_VALIDATION_SAMPLES_PER_LEG,
+            cola_input: &default_cola,
+        };
+        let mission = plan_mission(&ctx, &input);
         let leg = &mission.legs[0];
 
-        let ctx = super::LegPropagationCtx {
-            samples_per_leg: samples,
-            chief_config: &SpacecraftConfig::SERVICER_500KG,
-            deputy_config: &SpacecraftConfig::SERVICER_500KG,
-            almanac: &almanac,
-        };
+        let chief_cfg = SpacecraftConfig::SERVICER_500KG;
+        let deputy_cfg = SpacecraftConfig::SERVICER_500KG;
+        let leg_ctx = leg_propagation_ctx_from_scenario(
+            &ctx,
+            &chief_cfg,
+            &deputy_cfg,
+            DEFAULT_VALIDATION_SAMPLES_PER_LEG,
+        );
 
-        // Single-segment baseline (no COLA)
+        // Single-segment baseline (no COLA).
         let (chief_baseline, deputy_baseline) = super::propagate_leg_parallel(
-            &chief_sv, &deputy_sv, leg, &ctx,
-        ).expect("baseline propagation should succeed");
+            &ctx.chief_state,
+            &ctx.deputy_state,
+            leg,
+            &leg_ctx,
+        )
+        .expect("baseline propagation should succeed");
 
-        // Two-segment with zero COLA delta-v at mid-leg
+        // Two-segment with zero COLA delta-v at mid-leg.
         let zero_cola = super::ColaBurn {
             leg_index: 0,
             elapsed_s: leg.tof_s * 0.5,
             dv_ric_km_s: Vector3::zeros(),
         };
         let cola_out = super::propagate_leg_with_cola(
-            &chief_sv, &deputy_sv, leg, &zero_cola, &ctx,
-        ).expect("COLA propagation should succeed");
+            &ctx.chief_state,
+            &ctx.deputy_state,
+            leg,
+            &zero_cola,
+            &leg_ctx,
+        )
+        .expect("COLA propagation should succeed");
 
-        // Compare final states -- should match within nyx integrator tolerance.
-        // The two-segment approach re-initializes the integrator at the split point,
-        // so we allow a small tolerance for integrator restart transients.
         let chief_final_baseline = &chief_baseline.last().unwrap().state;
         let chief_final_cola = &cola_out.chief_results.last().unwrap().state;
         let deputy_final_baseline = &deputy_baseline.last().unwrap().state;
         let deputy_final_cola = &cola_out.deputy_results.last().unwrap().state;
 
-        let chief_pos_diff = (chief_final_baseline.position_eci_km - chief_final_cola.position_eci_km).norm();
-        let deputy_pos_diff = (deputy_final_baseline.position_eci_km - deputy_final_cola.position_eci_km).norm();
-
-        eprintln!("Zero-COLA vs baseline: chief dpos={chief_pos_diff:.6} km, deputy dpos={deputy_pos_diff:.6} km");
+        let chief_pos_diff =
+            (chief_final_baseline.position_eci_km - chief_final_cola.position_eci_km).norm();
+        let deputy_pos_diff =
+            (deputy_final_baseline.position_eci_km - deputy_final_cola.position_eci_km).norm();
 
         assert!(
             chief_pos_diff < TEST_INTEGRATOR_RESTART_TOL_KM,
-            "chief final position diverged: {chief_pos_diff:.6} km (expected < {TEST_INTEGRATOR_RESTART_TOL_KM})"
+            "chief final position diverged: {chief_pos_diff:.6} km \
+             (expected < {TEST_INTEGRATOR_RESTART_TOL_KM})"
         );
         assert!(
             deputy_pos_diff < TEST_INTEGRATOR_RESTART_TOL_KM,
-            "deputy final position diverged: {deputy_pos_diff:.6} km (expected < {TEST_INTEGRATOR_RESTART_TOL_KM})"
+            "deputy final position diverged: {deputy_pos_diff:.6} km \
+             (expected < {TEST_INTEGRATOR_RESTART_TOL_KM})"
         );
     }
 
