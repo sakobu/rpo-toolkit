@@ -75,7 +75,7 @@ impl ValidationContext {
     /// # Panics
     ///
     /// - If [`nyx_bridge::load_full_almanac`] fails (network unavailable on
-    ///   first use, or missing MetaAlmanac credentials). Tests that call
+    ///   first use, or missing `MetaAlmanac` credentials). Tests that call
     ///   this constructor are always `#[ignore = "requires MetaAlmanac
     ///   (network on first run)"]`; running without network or without the
     ///   almanac cache will panic here.
