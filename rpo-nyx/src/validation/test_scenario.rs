@@ -43,6 +43,11 @@ pub(super) struct ValidationContext {
     pub(super) chief_sv: StateVector,
     pub(super) deputy_sv: StateVector,
     pub(super) almanac: Arc<Almanac>,
+    /// QNS ROE from which `deputy_sv` was derived. Stored here so that
+    /// `plan_mission` has a single source of truth and cannot silently
+    /// construct a `DepartureState.roe` that disagrees with `deputy_sv`.
+    /// Populated by every constructor; never mutated.
+    pub(super) formation_roe: QuasiNonsingularROE,
 }
 
 impl ValidationContext {
@@ -56,7 +61,29 @@ impl ValidationContext {
         let chief_sv = keplerian_to_state(&chief_ke, epoch).unwrap();
         let deputy_sv = keplerian_to_state(&deputy_ke, epoch).unwrap();
         let almanac = nyx_bridge::load_full_almanac().expect("full almanac should load");
-        Self { epoch, chief_ke, chief_sv, deputy_sv, almanac }
+
+        // Hardening invariant: `deputy_sv` was derived from `formation_roe`
+        // via `deputy_from_roe` + `keplerian_to_state`. Re-run that
+        // derivation and confirm the result agrees with the stored
+        // `deputy_sv` within f64 position noise. Today this passes by
+        // construction, but the assert locks in the invariant so a future
+        // refactor that decouples `deputy_sv` from `formation_roe` cannot
+        // merge without tripping this check.
+        debug_assert!({
+            let roundtrip_ke = deputy_from_roe(&chief_ke, formation_roe);
+            let roundtrip_sv = keplerian_to_state(&roundtrip_ke, epoch).unwrap();
+            (roundtrip_sv.position_eci_km - deputy_sv.position_eci_km).norm()
+                < rpo_core::constants::TEST_F64_POSITION_NOISE_KM
+        });
+
+        Self {
+            epoch,
+            chief_ke,
+            chief_sv,
+            deputy_sv,
+            almanac,
+            formation_roe: *formation_roe,
+        }
     }
 
     /// ISS-like chief with a deputy colocated at the chief state vector.
@@ -68,16 +95,25 @@ impl ValidationContext {
         let chief_sv = keplerian_to_state(&chief_ke, epoch).unwrap();
         let deputy_sv = chief_sv.clone();
         let almanac = nyx_bridge::load_full_almanac().expect("full almanac should load");
-        Self { epoch, chief_ke, chief_sv, deputy_sv, almanac }
+        Self {
+            epoch,
+            chief_ke,
+            chief_sv,
+            deputy_sv,
+            almanac,
+            formation_roe: QuasiNonsingularROE::zeros(),
+        }
     }
 }
 
 /// Parameter bundle for [`plan_and_validate`], keeping the argument count
 /// manageable while still allowing every knob to vary per call site.
+///
+/// Note: the formation ROE is no longer a field here — it lives on
+/// `ValidationContext` as the single source of truth (see C-4), so
+/// `plan_mission` reads `ctx.formation_roe` directly and cannot drift
+/// away from the ROE that produced `ctx.deputy_sv`.
 pub(super) struct PlanAndValidateInput<'a> {
-    /// Formation ROE threaded through the departure state. Cloned into the
-    /// `DepartureState` so callers can reuse it for follow-up analysis.
-    pub(super) formation_roe: QuasiNonsingularROE,
     /// Target waypoints for the mission.
     pub(super) waypoints: &'a [Waypoint],
     /// Mission configuration (safety, etc.).
@@ -103,7 +139,7 @@ pub(super) fn plan_mission(
     input: &PlanAndValidateInput<'_>,
 ) -> WaypointMission {
     let departure = DepartureState {
-        roe: input.formation_roe,
+        roe: ctx.formation_roe,
         chief: ctx.chief_ke,
         epoch: ctx.epoch,
     };

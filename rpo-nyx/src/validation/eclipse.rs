@@ -664,7 +664,6 @@ mod tests {
         ];
 
         let input = PlanAndValidateInput {
-            formation_roe,
             waypoints: &waypoints,
             config: &MissionConfig::default(),
             propagator: &PropagationModel::J2Stm,

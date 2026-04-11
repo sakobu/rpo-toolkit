@@ -922,7 +922,7 @@ mod tests {
     use rpo_core::test_helpers::{
         iss_like_elements, test_epoch, DMF_RATE_NONZERO_LOWER_BOUND, DMF_RATE_UPPER_BOUND,
     };
-    use rpo_core::types::{QuasiNonsingularROE, SpacecraftConfig};
+    use rpo_core::types::SpacecraftConfig;
 
     use crate::validation::test_scenario;
     use rpo_core::mission::types::{ColaEffectivenessEntry, SafetyMetrics};
@@ -1347,7 +1347,6 @@ mod tests {
         let (_, report) = plan_and_validate(
             &ctx,
             &PlanAndValidateInput {
-                formation_roe,
                 waypoints: &waypoints,
                 config: &MissionConfig::default(),
                 propagator: &PropagationModel::J2Stm,
@@ -1429,7 +1428,6 @@ mod tests {
         let (_, report) = plan_and_validate(
             &ctx,
             &PlanAndValidateInput {
-                formation_roe,
                 waypoints: &waypoints,
                 config: &MissionConfig::default(),
                 propagator: &PropagationModel::J2Stm,
@@ -1533,7 +1531,6 @@ mod tests {
         let (_, drag_report) = plan_and_validate(
             &ctx,
             &PlanAndValidateInput {
-                formation_roe: QuasiNonsingularROE::default(),
                 waypoints: &waypoints,
                 config: &config,
                 propagator: &drag_propagator,
@@ -1548,7 +1545,6 @@ mod tests {
         let (_, j2_report) = plan_and_validate(
             &ctx,
             &PlanAndValidateInput {
-                formation_roe: QuasiNonsingularROE::default(),
                 waypoints: &waypoints,
                 config: &config,
                 propagator: &j2_propagator,
@@ -1639,7 +1635,6 @@ mod tests {
         let (_, report) = plan_and_validate(
             &ctx,
             &PlanAndValidateInput {
-                formation_roe,
                 waypoints: &waypoints,
                 config: &config,
                 propagator: &PropagationModel::J2Stm,
@@ -1883,7 +1878,6 @@ mod tests {
         // POCA + assess COLA off the planned trajectory.
         let default_cola = super::ColaValidationInput::default();
         let mut input = PlanAndValidateInput {
-            formation_roe,
             waypoints: &waypoints,
             config: &config,
             propagator: &propagator,
