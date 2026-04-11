@@ -5,6 +5,9 @@ mod eclipse;
 mod statistics;
 mod trajectory;
 
+#[cfg(test)]
+mod test_scenario;
+
 pub use errors::ValidationError;
 pub use trajectory::{
     validate_leg_nyx, validate_mission_nyx, ColaBurn, ColaValidationInput,

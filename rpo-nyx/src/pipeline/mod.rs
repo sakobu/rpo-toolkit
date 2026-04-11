@@ -213,6 +213,24 @@ mod tests {
     /// cascade will exceed it.
     const CASCADE_DV_CHANGE_TOL_KM_S: f64 = 1e-10;
 
+    // --- Far-field test fixture state vectors (ECI) -----------------------
+    // ISS-like orbit, chief and deputy separated by ~1600 km so the
+    // classification path exits the proximity regime and exercises the
+    // full Lambert solve + propagation pipeline.
+
+    /// Far-field fixture: chief position in ECI (km).
+    const FAR_FIELD_CHIEF_POSITION_ECI_KM: [f64; 3] = [5876.261, 3392.661, 0.0];
+
+    /// Far-field fixture: chief velocity in ECI (km/s).
+    const FAR_FIELD_CHIEF_VELOCITY_ECI_KM_S: [f64; 3] = [-2.380_512, 4.123_167, 6.006_917];
+
+    /// Far-field fixture: deputy position in ECI (km).
+    const FAR_FIELD_DEPUTY_POSITION_ECI_KM: [f64; 3] =
+        [5_199.839_421, 4_281.648_523, 1_398.070_066];
+
+    /// Far-field fixture: deputy velocity in ECI (km/s).
+    const FAR_FIELD_DEPUTY_VELOCITY_ECI_KM_S: [f64; 3] = [-3.993_103, 2.970_313, 5.764_540];
+
     /// Build a minimal `PipelineInput` from the standard far-field test scenario.
     fn far_field_input() -> PipelineInput {
         use hifitime::Epoch;
@@ -220,14 +238,14 @@ mod tests {
 
         let chief = StateVector {
             epoch: Epoch::from_gregorian_str("2024-01-01T00:00:00 UTC").unwrap(),
-            position_eci_km: Vector3::new(5876.261, 3392.661, 0.0),
-            velocity_eci_km_s: Vector3::new(-2.380512, 4.123167, 6.006917),
+            position_eci_km: Vector3::from(FAR_FIELD_CHIEF_POSITION_ECI_KM),
+            velocity_eci_km_s: Vector3::from(FAR_FIELD_CHIEF_VELOCITY_ECI_KM_S),
         };
 
         let deputy = StateVector {
             epoch: Epoch::from_gregorian_str("2024-01-01T00:00:00 UTC").unwrap(),
-            position_eci_km: Vector3::new(5199.839421, 4281.648523, 1398.070066),
-            velocity_eci_km_s: Vector3::new(-3.993103, 2.970313, 5.764540),
+            position_eci_km: Vector3::from(FAR_FIELD_DEPUTY_POSITION_ECI_KM),
+            velocity_eci_km_s: Vector3::from(FAR_FIELD_DEPUTY_VELOCITY_ECI_KM_S),
         };
 
         PipelineInput {

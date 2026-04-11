@@ -421,7 +421,7 @@ mod tests {
     // -----------------------------------------------------------------------
 
     #[test]
-    #[ignore] // Requires MetaAlmanac (network on first run)
+    #[ignore = "requires MetaAlmanac (network on first run)"]
     fn nyx_mc_single_sample() {
         let (chief, deputy, mission, mc_config, mission_config, propagator, almanac) =
             build_mc_test_fixtures(1, MonteCarloMode::OpenLoop, default_state_dispersions());
@@ -451,7 +451,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore] // Requires MetaAlmanac (network on first run)
+    #[ignore = "requires MetaAlmanac (network on first run)"]
     fn nyx_mc_10_samples_statistics() {
         let (chief, deputy, mission, mc_config, mission_config, propagator, almanac) =
             build_mc_test_fixtures(10, MonteCarloMode::OpenLoop, default_state_dispersions());
@@ -492,7 +492,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore] // Requires MetaAlmanac (network on first run)
+    #[ignore = "requires MetaAlmanac (network on first run)"]
     fn nyx_mc_parallel_deterministic() {
         let dispersions = default_state_dispersions();
 
@@ -533,16 +533,20 @@ mod tests {
 
         assert_eq!(report1.samples.len(), report2.samples.len());
         for (s1, s2) in report1.samples.iter().zip(report2.samples.iter()) {
+            // Determinism: identical seeds must produce bitwise-identical Δv.
             assert_eq!(
-                s1.total_dv_km_s, s2.total_dv_km_s,
+                s1.total_dv_km_s.to_bits(),
+                s2.total_dv_km_s.to_bits(),
                 "sample {} Δv mismatch: {} vs {}",
-                s1.index, s1.total_dv_km_s, s2.total_dv_km_s
+                s1.index,
+                s1.total_dv_km_s,
+                s2.total_dv_km_s,
             );
         }
     }
 
     #[test]
-    #[ignore] // Requires MetaAlmanac (network on first run)
+    #[ignore = "requires MetaAlmanac (network on first run)"]
     fn nyx_mc_report_serde_roundtrip() {
         let (chief, deputy, mission, mc_config, mission_config, propagator, almanac) =
             build_mc_test_fixtures(3, MonteCarloMode::OpenLoop, default_state_dispersions());
@@ -568,14 +572,16 @@ mod tests {
 
         assert_eq!(roundtrip.samples.len(), report.samples.len());
         assert_eq!(roundtrip.config.num_samples, report.config.num_samples);
+        // serde_json uses lossless f64 encoding; the roundtrip must be bitwise.
         assert_eq!(
-            roundtrip.nominal_dv_km_s, report.nominal_dv_km_s,
-            "nominal Δv should survive roundtrip"
+            roundtrip.nominal_dv_km_s.to_bits(),
+            report.nominal_dv_km_s.to_bits(),
+            "nominal Δv should survive roundtrip",
         );
     }
 
     #[test]
-    #[ignore] // Requires MetaAlmanac (network on first run)
+    #[ignore = "requires MetaAlmanac (network on first run)"]
     fn nyx_mc_collision_prob_safe() {
         let (chief, deputy, mission, mc_config, mission_config, propagator, almanac) =
             build_mc_test_fixtures(10, MonteCarloMode::OpenLoop, default_state_dispersions());
@@ -603,7 +609,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore] // Requires MetaAlmanac (network on first run)
+    #[ignore = "requires MetaAlmanac (network on first run)"]
     fn nyx_mc_collision_prob_unsafe() {
         use rpo_core::elements::keplerian_conversions::keplerian_to_state;
         use crate::nyx_bridge::load_full_almanac;
@@ -665,7 +671,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore] // Requires MetaAlmanac (network on first run)
+    #[ignore = "requires MetaAlmanac (network on first run)"]
     fn nyx_mc_closed_loop_converges() {
         let (chief, deputy, mission, mc_config, mission_config, propagator, almanac) =
             build_mc_test_fixtures(5, MonteCarloMode::ClosedLoop, default_state_dispersions());
@@ -696,7 +702,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore] // Requires MetaAlmanac (network on first run)
+    #[ignore = "requires MetaAlmanac (network on first run)"]
     fn nyx_mc_covariance_cross_check() {
         use rpo_core::mission::covariance::propagate_mission_covariance;
         use rpo_core::propagation::covariance::ric_accuracy_to_roe_covariance;

@@ -227,12 +227,14 @@ mod tests {
             "max_vel = {}, expected 0.03", stats.max_velocity_error_km_s
         );
 
-        // Empty input returns zeros
+        // Empty input returns structural zeros (default-initialized f64, never
+        // subject to arithmetic that could yield -0.0), so bit-pattern equality
+        // against `+0.0` is the exact contract.
         let empty = super::compute_report_statistics(&[]);
-        assert_eq!(empty.max_position_error_km, 0.0, "empty max_pos");
-        assert_eq!(empty.mean_position_error_km, 0.0, "empty mean_pos");
-        assert_eq!(empty.rms_position_error_km, 0.0, "empty rms_pos");
-        assert_eq!(empty.max_velocity_error_km_s, 0.0, "empty max_vel");
+        assert_eq!(empty.max_position_error_km.to_bits(), 0_u64, "empty max_pos");
+        assert_eq!(empty.mean_position_error_km.to_bits(), 0_u64, "empty mean_pos");
+        assert_eq!(empty.rms_position_error_km.to_bits(), 0_u64, "empty rms_pos");
+        assert_eq!(empty.max_velocity_error_km_s.to_bits(), 0_u64, "empty max_vel");
     }
 
     /// Verify all-zero summaries (e.g. all post-COLA) produce zero aggregate.
@@ -250,8 +252,9 @@ mod tests {
         }];
 
         let stats = super::compute_report_statistics(&summaries);
-        assert_eq!(stats.max_position_error_km, 0.0);
-        assert_eq!(stats.mean_position_error_km, 0.0);
+        // All-zero summaries: no arithmetic path can yield -0.0, so +0.0 bits.
+        assert_eq!(stats.max_position_error_km.to_bits(), 0_u64);
+        assert_eq!(stats.mean_position_error_km.to_bits(), 0_u64);
     }
 
     /// Verify `compute_leg_summaries` with mixed pre/post-COLA points across legs.
@@ -303,8 +306,8 @@ mod tests {
         assert_eq!(summaries[1].num_points, 2);
         assert_eq!(summaries[1].num_post_cola_excluded, 1);
 
-        // Leg 2: all excluded
-        assert_eq!(summaries[2].max_position_error_km, 0.0);
+        // Leg 2: all excluded — max starts at +0.0 and never updates.
+        assert_eq!(summaries[2].max_position_error_km.to_bits(), 0_u64);
         assert_eq!(summaries[2].num_points, 0);
         assert_eq!(summaries[2].num_post_cola_excluded, 2);
     }
@@ -323,6 +326,7 @@ mod tests {
         assert_eq!(summaries.len(), 1);
         assert_eq!(summaries[0].num_points, 0);
         assert_eq!(summaries[0].num_post_cola_excluded, 0);
-        assert_eq!(summaries[0].max_position_error_km, 0.0);
+        // No input means no update to `max_position_error_km`; stays at +0.0.
+        assert_eq!(summaries[0].max_position_error_km.to_bits(), 0_u64);
     }
 }

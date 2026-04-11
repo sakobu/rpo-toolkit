@@ -1,8 +1,8 @@
 //! Integration tests for the stateless WebSocket API.
 //!
-//! Tests the stateless protocol: 5 ClientMessage variants (compute_transfer,
-//! extract_drag, validate, run_mc, cancel) and 8 ServerMessage variants
-//! (transfer_result, drag_result, validation_result, monte_carlo_result,
+//! Tests the stateless protocol: 5 `ClientMessage` variants (`compute_transfer`,
+//! `extract_drag`, validate, `run_mc`, cancel) and 8 `ServerMessage` variants
+//! (`transfer_result`, `drag_result`, `validation_result`, `monte_carlo_result`,
 //! progress, error, cancelled, heartbeat).
 //!
 //! Each test creates its own server because `#[tokio::test]` uses a per-test
@@ -103,7 +103,7 @@ async fn start_test_server_full() -> String {
 
 /// Send a JSON message and receive the next non-heartbeat text response within 10 seconds.
 ///
-/// Heartbeat messages are skipped — background jobs (extract_drag) may send one
+/// Heartbeat messages are skipped — background jobs (`extract_drag`) may send one
 /// before the result arrives if the 30-second heartbeat fires.
 async fn send_recv(
     ws: &mut tokio_tungstenite::WebSocketStream<
@@ -127,9 +127,7 @@ async fn recv_next(
     let deadline = std::time::Instant::now() + DEFAULT_RECV_TIMEOUT;
     loop {
         let remaining = deadline.saturating_duration_since(std::time::Instant::now());
-        if remaining.is_zero() {
-            panic!("Timed out waiting for non-heartbeat response");
-        }
+        assert!(!remaining.is_zero(), "Timed out waiting for non-heartbeat response");
         match tokio::time::timeout(remaining, ws.next()).await {
             Ok(Some(Ok(Message::Text(text)))) => {
                 let val: Value = serde_json::from_str(&text).unwrap();
@@ -157,9 +155,7 @@ async fn recv_until_type(
     let deadline = std::time::Instant::now() + Duration::from_secs(timeout_secs);
     loop {
         let remaining = deadline.saturating_duration_since(std::time::Instant::now());
-        if remaining.is_zero() {
-            panic!("Timed out waiting for '{target_type}'");
-        }
+        assert!(!remaining.is_zero(), "Timed out waiting for '{target_type}'");
         match tokio::time::timeout(remaining, ws.next()).await {
             Ok(Some(Ok(Message::Text(text)))) => {
                 let val: Value = serde_json::from_str(&text).unwrap();
@@ -198,7 +194,7 @@ fn far_field_states() -> (Value, Value) {
 }
 
 /// Proximity test states: two states ~0.3 km apart at ISS-like altitude.
-/// δr/r ≈ 0.3 / 6778 ≈ 4.4e-5 << roe_threshold = 0.005 → proximity.
+/// δr/r ≈ 0.3 / 6778 ≈ 4.4e-5 << `roe_threshold` = 0.005 → proximity.
 fn proximity_states() -> (Value, Value) {
     let chief = json!({
         "epoch": "2024-01-15T12:00:00.000000000 UTC",
@@ -287,9 +283,11 @@ async fn transfer_proximity() {
         "proximity should have no Lambert transfer, got: {}",
         resp["result"]["plan"]["transfer"]
     );
+    // Proximity regime skips the Lambert solve entirely, so the reported Δv
+    // is the default-initialized 0.0 — bitwise equality captures that intent.
     assert_eq!(
-        resp["result"]["lambert_dv_km_s"].as_f64().unwrap(),
-        0.0,
+        resp["result"]["lambert_dv_km_s"].as_f64().unwrap().to_bits(),
+        0_u64,
         "lambert_dv_km_s should be zero for proximity"
     );
 }
@@ -346,7 +344,7 @@ async fn extract_drag_identical_configs_returns_zero() {
 /// short-circuit and must run the full nyx propagation.
 /// The resulting `da_dot` must be non-zero because the mass ratio is ~42×.
 #[tokio::test]
-#[ignore] // nyx full-physics drag extraction (~3s)
+#[ignore = "nyx full-physics drag extraction (~3s)"]
 async fn extract_drag_different_configs() {
     let input: PipelineInput = serde_json::from_reader(
         std::fs::File::open("../examples/validate.json").expect("open examples/validate.json"),
@@ -401,7 +399,7 @@ async fn extract_drag_different_configs() {
 /// is then sent to the WS Validate endpoint for nyx full-physics comparison.
 /// Verifies that a `ValidationResult` with meaningful position errors is returned.
 #[tokio::test]
-#[ignore] // nyx full-physics propagation (~5-10s)
+#[ignore = "nyx full-physics propagation (~5-10s)"]
 async fn validate_mission_roundtrip() {
     let url = start_test_server_full().await;
     let (mut ws, _) = connect_async(&url).await.unwrap();
@@ -461,7 +459,7 @@ async fn validate_mission_roundtrip() {
 /// Uses `examples/mc.json` for realistic states and configs, but overrides
 /// to minimal settings: 3 samples, open-loop mode, J2 propagator, seed 42.
 #[tokio::test]
-#[ignore] // nyx full-physics propagation (~30-60s)
+#[ignore = "nyx full-physics propagation (~30-60s)"]
 async fn mc_ensemble_roundtrip() {
     let url = start_test_server_full().await;
     let (mut ws, _) = connect_async(&url).await.unwrap();
@@ -569,7 +567,7 @@ async fn cancel_without_active_job() {
 /// checked. Both `cancelled` and `validation_result` are valid outcomes.
 /// The key invariant is that the server returns a response and does not hang.
 #[tokio::test]
-#[ignore] // nyx full-physics propagation (cancelled quickly)
+#[ignore = "nyx full-physics propagation (cancelled quickly)"]
 async fn cancel_active_validation() {
     let url = start_test_server_full().await;
     let (mut ws, _) = connect_async(&url).await.unwrap();
@@ -631,14 +629,15 @@ async fn cancel_active_validation() {
                         got_result = true;
                         break;
                     }
-                    "progress" | "heartbeat" => continue,
+                    "progress" | "heartbeat" => {}
                     other => panic!("unexpected message type: {other}"),
                 }
             }
-            Ok(Some(Ok(Message::Close(_)))) | Ok(None) => break,
+            // Clean WS close (Close frame or None) and recv timeout both
+            // terminate the loop; the test treats them as equivalent outcomes.
+            Ok(Some(Ok(Message::Close(_))) | None) | Err(_) => break,
             Ok(Some(Err(e))) => panic!("ws error: {e}"),
-            Err(_) => break, // timeout
-            Ok(Some(Ok(_))) => continue, // ping/pong
+            Ok(Some(Ok(_))) => {} // ping/pong
         }
     }
 
@@ -727,7 +726,7 @@ async fn missing_required_fields() {
     );
 }
 
-/// All `ServerErrorCode` variants must serialize to snake_case strings.
+/// All `ServerErrorCode` variants must serialize to `snake_case` strings.
 #[test]
 fn error_codes_serialize_to_snake_case() {
     use rpo_api::protocol::ServerErrorCode;

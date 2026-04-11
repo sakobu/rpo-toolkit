@@ -298,7 +298,7 @@ mod tests {
     }
 
     /// Run `plan_mission` in proximity regime with the given perch geometry.
-    fn run_proximity_plan_mission(perch: PerchGeometry) -> (MissionPlan, KeplerianElements) {
+    fn run_proximity_plan_mission(perch: &PerchGeometry) -> (MissionPlan, KeplerianElements) {
         let epoch = test_epoch();
         let chief_ke = iss_like_elements();
         let mut deputy_ke = chief_ke;
@@ -309,7 +309,7 @@ mod tests {
         let deputy = keplerian_to_state(&deputy_ke, epoch).unwrap();
         let config = ProximityConfig::default();
 
-        let plan = plan_mission(&chief, &deputy, &perch, &config, TEST_LAMBERT_TOF_S, &LambertConfig::default())
+        let plan = plan_mission(&chief, &deputy, perch, &config, TEST_LAMBERT_TOF_S, &LambertConfig::default())
             .expect("proximity mission should succeed");
         (plan, chief_ke)
     }
@@ -317,7 +317,7 @@ mod tests {
     #[test]
     fn proximity_mission_uses_perch_roe() {
         let perch = PerchGeometry::VBar { along_track_km: 5.0 };
-        let (plan, chief_ke) = run_proximity_plan_mission(perch);
+        let (plan, chief_ke) = run_proximity_plan_mission(&perch);
 
         assert!(matches!(plan.phase, MissionPhase::Proximity { .. }));
         assert!(plan.transfer.is_none(), "proximity should have no Lambert transfer");
@@ -332,7 +332,7 @@ mod tests {
     #[test]
     fn proximity_mission_uses_rbar_perch() {
         let perch = PerchGeometry::RBar { radial_km: 2.0 };
-        let (plan, chief_ke) = run_proximity_plan_mission(perch);
+        let (plan, chief_ke) = run_proximity_plan_mission(&perch);
 
         assert!(matches!(plan.phase, MissionPhase::Proximity { .. }));
         assert!(plan.transfer.is_none(), "proximity should have no Lambert transfer");

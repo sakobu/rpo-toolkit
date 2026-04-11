@@ -340,10 +340,10 @@ mod tests {
         ).unwrap();
 
         let transfer = solve_lambert(&dep, &arr).expect("Lambert should succeed");
-        let arc = transfer.densify_arc(100).unwrap();
+        let densified = transfer.densify_arc(100).unwrap();
 
-        let dep_err = (arc.first().unwrap().position_eci_km - transfer.departure_state.position_eci_km).norm();
-        let arr_err = (arc.last().unwrap().position_eci_km - transfer.arrival_state.position_eci_km).norm();
+        let dep_err = (densified.first().unwrap().position_eci_km - transfer.departure_state.position_eci_km).norm();
+        let arr_err = (densified.last().unwrap().position_eci_km - transfer.arrival_state.position_eci_km).norm();
 
         assert!(
             dep_err < ARC_ENDPOINT_TOL_KM,
@@ -362,9 +362,9 @@ mod tests {
         ).unwrap();
 
         let transfer = solve_lambert(&dep, &arr).expect("Lambert should succeed");
-        let arc = transfer.densify_arc(100).unwrap();
+        let densified = transfer.densify_arc(100).unwrap();
 
-        assert_eq!(arc.len(), 101, "Expected 101 points (100 steps + 1)");
+        assert_eq!(densified.len(), 101, "Expected 101 points (100 steps + 1)");
     }
 
     #[test]
@@ -377,9 +377,9 @@ mod tests {
         ).unwrap();
 
         let transfer = solve_lambert(&dep, &arr).expect("Lambert should succeed");
-        let arc = transfer.densify_arc(50).unwrap();
+        let densified = transfer.densify_arc(50).unwrap();
 
-        for window in arc.windows(2) {
+        for window in densified.windows(2) {
             let t0 = window[0].epoch;
             let t1 = window[1].epoch;
             assert!(
@@ -401,9 +401,9 @@ mod tests {
         ).unwrap();
 
         let transfer = solve_lambert(&dep, &arr).expect("Lambert should succeed");
-        let arc = transfer.densify_arc(100).unwrap();
+        let densified = transfer.densify_arc(100).unwrap();
 
-        for (k, state) in arc.iter().enumerate() {
+        for (k, state) in densified.iter().enumerate() {
             let r = state.position_eci_km.norm();
             assert!(
                 r > R_EARTH,

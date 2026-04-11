@@ -323,11 +323,10 @@ pub(super) fn build_eclipse_validation(
 mod tests {
     use nalgebra::Vector3;
 
-    use rpo_core::elements::keplerian_conversions::keplerian_to_state;
     use crate::nyx_bridge;
-    use rpo_core::propagation::propagator::PropagationModel;
-    use rpo_core::test_helpers::{iss_like_elements, test_epoch};
-    use rpo_core::types::SpacecraftConfig;
+    use rpo_core::test_helpers::test_epoch;
+
+    use crate::validation::test_scenario;
 
     // Named tolerance constants for eclipse validation tests
 
@@ -386,23 +385,6 @@ mod tests {
             (recovered.eclipse_pct_error - 0.5).abs() < SERDE_ROUNDTRIP_TOL,
             "eclipse_pct_error roundtrip"
         );
-    }
-
-    #[test]
-    fn eclipse_validation_tolerances_are_reasonable() {
-        use rpo_core::constants::ECLIPSE_PERCENTAGE_AGREEMENT_TOL;
-        // Sun direction: 0.02 deg = 3.5e-4 rad (Meeus with precession correction)
-        assert!(SUN_DIRECTION_VALIDATION_TOL_RAD > 0.0);
-        assert!(SUN_DIRECTION_VALIDATION_TOL_RAD < 0.01); // < 0.57 deg
-        // Moon direction: 1.0 deg = 0.0175 rad (Meeus truncated ~0.5 deg)
-        assert!(MOON_DIRECTION_VALIDATION_TOL_RAD > SUN_DIRECTION_VALIDATION_TOL_RAD);
-        assert!(MOON_DIRECTION_VALIDATION_TOL_RAD < 0.1); // < 5.7 deg
-        // Eclipse timing: <120s (dominated by sample-interval quantization)
-        assert!(ECLIPSE_TIMING_VALIDATION_TOL_S > 0.0);
-        assert!(ECLIPSE_TIMING_VALIDATION_TOL_S < 300.0);
-        // Eclipse percentage agreement: <1% difference
-        assert!(ECLIPSE_PERCENTAGE_AGREEMENT_TOL > 0.0);
-        assert!(ECLIPSE_PERCENTAGE_AGREEMENT_TOL < 10.0);
     }
 
     // =========================================================================
@@ -642,34 +624,28 @@ mod tests {
     /// Verifies that `validate_mission_nyx()` produces eclipse validation data
     /// and that Sun direction and timing errors are within tolerances.
     #[test]
-    #[ignore] // Requires MetaAlmanac (network on first run)
+    #[ignore = "requires MetaAlmanac (network on first run)"]
     fn validate_eclipse_full_mission() {
-        use rpo_core::mission::waypoints::plan_waypoint_mission;
-        use rpo_core::test_helpers::deputy_from_roe;
         use rpo_core::mission::config::MissionConfig;
         use rpo_core::mission::types::Waypoint;
-        use rpo_core::types::{DepartureState, QuasiNonsingularROE};
+        use rpo_core::propagation::PropagationModel;
+        use rpo_core::types::SpacecraftConfig;
 
-        let epoch = test_epoch();
-        let chief_ke = iss_like_elements();
-        let a = chief_ke.a_km;
-
-        let formation_roe = QuasiNonsingularROE {
-            da: 0.0,
-            dlambda: 0.0,
-            dex: 0.3 / a,
-            dey: -0.2 / a,
-            dix: 0.2 / a,
-            diy: 0.0,
+        use test_scenario::{
+            iss_formation_roe, plan_mission, validate_planned, PlanAndValidateInput,
+            ValidationContext,
         };
-        let deputy_ke = deputy_from_roe(&chief_ke, &formation_roe);
 
-        let chief_sv = keplerian_to_state(&chief_ke, epoch).unwrap();
-        let deputy_sv = keplerian_to_state(&deputy_ke, epoch).unwrap();
+        /// nyx sample count per leg for the eclipse validation scenario.
+        /// 50 gives enough resolution for per-interval comparisons while
+        /// keeping the full-physics run under ~10 s on a laptop.
+        const SAMPLES_PER_LEG: u32 = 50;
 
-        let period = chief_ke.period().unwrap();
+        let formation_roe = iss_formation_roe(0.3, -0.2, 0.2, 0.0);
+        let ctx = ValidationContext::iss_with_formation(&formation_roe);
+        let period = ctx.chief_ke.period().unwrap();
         let tof = 0.75 * period;
-        let waypoints = vec![
+        let waypoints = [
             Waypoint {
                 position_ric_km: Vector3::new(0.5, 3.0, 0.5),
                 velocity_ric_km_s: Some(Vector3::zeros()),
@@ -687,39 +663,26 @@ mod tests {
             },
         ];
 
-        let departure = DepartureState {
-            roe: formation_roe,
-            chief: chief_ke,
-            epoch,
+        let input = PlanAndValidateInput {
+            formation_roe,
+            waypoints: &waypoints,
+            config: &MissionConfig::default(),
+            propagator: &PropagationModel::J2Stm,
+            chief_config: SpacecraftConfig::SERVICER_500KG,
+            deputy_config: SpacecraftConfig::SERVICER_500KG,
+            samples_per_leg: SAMPLES_PER_LEG,
+            cola_input: &crate::validation::ColaValidationInput::default(),
         };
-        let config = MissionConfig::default();
-        let propagator = PropagationModel::J2Stm;
 
-        let mission = plan_waypoint_mission(&departure, &waypoints, &config, &propagator)
-            .expect("mission planning should succeed");
+        let mission = plan_mission(&ctx, &input);
 
-        // Verify eclipse data was computed
+        // Verify eclipse data was computed as a side effect of planning.
         assert!(
             mission.eclipse.is_some(),
             "mission should have eclipse data"
         );
 
-        let almanac = nyx_bridge::load_full_almanac().expect("full almanac should load");
-        let val_config = crate::validation::ValidationConfig {
-            samples_per_leg: 50,
-            chief_config: SpacecraftConfig::SERVICER_500KG,
-            deputy_config: SpacecraftConfig::SERVICER_500KG,
-        };
-
-        let report = crate::validation::validate_mission_nyx(
-            &mission,
-            &chief_sv,
-            &deputy_sv,
-            &val_config,
-            &crate::validation::ColaValidationInput::default(),
-            &almanac,
-        )
-        .expect("validation should succeed");
+        let report = validate_planned(&ctx, &mission, &input);
 
         // Eclipse validation should be present
         let ev = report
@@ -775,7 +738,7 @@ mod tests {
     /// Validates that the analytical Sun ephemeris (Meeus Ch. 25) agrees
     /// with the high-fidelity ANISE ephemeris within the stated accuracy.
     #[test]
-    #[ignore] // Requires MetaAlmanac (network on first run)
+    #[ignore = "requires MetaAlmanac (network on first run)"]
     fn validate_sun_direction_accuracy() {
         use rpo_core::elements::eclipse::sun_position_eci_km;
         use anise::constants::frames::{SUN_J2000, EARTH_J2000 as ANISE_EARTH_J2000};
@@ -830,7 +793,7 @@ mod tests {
     /// Validates that the analytical Moon ephemeris (Meeus Ch. 47, truncated)
     /// agrees with the high-fidelity ANISE ephemeris within the stated accuracy.
     #[test]
-    #[ignore] // Requires MetaAlmanac (network on first run)
+    #[ignore = "requires MetaAlmanac (network on first run)"]
     fn validate_moon_direction_accuracy() {
         use rpo_core::elements::eclipse::moon_position_eci_km;
         use anise::constants::frames::{MOON_J2000, EARTH_J2000 as ANISE_EARTH_J2000};

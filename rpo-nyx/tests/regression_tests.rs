@@ -165,12 +165,12 @@ const ROE_ECC_VECTOR_RELATIVE_TOL: f64 = 0.05;
 const ROE_TO_RIC_RMS_POSITION_BOUND_M: f64 = 50.0;
 
 /// Drag STM relative error tolerance for da drift linearity.
-/// da drift should track da_dot * t to within 10%. The residual comes from
+/// da drift should track `da_dot` * t to within 10%. The residual comes from
 /// quadratic and coupling terms in the 9×9 STM that are not purely linear.
 const DRAG_DA_DRIFT_RELATIVE_TOL: f64 = 0.1;
 
 /// Quadratic dlambda ratio tolerance.
-/// With constant da_dot, dlambda grows quadratically: ratio at 10/5 orbits ≈ 4.
+/// With constant `da_dot`, dlambda grows quadratically: ratio at 10/5 orbits ≈ 4.
 /// Tolerance of 1.0 allows ~25% deviation from the ideal ratio,
 /// covering higher-order STM terms and J2 coupling.
 const DRAG_DLAMBDA_QUADRATIC_RATIO_TOL: f64 = 1.0;
@@ -769,7 +769,7 @@ fn j2_stm_vs_nyx_two_body() {
 // =========================================================================
 
 #[test]
-#[ignore] // Requires MetaAlmanac (network on first run)
+#[ignore = "requires MetaAlmanac (network on first run)"]
 fn full_almanac_loads() {
     let almanac =
         nyx_bridge::load_full_almanac().expect("MetaAlmanac::latest() should succeed");
@@ -784,7 +784,7 @@ fn full_almanac_loads() {
 }
 
 #[test]
-#[ignore] // Requires MetaAlmanac (network on first run)
+#[ignore = "requires MetaAlmanac (network on first run)"]
 fn full_physics_propagate_one_orbit() {
     let almanac =
         nyx_bridge::load_full_almanac().expect("full almanac should load");
@@ -840,7 +840,7 @@ fn full_physics_propagate_one_orbit() {
 /// nonzero differential drag rates. Chief: 500 kg / 1.0 m² (default),
 /// Deputy: 200 kg / 2.0 m² (higher B* = Cd·A/m).
 #[test]
-#[ignore] // Requires MetaAlmanac (network on first run)
+#[ignore = "requires MetaAlmanac (network on first run)"]
 fn extract_dmf_rates_nonzero() {
     let almanac = nyx_bridge::load_full_almanac().expect("full almanac should load");
     let epoch = test_epoch();
@@ -890,7 +890,7 @@ fn extract_dmf_rates_nonzero() {
 
 /// Identical spacecraft configs should produce zero (or sub-threshold) drag rates.
 #[test]
-#[ignore] // Requires MetaAlmanac (network on first run)
+#[ignore = "requires MetaAlmanac (network on first run)"]
 fn extract_dmf_rates_identical() {
     let almanac = nyx_bridge::load_full_almanac().expect("full almanac should load");
     let epoch = test_epoch();

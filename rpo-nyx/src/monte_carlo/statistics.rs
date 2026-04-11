@@ -256,6 +256,33 @@ mod tests {
     /// Mean of [1, 2, 3, 4, 5] = 3.0 exactly in f64; 1e-10 is conservative.
     const MEAN_EXACT_TOL: f64 = 1e-10;
 
+    // --- Percentile reduction fixture values ------------------------------
+    // Hoisted constants for the `percentile_single_value` and
+    // `percentile_filters_nan` tests. The degenerate cases are intentionally
+    // chosen so min/max/p50/mean are bitwise-exact copies of inputs, letting
+    // the assertions use `.to_bits()` equality instead of a tolerance.
+
+    /// Single-value input for `percentile_single_value`.
+    const SINGLE_VALUE_INPUT: f64 = 42.0;
+
+    /// Minimum finite value in the NaN-filter fixture (= p0 after filtering).
+    const NAN_FILTER_FINITE_MIN: f64 = 1.0;
+
+    /// Median (p50) of the finite subset [1, 2, 3, 4, 5].
+    const NAN_FILTER_FINITE_MEDIAN: f64 = 3.0;
+
+    /// Maximum finite value in the NaN-filter fixture (= p100 after filtering).
+    const NAN_FILTER_FINITE_MAX: f64 = 5.0;
+
+    /// Low filler in the NaN-filter fixture (slots between min and median).
+    const NAN_FILTER_FINITE_FILLER_LOW: f64 = 2.0;
+
+    /// High filler in the NaN-filter fixture (slots between median and max).
+    const NAN_FILTER_FINITE_FILLER_HIGH: f64 = 4.0;
+
+    /// Expected mean of the finite subset [1, 2, 3, 4, 5].
+    const NAN_FILTER_FINITE_MEAN: f64 = 3.0;
+
     /// Build a minimal `MissionCovarianceReport` with given terminal position
     /// and per-axis 3-sigma values.
     fn mock_cov_report(sigma3_ric: Vector3<f64>) -> MissionCovarianceReport {
@@ -365,26 +392,38 @@ mod tests {
 
     #[test]
     fn percentile_single_value() {
-        let stats = compute_percentile_stats(&[42.0]).unwrap();
-        assert_eq!(stats.min, 42.0);
-        assert_eq!(stats.max, 42.0);
-        assert_eq!(stats.p50, 42.0);
-        assert_eq!(stats.mean, 42.0);
-        assert_eq!(stats.std_dev, 0.0);
+        // All stats are pure copies / degenerate reductions, so bitwise
+        // equality is the correct contract — no arithmetic rounding budget.
+        let stats = compute_percentile_stats(&[SINGLE_VALUE_INPUT]).unwrap();
+        assert_eq!(stats.min.to_bits(), SINGLE_VALUE_INPUT.to_bits());
+        assert_eq!(stats.max.to_bits(), SINGLE_VALUE_INPUT.to_bits());
+        assert_eq!(stats.p50.to_bits(), SINGLE_VALUE_INPUT.to_bits());
+        assert_eq!(stats.mean.to_bits(), SINGLE_VALUE_INPUT.to_bits());
+        assert_eq!(stats.std_dev.to_bits(), 0.0_f64.to_bits());
     }
 
     /// NaN values in input are filtered before computing statistics.
     /// The finite values should produce correct percentiles.
     #[test]
     fn percentile_filters_nan() {
-        let values = vec![1.0, 2.0, f64::NAN, 3.0, f64::NAN, 4.0, 5.0];
+        // Same bitwise rationale as `percentile_single_value`: after NaN
+        // filtering the surviving [1, 2, 3, 4, 5] yields exact integer stats.
+        let values = vec![
+            NAN_FILTER_FINITE_MIN,
+            NAN_FILTER_FINITE_FILLER_LOW,
+            f64::NAN,
+            NAN_FILTER_FINITE_MEDIAN,
+            f64::NAN,
+            NAN_FILTER_FINITE_FILLER_HIGH,
+            NAN_FILTER_FINITE_MAX,
+        ];
         let stats = compute_percentile_stats(&values).unwrap();
-        assert_eq!(stats.min, 1.0);
-        assert_eq!(stats.max, 5.0);
-        assert_eq!(stats.p50, 3.0);
+        assert_eq!(stats.min.to_bits(), NAN_FILTER_FINITE_MIN.to_bits());
+        assert_eq!(stats.max.to_bits(), NAN_FILTER_FINITE_MAX.to_bits());
+        assert_eq!(stats.p50.to_bits(), NAN_FILTER_FINITE_MEDIAN.to_bits());
         assert!(
-            (stats.mean - 3.0).abs() < MEAN_EXACT_TOL,
-            "mean should be 3.0, got {}",
+            (stats.mean - NAN_FILTER_FINITE_MEAN).abs() < MEAN_EXACT_TOL,
+            "mean should be {NAN_FILTER_FINITE_MEAN}, got {}",
             stats.mean
         );
     }

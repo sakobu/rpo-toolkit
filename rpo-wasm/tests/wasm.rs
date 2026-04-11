@@ -11,8 +11,10 @@
 use hifitime::Epoch;
 use nalgebra::Vector3;
 use rpo_core::elements::keplerian_to_state;
-use rpo_core::mission::config::MissionConfig;
+use rpo_core::mission::config::{MissionConfig, ProximityConfig};
+use rpo_core::mission::formation::EiAlignment;
 use rpo_core::mission::types::{MissionPhase, MissionPlan, PerchGeometry, Waypoint, WaypointMission};
+use rpo_core::propagation::lambert::LambertConfig;
 use rpo_core::pipeline::types::{PipelineInput, PropagatorChoice, TransferResult, WaypointInput};
 use rpo_core::propagation::PropagationModel;
 use rpo_core::test_helpers::{iss_like_elements, test_epoch};
@@ -31,7 +33,7 @@ const TEST_LAMBERT_SMA_OFFSET_KM: f64 = 10.0;
 /// Proximity-regime separation (matches classification output for 1 km SMA offset).
 const TEST_PROXIMITY_SEPARATION_KM: f64 = 1.0;
 
-/// Proximity-regime delta_r/r (matches classification output for 1 km SMA offset).
+/// Proximity-regime `delta_r/r` (matches classification output for 1 km SMA offset).
 const TEST_PROXIMITY_DELTA_R_OVER_R: f64 = 0.0001;
 
 /// Safety config: minimum e/i vector separation.
@@ -172,8 +174,8 @@ fn test_pipeline_input() -> PipelineInput {
         propagator: PropagatorChoice::J2,
         perch: PerchGeometry::VBar { along_track_km: TEST_PERCH_ALONG_TRACK_KM },
         lambert_tof_s: TEST_LAMBERT_TOF_S,
-        lambert_config: Default::default(),
-        proximity: Default::default(),
+        lambert_config: LambertConfig::default(),
+        proximity: ProximityConfig::default(),
         chief_config: None,
         deputy_config: None,
         navigation_accuracy: None,
@@ -620,8 +622,8 @@ fn compute_safety_analysis_without_config() {
     let _ = format!("{result:?}");
 }
 
-/// Tests assess_cola via rpo-core directly because the WASM wrapper
-/// takes JsValue for the `poca` parameter (cannot construct in native test).
+/// Tests `assess_cola` via rpo-core directly because the WASM wrapper
+/// takes `JsValue` for the `poca` parameter (cannot construct in native test).
 #[test]
 fn assess_cola_nominal() {
     use rpo_core::mission::avoidance::ColaConfig;
@@ -737,7 +739,7 @@ fn apply_perch_enrichment_nominal() {
     let mut input = test_pipeline_input();
     input.safety_requirements = Some(SafetyRequirements {
         min_separation_km: TEST_MIN_SEPARATION_KM,
-        alignment: Default::default(),
+        alignment: EiAlignment::default(),
     });
 
     // Get a suggestion first (needs safety_requirements).

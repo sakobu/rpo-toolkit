@@ -210,7 +210,8 @@ mod tests {
         for _ in 0..100 {
             let a = sample_distribution(&dist, &mut rng1).unwrap();
             let b = sample_distribution(&dist, &mut rng2).unwrap();
-            assert_eq!(a, b, "same seed should produce identical values");
+            // Deterministic RNG: same seed must produce bitwise-identical f64.
+            assert_eq!(a.to_bits(), b.to_bits(), "same seed should produce identical values");
         }
     }
 
@@ -221,7 +222,8 @@ mod tests {
         let mut rng2 = ChaCha20Rng::seed_from_u64(99);
         let a = sample_distribution(&dist, &mut rng1).unwrap();
         let b = sample_distribution(&dist, &mut rng2).unwrap();
-        assert_ne!(a, b, "different seeds should produce different values");
+        // Distinct seeds must diverge in the first sample (bitwise).
+        assert_ne!(a.to_bits(), b.to_bits(), "different seeds should produce different values");
     }
 
     #[test]
