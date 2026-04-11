@@ -1118,7 +1118,10 @@ mod tests {
             .expect("conversion should succeed");
 
         assert_eq!(burns.len(), 1);
-        assert!((burns[0].elapsed_s - 2000.0).abs() < 1e-6, "elapsed_s should be ~2000");
+        assert!(
+            (burns[0].elapsed_s - 2000.0).abs() < rpo_core::constants::ELAPSED_TIME_TOL_S,
+            "elapsed_s should be ~2000",
+        );
         assert_eq!(burns[0].leg_index, 0);
     }
 
