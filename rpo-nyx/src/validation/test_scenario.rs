@@ -71,6 +71,21 @@ impl ValidationContext {
     /// ISS-like chief with a deputy derived from the given formation ROE
     /// (via [`deputy_from_roe`]). Loads the full almanac eagerly, so the
     /// first use in a test session hits the network.
+    ///
+    /// # Panics
+    ///
+    /// - If [`nyx_bridge::load_full_almanac`] fails (network unavailable on
+    ///   first use, or missing MetaAlmanac credentials). Tests that call
+    ///   this constructor are always `#[ignore = "requires MetaAlmanac
+    ///   (network on first run)"]`; running without network or without the
+    ///   almanac cache will panic here.
+    /// - If `keplerian_to_state` fails for either the chief or deputy — this
+    ///   should not happen for the ISS-like fixture but is propagated
+    ///   through `.unwrap()` for debug clarity.
+    /// - The hardening `debug_assert!` fires in debug builds if
+    ///   `deputy_state` drifts from the re-derived state by more than
+    ///   `TEST_F64_POSITION_NOISE_KM`. This is a load-bearing invariant —
+    ///   do not weaken the tolerance.
     pub(super) fn iss_with_formation(formation_roe: &QuasiNonsingularROE) -> Self {
         let epoch = test_epoch();
         let chief_elements = iss_like_elements();
@@ -106,6 +121,11 @@ impl ValidationContext {
     /// ISS-like chief with a deputy colocated at the chief state vector.
     /// Used by differential-drag tests where chief and deputy start in the
     /// same orbit but have distinct ballistic coefficients.
+    ///
+    /// # Panics
+    ///
+    /// Same almanac and `keplerian_to_state` panic paths as
+    /// [`ValidationContext::iss_with_formation`].
     pub(super) fn iss_colocated() -> Self {
         let epoch = test_epoch();
         let chief_elements = iss_like_elements();
@@ -151,6 +171,15 @@ pub(super) struct PlanAndValidateInput<'a> {
 /// Plan a waypoint mission from the given context + input, without running
 /// nyx validation. Useful when the caller needs to do mission-level analysis
 /// (POCA computation, COLA assessment) before validating.
+///
+/// # Panics
+///
+/// Panics if `plan_waypoint_mission` returns `Err`. This happens when the
+/// departure ROE is linearly degenerate (cannot invert the Lambert
+/// geometry) or when the waypoint list is malformed (zero TOF, NaN
+/// components). Callers must supply valid inputs — tests that exercise
+/// failure paths should call the planner directly, not through this
+/// helper.
 pub(super) fn plan_mission(
     ctx: &ValidationContext,
     input: &PlanAndValidateInput<'_>,
@@ -173,6 +202,14 @@ pub(super) fn plan_mission(
 /// chief/deputy/almanac bundled in `ctx`. Kept separate from [`plan_mission`]
 /// so callers that need to instrument the mission between planning and
 /// validation (e.g. COLA assessment) don't pay for a re-plan.
+///
+/// # Panics
+///
+/// Panics if `validate_mission_nyx` returns `Err`. The dominant failure
+/// modes are (a) nyx dynamics build failure (missing frame or ephemeris
+/// data in the almanac) and (b) integrator divergence on numerically
+/// unstable inputs. Both indicate a malformed fixture or an almanac
+/// cache issue, not a physical failure mode worth testing.
 pub(super) fn validate_planned(
     ctx: &ValidationContext,
     mission: &WaypointMission,
