@@ -528,15 +528,15 @@ fn propagate_leg(
 /// [`propagate_leg_parallel`], [`propagate_leg_with_cola`]) and the
 /// pre-COLA safety pass ([`compute_pre_cola_safety`]), avoiding parameter
 /// sprawl.
-struct LegPropagationCtx<'a> {
+pub(super) struct LegPropagationCtx<'a> {
     /// Number of intermediate comparison samples per leg.
-    samples_per_leg: u32,
+    pub(super) samples_per_leg: u32,
     /// Chief spacecraft properties.
-    chief_config: &'a SpacecraftConfig,
+    pub(super) chief_config: &'a SpacecraftConfig,
     /// Deputy spacecraft properties.
-    deputy_config: &'a SpacecraftConfig,
+    pub(super) deputy_config: &'a SpacecraftConfig,
     /// ANISE almanac with ephemeris and frame data.
-    almanac: &'a Arc<Almanac>,
+    pub(super) almanac: &'a Arc<Almanac>,
 }
 
 /// Output from propagating a single leg with a mid-coast COLA impulse.
@@ -914,7 +914,7 @@ mod tests {
         TEST_F64_EPOCH_NOISE_S, TEST_F64_POSITION_NOISE_KM, TEST_INTEGRATOR_RESTART_TOL_KM,
         TEST_SAMPLING_REGRESSION_TOL_KM,
     };
-    use rpo_core::elements::keplerian_conversions::keplerian_to_state;
+
     use crate::nyx_bridge;
     use rpo_core::mission::config::MissionConfig;
     use rpo_core::mission::types::Waypoint;
@@ -925,137 +925,6 @@ mod tests {
     use rpo_core::types::SpacecraftConfig;
 
     use crate::validation::test_scenario;
-    use rpo_core::mission::types::{ColaEffectivenessEntry, SafetyMetrics};
-
-    /// Assert that analytical and numerical safety metrics agree within the
-    /// module-scoped tolerances (`SAFETY_RC_RELATIVE_TOL`,
-    /// `SAFETY_3D_ABSOLUTE_TOL_KM`, `SAFETY_EI_RELATIVE_TOL`). Also emits
-    /// a comparison banner to stderr for post-run eyeballing.
-    ///
-    /// R/C and e/i comparisons are relative and are skipped when either
-    /// reference value is below its `*_NEAR_ZERO_KM` threshold (e.g. a
-    /// V-bar configuration has ~zero R/C, making relative error undefined).
-    fn assert_safety_agreement(analytical: &SafetyMetrics, numerical: &SafetyMetrics) {
-        eprintln!("Safety comparison (analytical vs numerical):");
-        eprintln!(
-            "  R/C separation:  {:.4} km vs {:.4} km",
-            analytical.operational.min_rc_separation_km,
-            numerical.operational.min_rc_separation_km,
-        );
-        eprintln!(
-            "  3D distance:     {:.4} km vs {:.4} km",
-            analytical.operational.min_distance_3d_km,
-            numerical.operational.min_distance_3d_km,
-        );
-        eprintln!(
-            "  e/i separation:  {:.4} km vs {:.4} km",
-            analytical.passive.min_ei_separation_km,
-            numerical.passive.min_ei_separation_km,
-        );
-        eprintln!(
-            "  |de|:            {:.6} vs {:.6}",
-            analytical.passive.de_magnitude, numerical.passive.de_magnitude,
-        );
-        eprintln!(
-            "  |di|:            {:.6} vs {:.6}",
-            analytical.passive.di_magnitude, numerical.passive.di_magnitude,
-        );
-        eprintln!(
-            "  e/i phase angle: {:.4} rad vs {:.4} rad",
-            analytical.passive.ei_phase_angle_rad, numerical.passive.ei_phase_angle_rad,
-        );
-
-        // R/C separation: relative agreement, skip if both near zero.
-        let rc_ref = analytical
-            .operational
-            .min_rc_separation_km
-            .max(numerical.operational.min_rc_separation_km);
-        if rc_ref > SAFETY_RC_NEAR_ZERO_KM {
-            let rc_rel_err = (analytical.operational.min_rc_separation_km
-                - numerical.operational.min_rc_separation_km)
-                .abs()
-                / rc_ref;
-            eprintln!("  R/C relative error: {rc_rel_err:.2}");
-            assert!(
-                rc_rel_err < SAFETY_RC_RELATIVE_TOL,
-                "R/C separation relative error = {rc_rel_err:.2} (expected < {SAFETY_RC_RELATIVE_TOL})",
-            );
-        } else {
-            eprintln!(
-                "  R/C near-zero ({rc_ref:.4} km < {SAFETY_RC_NEAR_ZERO_KM}): \
-                 skipping relative comparison"
-            );
-        }
-
-        // 3D distance: absolute agreement.
-        let dist_3d_err = (analytical.operational.min_distance_3d_km
-            - numerical.operational.min_distance_3d_km)
-            .abs();
-        eprintln!("  3D distance absolute error: {dist_3d_err:.4} km");
-        assert!(
-            dist_3d_err < SAFETY_3D_ABSOLUTE_TOL_KM,
-            "3D distance error = {dist_3d_err:.4} km (expected < {SAFETY_3D_ABSOLUTE_TOL_KM})",
-        );
-
-        // e/i separation: relative agreement, skip if both near zero.
-        let ei_ref = analytical
-            .passive
-            .min_ei_separation_km
-            .max(numerical.passive.min_ei_separation_km);
-        if ei_ref > SAFETY_EI_NEAR_ZERO_KM {
-            let ei_rel_err = (analytical.passive.min_ei_separation_km
-                - numerical.passive.min_ei_separation_km)
-                .abs()
-                / ei_ref;
-            eprintln!("  e/i relative error: {ei_rel_err:.2}");
-            assert!(
-                ei_rel_err < SAFETY_EI_RELATIVE_TOL,
-                "e/i separation relative error = {ei_rel_err:.2} (expected < {SAFETY_EI_RELATIVE_TOL})",
-            );
-        }
-    }
-
-    /// Per-leg COLA effectiveness assertion: checks that nyx's post-COLA
-    /// minimum distance exceeds `COLA_EFFECTIVENESS_THRESHOLD_FRACTION` of
-    /// the target, and that the analytical vs nyx relative disagreement is
-    /// within `COLA_EFFECTIVENESS_RELATIVE_TOL` when an analytical estimate
-    /// is available. Emits a one-line summary per entry to stderr.
-    fn assert_cola_effectiveness(eff: &ColaEffectivenessEntry) {
-        eprintln!(
-            "Leg {}: analytical POCA={:.1}m, nyx min={:.1}m, target={:.1}m, met={:?}",
-            eff.leg_index + 1,
-            eff.analytical_post_cola_poca_km.unwrap_or(0.0) * 1000.0,
-            eff.nyx_post_cola_min_distance_km * 1000.0,
-            eff.target_distance_km.unwrap_or(0.0) * 1000.0,
-            eff.threshold_met,
-        );
-
-        let target = eff.target_distance_km.expect("target should be set");
-        assert!(
-            eff.nyx_post_cola_min_distance_km > target * COLA_EFFECTIVENESS_THRESHOLD_FRACTION,
-            "Nyx post-COLA min ({:.1}m) should exceed {:.0}% of target ({:.1}m)",
-            eff.nyx_post_cola_min_distance_km * 1000.0,
-            COLA_EFFECTIVENESS_THRESHOLD_FRACTION * 100.0,
-            target * 1000.0,
-        );
-
-        if let Some(analytical) = eff.analytical_post_cola_poca_km {
-            if analytical > 0.0 {
-                let relative_diff =
-                    (eff.nyx_post_cola_min_distance_km - analytical).abs() / analytical;
-                eprintln!("  analytical vs nyx relative diff: {:.1}%", relative_diff * 100.0);
-                assert!(
-                    relative_diff < COLA_EFFECTIVENESS_RELATIVE_TOL,
-                    "Analytical ({:.1}m) vs nyx ({:.1}m) relative diff {:.0}% exceeds {:.0}% tolerance",
-                    analytical * 1000.0,
-                    eff.nyx_post_cola_min_distance_km * 1000.0,
-                    relative_diff * 100.0,
-                    COLA_EFFECTIVENESS_RELATIVE_TOL * 100.0,
-                );
-            }
-        }
-    }
-
     // =========================================================================
     // COLA Burn Conversion Tests (pure logic, no nyx)
     // =========================================================================
@@ -1264,42 +1133,10 @@ mod tests {
     /// DMF linear fit error + unmodeled SRP/3rd-body over 1 orbit.
     const DRAG_STM_VS_NYX_POS_TOL_KM: f64 = 1.0;
 
-    /// Relative tolerance for R/C separation comparison (analytical vs numerical).
-    /// Different sampling density + mean/osculating offset justify 50%.
-    const SAFETY_RC_RELATIVE_TOL: f64 = 0.50;
-
-    /// Absolute tolerance for 3D distance comparison (km).
-    /// Same effects as R/C; absolute because 3D distance can be small.
-    const SAFETY_3D_ABSOLUTE_TOL_KM: f64 = 0.5;
-
-    /// Relative tolerance for e/i vector separation comparison.
-    /// ROE-level drift O(1e-5) over 1-3 orbits.
-    const SAFETY_EI_RELATIVE_TOL: f64 = 0.50;
-
-    /// Below this threshold (km), R/C separations are operationally "at V-bar"
-    /// and relative-error comparison is not meaningful.
-    const SAFETY_RC_NEAR_ZERO_KM: f64 = 0.01;
-
     /// Guard threshold for improvement ratio computation (km).
     /// When the J2-only error is below this threshold, the improvement ratio
     /// is numerically meaningless (division by near-zero). Skip the diagnostic.
     const IMPROVEMENT_RATIO_GUARD_KM: f64 = 1e-10;
-
-    /// Below this threshold (km), e/i separation values are too small
-    /// for a meaningful relative-error comparison.
-    const SAFETY_EI_NEAR_ZERO_KM: f64 = 1e-6;
-
-    /// Maximum relative difference between analytical and nyx post-COLA minimum distance.
-    /// Analytical uses linearized GVE (inverse Gauss variational equations) while nyx uses
-    /// full nonlinear dynamics with J2, drag, SRP, and third-body perturbations.
-    /// The 50% tolerance accommodates this fundamental model fidelity gap.
-    const COLA_EFFECTIVENESS_RELATIVE_TOL: f64 = 0.50;
-
-    /// Nyx post-COLA minimum distance must exceed this fraction of the target distance.
-    /// Set at 50% to account for: (a) discrete sampling resolution (50 points/leg may
-    /// miss the true minimum), (b) nonlinear dynamics divergence from the linearized
-    /// avoidance solution, and (c) unmodeled perturbations (SRP, third-body).
-    const COLA_EFFECTIVENESS_THRESHOLD_FRACTION: f64 = 0.50;
 
     /// COLA sample-split fraction for `propagate_leg_with_cola_sample_split`,
     /// expressed as an integer percentage so the expected split count can be
@@ -1316,11 +1153,6 @@ mod tests {
     /// two segments, so the total can exceed `samples_per_leg` by at most this many.
     const COLA_TOTAL_SAMPLE_SLOP: usize = 4;
 
-    /// Default nyx sample count per mission leg used by the full-physics
-    /// validation tests. 50 samples gives enough resolution to characterize
-    /// per-sample position error without making runs prohibitively slow.
-    const DEFAULT_VALIDATION_SAMPLES_PER_LEG: u32 = 50;
-
     /// Single-leg transfer with nonzero initial ROE and mixed-axis waypoint,
     /// validated against nyx full-physics propagation.
     ///
@@ -1332,19 +1164,20 @@ mod tests {
     #[ignore = "requires MetaAlmanac (network on first run)"]
     fn validate_full_physics_single_leg() {
         use test_scenario::{
-            iss_formation_roe, plan_and_validate, PlanAndValidateInput, ValidationContext,
+            iss_formation_roe, plan_and_validate, DEFAULT_VALIDATION_SAMPLES_PER_LEG,
+            PlanAndValidateInput, ValidationContext,
         };
 
         let formation_roe = iss_formation_roe(0.3, -0.2, 0.2, 0.0);
         let ctx = ValidationContext::iss_with_formation(&formation_roe);
-        let period = ctx.chief_ke.period().unwrap();
+        let period = ctx.chief_elements.period().unwrap();
         let waypoints = [Waypoint {
             position_ric_km: Vector3::new(0.5, 3.0, 1.0),
             velocity_ric_km_s: Some(Vector3::zeros()),
             tof_s: Some(0.8 * period),
         }];
 
-        let (_, report) = plan_and_validate(
+        let report = plan_and_validate(
             &ctx,
             &PlanAndValidateInput {
                 waypoints: &waypoints,
@@ -1400,12 +1233,13 @@ mod tests {
     #[ignore = "requires MetaAlmanac (network on first run)"]
     fn validate_full_physics_multi_waypoint() {
         use test_scenario::{
-            iss_formation_roe, plan_and_validate, PlanAndValidateInput, ValidationContext,
+            iss_formation_roe, plan_and_validate, DEFAULT_VALIDATION_SAMPLES_PER_LEG,
+            PlanAndValidateInput, ValidationContext,
         };
 
         let formation_roe = iss_formation_roe(0.3, -0.2, 0.2, 0.0);
         let ctx = ValidationContext::iss_with_formation(&formation_roe);
-        let period = ctx.chief_ke.period().unwrap();
+        let period = ctx.chief_elements.period().unwrap();
         let tof = 0.75 * period;
         let waypoints = [
             Waypoint {
@@ -1425,7 +1259,7 @@ mod tests {
             },
         ];
 
-        let (_, report) = plan_and_validate(
+        let report = plan_and_validate(
             &ctx,
             &PlanAndValidateInput {
                 waypoints: &waypoints,
@@ -1476,7 +1310,10 @@ mod tests {
     #[test]
     #[ignore = "requires MetaAlmanac (network on first run)"]
     fn validate_drag_stm_vs_nyx_drag() {
-        use test_scenario::{plan_and_validate, PlanAndValidateInput, ValidationContext};
+        use test_scenario::{
+            plan_and_validate, DEFAULT_VALIDATION_SAMPLES_PER_LEG, PlanAndValidateInput,
+            ValidationContext,
+        };
 
         let ctx = ValidationContext::iss_colocated();
         let chief_config = SpacecraftConfig::SERVICER_500KG;
@@ -1488,8 +1325,8 @@ mod tests {
 
         // Step 1: Extract DMF rates (uses the shared almanac from `ctx`).
         let drag = nyx_bridge::extract_dmf_rates(
-            &ctx.chief_sv,
-            &ctx.deputy_sv,
+            &ctx.chief_state,
+            &ctx.deputy_state,
             &chief_config,
             &deputy_config,
             &ctx.almanac,
@@ -1518,7 +1355,7 @@ mod tests {
         );
 
         // Step 2: plan & validate with both propagators, sharing scaffolding.
-        let period = ctx.chief_ke.period().unwrap();
+        let period = ctx.chief_elements.period().unwrap();
         let waypoints = [Waypoint {
             position_ric_km: Vector3::new(0.0, 5.0, 0.0),
             velocity_ric_km_s: Some(Vector3::zeros()),
@@ -1528,7 +1365,7 @@ mod tests {
         let default_cola = super::ColaValidationInput::default();
 
         let drag_propagator = PropagationModel::J2DragStm { drag };
-        let (_, drag_report) = plan_and_validate(
+        let drag_report = plan_and_validate(
             &ctx,
             &PlanAndValidateInput {
                 waypoints: &waypoints,
@@ -1542,7 +1379,7 @@ mod tests {
         );
 
         let j2_propagator = PropagationModel::J2Stm;
-        let (_, j2_report) = plan_and_validate(
+        let j2_report = plan_and_validate(
             &ctx,
             &PlanAndValidateInput {
                 waypoints: &waypoints,
@@ -1601,14 +1438,15 @@ mod tests {
         use rpo_core::mission::config::SafetyConfig;
 
         use test_scenario::{
-            iss_formation_roe, plan_and_validate, PlanAndValidateInput, ValidationContext,
+            assert_safety_agreement, iss_formation_roe, plan_and_validate,
+            DEFAULT_VALIDATION_SAMPLES_PER_LEG, PlanAndValidateInput, ValidationContext,
         };
 
         // Perpendicular e/i vectors: dex along ex, diy along iy -> meaningful separation.
         let formation_roe = iss_formation_roe(0.5, 0.0, 0.0, 0.5);
         let ctx = ValidationContext::iss_with_formation(&formation_roe);
 
-        let period = ctx.chief_ke.period().unwrap();
+        let period = ctx.chief_elements.period().unwrap();
         let tof = 0.75 * period;
         let waypoints = [
             Waypoint {
@@ -1632,7 +1470,7 @@ mod tests {
             ..MissionConfig::default()
         };
 
-        let (_, report) = plan_and_validate(
+        let report = plan_and_validate(
             &ctx,
             &PlanAndValidateInput {
                 waypoints: &waypoints,
@@ -1666,85 +1504,90 @@ mod tests {
     #[test]
     #[ignore = "requires MetaAlmanac (network on first run)"]
     fn propagate_leg_with_cola_zero_dv_matches_single_segment() {
-        use rpo_core::mission::waypoints::plan_waypoint_mission;
-        use rpo_core::test_helpers::deputy_from_roe;
         use rpo_core::mission::config::MissionConfig;
         use rpo_core::mission::types::Waypoint;
-        use rpo_core::types::{DepartureState, QuasiNonsingularROE};
 
-        let epoch = test_epoch();
-        let chief_ke = iss_like_elements();
-        let a = chief_ke.a_km;
-
-        let formation_roe = QuasiNonsingularROE {
-            da: 0.0, dlambda: 0.0,
-            dex: 0.3 / a, dey: -0.2 / a,
-            dix: 0.2 / a, diy: 0.0,
+        use test_scenario::{
+            iss_formation_roe, leg_propagation_ctx_from_scenario, plan_mission,
+            DEFAULT_VALIDATION_SAMPLES_PER_LEG, PlanAndValidateInput, ValidationContext,
         };
-        let deputy_ke = deputy_from_roe(&chief_ke, &formation_roe);
 
-        let chief_sv = keplerian_to_state(&chief_ke, epoch).unwrap();
-        let deputy_sv = keplerian_to_state(&deputy_ke, epoch).unwrap();
+        let formation = iss_formation_roe(0.3, -0.2, 0.2, 0.0);
+        let ctx = ValidationContext::iss_with_formation(&formation);
 
-        let period = chief_ke.period().unwrap();
+        let period = ctx.chief_elements.period().unwrap();
         let waypoint = Waypoint {
             position_ric_km: Vector3::new(0.5, 3.0, 1.0),
             velocity_ric_km_s: Some(Vector3::zeros()),
             tof_s: Some(0.8 * period),
         };
 
-        let departure = DepartureState { roe: formation_roe, chief: chief_ke, epoch };
-        let config = MissionConfig::default();
+        let default_cola = super::ColaValidationInput::default();
         let propagator = PropagationModel::J2Stm;
-        let mission = plan_waypoint_mission(&departure, &[waypoint], &config, &propagator)
-            .expect("mission planning should succeed");
-
-        let almanac = nyx_bridge::load_full_almanac().expect("full almanac should load");
-        let samples: u32 = 50;
+        let input = PlanAndValidateInput {
+            waypoints: &[waypoint],
+            config: &MissionConfig::default(),
+            propagator: &propagator,
+            chief_config: SpacecraftConfig::SERVICER_500KG,
+            deputy_config: SpacecraftConfig::SERVICER_500KG,
+            samples_per_leg: DEFAULT_VALIDATION_SAMPLES_PER_LEG,
+            cola_input: &default_cola,
+        };
+        let mission = plan_mission(&ctx, &input);
         let leg = &mission.legs[0];
 
-        let ctx = super::LegPropagationCtx {
-            samples_per_leg: samples,
-            chief_config: &SpacecraftConfig::SERVICER_500KG,
-            deputy_config: &SpacecraftConfig::SERVICER_500KG,
-            almanac: &almanac,
-        };
+        let chief_cfg = SpacecraftConfig::SERVICER_500KG;
+        let deputy_cfg = SpacecraftConfig::SERVICER_500KG;
+        let leg_ctx = leg_propagation_ctx_from_scenario(
+            &ctx,
+            &chief_cfg,
+            &deputy_cfg,
+            DEFAULT_VALIDATION_SAMPLES_PER_LEG,
+        );
 
-        // Single-segment baseline (no COLA)
+        // Single-segment baseline (no COLA).
         let (chief_baseline, deputy_baseline) = super::propagate_leg_parallel(
-            &chief_sv, &deputy_sv, leg, &ctx,
-        ).expect("baseline propagation should succeed");
+            &ctx.chief_state,
+            &ctx.deputy_state,
+            leg,
+            &leg_ctx,
+        )
+        .expect("baseline propagation should succeed");
 
-        // Two-segment with zero COLA delta-v at mid-leg
+        // Two-segment with zero COLA delta-v at mid-leg.
         let zero_cola = super::ColaBurn {
             leg_index: 0,
             elapsed_s: leg.tof_s * 0.5,
             dv_ric_km_s: Vector3::zeros(),
         };
         let cola_out = super::propagate_leg_with_cola(
-            &chief_sv, &deputy_sv, leg, &zero_cola, &ctx,
-        ).expect("COLA propagation should succeed");
+            &ctx.chief_state,
+            &ctx.deputy_state,
+            leg,
+            &zero_cola,
+            &leg_ctx,
+        )
+        .expect("COLA propagation should succeed");
 
-        // Compare final states -- should match within nyx integrator tolerance.
-        // The two-segment approach re-initializes the integrator at the split point,
-        // so we allow a small tolerance for integrator restart transients.
         let chief_final_baseline = &chief_baseline.last().unwrap().state;
         let chief_final_cola = &cola_out.chief_results.last().unwrap().state;
         let deputy_final_baseline = &deputy_baseline.last().unwrap().state;
         let deputy_final_cola = &cola_out.deputy_results.last().unwrap().state;
 
-        let chief_pos_diff = (chief_final_baseline.position_eci_km - chief_final_cola.position_eci_km).norm();
-        let deputy_pos_diff = (deputy_final_baseline.position_eci_km - deputy_final_cola.position_eci_km).norm();
-
-        eprintln!("Zero-COLA vs baseline: chief dpos={chief_pos_diff:.6} km, deputy dpos={deputy_pos_diff:.6} km");
+        let chief_pos_diff =
+            (chief_final_baseline.position_eci_km - chief_final_cola.position_eci_km).norm();
+        let deputy_pos_diff =
+            (deputy_final_baseline.position_eci_km - deputy_final_cola.position_eci_km).norm();
 
         assert!(
             chief_pos_diff < TEST_INTEGRATOR_RESTART_TOL_KM,
-            "chief final position diverged: {chief_pos_diff:.6} km (expected < {TEST_INTEGRATOR_RESTART_TOL_KM})"
+            "chief final position diverged: {chief_pos_diff:.6} km \
+             (expected < {TEST_INTEGRATOR_RESTART_TOL_KM})"
         );
         assert!(
             deputy_pos_diff < TEST_INTEGRATOR_RESTART_TOL_KM,
-            "deputy final position diverged: {deputy_pos_diff:.6} km (expected < {TEST_INTEGRATOR_RESTART_TOL_KM})"
+            "deputy final position diverged: {deputy_pos_diff:.6} km \
+             (expected < {TEST_INTEGRATOR_RESTART_TOL_KM})"
         );
     }
 
@@ -1754,49 +1597,46 @@ mod tests {
     #[test]
     #[ignore = "requires MetaAlmanac (network on first run)"]
     fn propagate_leg_with_cola_sample_split() {
-        use rpo_core::mission::waypoints::plan_waypoint_mission;
-        use rpo_core::test_helpers::deputy_from_roe;
         use rpo_core::mission::config::MissionConfig;
         use rpo_core::mission::types::Waypoint;
-        use rpo_core::types::{DepartureState, QuasiNonsingularROE};
 
-        let epoch = test_epoch();
-        let chief_ke = iss_like_elements();
-        let a = chief_ke.a_km;
-
-        let formation_roe = QuasiNonsingularROE {
-            da: 0.0, dlambda: 0.0,
-            dex: 0.3 / a, dey: -0.2 / a,
-            dix: 0.2 / a, diy: 0.0,
+        use test_scenario::{
+            iss_formation_roe, leg_propagation_ctx_from_scenario, plan_mission,
+            DEFAULT_VALIDATION_SAMPLES_PER_LEG, PlanAndValidateInput, ValidationContext,
         };
-        let deputy_ke = deputy_from_roe(&chief_ke, &formation_roe);
 
-        let chief_sv = keplerian_to_state(&chief_ke, epoch).unwrap();
-        let deputy_sv = keplerian_to_state(&deputy_ke, epoch).unwrap();
+        let formation = iss_formation_roe(0.3, -0.2, 0.2, 0.0);
+        let ctx = ValidationContext::iss_with_formation(&formation);
 
-        let period = chief_ke.period().unwrap();
+        let period = ctx.chief_elements.period().unwrap();
         let waypoint = Waypoint {
             position_ric_km: Vector3::new(0.5, 3.0, 1.0),
             velocity_ric_km_s: Some(Vector3::zeros()),
             tof_s: Some(0.8 * period),
         };
 
-        let departure = DepartureState { roe: formation_roe, chief: chief_ke, epoch };
-        let config = MissionConfig::default();
+        let default_cola = super::ColaValidationInput::default();
         let propagator = PropagationModel::J2Stm;
-        let mission = plan_waypoint_mission(&departure, &[waypoint], &config, &propagator)
-            .expect("mission planning should succeed");
-
-        let almanac = nyx_bridge::load_full_almanac().expect("full almanac should load");
-        let samples: u32 = 50;
+        let input = PlanAndValidateInput {
+            waypoints: &[waypoint],
+            config: &MissionConfig::default(),
+            propagator: &propagator,
+            chief_config: SpacecraftConfig::SERVICER_500KG,
+            deputy_config: SpacecraftConfig::SERVICER_500KG,
+            samples_per_leg: DEFAULT_VALIDATION_SAMPLES_PER_LEG,
+            cola_input: &default_cola,
+        };
+        let mission = plan_mission(&ctx, &input);
         let leg = &mission.legs[0];
 
-        let ctx = super::LegPropagationCtx {
-            samples_per_leg: samples,
-            chief_config: &SpacecraftConfig::SERVICER_500KG,
-            deputy_config: &SpacecraftConfig::SERVICER_500KG,
-            almanac: &almanac,
-        };
+        let chief_cfg = SpacecraftConfig::SERVICER_500KG;
+        let deputy_cfg = SpacecraftConfig::SERVICER_500KG;
+        let leg_ctx = leg_propagation_ctx_from_scenario(
+            &ctx,
+            &chief_cfg,
+            &deputy_cfg,
+            DEFAULT_VALIDATION_SAMPLES_PER_LEG,
+        );
 
         // COLA fires at COLA_SAMPLE_PERCENT % of the leg tof.
         let cola = super::ColaBurn {
@@ -1805,32 +1645,33 @@ mod tests {
             dv_ric_km_s: Vector3::new(0.0, 0.001, 0.0),
         };
         let out = super::propagate_leg_with_cola(
-            &chief_sv, &deputy_sv, leg, &cola, &ctx,
-        ).expect("COLA propagation should succeed");
+            &ctx.chief_state,
+            &ctx.deputy_state,
+            leg,
+            &cola,
+            &leg_ctx,
+        )
+        .expect("COLA propagation should succeed");
 
-        // cola_split_index marks where segment 2 begins
         let n1 = out.cola_split_index;
         let n_total = out.chief_results.len();
-        let n2 = n_total - n1;
 
-        eprintln!("Sample split: n1={n1}, n2={n2}, total={n_total}, cola_split_index={}", out.cola_split_index);
-
-        // n1 + n2 should be close to samples_per_leg (nyx may return up to
-        // COLA_TOTAL_SAMPLE_SLOP extra points for endpoint inclusion).
-        let samples_usize = usize::try_from(samples).unwrap();
+        let samples_usize = usize::try_from(DEFAULT_VALIDATION_SAMPLES_PER_LEG).unwrap();
         assert!(
             n_total >= samples_usize && n_total <= samples_usize + COLA_TOTAL_SAMPLE_SLOP,
-            "total samples {n_total} should be approximately {samples} (+/-{COLA_TOTAL_SAMPLE_SLOP})"
+            "total samples {n_total} should be approximately \
+             {DEFAULT_VALIDATION_SAMPLES_PER_LEG} (+/-{COLA_TOTAL_SAMPLE_SLOP})"
         );
 
         let expected_n1 = usize::try_from(rpo_core::constants::round_half_up_percent(
-            samples,
+            DEFAULT_VALIDATION_SAMPLES_PER_LEG,
             COLA_SAMPLE_PERCENT,
         ))
         .unwrap();
         assert!(
             n1.abs_diff(expected_n1) <= COLA_SAMPLE_SPLIT_SLOP,
-            "n1={n1} should be approximately {expected_n1} (COLA at {COLA_SAMPLE_PERCENT}% of leg)"
+            "n1={n1} should be approximately {expected_n1} \
+             (COLA at {COLA_SAMPLE_PERCENT}% of leg)"
         );
     }
 
@@ -1847,8 +1688,8 @@ mod tests {
         use rpo_core::mission::{assess_cola, ClosestApproach, ColaAssessment, ColaConfig};
 
         use test_scenario::{
-            iss_formation_roe, plan_mission, validate_planned, PlanAndValidateInput,
-            ValidationContext,
+            assert_cola_effectiveness, iss_formation_roe, plan_mission, validate_planned,
+            DEFAULT_VALIDATION_SAMPLES_PER_LEG, PlanAndValidateInput, ValidationContext,
         };
 
         // Deputy: formation sized so POCA ~ 0.1 km (below 0.2 km threshold).
@@ -1859,7 +1700,7 @@ mod tests {
 
         // Waypoint: along-track displacement, ~0.8 period.
         // Along-track (T) motion is cheapest for near-circular chief orbits.
-        let period = ctx.chief_ke.period().unwrap();
+        let period = ctx.chief_elements.period().unwrap();
         let waypoints = [Waypoint {
             position_ric_km: Vector3::new(0.0, 0.5, 0.0),
             velocity_ric_km_s: Some(Vector3::zeros()),
@@ -1877,7 +1718,7 @@ mod tests {
         // Plan the mission once (no nyx validation yet) so we can compute
         // POCA + assess COLA off the planned trajectory.
         let default_cola = super::ColaValidationInput::default();
-        let mut input = PlanAndValidateInput {
+        let plan_input = PlanAndValidateInput {
             waypoints: &waypoints,
             config: &config,
             propagator: &propagator,
@@ -1886,7 +1727,7 @@ mod tests {
             samples_per_leg: DEFAULT_VALIDATION_SAMPLES_PER_LEG,
             cola_input: &default_cola,
         };
-        let mission = plan_mission(&ctx, &input);
+        let mission = plan_mission(&ctx, &plan_input);
 
         // COLA assessment: target distance intentionally modest. Budget
         // generous (1 km/s) because tight formations require large ROE
@@ -1932,8 +1773,11 @@ mod tests {
 
         // Now validate the (same) planned mission against nyx, passing the
         // populated COLA input so the report carries effectiveness data.
-        input.cola_input = &cola_input;
-        let report = validate_planned(&ctx, &mission, &input);
+        let validate_input = PlanAndValidateInput {
+            cola_input: &cola_input,
+            ..plan_input
+        };
+        let report = validate_planned(&ctx, &mission, &validate_input);
 
         // Assert effectiveness data is populated, then check each entry.
         assert!(
@@ -1976,26 +1820,6 @@ mod tests {
         }
     }
 
-    /// Build chief/deputy initial ECI states for an ISS-like ~300m formation
-    /// with nonzero `dex`/`dey`/`dix`. Used by the sampling-parity tests.
-    fn make_iss_like_formation_states() -> (StateVector, StateVector) {
-        use rpo_core::test_helpers::deputy_from_roe;
-        use rpo_core::types::QuasiNonsingularROE;
-
-        let epoch = test_epoch();
-        let chief_ke = iss_like_elements();
-        let a = chief_ke.a_km;
-        let formation_roe = QuasiNonsingularROE {
-            da: 0.0, dlambda: 0.0,
-            dex: 0.3 / a, dey: -0.2 / a,
-            dix: 0.2 / a, diy: 0.0,
-        };
-        let deputy_ke = deputy_from_roe(&chief_ke, &formation_roe);
-        let chief_sv = keplerian_to_state(&chief_ke, epoch).unwrap();
-        let deputy_sv = keplerian_to_state(&deputy_ke, epoch).unwrap();
-        (chief_sv, deputy_sv)
-    }
-
     /// Unit test: segment 1 of `propagate_leg` must be bit-identical (within
     /// float noise) across burn = None, burn = Some(zero), burn = Some(real),
     /// given the same `elapsed_s`. This is the load-bearing invariant that
@@ -2004,35 +1828,52 @@ mod tests {
     #[test]
     #[ignore = "Requires MetaAlmanac (network on first run)"]
     fn propagate_leg_segment_1_is_impulse_independent() {
-        let (chief_state, deputy_state) = make_iss_like_formation_states();
-        let leg = make_zero_dv_iss_leg(4200.0);
-        let almanac = nyx_bridge::load_full_almanac().expect("full almanac should load");
-        let ctx = super::LegPropagationCtx {
-            samples_per_leg: 50,
-            chief_config: &SpacecraftConfig::SERVICER_500KG,
-            deputy_config: &SpacecraftConfig::SERVICER_500KG,
-            almanac: &almanac,
+        use test_scenario::{
+            iss_formation_roe, leg_propagation_ctx_from_scenario,
+            DEFAULT_VALIDATION_SAMPLES_PER_LEG, ValidationContext,
         };
 
+        /// Mid-coast burn time, prime-ish to avoid coinciding with sampling grid points.
+        const MID_COAST_BURN_ELAPSED_S: f64 = 709.0;
+
+        let formation = iss_formation_roe(0.3, -0.2, 0.2, 0.0);
+        let ctx = ValidationContext::iss_with_formation(&formation);
+        let leg = make_zero_dv_iss_leg(4200.0);
+
+        let chief_cfg = SpacecraftConfig::SERVICER_500KG;
+        let deputy_cfg = SpacecraftConfig::SERVICER_500KG;
+        let leg_ctx = leg_propagation_ctx_from_scenario(
+            &ctx,
+            &chief_cfg,
+            &deputy_cfg,
+            DEFAULT_VALIDATION_SAMPLES_PER_LEG,
+        );
+
         let burn_none = super::MidLegBurn {
-            elapsed_s: 709.0,
+            elapsed_s: MID_COAST_BURN_ELAPSED_S,
             impulse_dv_ric_km_s: None,
         };
         let burn_zero = super::MidLegBurn {
-            elapsed_s: 709.0,
+            elapsed_s: MID_COAST_BURN_ELAPSED_S,
             impulse_dv_ric_km_s: Some(Vector3::zeros()),
         };
         let burn_real = super::MidLegBurn {
-            elapsed_s: 709.0,
+            elapsed_s: MID_COAST_BURN_ELAPSED_S,
             impulse_dv_ric_km_s: Some(Vector3::new(0.001, 0.0, 0.0)),
         };
 
-        let out_none = super::propagate_leg(&chief_state, &deputy_state, &leg, Some(&burn_none), &ctx)
-            .expect("impulse=None should succeed");
-        let out_zero = super::propagate_leg(&chief_state, &deputy_state, &leg, Some(&burn_zero), &ctx)
-            .expect("impulse=zero should succeed");
-        let out_real = super::propagate_leg(&chief_state, &deputy_state, &leg, Some(&burn_real), &ctx)
-            .expect("impulse=real should succeed");
+        let out_none = super::propagate_leg(
+            &ctx.chief_state, &ctx.deputy_state, &leg, Some(&burn_none), &leg_ctx,
+        )
+        .expect("impulse=None should succeed");
+        let out_zero = super::propagate_leg(
+            &ctx.chief_state, &ctx.deputy_state, &leg, Some(&burn_zero), &leg_ctx,
+        )
+        .expect("impulse=zero should succeed");
+        let out_real = super::propagate_leg(
+            &ctx.chief_state, &ctx.deputy_state, &leg, Some(&burn_real), &leg_ctx,
+        )
+        .expect("impulse=real should succeed");
 
         let split = out_none.split_index.expect("burn Some => split_index Some");
         assert_eq!(out_zero.split_index, Some(split), "same burn elapsed_s => same split index");
@@ -2099,63 +1940,70 @@ mod tests {
     #[test]
     #[ignore = "Requires MetaAlmanac (network on first run)"]
     fn pre_cola_and_post_cola_pre_burn_window_match_within_sampling_tolerance() {
-        use rpo_core::mission::waypoints::plan_waypoint_mission;
-        use rpo_core::test_helpers::deputy_from_roe;
         use rpo_core::mission::config::MissionConfig;
         use rpo_core::mission::types::Waypoint;
-        use rpo_core::types::{DepartureState, QuasiNonsingularROE};
+
+        use test_scenario::{
+            iss_formation_roe, plan_mission, DEFAULT_VALIDATION_SAMPLES_PER_LEG,
+            PlanAndValidateInput, ValidationContext,
+        };
+
+        // Mid-coast COLA burn time, prime-ish to avoid coinciding with sampling grid points.
+        const MID_COAST_BURN_ELAPSED_S: f64 = 709.0;
 
         // Build a single-leg mission with a nonzero formation so the ROE
         // trajectory is interesting. COLA burn will be injected at mid-leg.
-        let epoch = test_epoch();
-        let chief_ke = iss_like_elements();
-        let a = chief_ke.a_km;
-        let formation_roe = QuasiNonsingularROE {
-            da: 0.0, dlambda: 0.0,
-            dex: 0.3 / a, dey: -0.2 / a,
-            dix: 0.2 / a, diy: 0.0,
-        };
-        let deputy_ke = deputy_from_roe(&chief_ke, &formation_roe);
-        let chief_sv = keplerian_to_state(&chief_ke, epoch).unwrap();
-        let deputy_sv = keplerian_to_state(&deputy_ke, epoch).unwrap();
+        let formation = iss_formation_roe(0.3, -0.2, 0.2, 0.0);
+        let ctx = ValidationContext::iss_with_formation(&formation);
 
-        let period = chief_ke.period().unwrap();
+        let period = ctx.chief_elements.period().unwrap();
         let waypoint = Waypoint {
             position_ric_km: Vector3::new(0.5, 3.0, 1.0),
             velocity_ric_km_s: Some(Vector3::zeros()),
             tof_s: Some(0.8 * period),
         };
-        let departure = DepartureState { roe: formation_roe, chief: chief_ke, epoch };
-        let mission_config = MissionConfig::default();
-        let propagator = PropagationModel::J2Stm;
-        let mission = plan_waypoint_mission(&departure, &[waypoint], &mission_config, &propagator)
-            .expect("mission planning should succeed");
 
-        // COLA burn at 709s (synthetic small burn; we only care about sampling
-        // grid parity in the pre-burn window, not that COLA actually resolves
-        // anything). The dv is small enough not to blow up the trajectory but
-        // large enough that the post-burn segment diverges from the baseline.
+        let default_cola = super::ColaValidationInput::default();
+        let propagator = PropagationModel::J2Stm;
+        let input = PlanAndValidateInput {
+            waypoints: &[waypoint],
+            config: &MissionConfig::default(),
+            propagator: &propagator,
+            chief_config: SpacecraftConfig::SERVICER_500KG,
+            deputy_config: SpacecraftConfig::SERVICER_500KG,
+            samples_per_leg: DEFAULT_VALIDATION_SAMPLES_PER_LEG,
+            cola_input: &default_cola,
+        };
+        let mission = plan_mission(&ctx, &input);
+
+        // COLA burn at MID_COAST_BURN_ELAPSED_S. The dv is small enough not to
+        // blow up the trajectory but large enough that the post-burn segment
+        // diverges from the baseline.
         let leg_tof_s = mission.legs[0].tof_s;
-        assert!(709.0 < leg_tof_s, "test burn at 709s must be inside leg tof");
+        assert!(MID_COAST_BURN_ELAPSED_S < leg_tof_s, "burn time must be inside leg tof");
         let cola = super::ColaValidationInput {
             burns: vec![super::ColaBurn {
                 leg_index: 0,
-                elapsed_s: 709.0,
+                elapsed_s: MID_COAST_BURN_ELAPSED_S,
                 dv_ric_km_s: Vector3::new(0.0, 0.001, 0.0),
             }],
             analytical_maneuvers: vec![],
             target_distance_km: None,
         };
 
-        let almanac = nyx_bridge::load_full_almanac().expect("full almanac should load");
         let val_config = super::ValidationConfig {
-            samples_per_leg: 50,
+            samples_per_leg: DEFAULT_VALIDATION_SAMPLES_PER_LEG,
             chief_config: SpacecraftConfig::SERVICER_500KG,
             deputy_config: SpacecraftConfig::SERVICER_500KG,
         };
 
         let report = crate::validation::validate_mission_nyx(
-            &mission, &chief_sv, &deputy_sv, &val_config, &cola, &almanac,
+            &mission,
+            &ctx.chief_state,
+            &ctx.deputy_state,
+            &val_config,
+            &cola,
+            &ctx.almanac,
         )
         .expect("validation should succeed");
 
@@ -2165,10 +2013,6 @@ mod tests {
             .expect("pre_cola_numerical_safety must be populated when COLA is present");
         let post_cola_min_3d_km = report.numerical_safety.operational.min_distance_3d_km;
         let pre_cola_min_3d_km = pre_cola.operational.min_distance_3d_km;
-
-        eprintln!(
-            "Pre-COLA min 3D: {pre_cola_min_3d_km:.12} km; Post-COLA min 3D: {post_cola_min_3d_km:.12} km"
-        );
 
         // COLA can only reduce the post-burn minimum; it cannot affect
         // pre-burn. So pre_cola_min_3d must be <= post_cola_min_3d +
@@ -2181,9 +2025,6 @@ mod tests {
              within sampling tolerance; delta = {delta_km:.9} km"
         );
 
-        // Additional assertion: this guards against any future change that
-        // re-introduces sampling asymmetry. Micron-scale tolerance -- purely
-        // numerical noise from the safety reduction.
         assert!(
             (pre_cola_min_3d_km - post_cola_min_3d_km).abs() < TEST_F64_POSITION_NOISE_KM
                 || pre_cola_min_3d_km <= post_cola_min_3d_km,

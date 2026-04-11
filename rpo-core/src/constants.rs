@@ -109,6 +109,27 @@ pub const DAYS_PER_JULIAN_CENTURY: f64 = 36_525.0;
 /// effectively the same illumination state.
 pub const ECLIPSE_PERCENTAGE_AGREEMENT_TOL: f64 = 1.0;
 
+/// Maximum expected Sun direction angular error (Meeus vs ANISE DE440s).
+///
+/// Meeus Ch. 25 with precession correction gives ~0.005 deg at 2024 epoch;
+/// 0.02 deg (3.5e-4 rad) provides margin for nutation/perturbation residuals.
+/// Consumed by `validate_sun_direction_accuracy` and the shared
+/// `assert_eclipse_agreement` helper.
+pub const SUN_DIRECTION_VALIDATION_TOL_RAD: f64 = 3.5e-4;
+
+/// Maximum expected Moon direction angular error (Meeus vs ANISE DE440s).
+///
+/// Meeus Ch. 47 truncated series gives ~0.007 deg with precession correction;
+/// 1.0 deg (0.0175 rad) provides generous margin for the truncated series.
+pub const MOON_DIRECTION_VALIDATION_TOL_RAD: f64 = 0.0175;
+
+/// Maximum eclipse entry/exit timing error (seconds).
+///
+/// With linear interpolation of eclipse boundaries between samples, the
+/// error is dominated by the non-linearity of the shadow geometry rather
+/// than sample-interval quantization.
+pub const ECLIPSE_TIMING_VALIDATION_TOL_S: f64 = 120.0;
+
 // --- Test tolerances ---
 //
 // Canonical named tolerances for test assertions across the workspace.

@@ -324,6 +324,10 @@ mod tests {
     use nalgebra::Vector3;
 
     use crate::nyx_bridge;
+    use rpo_core::constants::{
+        ECLIPSE_TIMING_VALIDATION_TOL_S, MOON_DIRECTION_VALIDATION_TOL_RAD,
+        SUN_DIRECTION_VALIDATION_TOL_RAD,
+    };
     use rpo_core::test_helpers::test_epoch;
 
     use crate::validation::test_scenario;
@@ -342,22 +346,6 @@ mod tests {
     /// Sample-spaced intervals have +/-1 sample quantization;
     /// at 1s spacing, 2s covers worst case.
     const INTERVAL_DURATION_TOL_S: f64 = 2.0;
-
-    /// Maximum expected Sun direction angular error (Meeus vs ANISE DE440s).
-    /// Meeus Ch. 25 with precession correction gives ~0.005 deg at 2024 epoch.
-    /// 0.02 deg (3.5e-4 rad) provides margin for nutation/perturbation residuals.
-    const SUN_DIRECTION_VALIDATION_TOL_RAD: f64 = 3.5e-4;
-
-    /// Maximum expected Moon direction angular error (Meeus vs ANISE DE440s).
-    /// Meeus Ch. 47 truncated series gives ~0.007 deg with precession correction.
-    /// 1.0 deg (0.0175 rad) provides generous margin for the truncated series.
-    const MOON_DIRECTION_VALIDATION_TOL_RAD: f64 = 0.0175;
-
-    /// Maximum eclipse entry/exit timing error (seconds).
-    /// With linear interpolation of eclipse boundaries between samples,
-    /// the error is dominated by the non-linearity of the shadow geometry
-    /// rather than sample-interval quantization.
-    const ECLIPSE_TIMING_VALIDATION_TOL_S: f64 = 120.0;
 
     /// Interpolation accuracy tolerance for eclipse boundary tests.
     /// Linear interpolation of a linear ramp should be exact to floating-point
@@ -632,18 +620,13 @@ mod tests {
         use rpo_core::types::SpacecraftConfig;
 
         use test_scenario::{
-            iss_formation_roe, plan_mission, validate_planned, PlanAndValidateInput,
-            ValidationContext,
+            assert_eclipse_agreement, iss_formation_roe, plan_mission, validate_planned,
+            DEFAULT_VALIDATION_SAMPLES_PER_LEG, PlanAndValidateInput, ValidationContext,
         };
-
-        /// nyx sample count per leg for the eclipse validation scenario.
-        /// 50 gives enough resolution for per-interval comparisons while
-        /// keeping the full-physics run under ~10 s on a laptop.
-        const SAMPLES_PER_LEG: u32 = 50;
 
         let formation_roe = iss_formation_roe(0.3, -0.2, 0.2, 0.0);
         let ctx = ValidationContext::iss_with_formation(&formation_roe);
-        let period = ctx.chief_ke.period().unwrap();
+        let period = ctx.chief_elements.period().unwrap();
         let tof = 0.75 * period;
         let waypoints = [
             Waypoint {
@@ -669,7 +652,7 @@ mod tests {
             propagator: &PropagationModel::J2Stm,
             chief_config: SpacecraftConfig::SERVICER_500KG,
             deputy_config: SpacecraftConfig::SERVICER_500KG,
-            samples_per_leg: SAMPLES_PER_LEG,
+            samples_per_leg: DEFAULT_VALIDATION_SAMPLES_PER_LEG,
             cola_input: &crate::validation::ColaValidationInput::default(),
         };
 
@@ -682,55 +665,7 @@ mod tests {
         );
 
         let report = validate_planned(&ctx, &mission, &input);
-
-        // Eclipse validation should be present
-        let ev = report
-            .eclipse_validation
-            .expect("eclipse validation should be present");
-
-        eprintln!("Eclipse validation results:");
-        eprintln!(
-            "  Sun direction error: max {:.6} deg mean {:.6} deg",
-            ev.max_sun_direction_error_rad.to_degrees(),
-            ev.mean_sun_direction_error_rad.to_degrees(),
-        );
-        eprintln!(
-            "  Intervals: {} analytical, {} numerical, {} matched, {} unmatched",
-            ev.analytical_interval_count,
-            ev.numerical_interval_count,
-            ev.matched_interval_count,
-            ev.unmatched_interval_count,
-        );
-        if !ev.interval_comparisons.is_empty() {
-            eprintln!(
-                "  Timing error: max {:.2} s, mean {:.2} s",
-                ev.max_timing_error_s, ev.mean_timing_error_s,
-            );
-        }
-
-        // Sun direction should be within Meeus accuracy
-        assert!(
-            ev.max_sun_direction_error_rad < SUN_DIRECTION_VALIDATION_TOL_RAD,
-            "max Sun direction error = {:.6} deg (expected < {:.4} deg)",
-            ev.max_sun_direction_error_rad.to_degrees(),
-            SUN_DIRECTION_VALIDATION_TOL_RAD.to_degrees(),
-        );
-
-        // Timing error should be within tolerance (if intervals were matched)
-        if !ev.interval_comparisons.is_empty() {
-            assert!(
-                ev.max_timing_error_s < ECLIPSE_TIMING_VALIDATION_TOL_S,
-                "max timing error = {:.2} s (expected < {:.1} s)",
-                ev.max_timing_error_s,
-                ECLIPSE_TIMING_VALIDATION_TOL_S,
-            );
-        }
-
-        // Should have some eclipse points
-        assert!(
-            !ev.points.is_empty(),
-            "should have eclipse validation points"
-        );
+        assert_eclipse_agreement(&report);
     }
 
     /// Meeus Sun position vs ANISE DE440s over 24 hours.
