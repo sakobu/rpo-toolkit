@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://github.com/sakobu/roe-rust/docs/schema/pipeline-input.schema.json",
+  "$id": "https://github.com/sakobu/rpo-toolkit/docs/schema/pipeline-input.schema.json",
   "title": "PipelineInput",
   "description": "Canonical mission input for the RPO planner. Used by the CLI (as JSON file input for mission, validate, and mc commands). The WebSocket API uses the same domain types (StateVector, SpacecraftConfig, WaypointMission, etc.) but each message carries only the fields it needs rather than wrapping a full PipelineInput.",
   "type": "object",
@@ -481,7 +481,13 @@
     "SpacecraftConfig": {
       "type": "object",
       "description": "Physical properties of a spacecraft for force modeling (nyx propagation, drag extraction).",
-      "required": ["dry_mass_kg", "drag_area_m2", "coeff_drag", "srp_area_m2", "coeff_reflectivity"],
+      "required": [
+        "dry_mass_kg",
+        "drag_area_m2",
+        "coeff_drag",
+        "srp_area_m2",
+        "coeff_reflectivity"
+      ],
       "properties": {
         "dry_mass_kg": {
           "type": "number",
@@ -607,8 +613,12 @@
       "type": "object",
       "description": "Initial state uncertainty model in the RIC frame, applied to the deputy.",
       "required": [
-        "position_radial_km", "position_intrack_km", "position_crosstrack_km",
-        "velocity_radial_km_s", "velocity_intrack_km_s", "velocity_crosstrack_km_s"
+        "position_radial_km",
+        "position_intrack_km",
+        "position_crosstrack_km",
+        "velocity_radial_km_s",
+        "velocity_intrack_km_s",
+        "velocity_crosstrack_km_s"
       ],
       "properties": {
         "position_radial_km": {
