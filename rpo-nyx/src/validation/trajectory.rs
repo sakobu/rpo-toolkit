@@ -925,95 +925,7 @@ mod tests {
     use rpo_core::types::SpacecraftConfig;
 
     use crate::validation::test_scenario;
-    use rpo_core::mission::types::{ColaEffectivenessEntry, SafetyMetrics};
-
-    /// Assert that analytical and numerical safety metrics agree within the
-    /// module-scoped tolerances (`SAFETY_RC_RELATIVE_TOL`,
-    /// `SAFETY_3D_ABSOLUTE_TOL_KM`, `SAFETY_EI_RELATIVE_TOL`). Also emits
-    /// a comparison banner to stderr for post-run eyeballing.
-    ///
-    /// R/C and e/i comparisons are relative and are skipped when either
-    /// reference value is below its `*_NEAR_ZERO_KM` threshold (e.g. a
-    /// V-bar configuration has ~zero R/C, making relative error undefined).
-    fn assert_safety_agreement(analytical: &SafetyMetrics, numerical: &SafetyMetrics) {
-        eprintln!("Safety comparison (analytical vs numerical):");
-        eprintln!(
-            "  R/C separation:  {:.4} km vs {:.4} km",
-            analytical.operational.min_rc_separation_km,
-            numerical.operational.min_rc_separation_km,
-        );
-        eprintln!(
-            "  3D distance:     {:.4} km vs {:.4} km",
-            analytical.operational.min_distance_3d_km,
-            numerical.operational.min_distance_3d_km,
-        );
-        eprintln!(
-            "  e/i separation:  {:.4} km vs {:.4} km",
-            analytical.passive.min_ei_separation_km,
-            numerical.passive.min_ei_separation_km,
-        );
-        eprintln!(
-            "  |de|:            {:.6} vs {:.6}",
-            analytical.passive.de_magnitude, numerical.passive.de_magnitude,
-        );
-        eprintln!(
-            "  |di|:            {:.6} vs {:.6}",
-            analytical.passive.di_magnitude, numerical.passive.di_magnitude,
-        );
-        eprintln!(
-            "  e/i phase angle: {:.4} rad vs {:.4} rad",
-            analytical.passive.ei_phase_angle_rad, numerical.passive.ei_phase_angle_rad,
-        );
-
-        // R/C separation: relative agreement, skip if both near zero.
-        let rc_ref = analytical
-            .operational
-            .min_rc_separation_km
-            .max(numerical.operational.min_rc_separation_km);
-        if rc_ref > SAFETY_RC_NEAR_ZERO_KM {
-            let rc_rel_err = (analytical.operational.min_rc_separation_km
-                - numerical.operational.min_rc_separation_km)
-                .abs()
-                / rc_ref;
-            eprintln!("  R/C relative error: {rc_rel_err:.2}");
-            assert!(
-                rc_rel_err < SAFETY_RC_RELATIVE_TOL,
-                "R/C separation relative error = {rc_rel_err:.2} (expected < {SAFETY_RC_RELATIVE_TOL})",
-            );
-        } else {
-            eprintln!(
-                "  R/C near-zero ({rc_ref:.4} km < {SAFETY_RC_NEAR_ZERO_KM}): \
-                 skipping relative comparison"
-            );
-        }
-
-        // 3D distance: absolute agreement.
-        let dist_3d_err = (analytical.operational.min_distance_3d_km
-            - numerical.operational.min_distance_3d_km)
-            .abs();
-        eprintln!("  3D distance absolute error: {dist_3d_err:.4} km");
-        assert!(
-            dist_3d_err < SAFETY_3D_ABSOLUTE_TOL_KM,
-            "3D distance error = {dist_3d_err:.4} km (expected < {SAFETY_3D_ABSOLUTE_TOL_KM})",
-        );
-
-        // e/i separation: relative agreement, skip if both near zero.
-        let ei_ref = analytical
-            .passive
-            .min_ei_separation_km
-            .max(numerical.passive.min_ei_separation_km);
-        if ei_ref > SAFETY_EI_NEAR_ZERO_KM {
-            let ei_rel_err = (analytical.passive.min_ei_separation_km
-                - numerical.passive.min_ei_separation_km)
-                .abs()
-                / ei_ref;
-            eprintln!("  e/i relative error: {ei_rel_err:.2}");
-            assert!(
-                ei_rel_err < SAFETY_EI_RELATIVE_TOL,
-                "e/i separation relative error = {ei_rel_err:.2} (expected < {SAFETY_EI_RELATIVE_TOL})",
-            );
-        }
-    }
+    use rpo_core::mission::types::ColaEffectivenessEntry;
 
     /// Per-leg COLA effectiveness assertion: checks that nyx's post-COLA
     /// minimum distance exceeds `COLA_EFFECTIVENESS_THRESHOLD_FRACTION` of
@@ -1264,30 +1176,10 @@ mod tests {
     /// DMF linear fit error + unmodeled SRP/3rd-body over 1 orbit.
     const DRAG_STM_VS_NYX_POS_TOL_KM: f64 = 1.0;
 
-    /// Relative tolerance for R/C separation comparison (analytical vs numerical).
-    /// Different sampling density + mean/osculating offset justify 50%.
-    const SAFETY_RC_RELATIVE_TOL: f64 = 0.50;
-
-    /// Absolute tolerance for 3D distance comparison (km).
-    /// Same effects as R/C; absolute because 3D distance can be small.
-    const SAFETY_3D_ABSOLUTE_TOL_KM: f64 = 0.5;
-
-    /// Relative tolerance for e/i vector separation comparison.
-    /// ROE-level drift O(1e-5) over 1-3 orbits.
-    const SAFETY_EI_RELATIVE_TOL: f64 = 0.50;
-
-    /// Below this threshold (km), R/C separations are operationally "at V-bar"
-    /// and relative-error comparison is not meaningful.
-    const SAFETY_RC_NEAR_ZERO_KM: f64 = 0.01;
-
     /// Guard threshold for improvement ratio computation (km).
     /// When the J2-only error is below this threshold, the improvement ratio
     /// is numerically meaningless (division by near-zero). Skip the diagnostic.
     const IMPROVEMENT_RATIO_GUARD_KM: f64 = 1e-10;
-
-    /// Below this threshold (km), e/i separation values are too small
-    /// for a meaningful relative-error comparison.
-    const SAFETY_EI_NEAR_ZERO_KM: f64 = 1e-6;
 
     /// Maximum relative difference between analytical and nyx post-COLA minimum distance.
     /// Analytical uses linearized GVE (inverse Gauss variational equations) while nyx uses
@@ -1601,8 +1493,8 @@ mod tests {
         use rpo_core::mission::config::SafetyConfig;
 
         use test_scenario::{
-            iss_formation_roe, plan_and_validate, DEFAULT_VALIDATION_SAMPLES_PER_LEG,
-            PlanAndValidateInput, ValidationContext,
+            assert_safety_agreement, iss_formation_roe, plan_and_validate,
+            DEFAULT_VALIDATION_SAMPLES_PER_LEG, PlanAndValidateInput, ValidationContext,
         };
 
         // Perpendicular e/i vectors: dex along ex, diy along iy -> meaningful separation.

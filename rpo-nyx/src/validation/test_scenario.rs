@@ -28,7 +28,7 @@ use hifitime::Epoch;
 
 use rpo_core::elements::keplerian_to_state;
 use rpo_core::mission::config::MissionConfig;
-use rpo_core::mission::types::{ValidationReport, Waypoint, WaypointMission};
+use rpo_core::mission::types::{SafetyMetrics, ValidationReport, Waypoint, WaypointMission};
 use rpo_core::mission::waypoints::plan_waypoint_mission;
 use rpo_core::propagation::PropagationModel;
 use rpo_core::test_helpers::{deputy_from_roe, iss_like_elements, test_epoch};
@@ -229,6 +229,101 @@ pub(super) fn iss_formation_roe(
         dey: de_tangential_km / a,
         dix: di_normal_km / a,
         diy: di_phase_km / a,
+    }
+}
+
+/// Relative tolerance for R/C separation comparison (analytical vs numerical).
+/// Different sampling density + mean/osculating offset justify 50 %.
+const SAFETY_RC_RELATIVE_TOL: f64 = 0.50;
+/// Below this threshold (km), R/C separations are operationally "at V-bar"
+/// and relative-error comparison is not meaningful.
+const SAFETY_RC_NEAR_ZERO_KM: f64 = 0.01;
+/// Absolute tolerance for 3D distance comparison (km). Same effects as R/C;
+/// absolute because 3D distance can be small.
+const SAFETY_3D_ABSOLUTE_TOL_KM: f64 = 0.5;
+/// Relative tolerance for e/i vector separation comparison. ROE-level drift
+/// O(1e-5) over 1-3 orbits.
+const SAFETY_EI_RELATIVE_TOL: f64 = 0.50;
+/// Below this threshold (km), e/i separation values are too small for a
+/// meaningful relative-error comparison.
+const SAFETY_EI_NEAR_ZERO_KM: f64 = 1e-6;
+
+/// Assert that analytical and numerical safety metrics agree within the
+/// module-scoped tolerances (`SAFETY_RC_RELATIVE_TOL`,
+/// `SAFETY_3D_ABSOLUTE_TOL_KM`, `SAFETY_EI_RELATIVE_TOL`).
+///
+/// Silent on success. On failure, the `assert!` message contains the full
+/// side-by-side comparison banner so CI shows the divergence without
+/// having to re-run locally.
+///
+/// R/C and e/i comparisons are relative and are skipped when either
+/// reference value is below its `*_NEAR_ZERO_KM` threshold (e.g. a V-bar
+/// configuration has ~zero R/C, making relative error undefined).
+pub(super) fn assert_safety_agreement(
+    analytical: &SafetyMetrics,
+    numerical: &SafetyMetrics,
+) {
+    let banner = format!(
+        "Safety comparison (analytical vs numerical):\n  \
+         R/C separation:  {:.4} km vs {:.4} km\n  \
+         3D distance:     {:.4} km vs {:.4} km\n  \
+         e/i separation:  {:.4} km vs {:.4} km\n  \
+         |de|:            {:.6} vs {:.6}\n  \
+         |di|:            {:.6} vs {:.6}\n  \
+         e/i phase angle: {:.4} rad vs {:.4} rad",
+        analytical.operational.min_rc_separation_km,
+        numerical.operational.min_rc_separation_km,
+        analytical.operational.min_distance_3d_km,
+        numerical.operational.min_distance_3d_km,
+        analytical.passive.min_ei_separation_km,
+        numerical.passive.min_ei_separation_km,
+        analytical.passive.de_magnitude,
+        numerical.passive.de_magnitude,
+        analytical.passive.di_magnitude,
+        numerical.passive.di_magnitude,
+        analytical.passive.ei_phase_angle_rad,
+        numerical.passive.ei_phase_angle_rad,
+    );
+
+    let rc_ref = analytical
+        .operational
+        .min_rc_separation_km
+        .max(numerical.operational.min_rc_separation_km);
+    if rc_ref > SAFETY_RC_NEAR_ZERO_KM {
+        let rc_rel_err = (analytical.operational.min_rc_separation_km
+            - numerical.operational.min_rc_separation_km)
+            .abs()
+            / rc_ref;
+        assert!(
+            rc_rel_err < SAFETY_RC_RELATIVE_TOL,
+            "{banner}\nR/C separation relative error = {rc_rel_err:.2} \
+             (expected < {SAFETY_RC_RELATIVE_TOL})",
+        );
+    }
+
+    let dist_3d_err = (analytical.operational.min_distance_3d_km
+        - numerical.operational.min_distance_3d_km)
+        .abs();
+    assert!(
+        dist_3d_err < SAFETY_3D_ABSOLUTE_TOL_KM,
+        "{banner}\n3D distance error = {dist_3d_err:.4} km \
+         (expected < {SAFETY_3D_ABSOLUTE_TOL_KM})",
+    );
+
+    let ei_ref = analytical
+        .passive
+        .min_ei_separation_km
+        .max(numerical.passive.min_ei_separation_km);
+    if ei_ref > SAFETY_EI_NEAR_ZERO_KM {
+        let ei_rel_err = (analytical.passive.min_ei_separation_km
+            - numerical.passive.min_ei_separation_km)
+            .abs()
+            / ei_ref;
+        assert!(
+            ei_rel_err < SAFETY_EI_RELATIVE_TOL,
+            "{banner}\ne/i separation relative error = {ei_rel_err:.2} \
+             (expected < {SAFETY_EI_RELATIVE_TOL})",
+        );
     }
 }
 
