@@ -254,7 +254,7 @@ mod tests {
 
     /// Zero-burn identity: free-drift trajectory from the post-departure ROE
     /// should match a nominal propagation when departure Δv is zero
-    /// (i.e. pre_departure_roe == post_departure_roe).
+    /// (i.e. `pre_departure_roe` == `post_departure_roe`).
     #[test]
     fn test_zero_burn_identity() {
         let chief = damico_table21_chief();
@@ -314,7 +314,7 @@ mod tests {
         );
     }
 
-    /// γ cross-check: γ = κ / ((3/4)·n), where κ and n come from J2Params.
+    /// γ cross-check: γ = κ / ((3/4)·n), where κ and n come from `J2Params`.
     #[test]
     fn test_gamma_cross_check() {
         let chief = damico_table21_chief();
@@ -378,7 +378,7 @@ mod tests {
         );
     }
 
-    /// Zero num_steps → propagation error (ZeroSteps).
+    /// Zero `num_steps` → propagation error (`ZeroSteps`).
     #[test]
     fn test_zero_num_steps() {
         let chief = damico_table21_chief();
@@ -394,7 +394,7 @@ mod tests {
         );
     }
 
-    /// Safety metrics populated: free-drift analysis returns valid SafetyMetrics.
+    /// Safety metrics populated: free-drift analysis returns valid `SafetyMetrics`.
     #[test]
     fn test_safety_metrics_populated() {
         let chief = damico_table21_chief();

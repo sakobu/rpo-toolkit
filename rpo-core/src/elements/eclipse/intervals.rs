@@ -253,7 +253,7 @@ mod tests {
         for k in 0..n_steps {
             let t = f64::from(k) * dt;
             let m = f64::from(k) * TWO_PI / f64::from(n_steps);
-            let mut elements = base.clone();
+            let mut elements = base;
             elements.mean_anomaly_rad = m.rem_euclid(TWO_PI);
             points.push((
                 epoch + hifitime::Duration::from_seconds(t),

@@ -83,16 +83,16 @@ mod tests {
     /// 1e-15 is at machine epsilon for the O(1) normalization.
     const ROE_IDENTITY_TOL: f64 = 1e-15;
 
-    /// SMA offset ROE: δa = Δa/a_c is an exact ratio.
+    /// SMA offset ROE: δa = `Δa/a_c` is an exact ratio.
     /// Division introduces ~O(1e-16); 1e-12 is conservative.
     const ROE_EXACT_RATIO_TOL: f64 = 1e-12;
 
-    /// D'Amico Table 2.1 roundtrip: construct deputy via deputy_from_roe,
-    /// then recover ROE via compute_roe. Two Kepler solves + trigonometric
+    /// D'Amico Table 2.1 roundtrip: construct deputy via `deputy_from_roe`,
+    /// then recover ROE via `compute_roe`. Two Kepler solves + trigonometric
     /// inversions accumulate ~O(1e-12); 1e-10 provides margin.
     const ROE_ROUNDTRIP_TOL: f64 = 1e-10;
 
-    /// Near-equatorial δiy bound: δiy = ΔΩ·sin(i_c) where sin(0.001°) ≈ 1.7e-5.
+    /// Near-equatorial δiy bound: δiy = `ΔΩ·sin(i_c)` where sin(0.001°) ≈ 1.7e-5.
     /// With ΔΩ = 0.01 rad, δiy ≈ 1.7e-7; 1e-4 is a generous upper bound.
     const NEAR_EQUATORIAL_DIY_BOUND: f64 = 1e-4;
 

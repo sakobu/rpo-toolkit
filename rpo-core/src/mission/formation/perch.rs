@@ -196,7 +196,7 @@ mod tests {
     /// the `perch_to_roe` normalization (`offset / a_km`).
     const ROE_PRESERVATION_TOL: f64 = 1e-15;
 
-    /// V-bar perch enriched with min_separation_km = 0.15 km (TanDEM-X baseline)
+    /// V-bar perch enriched with `min_separation_km` = 0.15 km (TanDEM-X baseline)
     /// on D'Amico Table 2.1 chief orbit (a = 7078.135 km).
     ///
     /// Verify: `min_rc_separation_km ≥ 0.15 km` (D'Amico Eq. 2.23).
@@ -241,7 +241,7 @@ mod tests {
         );
     }
 
-    /// R-bar perch enriched with min_separation_km = 0.15 km on D'Amico Table 2.1
+    /// R-bar perch enriched with `min_separation_km` = 0.15 km on D'Amico Table 2.1
     /// chief orbit.
     ///
     /// Verify: `min_rc_separation_km ≥ 0.15 km`.
@@ -349,8 +349,7 @@ mod tests {
         .sqrt();
         assert!(
             norm_change < 1e-6,
-            "enrichment should be near-no-op for ROE already above threshold, norm_change={}",
-            norm_change,
+            "enrichment should be near-no-op for ROE already above threshold, norm_change={norm_change}",
         );
 
         // Baseline ROE should be the original custom ROE

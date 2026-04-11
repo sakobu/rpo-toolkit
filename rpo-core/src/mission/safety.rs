@@ -387,7 +387,7 @@ mod tests {
     /// 1e-9 km tolerance for separations on the order of 0.200–0.300 km.
     const EI_SEPARATION_TOL_KM: f64 = 1e-9;
 
-    /// Trajectory point matching: find the point at a given elapsed_s.
+    /// Trajectory point matching: find the point at a given `elapsed_s`.
     /// Exact f64 comparison after propagation; 1e-12 s.
     const ELAPSED_TIME_MATCH_TOL_S: f64 = 1e-12;
 
@@ -399,7 +399,7 @@ mod tests {
     /// 1e-12 guards against f64 non-determinism.
     const SAMPLING_MONOTONICITY_GUARD: f64 = 1e-12;
 
-    /// Tolerance for compute_ei_separation regression tests (km).
+    /// Tolerance for `compute_ei_separation` regression tests (km).
     /// 1e-6 km = 1 mm. The formula is exact for the given ROE; the only error
     /// source is f64 rounding in the square root and division (~1e-14 relative).
     /// 1e-6 provides 8 orders of margin.
@@ -767,7 +767,7 @@ mod tests {
 
     /// D'Amico Eq. 2.22/2.23: parallel e/i vectors give a·min(δe,δi).
     /// D'Amico Table 2.1 Case 1: δey=400m/a, δiy=200m/a (parallel along +y).
-    /// Eq. 2.22 reduces to Eq. 2.23: δr_nr^min = a·min(δe,δi) = 0.200 km.
+    /// Eq. 2.22 reduces to Eq. 2.23: `δr_nr^min` = a·min(δe,δi) = 0.200 km.
     #[test]
     fn damico_eq222_parallel_gives_a_min_de_di() {
         let chief = damico_table21_chief();
@@ -783,7 +783,7 @@ mod tests {
     }
 
     /// D'Amico Eq. 2.22/2.23: parallel e/i with equal magnitudes.
-    /// δey = δiy = 300m/a → δr_nr^min = a·min(δe,δi) = 0.300 km.
+    /// δey = δiy = 300m/a → `δr_nr^min` = a·min(δe,δi) = 0.300 km.
     #[test]
     fn damico_eq222_parallel_equal_magnitudes() {
         let chief = damico_table21_chief();
@@ -967,7 +967,7 @@ mod tests {
 
     // --- SafetyAssessment / assess_safety tests ---
 
-    /// V-bar geometry: R/C = 0, along-track = 5 km → AlongTrackDominated.
+    /// V-bar geometry: R/C = 0, along-track = 5 km → `AlongTrackDominated`.
     #[test]
     fn assess_vbar_along_track_dominated() {
         let chief = iss_like_elements();
@@ -987,7 +987,7 @@ mod tests {
         );
     }
 
-    /// R-bar geometry: R/C = 5 km, along-track = 0 → RadialCrossTrack.
+    /// R-bar geometry: R/C = 5 km, along-track = 0 → `RadialCrossTrack`.
     #[test]
     fn assess_rbar_radial_cross_track() {
         let chief = iss_like_elements();
@@ -1004,7 +1004,7 @@ mod tests {
         );
     }
 
-    /// Diagonal geometry: R/C = √(0.5² + 0.5²) ≈ 0.71 km → RadialCrossTrack
+    /// Diagonal geometry: R/C = √(0.5² + 0.5²) ≈ 0.71 km → `RadialCrossTrack`
     /// even though along-track is larger.
     #[test]
     fn assess_diagonal_radial_cross_track() {
@@ -1023,7 +1023,7 @@ mod tests {
     }
 
     /// Near V-bar geometry: R/C = 12.3 m, along-track = 5 km (ratio ~407:1)
-    /// → AlongTrackDominated. Previously misclassified by absolute threshold.
+    /// → `AlongTrackDominated`. Previously misclassified by absolute threshold.
     #[test]
     fn assess_near_vbar_along_track_dominated() {
         let chief = iss_like_elements();

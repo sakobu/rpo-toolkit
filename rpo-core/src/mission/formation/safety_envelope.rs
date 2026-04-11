@@ -433,7 +433,7 @@ mod tests {
     /// 1e-10 km covers f64 matrix multiplication roundoff for 3×6 · 6×1.
     const POSITION_PRESERVATION_TOL: f64 = 1e-10;
 
-    /// Tolerance for `T_pos` · n_j being zero. Covers 3×6 · 6×1 multiplication
+    /// Tolerance for `T_pos` · `n_j` being zero. Covers 3×6 · 6×1 multiplication
     /// roundoff at O(1e-14).
     const NULL_SPACE_ORTHOGONALITY_TOL: f64 = 1e-12;
 

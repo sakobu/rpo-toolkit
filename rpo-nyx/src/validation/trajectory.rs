@@ -968,7 +968,7 @@ mod tests {
         }
     }
 
-    /// Verify `convert_cola_to_burns` computes correct elapsed_s from epoch delta.
+    /// Verify `convert_cola_to_burns` computes correct `elapsed_s` from epoch delta.
     #[test]
     fn test_convert_cola_to_burns_epoch_to_elapsed() {
         let dep_epoch = test_epoch();
@@ -1169,7 +1169,7 @@ mod tests {
     ///
     /// Chief: ISS-like orbit. Deputy: ~300m-scale formation (nonzero dex, dey, dix).
     /// Waypoint: [0.5, 3.0, 1.0] RIC km, TOF = 0.8 orbital periods.
-    /// Non-integer period avoids CW singularity at nt = 2pi (rank-1 phi_rv).
+    /// Non-integer period avoids CW singularity at nt = 2pi (rank-1 `phi_rv`).
     /// 50 samples for detailed error characterization.
     #[test]
     #[ignore] // Requires MetaAlmanac (network on first run)
@@ -1374,11 +1374,11 @@ mod tests {
     /// J2+drag STM, validate against nyx full-physics propagation.
     ///
     /// 1. ISS-like orbit, deputy colocated (zero ROE)
-    /// 2. Chief: SERVICER_500KG (B*=0.0044), Deputy: 200kg/2m2 (B*=0.022, ~5x higher)
-    /// 3. Extract DMF rates -> DragConfig
-    /// 4. Plan with J2DragStm: single V-bar waypoint [0,5,0], 0.8 periods
+    /// 2. Chief: `SERVICER_500KG` (B*=0.0044), Deputy: 200kg/2m2 (B*=0.022, ~5x higher)
+    /// 3. Extract DMF rates -> `DragConfig`
+    /// 4. Plan with `J2DragStm`: single V-bar waypoint [0,5,0], 0.8 periods
     ///    (non-integer period avoids CW singularity at nt = 2pi)
-    /// 5. Plan same with J2Stm for comparison
+    /// 5. Plan same with `J2Stm` for comparison
     /// 6. Validate both against nyx
     /// 7. Assert drag-aware error < tolerance; log improvement ratio
     #[test]

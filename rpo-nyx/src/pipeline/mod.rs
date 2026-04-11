@@ -156,7 +156,7 @@ mod tests {
     use rpo_core::test_helpers::iss_like_elements;
 
     /// Default V-bar perch at 5 km along-track.
-    /// Inlined from rpo_core::pipeline::types::default_perch (pub(crate)).
+    /// Inlined from `rpo_core::pipeline::types::default_perch` (pub(crate)).
     fn default_perch() -> PerchGeometry {
         PerchGeometry::VBar {
             along_track_km: 5.0,
@@ -167,7 +167,7 @@ mod tests {
     const COPY_FIDELITY_TOL: f64 = f64::EPSILON;
 
     /// Minimum e/i magnitude expected after enrichment (dimensionless ROE).
-    /// For a 100m separation at a = 7000 km, d_min/a ~ 1.4e-5. 1e-10 provides
+    /// For a 100m separation at a = 7000 km, `d_min/a` ~ 1.4e-5. 1e-10 provides
     /// 5 orders of margin above floating-point noise.
     const ENRICHMENT_NONZERO_TOL: f64 = 1e-10;
 
@@ -193,7 +193,7 @@ mod tests {
     /// compensation (which would produce pi/2 ~ 1.57 rad).
     const PIPELINE_ENRICHMENT_PHASE_TOL_RAD: f64 = 0.05;
 
-    /// Upper bound on |delta_da| introduced by e/i enrichment (dimensionless).
+    /// Upper bound on |`delta_da`| introduced by e/i enrichment (dimensionless).
     /// The null-space projection (D'Amico Eq. 2.17) preserves position but
     /// da is a free DOF that shifts during e/i alignment -- typically
     /// O(1e-4) for proximity-regime geometries. 1e-3 (~7 km at a = 7 000 km)
@@ -469,7 +469,7 @@ mod tests {
 
     /// Formation report includes drift prediction for leg-1 coast arc.
     ///
-    /// proximity_input has tof_s = 4200s (~0.78 orbits of ISS-like chief),
+    /// `proximity_input` has `tof_s` = 4200s (~0.78 orbits of ISS-like chief),
     /// well within the 10-orbit drift compensation regime, so a prediction
     /// must be present.
     #[test]

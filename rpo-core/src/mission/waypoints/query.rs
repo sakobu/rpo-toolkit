@@ -193,7 +193,7 @@ mod tests {
         );
     }
 
-    /// Exact evaluation at an arbitrary mid-leg time returns exact elapsed_s.
+    /// Exact evaluation at an arbitrary mid-leg time returns exact `elapsed_s`.
     #[test]
     fn exact_evaluation_midpoint() {
         let departure = zero_departure();

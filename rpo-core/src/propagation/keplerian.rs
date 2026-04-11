@@ -78,7 +78,7 @@ mod tests {
     /// vis-viva equation and PQW→ECI rotation.
     const ORBIT_CLOSURE_TOL_KM: f64 = 1e-10;
 
-    /// n_steps=0 returns the exact initial state (no computation, clone only).
+    /// `n_steps=0` returns the exact initial state (no computation, clone only).
     const ZERO_STEP_IDENTITY_TOL: f64 = 1e-15;
 
     /// Two-body specific energy conservation (km²/s²). Limited by Kepler

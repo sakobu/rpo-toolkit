@@ -370,8 +370,8 @@ async fn extract_drag_different_configs() {
         "request_id": 40,
         "chief": serde_json::to_value(&input.chief).unwrap(),
         "deputy": serde_json::to_value(&input.deputy).unwrap(),
-        "chief_config": serde_json::to_value(&chief_config).unwrap(),
-        "deputy_config": serde_json::to_value(&deputy_config).unwrap()
+        "chief_config": serde_json::to_value(chief_config).unwrap(),
+        "deputy_config": serde_json::to_value(deputy_config).unwrap()
     });
 
     ws.send(Message::Text(msg.to_string().into()))
@@ -426,8 +426,8 @@ async fn validate_mission_roundtrip() {
         "mission": serde_json::to_value(&output.mission).unwrap(),
         "chief": serde_json::to_value(&input.chief).unwrap(),
         "deputy": serde_json::to_value(&input.deputy).unwrap(),
-        "chief_config": serde_json::to_value(&chief_config).unwrap(),
-        "deputy_config": serde_json::to_value(&deputy_config).unwrap(),
+        "chief_config": serde_json::to_value(chief_config).unwrap(),
+        "deputy_config": serde_json::to_value(deputy_config).unwrap(),
         "samples_per_leg": 2
     });
 
@@ -486,8 +486,8 @@ async fn mc_ensemble_roundtrip() {
         "mission": serde_json::to_value(&output.mission).unwrap(),
         "chief": serde_json::to_value(&input.chief).unwrap(),
         "deputy": serde_json::to_value(&input.deputy).unwrap(),
-        "chief_config": serde_json::to_value(&chief_config).unwrap(),
-        "deputy_config": serde_json::to_value(&deputy_config).unwrap(),
+        "chief_config": serde_json::to_value(chief_config).unwrap(),
+        "deputy_config": serde_json::to_value(deputy_config).unwrap(),
         "mission_config": serde_json::to_value(&input.config).unwrap(),
         "propagator": "j2",
         "monte_carlo": {
@@ -590,8 +590,8 @@ async fn cancel_active_validation() {
         "mission": serde_json::to_value(&output.mission).unwrap(),
         "chief": serde_json::to_value(&input.chief).unwrap(),
         "deputy": serde_json::to_value(&input.deputy).unwrap(),
-        "chief_config": serde_json::to_value(&chief_config).unwrap(),
-        "deputy_config": serde_json::to_value(&deputy_config).unwrap(),
+        "chief_config": serde_json::to_value(chief_config).unwrap(),
+        "deputy_config": serde_json::to_value(deputy_config).unwrap(),
         "samples_per_leg": 2
     });
     ws.send(Message::Text(validate_msg.to_string().into()))

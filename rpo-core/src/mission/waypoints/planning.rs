@@ -619,7 +619,7 @@ mod tests {
         );
     }
 
-    /// Second bounds check: modified_index exceeds existing legs count.
+    /// Second bounds check: `modified_index` exceeds existing legs count.
     #[test]
     fn replan_index_exceeds_existing_legs() {
         let departure = zero_departure();
@@ -1156,7 +1156,7 @@ mod tests {
         );
     }
 
-    /// WaypointMission with eclipse data survives serde roundtrip.
+    /// `WaypointMission` with eclipse data survives serde roundtrip.
     #[test]
     fn serde_roundtrip_with_eclipse() {
         let departure = zero_departure();

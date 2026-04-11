@@ -179,7 +179,7 @@ mod tests {
     use rpo_core::test_helpers::{iss_like_elements, test_epoch};
 
     /// Tolerance for the perch ROE→Keplerian→ROE roundtrip.
-    /// The roundtrip involves atan2, sin/cos, and rem_euclid operations that
+    /// The roundtrip involves atan2, sin/cos, and `rem_euclid` operations that
     /// accumulate ~1e-10 error on dimensionless ROE components.
     const PERCH_ROE_ROUNDTRIP_TOL: f64 = 1e-10;
 
@@ -189,7 +189,7 @@ mod tests {
     const STRUCTURAL_ZERO_TOL: f64 = 1e-15;
 
     /// Tolerance for perch ROE expected-value comparison.
-    /// A single division (offset_km / a_km) introduces one ULP of rounding;
+    /// A single division (`offset_km` / `a_km`) introduces one ULP of rounding;
     /// 1e-12 is conservative for this single-operation error.
     const PERCH_ROE_EXPECTED_TOL: f64 = 1e-12;
 

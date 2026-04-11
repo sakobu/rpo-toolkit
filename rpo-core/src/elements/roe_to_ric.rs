@@ -205,7 +205,7 @@ mod tests {
     const ZERO_ROE_TOL: f64 = 1e-12;
 
     /// T-matrix structural entries vs analytical D'Amico Eq. 2.17 values,
-    /// and T·roe vs roe_to_ric cross-validation. Agreement to ~O(1e-14);
+    /// and T·roe vs `roe_to_ric` cross-validation. Agreement to ~O(1e-14);
     /// 1e-10 is conservative.
     const T_MATRIX_TOL: f64 = 1e-10;
 
@@ -343,7 +343,7 @@ mod tests {
 
     // --- Tests from t_matrix.rs ---
 
-    /// T · roe must match roe_to_ric() at the default u value.
+    /// T · roe must match `roe_to_ric()` at the default u value.
     #[test]
     fn t_matrix_matches_roe_to_ric() {
         let chief = iss_like_elements();
@@ -370,7 +370,7 @@ mod tests {
         assert!((ric_vec[5] - ric_ref.velocity_ric_km_s.z).abs() < T_MATRIX_TOL, "vC mismatch");
     }
 
-    /// T · roe matches roe_to_ric at multiple u values.
+    /// T · roe matches `roe_to_ric` at multiple u values.
     #[test]
     fn t_matrix_matches_at_multiple_u() {
         for u_deg in [0.0_f64, 45.0, 90.0, 135.0, 180.0, 270.0, 350.0] {
@@ -436,7 +436,7 @@ mod tests {
         assert!((pos[2] - ric_ref.position_ric_km.z).abs() < T_MATRIX_TOL);
     }
 
-    /// Pseudo-inverse roundtrip: ric_position_to_roe → T_pos·roe recovers position.
+    /// Pseudo-inverse roundtrip: `ric_position_to_roe` → `T_pos·roe` recovers position.
     #[test]
     fn pseudo_inverse_roundtrip() {
         let chief = iss_like_elements();

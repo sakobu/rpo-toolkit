@@ -270,8 +270,7 @@ mod tests {
                 .acos();
             assert!(
                 angle < SUN_DIRECTION_CROSS_VALIDATION_TOL_RAD,
-                "Sun direction diverges by {:.4} rad",
-                angle
+                "Sun direction diverges by {angle:.4} rad"
             );
         }
     }

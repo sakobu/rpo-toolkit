@@ -247,7 +247,7 @@ mod tests {
     const STM_COEFFICIENT_TOL: f64 = 1e-6;
 
     /// Tolerance for STM entries that should be near-zero because a
-    /// multiplicative factor (e.g. ey_i ≈ 0 at aop=180°) kills the term.
+    /// multiplicative factor (e.g. `ey_i` ≈ 0 at aop=180°) kills the term.
     const STM_NEAR_ZERO_TOL: f64 = 1e-12;
 
     /// Tolerance for comparing an STM entry to its leading-order cosine
@@ -500,7 +500,7 @@ mod tests {
 
     /// Koenig Eq. A6: STM structure for Table 2 Case 1 (i=30°, e=0.005), tau = 1 period.
     /// Validates row 0/row 4 identity structure and key matrix entries against
-    /// hand-computed values from Eq. A6 using precomputed J2Params.
+    /// hand-computed values from Eq. A6 using precomputed `J2Params`.
     #[test]
     fn koenig_eqa6_stm_elements_case1() {
         let chief = koenig_table2_case1();
@@ -603,7 +603,7 @@ mod tests {
     }
 
     /// Koenig Eq. A6: STM for Table 2 Case 2 (e=0.2, aop=120°).
-    /// Nonzero ey_i = 0.2·sin(120°) ≈ 0.1732 makes phi[1,3] substantial.
+    /// Nonzero `ey_i` = 0.2·sin(120°) ≈ 0.1732 makes phi[1,3] substantial.
     #[test]
     fn koenig_eqa6_stm_elements_case2() {
         let chief = koenig_table2_case2();

@@ -275,7 +275,7 @@ mod tests {
                 PropagatedState {
                     epoch: epoch + Duration::from_seconds(t),
                     roe,
-                    chief_mean: chief.clone(),
+                    chief_mean: chief,
                     ric: RICState {
                         position_ric_km: Vector3::new(
                             t * 0.001,
@@ -306,7 +306,7 @@ mod tests {
             total_dv_km_s: 0.05,
             pre_departure_roe: roe,
             post_departure_roe: roe,
-            departure_chief_mean: chief.clone(),
+            departure_chief_mean: chief,
             pre_arrival_roe: roe,
             post_arrival_roe: roe,
             arrival_chief_mean: chief,
@@ -473,8 +473,8 @@ mod tests {
         let plan = LeanPlanResult {
             phase: MissionPhase::Proximity {
                 roe: QuasiNonsingularROE::default(),
-                chief_elements: chief.clone(),
-                deputy_elements: chief.clone(),
+                chief_elements: chief,
+                deputy_elements: chief,
                 separation_km: 1.0,
                 delta_r_over_r: 1e-4,
             },

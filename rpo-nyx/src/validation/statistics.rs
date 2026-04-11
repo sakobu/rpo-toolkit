@@ -178,9 +178,9 @@ mod tests {
 
     /// Verify `compute_report_statistics` derives correct aggregates from leg summaries.
     ///
-    /// Two legs: leg 0 has 3 points (max=3.0, mean=2.0, rms=sqrt(14/3), max_vel=0.03),
-    /// leg 1 has 2 points (max=2.0, mean=1.5, max_vel=0.02).
-    /// Global: max=3.0, mean=(2.0*3+1.5*2)/5=1.8, max_vel=0.03.
+    /// Two legs: leg 0 has 3 points (max=3.0, mean=2.0, rms=sqrt(14/3), `max_vel=0.03`),
+    /// leg 1 has 2 points (max=2.0, mean=1.5, `max_vel=0.02`).
+    /// Global: max=3.0, mean=(2.0*3+1.5*2)/5=1.8, `max_vel=0.03`.
     /// Also verifies empty input returns zeros.
     #[test]
     fn report_statistics_from_summaries() {
@@ -258,7 +258,7 @@ mod tests {
     ///
     /// Leg 0: errors [1.0, 3.0, 2.0], no post-COLA → max=3.0, mean=2.0, rms=sqrt(14/3)
     /// Leg 1: errors [1.0(pre), 2.0(pre), 10.0(post)] → max=2.0, mean=1.5, 1 excluded
-    /// Leg 2: all post-COLA → num_points=0, 2 excluded
+    /// Leg 2: all post-COLA → `num_points=0`, 2 excluded
     #[test]
     fn leg_summaries_mixed_cola() {
         let make = |pos_err: f64, vel_err: f64, post_cola: bool| ValidationPoint {

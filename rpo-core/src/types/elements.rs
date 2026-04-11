@@ -182,7 +182,7 @@ mod tests {
     use crate::constants::{MU_EARTH, TWO_PI};
     use std::f64::consts::PI;
 
-    /// Period identity check tolerance. period() = 2π/n where n uses sqrt(µ/a³);
+    /// Period identity check tolerance. `period()` = 2π/n where n uses sqrt(µ/a³);
     /// 1e-9 s covers accumulated f64 error for ~5550 s period.
     const PERIOD_IDENTITY_TOL_S: f64 = 1e-9;
 
@@ -194,7 +194,7 @@ mod tests {
     // Helpers
     // ---------------------------------------------------------------------------
 
-    /// Build a minimal KeplerianElements with sensible defaults for fields that
+    /// Build a minimal `KeplerianElements` with sensible defaults for fields that
     /// are not relevant to the method under test.
     fn make_elements(a_km: f64, e: f64, mean_anomaly_rad: f64) -> KeplerianElements {
         KeplerianElements {
@@ -273,7 +273,7 @@ mod tests {
 
     /// High-eccentricity convergence test (e = 0.8, M = 1.0 rad): validate
     /// that the solver converges (i.e., ν is finite and in [0, 2π)).
-    /// Cross-check via Kepler's equation: given computed E, M_check = E - e*sin(E)
+    /// Cross-check via Kepler's equation: given computed E, `M_check` = E - e*sin(E)
     /// must recover the original M.
     #[test]
     fn true_anomaly_high_eccentricity_convergence() {
@@ -315,7 +315,7 @@ mod tests {
         let el = make_elements(7_000.0, 0.3, TWO_PI - 1e-10);
         let nu = el.true_anomaly().unwrap();
         assert!(
-            nu >= 0.0 && nu < TWO_PI,
+            (0.0..TWO_PI).contains(&nu),
             "near-2π wrap: expected ν in [0, 2π), got {nu}"
         );
     }

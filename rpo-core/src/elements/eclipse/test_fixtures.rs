@@ -8,7 +8,7 @@ use crate::types::KeplerianElements;
 /// ISS orbital period ~92.4 min = 5544 s. Published ~15.5 orbits/day.
 pub(super) const ISS_PERIOD_S: f64 = 5544.0;
 
-/// Build an ISS-like trajectory as (Epoch, KeplerianElements) pairs.
+/// Build an ISS-like trajectory as (Epoch, `KeplerianElements`) pairs.
 ///
 /// Generates `n_orbits` orbits at 360 points per orbit (1 deg mean anomaly steps).
 /// Each point advances both the epoch and mean anomaly uniformly.
@@ -24,7 +24,7 @@ pub(super) fn iss_trajectory_points(n_orbits: u32) -> Vec<(Epoch, KeplerianEleme
     for k in 0..total_steps {
         let t = f64::from(k) * dt_per_step;
         let m = base_m + f64::from(k) * TWO_PI / f64::from(n_steps_per_orbit);
-        let mut elements = base_elements.clone();
+        let mut elements = base_elements;
         elements.mean_anomaly_rad = m.rem_euclid(TWO_PI);
         points.push((
             epoch + hifitime::Duration::from_seconds(t),

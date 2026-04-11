@@ -572,7 +572,7 @@ mod tests {
 
     /// Extremely tight position tolerance (km) used to force targeting
     /// non-convergence in a single iteration. No real mission would use this;
-    /// it exists solely to exercise the TargetingConvergence error path.
+    /// it exists solely to exercise the `TargetingConvergence` error path.
     const FORCED_NONCONVERGENCE_TOL_KM: f64 = 1e-12;
 
     /// Minimum detectable nonzero signal from minimum-norm velocity derivation.
@@ -872,7 +872,7 @@ mod tests {
         }
     }
 
-    /// TargetingConvergence: max_iterations=1 with a large target should not converge.
+    /// `TargetingConvergence`: `max_iterations=1` with a large target should not converge.
     #[test]
     fn targeting_convergence_failure() {
         let chief = iss_like_elements();

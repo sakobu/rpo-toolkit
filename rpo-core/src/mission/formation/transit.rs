@@ -369,8 +369,8 @@ mod tests {
     /// For an ROE state with parallel e/i vectors propagated for 1 orbital
     /// period, all sample points must satisfy the separation threshold.
     ///
-    /// Uses damico_table21_chief() + damico_table21_case1_roe() (parallel e/i).
-    /// Propagates with J2Stm for 1 period with 200 steps.
+    /// Uses `damico_table21_chief()` + `damico_table21_case1_roe()` (parallel e/i).
+    /// Propagates with `J2Stm` for 1 period with 200 steps.
     ///
     /// # References
     /// - D'Amico Eq. 2.22 (e/i separation)
@@ -499,7 +499,7 @@ mod tests {
     // Drift-compensated enrichment
     // -----------------------------------------------------------------------
 
-    /// Drift compensation is skipped for arcs exceeding MAX_DRIFT_COMPENSATION_PERIODS.
+    /// Drift compensation is skipped for arcs exceeding `MAX_DRIFT_COMPENSATION_PERIODS`.
     #[test]
     fn drift_compensation_skipped_for_long_arc() {
         let chief = damico_table21_chief();
@@ -524,7 +524,7 @@ mod tests {
         );
     }
 
-    /// Drift compensation is applied for arcs within MAX_DRIFT_COMPENSATION_PERIODS.
+    /// Drift compensation is applied for arcs within `MAX_DRIFT_COMPENSATION_PERIODS`.
     #[test]
     fn drift_compensation_applied_for_short_arc() {
         let chief = damico_table21_chief();
@@ -602,7 +602,7 @@ mod tests {
     /// Perigee rotation rate regression for D'Amico Table 2.1 SSO chief.
     ///
     /// phi' = kappa * Q where:
-    ///   kappa = (3/4) * n * J2 * (R_E/p)^2
+    ///   kappa = (3/4) * n * J2 * (`R_E/p)^2`
     ///   Q = 5 cos^2(i) - 1
     ///
     /// # References
@@ -632,7 +632,7 @@ mod tests {
         );
     }
 
-    /// At the critical inclination, aop_dot is near zero because Q = 0.
+    /// At the critical inclination, `aop_dot` is near zero because Q = 0.
     #[test]
     fn near_critical_inclination_aop_dot_near_zero() {
         let critical_i_rad = (1.0_f64 / 5.0_f64.sqrt()).acos();
@@ -653,7 +653,7 @@ mod tests {
         );
     }
 
-    /// The total phase rotation over MAX_DRIFT_COMPENSATION_PERIODS orbits
+    /// The total phase rotation over `MAX_DRIFT_COMPENSATION_PERIODS` orbits
     /// stays within the linear regime for both SSO and ISS orbits.
     #[test]
     fn delta_phi_within_linear_regime() {
@@ -676,9 +676,9 @@ mod tests {
     // -----------------------------------------------------------------------
 
     /// For a 2-orbit SSO arc, drift-compensated enrichment followed by
-    /// predict_compensated_ei should yield mid-transit e/i separation that
+    /// `predict_compensated_ei` should yield mid-transit e/i separation that
     /// is at least as good as the uncompensated minimum from
-    /// assess_transit_safety.
+    /// `assess_transit_safety`.
     ///
     /// The compensated departure pre-rotates e/i so parallel alignment occurs
     /// near mid-transit, which should improve the worst-case separation.
@@ -737,7 +737,7 @@ mod tests {
         );
     }
 
-    /// At zero TOF, predict_compensated_ei returns the departure e/i separation
+    /// At zero TOF, `predict_compensated_ei` returns the departure e/i separation
     /// (no propagation effect).
     #[test]
     fn predict_compensated_ei_at_zero_tof() {

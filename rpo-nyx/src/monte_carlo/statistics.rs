@@ -389,7 +389,7 @@ mod tests {
         );
     }
 
-    /// All-NaN input produces EmptyEnsemble error (no finite data to summarize).
+    /// All-NaN input produces `EmptyEnsemble` error (no finite data to summarize).
     #[test]
     fn percentile_all_nan_is_error() {
         let values = vec![f64::NAN, f64::NAN, f64::NAN];
@@ -403,7 +403,7 @@ mod tests {
         );
     }
 
-    /// Sigma ratios are computed per-axis: MC std_dev / (covariance 3-sigma / 3).
+    /// Sigma ratios are computed per-axis: MC `std_dev` / (covariance 3-sigma / 3).
     #[test]
     fn sigma_ratio_per_axis() {
         // Covariance 3-sigma: R=3.0, I=30.0, C=0.9

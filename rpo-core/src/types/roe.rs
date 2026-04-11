@@ -90,7 +90,7 @@ mod tests {
     // QuasiNonsingularROE::dimensionless_norm
     // ---------------------------------------------------------------------------
 
-    /// Verify that dimensionless_norm returns max(|δa|, |δex|, |δey|, |δix|)
+    /// Verify that `dimensionless_norm` returns max(|δa|, |δex|, |δey|, |δix|)
     /// and specifically EXCLUDES δλ and δiy, even when those are larger.
     #[test]
     fn dimensionless_norm_excludes_dlambda_and_diy() {

@@ -217,8 +217,8 @@ mod tests {
     use crate::test_helpers::{iss_like_elements, test_epoch};
     use crate::types::KeplerianElements;
 
-    /// Tolerance for ROE identity comparison: classify_separation computes
-    /// the same ROE as a direct compute_roe call on the same elements.
+    /// Tolerance for ROE identity comparison: `classify_separation` computes
+    /// the same ROE as a direct `compute_roe` call on the same elements.
     /// Both paths invoke the identical function — error is f64 arithmetic only.
     const ROE_IDENTITY_TOL: f64 = 1e-14;
 
@@ -233,7 +233,7 @@ mod tests {
     const STRUCTURAL_ZERO_TOL: f64 = 1e-15;
 
     /// Tolerance for perch ROE expected-value comparison.
-    /// A single division (offset_km / a_km) introduces one ULP of rounding;
+    /// A single division (`offset_km` / `a_km`) introduces one ULP of rounding;
     /// 1e-12 is conservative for this single-operation error.
     const PERCH_ROE_EXPECTED_TOL: f64 = 1e-12;
 

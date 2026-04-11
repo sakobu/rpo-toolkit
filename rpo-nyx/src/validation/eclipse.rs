@@ -409,7 +409,7 @@ mod tests {
     // Eclipse Interval Matching Tests
     // =========================================================================
 
-    /// Helper to create an EclipseInterval for testing.
+    /// Helper to create an `EclipseInterval` for testing.
     fn make_eclipse_interval(start_s: f64, end_s: f64) -> rpo_core::types::EclipseInterval {
         use rpo_core::types::{EclipseInterval, EclipseState};
         let base = rpo_core::test_helpers::test_epoch();
@@ -421,7 +421,7 @@ mod tests {
         }
     }
 
-    /// Helper to create an EclipseSummary from intervals.
+    /// Helper to create an `EclipseSummary` from intervals.
     fn make_eclipse_summary(
         intervals: Vec<rpo_core::types::EclipseInterval>,
     ) -> rpo_core::types::EclipseSummary {

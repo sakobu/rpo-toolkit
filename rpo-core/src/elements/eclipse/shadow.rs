@@ -166,7 +166,7 @@ mod tests {
     /// the conical geometry formula for mirrored inputs.
     const SHADOW_FRACTION_SYMMETRY_TOL: f64 = 1e-12;
 
-    /// Tolerance for penumbra midpoint test (shadow_fraction ~ 0.5).
+    /// Tolerance for penumbra midpoint test (`shadow_fraction` ~ 0.5).
     /// The test constructs the spacecraft position using small-angle geometry
     /// approximations, which introduces systematic offset from the exact
     /// midpoint. 0.10 tolerance accommodates the approximation error at GEO
@@ -174,7 +174,7 @@ mod tests {
     const PENUMBRA_MIDPOINT_TOL: f64 = 0.10;
 
     /// Floating-point guard for monotonicity assertions.
-    /// Allows shadow_fraction to decrease by at most this amount between
+    /// Allows `shadow_fraction` to decrease by at most this amount between
     /// adjacent samples due to floating-point rounding, without flagging
     /// a false monotonicity violation. 1e-10 is well above f64 epsilon
     /// but well below any physically meaningful shadow fraction change.
@@ -267,7 +267,7 @@ mod tests {
     ///
     /// Places the spacecraft at GEO distance behind Earth, offset laterally
     /// so it sits in the penumbra region. At GEO, penumbra spans ~0.53 deg
-    /// (= 2 * theta_sun). Computes the exact offset for shadow_fraction ~ 0.5.
+    /// (= 2 * `theta_sun`). Computes the exact offset for `shadow_fraction` ~ 0.5.
     #[test]
     fn penumbra_at_shadow_boundary() {
         let sun_eci_km = Vector3::new(AU_KM, 0.0, 0.0);
@@ -312,7 +312,7 @@ mod tests {
     ///
     /// Sweeps a spacecraft along an arc at GEO distance from a sunlit position
     /// toward the anti-Sun axis. Extracts an effective shadow value (0.0 for Sunlit,
-    /// shadow_fraction for Penumbra, 1.0 for Umbra) and verifies monotonicity.
+    /// `shadow_fraction` for Penumbra, 1.0 for Umbra) and verifies monotonicity.
     #[test]
     fn shadow_fraction_monotonic() {
         let sun_eci_km = Vector3::new(AU_KM, 0.0, 0.0);
@@ -363,7 +363,7 @@ mod tests {
     ///
     /// Samples many positions at various altitudes (LEO, MEO, GEO) around
     /// the shadow boundary region and verifies that any Penumbra result has
-    /// a valid shadow_fraction.
+    /// a valid `shadow_fraction`.
     #[test]
     fn penumbra_shadow_fraction_range() {
         let sun_eci_km = Vector3::new(AU_KM, 0.0, 0.0);

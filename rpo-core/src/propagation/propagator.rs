@@ -305,7 +305,7 @@ mod tests {
         );
     }
 
-    /// StepCountOverflow: requesting more than u32::MAX steps.
+    /// `StepCountOverflow`: requesting more than `u32::MAX` steps.
     #[test]
     fn propagator_step_count_overflow() {
         let prop = PropagationModel::J2Stm;
@@ -322,7 +322,7 @@ mod tests {
         );
     }
 
-    /// Invalid eccentricity in chief elements should return PropagationError.
+    /// Invalid eccentricity in chief elements should return `PropagationError`.
     #[test]
     fn propagator_invalid_eccentricity() {
         let prop = PropagationModel::J2Stm;

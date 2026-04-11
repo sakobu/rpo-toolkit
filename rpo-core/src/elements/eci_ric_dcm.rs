@@ -362,8 +362,7 @@ mod tests {
         let pos_err = (ric_geometric.position_ric_km - ric_analytical.position_ric_km).norm();
         assert!(
             pos_err < GEOMETRIC_VS_ANALYTICAL_POSITION_TOL_KM,
-            "Geometric vs analytical RIC position disagree by {:.4} km (should be < 0.010 km)",
-            pos_err
+            "Geometric vs analytical RIC position disagree by {pos_err:.4} km (should be < 0.010 km)"
         );
 
         let vel_err = (ric_geometric.velocity_ric_km_s - ric_analytical.velocity_ric_km_s).norm();
@@ -406,7 +405,7 @@ mod tests {
         );
     }
 
-    /// R_hat ∥ position, C_hat ⊥ orbital plane at multiple mean anomaly values
+    /// `R_hat` ∥ position, `C_hat` ⊥ orbital plane at multiple mean anomaly values
     #[test]
     fn dcm_inclined_orbit() {
         let base = iss_like_elements();

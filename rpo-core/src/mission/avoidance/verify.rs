@@ -246,7 +246,8 @@ mod tests {
         assert!(
             matches!(
                 result,
-                Err(AvoidanceError::ExceedsBudget { .. }) | Err(AvoidanceError::NoConvergence { .. })
+                Err(AvoidanceError::ExceedsBudget { .. } | AvoidanceError::NoConvergence { ..
+})
             ),
             "should fail with ExceedsBudget or NoConvergence, got {result:?}"
         );
