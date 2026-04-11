@@ -158,3 +158,31 @@ pub const TEST_INTEGRATOR_RESTART_TOL_KM: f64 = 1.0e-3;
 /// Use when asserting that two sampling strategies yield the same
 /// safety metric within mm-scale discretization error.
 pub const TEST_SAMPLING_REGRESSION_TOL_KM: f64 = 1.0e-6;
+
+// --- Integer-math helpers ---
+
+/// Round-half-away-from-zero integer-percent multiply: `(x * pct + 50) / 100`.
+///
+/// Use when computing an integer percent of an integer count and
+/// preferring round-half-up semantics (e.g. "30% of 50 samples,
+/// rounded to the nearest sample"). Not the same as nearest-rank
+/// percentile (which demands `ceil`, not round-half-up); prefer
+/// `u32::div_ceil(100)` for percentile rank computations.
+#[must_use]
+pub const fn round_half_up_percent(x: u32, pct: u32) -> u32 {
+    (x * pct + 50) / 100
+}
+
+#[cfg(test)]
+mod tests {
+    use super::round_half_up_percent;
+
+    #[test]
+    fn round_half_up_percent_matches_manual_idiom() {
+        assert_eq!(round_half_up_percent(50, 30), 15);
+        assert_eq!(round_half_up_percent(7, 50), 4);
+        assert_eq!(round_half_up_percent(100, 0), 0);
+        assert_eq!(round_half_up_percent(0, 100), 0);
+        assert_eq!(round_half_up_percent(1, 100), 1);
+    }
+}

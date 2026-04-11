@@ -55,6 +55,10 @@ pub(crate) fn compute_percentile_stats(
 
     // Nearest-rank percentile using integer arithmetic only.
     // rank = ceil(p * n / 100) computed as (p * n + 99) / 100 in u32.
+    // Ceil is required by the nearest-rank definition — do NOT switch to
+    // `rpo_core::constants::round_half_up_percent`, which has different
+    // semantics (round-half-up) and would misreport percentile indices
+    // for `p*n` values whose fractional part is ≤ 0.5.
     let percentile = |p_percent: u32| -> f64 {
         if n == 1 {
             return sorted[0];

@@ -1831,11 +1831,11 @@ mod tests {
             "total samples {n_total} should be approximately {samples} (+/-{COLA_TOTAL_SAMPLE_SLOP})"
         );
 
-        // Integer-space round-half-away-from-zero: (samples * pct + 50) / 100
-        // matches `(f64::from(samples) * pct/100.0).round()` for non-negative
-        // samples, and avoids the f64 → usize cast entirely.
-        let expected_n1 =
-            usize::try_from((samples * COLA_SAMPLE_PERCENT + 50) / 100).unwrap();
+        let expected_n1 = usize::try_from(rpo_core::constants::round_half_up_percent(
+            samples,
+            COLA_SAMPLE_PERCENT,
+        ))
+        .unwrap();
         assert!(
             n1.abs_diff(expected_n1) <= COLA_SAMPLE_SPLIT_SLOP,
             "n1={n1} should be approximately {expected_n1} (COLA at {COLA_SAMPLE_PERCENT}% of leg)"
