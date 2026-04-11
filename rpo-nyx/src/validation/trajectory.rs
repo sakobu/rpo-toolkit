@@ -925,49 +925,6 @@ mod tests {
     use rpo_core::types::SpacecraftConfig;
 
     use crate::validation::test_scenario;
-    use rpo_core::mission::types::ColaEffectivenessEntry;
-
-    /// Per-leg COLA effectiveness assertion: checks that nyx's post-COLA
-    /// minimum distance exceeds `COLA_EFFECTIVENESS_THRESHOLD_FRACTION` of
-    /// the target, and that the analytical vs nyx relative disagreement is
-    /// within `COLA_EFFECTIVENESS_RELATIVE_TOL` when an analytical estimate
-    /// is available. Emits a one-line summary per entry to stderr.
-    fn assert_cola_effectiveness(eff: &ColaEffectivenessEntry) {
-        eprintln!(
-            "Leg {}: analytical POCA={:.1}m, nyx min={:.1}m, target={:.1}m, met={:?}",
-            eff.leg_index + 1,
-            eff.analytical_post_cola_poca_km.unwrap_or(0.0) * 1000.0,
-            eff.nyx_post_cola_min_distance_km * 1000.0,
-            eff.target_distance_km.unwrap_or(0.0) * 1000.0,
-            eff.threshold_met,
-        );
-
-        let target = eff.target_distance_km.expect("target should be set");
-        assert!(
-            eff.nyx_post_cola_min_distance_km > target * COLA_EFFECTIVENESS_THRESHOLD_FRACTION,
-            "Nyx post-COLA min ({:.1}m) should exceed {:.0}% of target ({:.1}m)",
-            eff.nyx_post_cola_min_distance_km * 1000.0,
-            COLA_EFFECTIVENESS_THRESHOLD_FRACTION * 100.0,
-            target * 1000.0,
-        );
-
-        if let Some(analytical) = eff.analytical_post_cola_poca_km {
-            if analytical > 0.0 {
-                let relative_diff =
-                    (eff.nyx_post_cola_min_distance_km - analytical).abs() / analytical;
-                eprintln!("  analytical vs nyx relative diff: {:.1}%", relative_diff * 100.0);
-                assert!(
-                    relative_diff < COLA_EFFECTIVENESS_RELATIVE_TOL,
-                    "Analytical ({:.1}m) vs nyx ({:.1}m) relative diff {:.0}% exceeds {:.0}% tolerance",
-                    analytical * 1000.0,
-                    eff.nyx_post_cola_min_distance_km * 1000.0,
-                    relative_diff * 100.0,
-                    COLA_EFFECTIVENESS_RELATIVE_TOL * 100.0,
-                );
-            }
-        }
-    }
-
     // =========================================================================
     // COLA Burn Conversion Tests (pure logic, no nyx)
     // =========================================================================
@@ -1180,18 +1137,6 @@ mod tests {
     /// When the J2-only error is below this threshold, the improvement ratio
     /// is numerically meaningless (division by near-zero). Skip the diagnostic.
     const IMPROVEMENT_RATIO_GUARD_KM: f64 = 1e-10;
-
-    /// Maximum relative difference between analytical and nyx post-COLA minimum distance.
-    /// Analytical uses linearized GVE (inverse Gauss variational equations) while nyx uses
-    /// full nonlinear dynamics with J2, drag, SRP, and third-body perturbations.
-    /// The 50% tolerance accommodates this fundamental model fidelity gap.
-    const COLA_EFFECTIVENESS_RELATIVE_TOL: f64 = 0.50;
-
-    /// Nyx post-COLA minimum distance must exceed this fraction of the target distance.
-    /// Set at 50% to account for: (a) discrete sampling resolution (50 points/leg may
-    /// miss the true minimum), (b) nonlinear dynamics divergence from the linearized
-    /// avoidance solution, and (c) unmodeled perturbations (SRP, third-body).
-    const COLA_EFFECTIVENESS_THRESHOLD_FRACTION: f64 = 0.50;
 
     /// COLA sample-split fraction for `propagate_leg_with_cola_sample_split`,
     /// expressed as an integer percentage so the expected split count can be
@@ -1742,7 +1687,7 @@ mod tests {
         use rpo_core::mission::{assess_cola, ClosestApproach, ColaAssessment, ColaConfig};
 
         use test_scenario::{
-            iss_formation_roe, plan_mission, validate_planned,
+            assert_cola_effectiveness, iss_formation_roe, plan_mission, validate_planned,
             DEFAULT_VALIDATION_SAMPLES_PER_LEG, PlanAndValidateInput, ValidationContext,
         };
 

@@ -28,7 +28,9 @@ use hifitime::Epoch;
 
 use rpo_core::elements::keplerian_to_state;
 use rpo_core::mission::config::MissionConfig;
-use rpo_core::mission::types::{SafetyMetrics, ValidationReport, Waypoint, WaypointMission};
+use rpo_core::mission::types::{
+    ColaEffectivenessEntry, SafetyMetrics, ValidationReport, Waypoint, WaypointMission,
+};
 use rpo_core::mission::waypoints::plan_waypoint_mission;
 use rpo_core::propagation::PropagationModel;
 use rpo_core::test_helpers::{deputy_from_roe, iss_like_elements, test_epoch};
@@ -324,6 +326,60 @@ pub(super) fn assert_safety_agreement(
             "{banner}\ne/i separation relative error = {ei_rel_err:.2} \
              (expected < {SAFETY_EI_RELATIVE_TOL})",
         );
+    }
+}
+
+/// Nyx post-COLA minimum distance must exceed this fraction of the target
+/// distance. Set at 50 % to account for discrete sampling resolution
+/// (50 points/leg may miss the true minimum) and f64 floor on the nyx side.
+const COLA_EFFECTIVENESS_THRESHOLD_FRACTION: f64 = 0.50;
+/// Maximum relative difference between analytical and nyx post-COLA minimum
+/// distance. Analytical uses linearized GVE while nyx uses full nonlinear
+/// dynamics with J2, drag, SRP, and third-body perturbations — 50 %
+/// accommodates this fundamental model fidelity gap.
+const COLA_EFFECTIVENESS_RELATIVE_TOL: f64 = 0.50;
+
+/// Per-leg COLA effectiveness assertion: checks that nyx's post-COLA
+/// minimum distance exceeds `COLA_EFFECTIVENESS_THRESHOLD_FRACTION` of
+/// the target, and that the analytical vs nyx relative disagreement is
+/// within `COLA_EFFECTIVENESS_RELATIVE_TOL` when an analytical estimate
+/// is available.
+///
+/// Silent on success. On failure, the `assert!` message contains the full
+/// one-line summary plus the specific tolerance that was violated.
+pub(super) fn assert_cola_effectiveness(eff: &ColaEffectivenessEntry) {
+    let summary = format!(
+        "Leg {}: analytical POCA={:.1}m, nyx min={:.1}m, target={:.1}m, met={:?}",
+        eff.leg_index + 1,
+        eff.analytical_post_cola_poca_km.unwrap_or(0.0) * 1000.0,
+        eff.nyx_post_cola_min_distance_km * 1000.0,
+        eff.target_distance_km.unwrap_or(0.0) * 1000.0,
+        eff.threshold_met,
+    );
+
+    let target = eff.target_distance_km.expect("target should be set");
+    assert!(
+        eff.nyx_post_cola_min_distance_km > target * COLA_EFFECTIVENESS_THRESHOLD_FRACTION,
+        "{summary}\nNyx post-COLA min ({:.1}m) should exceed {:.0}% of target ({:.1}m)",
+        eff.nyx_post_cola_min_distance_km * 1000.0,
+        COLA_EFFECTIVENESS_THRESHOLD_FRACTION * 100.0,
+        target * 1000.0,
+    );
+
+    if let Some(analytical) = eff.analytical_post_cola_poca_km {
+        if analytical > 0.0 {
+            let relative_diff =
+                (eff.nyx_post_cola_min_distance_km - analytical).abs() / analytical;
+            assert!(
+                relative_diff < COLA_EFFECTIVENESS_RELATIVE_TOL,
+                "{summary}\nAnalytical ({:.1}m) vs nyx ({:.1}m) relative diff {:.0}% \
+                 exceeds {:.0}% tolerance",
+                analytical * 1000.0,
+                eff.nyx_post_cola_min_distance_km * 1000.0,
+                relative_diff * 100.0,
+                COLA_EFFECTIVENESS_RELATIVE_TOL * 100.0,
+            );
+        }
     }
 }
 
