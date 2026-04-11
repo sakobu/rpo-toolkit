@@ -847,7 +847,13 @@ mod tests {
     /// tolerances. If a single-character typo widens (e.g. `3.5e-4` →
     /// `3.5e4`) or narrows a tolerance, this test fails before the typo
     /// masks a real bug in downstream eclipse-agreement assertions.
+    ///
+    /// The `assert!` expressions are intentionally const-folded: the
+    /// whole point of this test is to fail if a future edit pushes a
+    /// constant out of its physical band, which is exactly the case
+    /// `clippy::assertions_on_constants` flags. Allow the lint.
     #[test]
+    #[allow(clippy::assertions_on_constants)]
     fn eclipse_validation_tolerances_are_reasonable() {
         // Physical band: between 10 µrad (tighter than any realistic
         // JPL ephemeris error) and 1 mrad (coarser than any mission

@@ -105,14 +105,7 @@ mod tests {
 
     #[test]
     fn zeros_returns_all_zero_components() {
-        let z = QuasiNonsingularROE::zeros();
-        assert_eq!(z.da, 0.0);
-        assert_eq!(z.dlambda, 0.0);
-        assert_eq!(z.dex, 0.0);
-        assert_eq!(z.dey, 0.0);
-        assert_eq!(z.dix, 0.0);
-        assert_eq!(z.diy, 0.0);
-        assert_eq!(z, QuasiNonsingularROE::default());
+        assert_eq!(QuasiNonsingularROE::zeros(), QuasiNonsingularROE::default());
     }
 
     // ---------------------------------------------------------------------------
