@@ -38,7 +38,7 @@ use rpo_core::types::{
 
 use crate::nyx_bridge;
 
-use super::trajectory::{ColaValidationInput, ValidationConfig};
+use super::trajectory::{ColaValidationInput, LegPropagationCtx, ValidationConfig};
 
 /// Default nyx sample count per mission leg used by the full-physics
 /// validation tests. 50 samples gives enough resolution to characterize
@@ -229,5 +229,27 @@ pub(super) fn iss_formation_roe(
         dey: de_tangential_km / a,
         dix: di_normal_km / a,
         diy: di_phase_km / a,
+    }
+}
+
+/// Build a [`LegPropagationCtx`] from a [`ValidationContext`] plus the
+/// chief / deputy configs and the sample count. Collapses the 5-line
+/// struct-literal that every direct `propagate_leg*` test would otherwise
+/// duplicate.
+///
+/// The returned context borrows from `ctx` and the passed configs, so it
+/// must not outlive either. Typically stored in a `let` inside the test
+/// body and used for a single `propagate_leg*` call.
+pub(super) fn leg_propagation_ctx_from_scenario<'a>(
+    ctx: &'a ValidationContext,
+    chief_config: &'a SpacecraftConfig,
+    deputy_config: &'a SpacecraftConfig,
+    samples_per_leg: u32,
+) -> LegPropagationCtx<'a> {
+    LegPropagationCtx {
+        samples_per_leg,
+        chief_config,
+        deputy_config,
+        almanac: &ctx.almanac,
     }
 }

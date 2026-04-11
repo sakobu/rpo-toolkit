@@ -528,15 +528,15 @@ fn propagate_leg(
 /// [`propagate_leg_parallel`], [`propagate_leg_with_cola`]) and the
 /// pre-COLA safety pass ([`compute_pre_cola_safety`]), avoiding parameter
 /// sprawl.
-struct LegPropagationCtx<'a> {
+pub(super) struct LegPropagationCtx<'a> {
     /// Number of intermediate comparison samples per leg.
-    samples_per_leg: u32,
+    pub(super) samples_per_leg: u32,
     /// Chief spacecraft properties.
-    chief_config: &'a SpacecraftConfig,
+    pub(super) chief_config: &'a SpacecraftConfig,
     /// Deputy spacecraft properties.
-    deputy_config: &'a SpacecraftConfig,
+    pub(super) deputy_config: &'a SpacecraftConfig,
     /// ANISE almanac with ephemeris and frame data.
-    almanac: &'a Arc<Almanac>,
+    pub(super) almanac: &'a Arc<Almanac>,
 }
 
 /// Output from propagating a single leg with a mid-coast COLA impulse.
