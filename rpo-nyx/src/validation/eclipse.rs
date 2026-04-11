@@ -620,7 +620,7 @@ mod tests {
         use rpo_core::types::SpacecraftConfig;
 
         use test_scenario::{
-            iss_formation_roe, plan_mission, validate_planned,
+            assert_eclipse_agreement, iss_formation_roe, plan_mission, validate_planned,
             DEFAULT_VALIDATION_SAMPLES_PER_LEG, PlanAndValidateInput, ValidationContext,
         };
 
@@ -665,55 +665,7 @@ mod tests {
         );
 
         let report = validate_planned(&ctx, &mission, &input);
-
-        // Eclipse validation should be present
-        let ev = report
-            .eclipse_validation
-            .expect("eclipse validation should be present");
-
-        eprintln!("Eclipse validation results:");
-        eprintln!(
-            "  Sun direction error: max {:.6} deg mean {:.6} deg",
-            ev.max_sun_direction_error_rad.to_degrees(),
-            ev.mean_sun_direction_error_rad.to_degrees(),
-        );
-        eprintln!(
-            "  Intervals: {} analytical, {} numerical, {} matched, {} unmatched",
-            ev.analytical_interval_count,
-            ev.numerical_interval_count,
-            ev.matched_interval_count,
-            ev.unmatched_interval_count,
-        );
-        if !ev.interval_comparisons.is_empty() {
-            eprintln!(
-                "  Timing error: max {:.2} s, mean {:.2} s",
-                ev.max_timing_error_s, ev.mean_timing_error_s,
-            );
-        }
-
-        // Sun direction should be within Meeus accuracy
-        assert!(
-            ev.max_sun_direction_error_rad < SUN_DIRECTION_VALIDATION_TOL_RAD,
-            "max Sun direction error = {:.6} deg (expected < {:.4} deg)",
-            ev.max_sun_direction_error_rad.to_degrees(),
-            SUN_DIRECTION_VALIDATION_TOL_RAD.to_degrees(),
-        );
-
-        // Timing error should be within tolerance (if intervals were matched)
-        if !ev.interval_comparisons.is_empty() {
-            assert!(
-                ev.max_timing_error_s < ECLIPSE_TIMING_VALIDATION_TOL_S,
-                "max timing error = {:.2} s (expected < {:.1} s)",
-                ev.max_timing_error_s,
-                ECLIPSE_TIMING_VALIDATION_TOL_S,
-            );
-        }
-
-        // Should have some eclipse points
-        assert!(
-            !ev.points.is_empty(),
-            "should have eclipse validation points"
-        );
+        assert_eclipse_agreement(&report);
     }
 
     /// Meeus Sun position vs ANISE DE440s over 24 hours.
