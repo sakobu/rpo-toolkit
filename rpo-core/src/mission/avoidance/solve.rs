@@ -372,13 +372,13 @@ mod tests {
         let delta_dex = 0.0;
         let de_mag = (delta_dex * delta_dex + delta_dey * delta_dey).sqrt();
 
-        // Inline Eqs. 2.50-2.51: two along-track burns at phase angle ξ and ξ+π
-        let xi = delta_dey.atan2(delta_dex);
+        // Per D'Amico Eqs. 2.50-2.51, the two along-track burns fire at
+        // argument-of-latitude u = ξ and u = ξ + π, where ξ = atan2(δey, δex).
+        // Only the burn magnitudes are needed here because this test validates
+        // the Eq. 2.52 cost formula, not a solver's output timing.
         let dv_mag = n * a * de_mag / 4.0;
-        let dv1 = Vector3::new(0.0, dv_mag, 0.0);   // at u = ξ
-        let dv2 = Vector3::new(0.0, -dv_mag, 0.0);   // at u = ξ + π
-        let _u_m1 = xi;
-        let _u_m2 = xi + std::f64::consts::PI;
+        let dv1 = Vector3::new(0.0, dv_mag, 0.0);
+        let dv2 = Vector3::new(0.0, -dv_mag, 0.0);
 
         // Total cost = |dv1| + |dv2| = n*a*de/4 + n*a*de/4 = n*a*de/2 (Eq. 2.52)
         let total_cost = dv1.norm() + dv2.norm();
