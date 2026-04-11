@@ -206,6 +206,13 @@ pub fn propagate_chief_mean(
 
 #[cfg(test)]
 mod tests {
+    // Tests intentionally mirror Koenig paper symbols (eccentricity vector
+    // components at initial/final epochs, e.g. `ex_f`/`ey_f`) for equation
+    // traceability; renaming to satisfy `similar_names` would break the
+    // paper-to-code mapping required by CLAUDE.md Published-method fidelity
+    // and Traceability rules.
+    #![allow(clippy::similar_names)]
+
     use super::*;
     use crate::elements::wrap_angle;
     use crate::test_helpers::{

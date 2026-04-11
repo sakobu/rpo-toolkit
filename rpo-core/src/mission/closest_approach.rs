@@ -519,6 +519,12 @@ pub fn find_closest_approaches(
 
 #[cfg(test)]
 mod tests {
+    // Tests intentionally mirror D'Amico paper symbols (δe/δi magnitudes)
+    // for equation traceability; renaming to satisfy `similar_names` would
+    // break the paper-to-code mapping required by CLAUDE.md Published-method
+    // fidelity and Traceability rules.
+    #![allow(clippy::similar_names)]
+
     use super::*;
     use crate::propagation::propagator::PropagationModel;
     use crate::test_helpers::{

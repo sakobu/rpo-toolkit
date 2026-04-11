@@ -310,6 +310,12 @@ pub fn compute_avoidance(
 
 #[cfg(test)]
 mod tests {
+    // Tests intentionally mirror D'Amico paper symbols (δe/δi components,
+    // burn magnitudes, derived deltas) for equation traceability; renaming
+    // to satisfy `similar_names` would break the paper-to-code mapping
+    // required by CLAUDE.md Published-method fidelity and Traceability rules.
+    #![allow(clippy::similar_names)]
+
     use super::*;
     use crate::mission::closest_approach::{find_closest_approaches, ClosestApproach};
     use crate::test_helpers::{

@@ -204,6 +204,13 @@ pub fn propagate_roe_j2_drag(
 
 #[cfg(test)]
 mod tests {
+    // Tests intentionally mirror Koenig paper symbols (drag rates, δa/δe
+    // components, multi-epoch state bindings) for equation traceability;
+    // renaming to satisfy `similar_names` would break the paper-to-code
+    // mapping required by CLAUDE.md Published-method fidelity and
+    // Traceability rules.
+    #![allow(clippy::similar_names)]
+
     use super::*;
     use crate::propagation::stm::compute_stm;
     use crate::test_helpers::{eccentric_elements, iss_like_elements, koenig_table2_case1, test_drag_config};

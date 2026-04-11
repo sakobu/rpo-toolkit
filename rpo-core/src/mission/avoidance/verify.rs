@@ -125,6 +125,12 @@ fn min_grid_distance(trajectory: &[PropagatedState]) -> f64 {
 
 #[cfg(test)]
 mod tests {
+    // Tests intentionally mirror D'Amico paper symbols (δe/δi components)
+    // for equation traceability; renaming to satisfy `similar_names` would
+    // break the paper-to-code mapping required by CLAUDE.md Published-method
+    // fidelity and Traceability rules.
+    #![allow(clippy::similar_names)]
+
     use super::*;
     use crate::elements::gve;
     use crate::mission::avoidance::solve::solve_inplane_eccentricity_only;
