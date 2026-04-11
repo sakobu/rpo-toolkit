@@ -324,6 +324,10 @@ mod tests {
     use nalgebra::Vector3;
 
     use crate::nyx_bridge;
+    use rpo_core::constants::{
+        ECLIPSE_TIMING_VALIDATION_TOL_S, MOON_DIRECTION_VALIDATION_TOL_RAD,
+        SUN_DIRECTION_VALIDATION_TOL_RAD,
+    };
     use rpo_core::test_helpers::test_epoch;
 
     use crate::validation::test_scenario;
@@ -342,22 +346,6 @@ mod tests {
     /// Sample-spaced intervals have +/-1 sample quantization;
     /// at 1s spacing, 2s covers worst case.
     const INTERVAL_DURATION_TOL_S: f64 = 2.0;
-
-    /// Maximum expected Sun direction angular error (Meeus vs ANISE DE440s).
-    /// Meeus Ch. 25 with precession correction gives ~0.005 deg at 2024 epoch.
-    /// 0.02 deg (3.5e-4 rad) provides margin for nutation/perturbation residuals.
-    const SUN_DIRECTION_VALIDATION_TOL_RAD: f64 = 3.5e-4;
-
-    /// Maximum expected Moon direction angular error (Meeus vs ANISE DE440s).
-    /// Meeus Ch. 47 truncated series gives ~0.007 deg with precession correction.
-    /// 1.0 deg (0.0175 rad) provides generous margin for the truncated series.
-    const MOON_DIRECTION_VALIDATION_TOL_RAD: f64 = 0.0175;
-
-    /// Maximum eclipse entry/exit timing error (seconds).
-    /// With linear interpolation of eclipse boundaries between samples,
-    /// the error is dominated by the non-linearity of the shadow geometry
-    /// rather than sample-interval quantization.
-    const ECLIPSE_TIMING_VALIDATION_TOL_S: f64 = 120.0;
 
     /// Interpolation accuracy tolerance for eclipse boundary tests.
     /// Linear interpolation of a linear ramp should be exact to floating-point

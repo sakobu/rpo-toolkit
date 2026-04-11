@@ -383,6 +383,66 @@ pub(super) fn assert_cola_effectiveness(eff: &ColaEffectivenessEntry) {
     }
 }
 
+/// Assert that the eclipse validation block on a [`ValidationReport`]
+/// sits within the physically justified tolerances defined in
+/// [`rpo_core::constants`] (`SUN_DIRECTION_VALIDATION_TOL_RAD` and
+/// `ECLIPSE_TIMING_VALIDATION_TOL_S`).
+///
+/// Silent on success. On failure, the `assert!` message contains the
+/// mission-level eclipse stats (direction error, interval counts, timing
+/// error) plus the specific tolerance that was violated.
+///
+/// # Panics
+///
+/// Panics if `report.eclipse_validation` is `None`. Callers that set up
+/// a mission without Earth-frame eclipse inputs should not call this.
+pub(super) fn assert_eclipse_agreement(report: &ValidationReport) {
+    use rpo_core::constants::{
+        ECLIPSE_TIMING_VALIDATION_TOL_S, SUN_DIRECTION_VALIDATION_TOL_RAD,
+    };
+
+    let ev = report
+        .eclipse_validation
+        .as_ref()
+        .expect("eclipse validation should be present");
+
+    let banner = format!(
+        "Eclipse validation results:\n  \
+         Sun direction error: max {:.6} deg mean {:.6} deg\n  \
+         Intervals: {} analytical, {} numerical, {} matched, {} unmatched\n  \
+         Timing error: max {:.2} s, mean {:.2} s",
+        ev.max_sun_direction_error_rad.to_degrees(),
+        ev.mean_sun_direction_error_rad.to_degrees(),
+        ev.analytical_interval_count,
+        ev.numerical_interval_count,
+        ev.matched_interval_count,
+        ev.unmatched_interval_count,
+        ev.max_timing_error_s,
+        ev.mean_timing_error_s,
+    );
+
+    assert!(
+        ev.max_sun_direction_error_rad < SUN_DIRECTION_VALIDATION_TOL_RAD,
+        "{banner}\nmax Sun direction error = {:.6} deg (expected < {:.4} deg)",
+        ev.max_sun_direction_error_rad.to_degrees(),
+        SUN_DIRECTION_VALIDATION_TOL_RAD.to_degrees(),
+    );
+
+    if !ev.interval_comparisons.is_empty() {
+        assert!(
+            ev.max_timing_error_s < ECLIPSE_TIMING_VALIDATION_TOL_S,
+            "{banner}\nmax timing error = {:.2} s (expected < {:.1} s)",
+            ev.max_timing_error_s,
+            ECLIPSE_TIMING_VALIDATION_TOL_S,
+        );
+    }
+
+    assert!(
+        !ev.points.is_empty(),
+        "{banner}\neclipse validation should produce at least one sample point"
+    );
+}
+
 /// Build a [`LegPropagationCtx`] from a [`ValidationContext`] plus the
 /// chief / deputy configs and the sample count. Collapses the 5-line
 /// struct-literal that every direct `propagate_leg*` test would otherwise
