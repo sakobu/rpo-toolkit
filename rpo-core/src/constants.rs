@@ -108,3 +108,81 @@ pub const DAYS_PER_JULIAN_CENTURY: f64 = 36_525.0;
 /// illumination state. Handles penumbra boundary: <1% difference is
 /// effectively the same illumination state.
 pub const ECLIPSE_PERCENTAGE_AGREEMENT_TOL: f64 = 1.0;
+
+// --- Test tolerances ---
+//
+// Canonical named tolerances for test assertions across the workspace.
+// Per CLAUDE.md tolerance policy: no anonymous thresholds in test code.
+// Each constant's physical justification is documented once here,
+// not re-justified per call site.
+
+/// f64 round-off noise floor at LEO km-scale (≈ 1 nm).
+///
+/// Use when asserting that two positions derived from bit-equivalent
+/// inputs agree within arithmetic round-off. Consumed by validation
+/// tests that compare pre/post-refactor sample positions.
+pub const TEST_F64_POSITION_NOISE_KM: f64 = 1.0e-12;
+
+/// f64 epoch round-off budget across a single leg time-of-flight (≈ 1 ns).
+///
+/// Use when asserting that two epoch computations derived from
+/// bit-equivalent inputs agree. Accounts for accumulated round-off
+/// over `~5000 s` of `Epoch` arithmetic at f64 precision.
+pub const TEST_F64_EPOCH_NOISE_S: f64 = 1.0e-9;
+
+/// f64 identity-arithmetic tolerance (no floating-point ops performed).
+///
+/// Use when asserting that a value survives a pure move/copy with
+/// zero arithmetic operations. Any larger slack indicates a bug.
+pub const TEST_F64_EXACT_ARITHMETIC_TOL: f64 = 1.0e-15;
+
+/// Tolerance for a single sqrt on a km-scale sum of squares.
+///
+/// Use when asserting that a norm computed two ways (e.g. `.norm()`
+/// vs. manual `(x*x + y*y + z*z).sqrt()`) agrees. Single-sqrt error
+/// accumulates at ~2 ULP over the LEO position magnitude.
+pub const TEST_F64_SQRT_ACCUMULATION_TOL: f64 = 1.0e-12;
+
+/// nyx integrator restart tolerance over a one-orbit split-vs-single
+/// propagation (≈ 1 m).
+///
+/// Use when asserting that a segmented propagation (two half-legs
+/// with a zero-impulse between them) agrees with a single continuous
+/// propagation of the same leg. Reflects RK step-size adaptation and
+/// restart overhead, not round-off.
+pub const TEST_INTEGRATOR_RESTART_TOL_KM: f64 = 1.0e-3;
+
+/// Safety-reduction residual tolerance for sampling-grid regressions
+/// (≈ 1 mm).
+///
+/// Use when asserting that two sampling strategies yield the same
+/// safety metric within mm-scale discretization error.
+pub const TEST_SAMPLING_REGRESSION_TOL_KM: f64 = 1.0e-6;
+
+// --- Integer-math helpers ---
+
+/// Round-half-away-from-zero integer-percent multiply: `(x * pct + 50) / 100`.
+///
+/// Use when computing an integer percent of an integer count and
+/// preferring round-half-up semantics (e.g. "30% of 50 samples,
+/// rounded to the nearest sample"). Not the same as nearest-rank
+/// percentile (which demands `ceil`, not round-half-up); prefer
+/// `u32::div_ceil(100)` for percentile rank computations.
+#[must_use]
+pub const fn round_half_up_percent(x: u32, pct: u32) -> u32 {
+    (x * pct + 50) / 100
+}
+
+#[cfg(test)]
+mod tests {
+    use super::round_half_up_percent;
+
+    #[test]
+    fn round_half_up_percent_matches_manual_idiom() {
+        assert_eq!(round_half_up_percent(50, 30), 15);
+        assert_eq!(round_half_up_percent(7, 50), 4);
+        assert_eq!(round_half_up_percent(100, 0), 0);
+        assert_eq!(round_half_up_percent(0, 100), 0);
+        assert_eq!(round_half_up_percent(1, 100), 1);
+    }
+}

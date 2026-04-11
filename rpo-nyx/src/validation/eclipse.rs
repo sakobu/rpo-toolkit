@@ -664,7 +664,6 @@ mod tests {
         ];
 
         let input = PlanAndValidateInput {
-            formation_roe,
             waypoints: &waypoints,
             config: &MissionConfig::default(),
             propagator: &PropagationModel::J2Stm,
@@ -841,6 +840,49 @@ mod tests {
             "max Moon direction error = {:.6} deg (expected < {:.4} deg)",
             max_err.to_degrees(),
             MOON_DIRECTION_VALIDATION_TOL_RAD.to_degrees(),
+        );
+    }
+
+    /// Guard against order-of-magnitude edits to the eclipse validation
+    /// tolerances. If a single-character typo widens (e.g. `3.5e-4` →
+    /// `3.5e4`) or narrows a tolerance, this test fails before the typo
+    /// masks a real bug in downstream eclipse-agreement assertions.
+    #[test]
+    fn eclipse_validation_tolerances_are_reasonable() {
+        // Physical band: between 10 µrad (tighter than any realistic
+        // JPL ephemeris error) and 1 mrad (coarser than any mission
+        // would tolerate).
+        assert!(
+            SUN_DIRECTION_VALIDATION_TOL_RAD > 1.0e-5
+                && SUN_DIRECTION_VALIDATION_TOL_RAD < 1.0e-3,
+            "SUN_DIRECTION_VALIDATION_TOL_RAD ({SUN_DIRECTION_VALIDATION_TOL_RAD}) outside (1e-5, 1e-3) rad",
+        );
+
+        // Physical band: between 1 mrad and 100 mrad (~0.06° to ~5.7°).
+        // Moon direction is coarser than Sun because JPL DE ephemeris
+        // is less accurate for the Moon at sub-arcsec scale.
+        assert!(
+            MOON_DIRECTION_VALIDATION_TOL_RAD > 1.0e-3
+                && MOON_DIRECTION_VALIDATION_TOL_RAD < 1.0e-1,
+            "MOON_DIRECTION_VALIDATION_TOL_RAD ({MOON_DIRECTION_VALIDATION_TOL_RAD}) outside (1e-3, 1e-1) rad",
+        );
+
+        // Physical band: between 10 s (tight enough to catch a botched
+        // Earth-shadow computation) and 600 s (loose enough to survive
+        // legitimate ephemeris-driven drift).
+        assert!(
+            ECLIPSE_TIMING_VALIDATION_TOL_S > 10.0
+                && ECLIPSE_TIMING_VALIDATION_TOL_S < 600.0,
+            "ECLIPSE_TIMING_VALIDATION_TOL_S ({ECLIPSE_TIMING_VALIDATION_TOL_S}) outside (10, 600) s",
+        );
+
+        // Physical band: between 0.1% and 10% — tighter than any real
+        // edge case, looser than a complete shadow-model bug.
+        assert!(
+            rpo_core::constants::ECLIPSE_PERCENTAGE_AGREEMENT_TOL > 0.1
+                && rpo_core::constants::ECLIPSE_PERCENTAGE_AGREEMENT_TOL < 10.0,
+            "ECLIPSE_PERCENTAGE_AGREEMENT_TOL ({}) outside (0.1, 10.0) %",
+            rpo_core::constants::ECLIPSE_PERCENTAGE_AGREEMENT_TOL,
         );
     }
 }

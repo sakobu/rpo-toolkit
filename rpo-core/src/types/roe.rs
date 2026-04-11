@@ -37,6 +37,23 @@ impl Default for QuasiNonsingularROE {
 }
 
 impl QuasiNonsingularROE {
+    /// Construct the zero ROE (all six components zero).
+    ///
+    /// Equivalent to `QuasiNonsingularROE::default()` but available in
+    /// `const` contexts and clearer at call sites that want to express
+    /// "no relative separation" explicitly.
+    #[must_use]
+    pub const fn zeros() -> Self {
+        Self {
+            da: 0.0,
+            dlambda: 0.0,
+            dex: 0.0,
+            dey: 0.0,
+            dix: 0.0,
+            diy: 0.0,
+        }
+    }
+
     /// Convert to a 6-element column vector [da, dlambda, dex, dey, dix, diy].
     #[must_use]
     pub fn to_vector(&self) -> SVector<f64, 6> {
@@ -85,6 +102,18 @@ mod tests {
     /// Dimensionless norm computation tolerance. The norm is a max of
     /// absolute values — exact arithmetic; 1e-15 covers f64 rounding.
     const NORM_TOL: f64 = 1e-15;
+
+    #[test]
+    fn zeros_returns_all_zero_components() {
+        let z = QuasiNonsingularROE::zeros();
+        assert_eq!(z.da, 0.0);
+        assert_eq!(z.dlambda, 0.0);
+        assert_eq!(z.dex, 0.0);
+        assert_eq!(z.dey, 0.0);
+        assert_eq!(z.dix, 0.0);
+        assert_eq!(z.diy, 0.0);
+        assert_eq!(z, QuasiNonsingularROE::default());
+    }
 
     // ---------------------------------------------------------------------------
     // QuasiNonsingularROE::dimensionless_norm
