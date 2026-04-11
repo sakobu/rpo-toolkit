@@ -1817,26 +1817,6 @@ mod tests {
         }
     }
 
-    /// Build chief/deputy initial ECI states for an ISS-like ~300m formation
-    /// with nonzero `dex`/`dey`/`dix`. Used by the sampling-parity tests.
-    fn make_iss_like_formation_states() -> (StateVector, StateVector) {
-        use rpo_core::test_helpers::deputy_from_roe;
-        use rpo_core::types::QuasiNonsingularROE;
-
-        let epoch = test_epoch();
-        let chief_ke = iss_like_elements();
-        let a = chief_ke.a_km;
-        let formation_roe = QuasiNonsingularROE {
-            da: 0.0, dlambda: 0.0,
-            dex: 0.3 / a, dey: -0.2 / a,
-            dix: 0.2 / a, diy: 0.0,
-        };
-        let deputy_ke = deputy_from_roe(&chief_ke, &formation_roe);
-        let chief_sv = keplerian_to_state(&chief_ke, epoch).unwrap();
-        let deputy_sv = keplerian_to_state(&deputy_ke, epoch).unwrap();
-        (chief_sv, deputy_sv)
-    }
-
     /// Unit test: segment 1 of `propagate_leg` must be bit-identical (within
     /// float noise) across burn = None, burn = Some(zero), burn = Some(real),
     /// given the same `elapsed_s`. This is the load-bearing invariant that
@@ -1845,37 +1825,52 @@ mod tests {
     #[test]
     #[ignore = "Requires MetaAlmanac (network on first run)"]
     fn propagate_leg_segment_1_is_impulse_independent() {
-        use test_scenario::DEFAULT_VALIDATION_SAMPLES_PER_LEG;
-
-        let (chief_state, deputy_state) = make_iss_like_formation_states();
-        let leg = make_zero_dv_iss_leg(4200.0);
-        let almanac = nyx_bridge::load_full_almanac().expect("full almanac should load");
-        let ctx = super::LegPropagationCtx {
-            samples_per_leg: DEFAULT_VALIDATION_SAMPLES_PER_LEG,
-            chief_config: &SpacecraftConfig::SERVICER_500KG,
-            deputy_config: &SpacecraftConfig::SERVICER_500KG,
-            almanac: &almanac,
+        use test_scenario::{
+            iss_formation_roe, leg_propagation_ctx_from_scenario,
+            DEFAULT_VALIDATION_SAMPLES_PER_LEG, ValidationContext,
         };
 
+        /// Mid-coast burn time, prime-ish to avoid coinciding with sampling grid points.
+        const MID_COAST_BURN_ELAPSED_S: f64 = 709.0;
+
+        let formation = iss_formation_roe(0.3, -0.2, 0.2, 0.0);
+        let ctx = ValidationContext::iss_with_formation(&formation);
+        let leg = make_zero_dv_iss_leg(4200.0);
+
+        let chief_cfg = SpacecraftConfig::SERVICER_500KG;
+        let deputy_cfg = SpacecraftConfig::SERVICER_500KG;
+        let leg_ctx = leg_propagation_ctx_from_scenario(
+            &ctx,
+            &chief_cfg,
+            &deputy_cfg,
+            DEFAULT_VALIDATION_SAMPLES_PER_LEG,
+        );
+
         let burn_none = super::MidLegBurn {
-            elapsed_s: 709.0,
+            elapsed_s: MID_COAST_BURN_ELAPSED_S,
             impulse_dv_ric_km_s: None,
         };
         let burn_zero = super::MidLegBurn {
-            elapsed_s: 709.0,
+            elapsed_s: MID_COAST_BURN_ELAPSED_S,
             impulse_dv_ric_km_s: Some(Vector3::zeros()),
         };
         let burn_real = super::MidLegBurn {
-            elapsed_s: 709.0,
+            elapsed_s: MID_COAST_BURN_ELAPSED_S,
             impulse_dv_ric_km_s: Some(Vector3::new(0.001, 0.0, 0.0)),
         };
 
-        let out_none = super::propagate_leg(&chief_state, &deputy_state, &leg, Some(&burn_none), &ctx)
-            .expect("impulse=None should succeed");
-        let out_zero = super::propagate_leg(&chief_state, &deputy_state, &leg, Some(&burn_zero), &ctx)
-            .expect("impulse=zero should succeed");
-        let out_real = super::propagate_leg(&chief_state, &deputy_state, &leg, Some(&burn_real), &ctx)
-            .expect("impulse=real should succeed");
+        let out_none = super::propagate_leg(
+            &ctx.chief_state, &ctx.deputy_state, &leg, Some(&burn_none), &leg_ctx,
+        )
+        .expect("impulse=None should succeed");
+        let out_zero = super::propagate_leg(
+            &ctx.chief_state, &ctx.deputy_state, &leg, Some(&burn_zero), &leg_ctx,
+        )
+        .expect("impulse=zero should succeed");
+        let out_real = super::propagate_leg(
+            &ctx.chief_state, &ctx.deputy_state, &leg, Some(&burn_real), &leg_ctx,
+        )
+        .expect("impulse=real should succeed");
 
         let split = out_none.split_index.expect("burn Some => split_index Some");
         assert_eq!(out_zero.split_index, Some(split), "same burn elapsed_s => same split index");
