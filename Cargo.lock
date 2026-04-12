@@ -3092,6 +3092,7 @@ dependencies = [
  "rand_distr 0.4.3",
  "rayon",
  "rpo-core",
+ "rpo-nyx",
  "serde",
  "serde_json",
 ]
