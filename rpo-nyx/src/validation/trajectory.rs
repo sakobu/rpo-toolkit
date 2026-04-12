@@ -246,7 +246,11 @@ fn build_leg_comparison_points(
 ) -> Result<LegComparisonOutput, ValidationError> {
     let mut points = Vec::with_capacity(chief_results.len());
     let mut safety_pairs = Vec::with_capacity(chief_results.len());
-    let mut eclipse_samples = Vec::new();
+    let mut eclipse_samples = if earth_frame.is_some() {
+        Vec::with_capacity(chief_results.len())
+    } else {
+        Vec::new()
+    };
 
     for (idx, (chief_sample, deputy_sample)) in
         chief_results.iter().zip(deputy_results.iter()).enumerate()
@@ -1068,7 +1072,7 @@ mod tests {
         let post_cola_distances = [3.0, 1.5, 0.8, 2.0, 4.0];
         for (j, &d) in post_cola_distances.iter().enumerate() {
             deputy.push(make_timed_state(
-                f64::from(u32::try_from(5 + j).unwrap()) * 100.0,
+                f64::from(5_u32 + u32::try_from(j).unwrap()) * 100.0,
                 Vector3::new(d, 0.0, 0.0),
             ));
         }
@@ -1826,7 +1830,7 @@ mod tests {
     /// guarantees pre-COLA and post-COLA paths see the same sampling grid and
     /// the same physical trajectory in the pre-burn window.
     #[test]
-    #[ignore = "Requires MetaAlmanac (network on first run)"]
+    #[ignore = "requires MetaAlmanac (network on first run)"]
     fn propagate_leg_segment_1_is_impulse_independent() {
         use test_scenario::{
             iss_formation_roe, leg_propagation_ctx_from_scenario,
@@ -1938,7 +1942,7 @@ mod tests {
     /// the sampling artifact where post-COLA looked worse than pre-COLA in
     /// the validate.md Safety Comparison table.
     #[test]
-    #[ignore = "Requires MetaAlmanac (network on first run)"]
+    #[ignore = "requires MetaAlmanac (network on first run)"]
     fn pre_cola_and_post_cola_pre_burn_window_match_within_sampling_tolerance() {
         use rpo_core::mission::config::MissionConfig;
         use rpo_core::mission::types::Waypoint;
