@@ -9,10 +9,10 @@ use rpo_nyx::monte_carlo::{run_monte_carlo, MonteCarloInput};
 use crate::cli::OutputMode;
 use crate::error::CliError;
 use crate::input::load_json;
-use crate::output::common::{
-    apply_overlays, output_json, output_text, status, McBaseline, OverlayFlags,
-};
-use crate::output::markdown_fmt;
+use crate::output::io::{output_json, output_text, status};
+use crate::output::overlays::{apply_overlays, OverlayFlags};
+use crate::output::verdict::McBaseline;
+use crate::output::report;
 
 use super::common::plan_with_physics;
 
@@ -126,7 +126,7 @@ pub fn run(
             output_json(&result, output)
         }
         OutputMode::Summary => {
-            let md = markdown_fmt::mc_to_markdown(
+            let md = report::mc_to_markdown(
                 &result,
                 &input,
                 &report,

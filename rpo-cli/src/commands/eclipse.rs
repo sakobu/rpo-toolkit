@@ -8,7 +8,7 @@ use rpo_nyx::pipeline::execute_mission;
 
 use crate::error::CliError;
 use crate::input::load_json;
-use crate::output::common::print_json;
+use crate::output::io::print_json;
 
 /// Compute eclipse data for a planned mission and print summary JSON.
 ///

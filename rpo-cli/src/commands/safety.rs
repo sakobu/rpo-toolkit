@@ -8,7 +8,7 @@ use rpo_nyx::pipeline::execute_mission;
 
 use crate::error::CliError;
 use crate::input::load_json;
-use crate::output::common::print_json;
+use crate::output::io::print_json;
 
 /// Run safety analysis on a planned mission and print JSON.
 pub fn run(input_path: &Path) -> Result<(), CliError> {

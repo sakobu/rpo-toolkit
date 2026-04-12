@@ -8,9 +8,8 @@ use rpo_core::mission::{
     EnsembleStatistics, LegValidationSummary, MonteCarloReport, SafetyConfig, ValidationReport,
 };
 
-use super::common::{
-    analytical_overestimate, margin_ratio, waypoint_miss_growth, KM_TO_M,
-};
+use super::fmt::KM_TO_M;
+use super::verdict::{analytical_overestimate, margin_ratio, waypoint_miss_growth};
 use super::thresholds::insight as insight_thresh;
 
 /// Severity level for cross-tier insights.

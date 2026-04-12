@@ -7,7 +7,7 @@ use rpo_core::types::StateVector;
 
 use crate::error::CliError;
 use crate::input::load_json;
-use crate::output::common::print_json;
+use crate::output::io::print_json;
 
 /// Convert ECI state to the specified representation and print JSON.
 pub fn run(input_path: &Path, to: &str) -> Result<(), CliError> {

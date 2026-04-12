@@ -9,7 +9,7 @@ use rpo_core::types::StateVector;
 
 use crate::error::CliError;
 use crate::input::load_json;
-use crate::output::common::print_json;
+use crate::output::io::print_json;
 
 #[derive(Deserialize)]
 struct ClassifyInput {

@@ -10,7 +10,7 @@ use rpo_nyx::lambert::solve_lambert_with_config;
 
 use crate::error::CliError;
 use crate::input::load_json;
-use crate::output::common::print_json;
+use crate::output::io::print_json;
 
 #[derive(Deserialize)]
 struct TransferInput {

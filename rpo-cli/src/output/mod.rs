@@ -1,7 +1,9 @@
 //! Output formatting — markdown reports and shared helpers.
 
-pub mod common;
-pub mod formation_fmt;
+pub mod fmt;
 pub mod insights;
-pub mod markdown_fmt;
+pub mod io;
+pub mod overlays;
+pub mod report;
 pub mod thresholds;
+pub mod verdict;

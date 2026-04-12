@@ -8,8 +8,9 @@ use rpo_nyx::pipeline::execute_mission;
 use crate::cli::OutputMode;
 use crate::error::CliError;
 use crate::input::load_json;
-use crate::output::common::{apply_overlays, output_json, output_text, OverlayFlags};
-use crate::output::markdown_fmt;
+use crate::output::io::{output_json, output_text};
+use crate::output::overlays::{apply_overlays, OverlayFlags};
+use crate::output::report;
 
 /// Run the end-to-end mission pipeline.
 pub fn run(
@@ -27,7 +28,7 @@ pub fn run(
         OutputMode::Json => output_json(&result, output),
         OutputMode::Summary => {
             let propagator = to_propagation_model(&input.base.propagator);
-            let md = markdown_fmt::mission_to_markdown(&result, &input, &propagator, false);
+            let md = report::mission_to_markdown(&result, &input, &propagator, false);
             output_text(&md, output)
         }
     }

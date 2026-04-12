@@ -7,7 +7,7 @@ use rpo_core::mission::{
     PerchEnrichmentResult, PerchFallbackReason,
 };
 
-use super::common::{fmt_duration, fmt_m, fmt_roe_component};
+use crate::output::fmt::{fmt_duration, fmt_m, fmt_roe_component};
 
 // ---------------------------------------------------------------------------
 // Public API

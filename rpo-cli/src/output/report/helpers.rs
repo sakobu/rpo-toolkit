@@ -3,7 +3,7 @@ use std::fmt::Write;
 use rpo_core::pipeline::PipelineOutput;
 use rpo_core::propagation::{DragConfig, PropagationModel};
 
-use crate::output::common::{cola_dv_summary, fmt_m_s};
+use crate::output::fmt::{cola_dv_summary, fmt_m_s};
 use crate::output::insights;
 
 /// Which report tier a shared formatter is writing into.
@@ -12,13 +12,17 @@ use crate::output::insights;
 /// `validate`" is self-referential inside a validate report and should
 /// instead point at a section downstream).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum ReportContext {
+pub(crate) enum ReportContext {
     /// Writing into a `mission` report.
     Mission,
     /// Writing into a `validate` report.
     Validate,
 }
 
+/// Map a propagation model to its human-readable label for report headers.
+///
+/// When `auto_drag` is true the J2+Drag variant is labelled "(auto-derived)";
+/// otherwise it is labelled "(user-specified)".
 pub(super) fn propagator_label(propagator: &PropagationModel, auto_drag: bool) -> &'static str {
     match propagator {
         PropagationModel::J2Stm => "J2 STM",
@@ -27,6 +31,7 @@ pub(super) fn propagator_label(propagator: &PropagationModel, auto_drag: bool) -
     }
 }
 
+/// Return a pass/fail status string with emoji prefix for summary tables.
 pub(super) fn status_emoji(pass: bool) -> &'static str {
     if pass {
         "\u{2705} PASS"
@@ -49,6 +54,7 @@ pub(super) fn write_cola_callout(out: &mut String, output: &PipelineOutput) {
     }
 }
 
+/// Write the auto-derived drag parameters as a markdown table.
 pub(super) fn write_drag_table(out: &mut String, drag: &DragConfig) {
     let _ = writeln!(out, "### Auto-Derived Drag\n");
     let _ = writeln!(out, "| Parameter | Value |");
@@ -59,6 +65,7 @@ pub(super) fn write_drag_table(out: &mut String, drag: &DragConfig) {
     let _ = writeln!(out);
 }
 
+/// Write cross-tier insights as blockquote lines with severity prefixes.
 pub(super) fn write_insights(out: &mut String, insight_list: &[insights::Insight]) {
     for insight in insight_list {
         let prefix = match insight.severity {

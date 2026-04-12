@@ -4,15 +4,16 @@ use rpo_core::mission::{assess_safety, EnsembleStatistics, MonteCarloReport, Saf
 use rpo_core::pipeline::PipelineOutput;
 use rpo_core::propagation::DragConfig;
 
-use crate::output::common::{
-    cola_dv_summary, determine_mc_verdict, fmt_duration, fmt_m, fmt_m_s, KM_TO_M, McBaseline,
-    VerdictResult,
-};
-use crate::output::formation_fmt::write_formation_design_md;
+use crate::output::fmt::{cola_dv_summary, fmt_duration, fmt_m, fmt_m_s, KM_TO_M};
+use crate::output::verdict::{determine_mc_verdict, McBaseline, VerdictResult};
+use super::sections::formation::write_formation_design_md;
 use crate::output::insights;
 use crate::output::thresholds::{insight as insight_thresh, rate as rate_thresh};
 
 use super::helpers::{status_emoji, write_cola_callout, write_drag_table, write_insights};
+
+/// Default seed displayed when the MC config does not specify one.
+const DISPLAY_DEFAULT_SEED: u64 = 42;
 
 /// Generate a complete markdown report for the `mc` command.
 #[must_use]
@@ -49,10 +50,10 @@ pub fn mc_to_markdown(
     // MC uses the MonteCarlo schedule variant (different title, COLA rows
     // carry a `†` reference marker). The footnote below is mc-specific
     // because it explains why the marker is there.
-    super::mission::write_maneuver_schedule_with(
+    super::sections::schedule::write_maneuver_schedule_with(
         &mut out,
         output,
-        super::mission::ScheduleVariant::MonteCarlo,
+        super::sections::schedule::ScheduleVariant::MonteCarlo,
     );
     let has_cola = output.safety.cola.as_ref().is_some_and(|c| !c.is_empty());
     if has_cola {
@@ -98,6 +99,7 @@ pub fn mc_to_markdown(
 
 // ── MC section helpers ──────────────────────────────────────────
 
+/// Write the MC summary table with verdict, key metrics, and pass/fail status.
 fn write_mc_summary_table(
     out: &mut String,
     report: &MonteCarloReport,
@@ -172,6 +174,7 @@ fn write_mc_summary_table(
     let _ = writeln!(out);
 }
 
+/// Write the baseline mission parameters and analytical safety summary.
 fn write_mc_baseline_section(
     out: &mut String,
     baseline: &McBaseline,
@@ -253,13 +256,14 @@ fn write_mc_baseline_section(
     let _ = writeln!(out);
 }
 
+/// Write the MC configuration table (samples, mode, seed, nominal/total Dv, wall time).
 fn write_mc_config_section(
     out: &mut String,
     report: &MonteCarloReport,
     baseline: &McBaseline,
 ) {
     let total_dv_km_s = baseline.total_dv_km_s();
-    let seed = report.config.seed.unwrap_or(42);
+    let seed = report.config.seed.unwrap_or(DISPLAY_DEFAULT_SEED);
 
     let _ = writeln!(
         out,
@@ -300,6 +304,7 @@ fn write_mc_config_section(
     let _ = writeln!(out);
 }
 
+/// Write the ensemble Dv distribution table (mean, std, percentiles, min/max).
 fn write_mc_dv_distribution(out: &mut String, stats: &EnsembleStatistics) {
     let dv = &stats.total_dv_km_s;
     let _ = writeln!(out, "### \u{0394}v Distribution (m/s)\n");
@@ -314,6 +319,7 @@ fn write_mc_dv_distribution(out: &mut String, stats: &EnsembleStatistics) {
     let _ = writeln!(out);
 }
 
+/// Write the operational safety section (collision probability, keep-out, R/C and 3D distances).
 fn write_mc_operational_safety(
     out: &mut String,
     stats: &EnsembleStatistics,
@@ -366,6 +372,7 @@ fn write_mc_operational_safety(
     }
 }
 
+/// Write the passive safety section (abort-case e/i violation rate and percentiles).
 fn write_mc_passive_safety(
     out: &mut String,
     stats: &EnsembleStatistics,
@@ -400,6 +407,7 @@ fn write_mc_passive_safety(
 
 }
 
+/// Write convergence rate and per-waypoint miss distance tables.
 fn write_mc_convergence_and_miss(
     out: &mut String,
     stats: &EnsembleStatistics,
@@ -436,6 +444,9 @@ fn write_mc_convergence_and_miss(
     }
 }
 
+/// Write the diagnostics section (covariance cross-check and auto-derived drag).
+///
+/// Omitted entirely when both the covariance cross-check and derived drag are absent.
 fn write_mc_diagnostics(
     out: &mut String,
     report: &MonteCarloReport,

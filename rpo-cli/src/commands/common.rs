@@ -16,7 +16,8 @@ use rpo_nyx::nyx_bridge::load_full_almanac;
 use rpo_nyx::pipeline::compute_transfer;
 
 use crate::error::CliError;
-use crate::output::common::{create_spinner, resolve_drag_and_propagator, status};
+use crate::output::io::{create_spinner, status};
+use crate::output::overlays::resolve_drag_and_propagator;
 
 /// Result of the shared transfer → waypoint planning orchestration.
 ///

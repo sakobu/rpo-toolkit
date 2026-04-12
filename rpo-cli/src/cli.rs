@@ -9,7 +9,7 @@ use std::path::PathBuf;
 
 use clap::{Args, Parser, Subcommand};
 
-use crate::output::common::OverlayFlags;
+use crate::output::overlays::OverlayFlags;
 
 /// Output mode for porcelain commands.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

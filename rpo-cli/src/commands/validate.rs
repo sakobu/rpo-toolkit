@@ -13,8 +13,9 @@ use rpo_nyx::validation::{
 use crate::cli::OutputMode;
 use crate::error::CliError;
 use crate::input::load_json;
-use crate::output::common::{apply_overlays, output_json, output_text, status, OverlayFlags};
-use crate::output::markdown_fmt::{self, ValidationContext};
+use crate::output::io::{output_json, output_text, status};
+use crate::output::overlays::{apply_overlays, OverlayFlags};
+use crate::output::report::{self, ValidationContext};
 
 use super::common::plan_with_physics;
 
@@ -111,7 +112,7 @@ pub fn run(
                 samples_per_leg,
                 derived_drag: plan.derived_drag.as_ref(),
             };
-            let md = markdown_fmt::validation_to_markdown(&result, &input, &report, &ctx);
+            let md = report::validation_to_markdown(&result, &input, &report, &ctx);
             output_text(&md, output)
         }
     }

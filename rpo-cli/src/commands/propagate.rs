@@ -9,7 +9,7 @@ use rpo_core::types::{DepartureState, KeplerianElements, QuasiNonsingularROE};
 
 use crate::error::CliError;
 use crate::input::load_json;
-use crate::output::common::print_json;
+use crate::output::io::print_json;
 
 /// Epoch string that we parse manually since `epoch_serde` is `pub(crate)`.
 #[derive(Deserialize)]
