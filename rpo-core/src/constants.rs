@@ -133,7 +133,6 @@ pub const ECLIPSE_TIMING_VALIDATION_TOL_S: f64 = 120.0;
 // --- Test tolerances ---
 //
 // Canonical named tolerances for test assertions across the workspace.
-// Per CLAUDE.md tolerance policy: no anonymous thresholds in test code.
 // Each constant's physical justification is documented once here,
 // not re-justified per call site.
 
