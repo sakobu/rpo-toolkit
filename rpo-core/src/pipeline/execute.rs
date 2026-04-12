@@ -40,7 +40,7 @@ use crate::mission::config::SafetyConfig;
 use super::convert::{to_propagation_model, to_waypoints};
 use super::errors::PipelineError;
 use super::projections::{LeanPlanResult, TransferSummary};
-use super::types::{PipelineInput, PipelineOutput, SafetyAnalysis, TransferResult, WaypointInput};
+use super::types::{MissionInput, PipelineOutput, SafetyAnalysis, TransferResult, WaypointInput};
 
 /// Number of eclipse evaluation points along the Lambert transfer arc.
 const DEFAULT_TRANSFER_ECLIPSE_SAMPLES: u32 = 200;
@@ -161,8 +161,8 @@ fn flag_global_minimum(results: &mut [Vec<ClosestApproach>]) {
 pub struct BuildOutputCtx<'a> {
     /// Transfer result from `compute_transfer()`.
     pub transfer: &'a TransferResult,
-    /// Original pipeline input (for covariance/eclipse config).
-    pub input: &'a PipelineInput,
+    /// Mission input (for covariance/eclipse config).
+    pub input: &'a MissionInput,
     /// Resolved propagation model.
     pub propagator: &'a PropagationModel,
     /// Auto-derived drag config, if any.
@@ -346,7 +346,7 @@ fn departure_from_transfer(transfer: &TransferResult) -> DepartureState {
 /// Returns [`PipelineError`] if waypoint targeting fails.
 pub fn plan_waypoints_from_transfer(
     transfer: &TransferResult,
-    input: &PipelineInput,
+    input: &MissionInput,
     propagator: &PropagationModel,
 ) -> Result<crate::mission::types::WaypointMission, PipelineError> {
     let waypoints = to_waypoints(&input.waypoints);
@@ -383,14 +383,14 @@ pub fn suggest_enrichment_from_parts(
     }
 }
 
-/// Compute enrichment suggestion from a [`PipelineInput`] without mutating the transfer.
+/// Compute enrichment suggestion from a [`MissionInput`] without mutating the transfer.
 ///
 /// Returns `None` if `safety_requirements` is not set on the input.
 /// Delegates to [`suggest_enrichment_from_parts()`].
 #[must_use]
 pub fn suggest_enrichment(
     transfer: &TransferResult,
-    input: &PipelineInput,
+    input: &MissionInput,
 ) -> Option<EnrichmentSuggestion> {
     input.safety_requirements.as_ref().map(|reqs| {
         suggest_enrichment_from_parts(
@@ -446,7 +446,7 @@ pub fn apply_perch_enrichment(
 /// Returns [`PipelineError`] if `waypoint_index` is out of bounds,
 /// if ROE-to-RIC conversion fails, or if replanning fails.
 pub fn accept_waypoint_enrichment(
-    input: &mut PipelineInput,
+    input: &mut MissionInput,
     transfer: &mut TransferResult,
     waypoint_index: usize,
     enriched_roe: &QuasiNonsingularROE,
@@ -666,7 +666,7 @@ pub fn build_lean_plan_result(
 /// Returns [`PipelineError::Covariance`] if covariance propagation fails.
 pub fn execute_mission_from_transfer(
     transfer: &mut TransferResult,
-    input: &PipelineInput,
+    input: &MissionInput,
 ) -> Result<PipelineOutput, PipelineError> {
     let propagator = to_propagation_model(&input.propagator);
 
@@ -725,7 +725,7 @@ pub fn execute_mission_from_transfer(
 /// Returns [`PipelineError::Covariance`] if covariance propagation fails.
 pub fn replan_from_transfer(
     transfer: &mut TransferResult,
-    input: &PipelineInput,
+    input: &MissionInput,
     modified_index: usize,
     cached_mission: Option<crate::mission::types::WaypointMission>,
 ) -> Result<PipelineOutput, PipelineError> {

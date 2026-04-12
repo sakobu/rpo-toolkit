@@ -96,6 +96,8 @@ pub fn compute_avoidance(
     propagator: PropagatorChoice,
     config: ColaConfig,
 ) -> Result<AvoidanceManeuver, WasmError> {
+    // hifitime's Epoch parse error does not implement std::error::Error,
+    // so we construct WasmError directly (same pattern as rpo-cli/commands/propagate.rs).
     let epoch: hifitime::Epoch = departure_epoch.parse().map_err(|e| WasmError {
         code: crate::error::WasmErrorCode::Deserialization,
         message: format!("departure_epoch is not valid ISO 8601: {e}"),

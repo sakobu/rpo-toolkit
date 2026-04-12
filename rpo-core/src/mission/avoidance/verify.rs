@@ -127,7 +127,7 @@ fn min_grid_distance(trajectory: &[PropagatedState]) -> f64 {
 mod tests {
     // Tests intentionally mirror D'Amico paper symbols (δe/δi components)
     // for equation traceability; renaming to satisfy `similar_names` would
-    // break the paper-to-code mapping required by CLAUDE.md Published-method
+    // break the paper-to-code mapping required by Codebase Published-method
     // fidelity and Traceability rules.
     #![allow(clippy::similar_names)]
 

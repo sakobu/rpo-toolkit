@@ -11,17 +11,16 @@
 use hifitime::Epoch;
 use nalgebra::Vector3;
 use rpo_core::elements::keplerian_to_state;
-use rpo_core::mission::config::{MissionConfig, ProximityConfig};
+use rpo_core::mission::config::MissionConfig;
 use rpo_core::mission::formation::EiAlignment;
 use rpo_core::mission::types::{MissionPhase, MissionPlan, PerchGeometry, Waypoint, WaypointMission};
-use rpo_core::propagation::lambert::LambertConfig;
-use rpo_core::pipeline::types::{PipelineInput, PropagatorChoice, TransferResult, WaypointInput};
+use rpo_core::pipeline::types::{MissionInput, PropagatorChoice, TransferResult, WaypointInput};
 use rpo_core::propagation::PropagationModel;
 use rpo_core::test_helpers::{iss_like_elements, test_epoch};
 use rpo_core::types::{DepartureState, KeplerianElements, QuasiNonsingularROE, StateVector};
 
 // ---------------------------------------------------------------------------
-// Test constants — named per CLAUDE.md Tolerance Policy
+// Test constants — named per Codebase Tolerance Policy
 // ---------------------------------------------------------------------------
 
 /// SMA offset to place the deputy in the proximity regime.
@@ -162,25 +161,19 @@ fn test_transfer_result() -> TransferResult {
     }
 }
 
-/// `PipelineInput` matching `test_transfer_result` — single waypoint at \[0, 0.5, 0\] km.
-fn test_pipeline_input() -> PipelineInput {
+/// `MissionInput` matching `test_transfer_result` — single waypoint at \[0, 0.5, 0\] km.
+fn test_mission_input() -> MissionInput {
     let (_chief_ke, _deputy_ke, chief, deputy, _epoch) = proximity_pair();
 
-    PipelineInput {
+    MissionInput {
         chief,
         deputy,
         waypoints: vec![test_waypoint_input()],
         config: MissionConfig::default(),
         propagator: PropagatorChoice::J2,
         perch: PerchGeometry::VBar { along_track_km: TEST_PERCH_ALONG_TRACK_KM },
-        lambert_tof_s: TEST_LAMBERT_TOF_S,
-        lambert_config: LambertConfig::default(),
-        proximity: ProximityConfig::default(),
-        chief_config: None,
-        deputy_config: None,
         navigation_accuracy: None,
         maneuver_uncertainty: None,
-        monte_carlo: None,
         cola: None,
         safety_requirements: None,
     }
@@ -248,7 +241,7 @@ fn eclipse_error_maps_to_eclipse_code() {
 }
 
 #[test]
-fn wasm_error_serde_roundtrip() {
+fn wasm_error_serializes_all_fields() {
     use rpo_wasm::error::{WasmError, WasmErrorCode};
 
     let err = WasmError {
@@ -257,10 +250,10 @@ fn wasm_error_serde_roundtrip() {
         details: Some("inner cause".to_string()),
     };
     let json = serde_json::to_string(&err).expect("serialize WasmError");
-    let roundtrip: WasmError = serde_json::from_str(&json).expect("deserialize WasmError");
-    assert!(matches!(roundtrip.code, WasmErrorCode::Mission));
-    assert_eq!(roundtrip.message, "test error");
-    assert_eq!(roundtrip.details.as_deref(), Some("inner cause"));
+    let value: serde_json::Value = serde_json::from_str(&json).expect("parse JSON");
+    assert_eq!(value["code"], "mission");
+    assert_eq!(value["message"], "test error");
+    assert_eq!(value["details"], "inner cause");
 }
 
 #[test]
@@ -268,7 +261,7 @@ fn wasm_error_without_details_omits_field() {
     use rpo_wasm::error::{WasmError, WasmErrorCode};
 
     let err = WasmError {
-        code: WasmErrorCode::Internal,
+        code: WasmErrorCode::Mission,
         message: "something broke".to_string(),
         details: None,
     };
@@ -280,30 +273,23 @@ fn wasm_error_without_details_omits_field() {
 }
 
 #[test]
-fn wasm_error_code_all_variants_roundtrip() {
+fn wasm_error_code_all_variants_serialize() {
     use rpo_wasm::error::WasmErrorCode;
 
-    let variants = [
-        WasmErrorCode::Mission,
-        WasmErrorCode::Propagation,
-        WasmErrorCode::Covariance,
-        WasmErrorCode::Avoidance,
-        WasmErrorCode::MissingField,
-        WasmErrorCode::EmptyTrajectory,
-        WasmErrorCode::Lambert,
-        WasmErrorCode::Eclipse,
-        WasmErrorCode::Formation,
-        WasmErrorCode::Deserialization,
-        WasmErrorCode::Internal,
+    let expected = [
+        (WasmErrorCode::Mission, "\"mission\""),
+        (WasmErrorCode::Propagation, "\"propagation\""),
+        (WasmErrorCode::Covariance, "\"covariance\""),
+        (WasmErrorCode::Avoidance, "\"avoidance\""),
+        (WasmErrorCode::MissingField, "\"missing_field\""),
+        (WasmErrorCode::EmptyTrajectory, "\"empty_trajectory\""),
+        (WasmErrorCode::Eclipse, "\"eclipse\""),
+        (WasmErrorCode::Formation, "\"formation\""),
+        (WasmErrorCode::Deserialization, "\"deserialization\""),
     ];
-    for variant in variants {
+    for (variant, want) in expected {
         let json = serde_json::to_string(&variant).expect("serialize");
-        let roundtrip: WasmErrorCode = serde_json::from_str(&json).expect("deserialize");
-        assert_eq!(
-            format!("{roundtrip:?}"),
-            format!("{variant:?}"),
-            "roundtrip failed for {variant:?}"
-        );
+        assert_eq!(json, want, "serialization mismatch for {variant:?}");
     }
 }
 
@@ -323,7 +309,7 @@ fn classify_separation_proximity() {
 #[test]
 fn execute_mission_from_transfer_nominal() {
     let transfer = test_transfer_result();
-    let input = test_pipeline_input();
+    let input = test_mission_input();
     let result = rpo_wasm::mission::execute_mission_from_transfer(transfer, input);
     assert!(result.is_ok(), "execute_mission_from_transfer should succeed: {result:?}");
     let mission_result = result.unwrap();
@@ -336,7 +322,7 @@ fn execute_mission_from_transfer_nominal() {
 #[test]
 fn execute_mission_from_transfer_empty_waypoints() {
     let transfer = test_transfer_result();
-    let mut input = test_pipeline_input();
+    let mut input = test_mission_input();
     input.waypoints.clear();
     let result = rpo_wasm::mission::execute_mission_from_transfer(transfer, input);
     assert!(result.is_err(), "should fail with empty waypoints");
@@ -351,7 +337,7 @@ fn execute_mission_from_transfer_empty_waypoints() {
 #[test]
 fn replan_from_transfer_nominal() {
     let transfer = test_transfer_result();
-    let input = test_pipeline_input();
+    let input = test_mission_input();
     let result = rpo_wasm::mission::replan_from_transfer(
         transfer,
         input,
@@ -364,7 +350,7 @@ fn replan_from_transfer_nominal() {
 #[test]
 fn replan_from_transfer_index_out_of_bounds() {
     let transfer = test_transfer_result();
-    let input = test_pipeline_input();
+    let input = test_mission_input();
     let result = rpo_wasm::mission::replan_from_transfer(
         transfer,
         input,
@@ -736,7 +722,7 @@ fn apply_perch_enrichment_nominal() {
     use rpo_core::mission::formation::SafetyRequirements;
 
     let transfer = test_transfer_result();
-    let mut input = test_pipeline_input();
+    let mut input = test_mission_input();
     input.safety_requirements = Some(SafetyRequirements {
         min_separation_km: TEST_MIN_SEPARATION_KM,
         alignment: EiAlignment::default(),
@@ -759,7 +745,7 @@ fn apply_perch_enrichment_nominal() {
 
 #[test]
 fn accept_waypoint_enrichment_nominal() {
-    let input = test_pipeline_input();
+    let input = test_mission_input();
     let transfer = test_transfer_result();
     let enriched_roe = QuasiNonsingularROE {
         da: 0.0,
@@ -783,7 +769,7 @@ fn accept_waypoint_enrichment_nominal() {
 
 #[test]
 fn accept_waypoint_enrichment_index_out_of_bounds() {
-    let input = test_pipeline_input();
+    let input = test_mission_input();
     let transfer = test_transfer_result();
     let roe = test_roe();
 
@@ -885,7 +871,7 @@ mod wasm_boundary {
     #[wasm_bindgen_test]
     fn suggest_enrichment_returns_none_without_safety() {
         let transfer = super::test_transfer_result();
-        let input = super::test_pipeline_input();
+        let input = super::test_mission_input();
 
         let result = rpo_wasm::enrichment::suggest_enrichment(transfer, input);
         assert!(result.is_none(), "should be None without safety_requirements");

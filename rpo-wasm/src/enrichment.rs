@@ -1,12 +1,13 @@
 //! Formation design enrichment: suggest, apply, accept, and per-waypoint enrichment.
 
-use serde::{Deserialize, Serialize};
+use nalgebra::Vector3;
+use serde::Serialize;
 use tsify_next::Tsify;
 use wasm_bindgen::prelude::*;
 
 use rpo_core::mission::formation::{EnrichedWaypoint, SafetyRequirements};
 use rpo_core::pipeline::types::{
-    EnrichmentSuggestion, PipelineInput, PipelineOutput, TransferResult,
+    EnrichmentSuggestion, MissionInput, PipelineOutput, TransferResult,
 };
 use rpo_core::types::{KeplerianElements, QuasiNonsingularROE};
 
@@ -14,17 +15,16 @@ use crate::error::WasmError;
 
 /// Combined output from accepting waypoint enrichment.
 ///
-/// Core functions take `&mut PipelineInput` and `&mut TransferResult`;
+/// Core functions take `&mut MissionInput` and `&mut TransferResult`;
 /// WASM cannot pass mutable references across the boundary, so this
 /// returns owned copies of all three values.
-#[derive(Debug, Serialize, Deserialize, Tsify)]
-// Output-only: no from_wasm_abi needed (never passed from JS to Rust).
+#[derive(Debug, Serialize, Tsify)]
 #[tsify(into_wasm_abi)]
 pub struct EnrichmentAcceptResult {
     /// Pipeline output from re-execution with enriched waypoint.
     pub output: PipelineOutput,
     /// Mutated pipeline input (waypoint ROE target updated).
-    pub input: PipelineInput,
+    pub input: MissionInput,
     /// Mutated transfer result.
     pub transfer: TransferResult,
 }
@@ -42,7 +42,7 @@ pub struct EnrichmentAcceptResult {
 #[wasm_bindgen]
 pub fn suggest_enrichment(
     transfer: TransferResult,
-    input: PipelineInput,
+    input: MissionInput,
 ) -> Option<EnrichmentSuggestion> {
     rpo_core::pipeline::suggest_enrichment(&transfer, &input)
 }
@@ -80,7 +80,7 @@ pub fn apply_perch_enrichment(
 /// Returns [`WasmError`] on targeting or propagation failure.
 #[wasm_bindgen]
 pub fn accept_waypoint_enrichment(
-    mut input: PipelineInput,
+    mut input: MissionInput,
     mut transfer: TransferResult,
     waypoint_index: usize,
     enriched_roe: QuasiNonsingularROE,
@@ -133,8 +133,8 @@ pub fn enrich_waypoint(
     let vel: Option<[f64; 3]> =
         crate::error::deserialize_js(velocity_ric_km_s, "velocity_ric_km_s")?;
 
-    let pos_vec = nalgebra::Vector3::new(pos[0], pos[1], pos[2]);
-    let vel_vec = vel.map(|v| nalgebra::Vector3::new(v[0], v[1], v[2]));
+    let pos_vec = Vector3::from(pos);
+    let vel_vec = vel.map(Vector3::from);
 
     rpo_core::mission::formation::safety_envelope::enrich_waypoint(
         &pos_vec,

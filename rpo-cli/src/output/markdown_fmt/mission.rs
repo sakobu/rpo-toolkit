@@ -25,7 +25,7 @@ use crate::output::thresholds::{insight as insight_thresh, safety as safety_thre
 ///
 /// Determined from the verdict + enrichment state before entering the safety
 /// section. Replaces two interdependent boolean flags (`enrichment_active`,
-/// `verdict_feasible`) with an explicit enum per CLAUDE.md "enums over boolean
+/// `verdict_feasible`) with an explicit enum per Codebase "enums over boolean
 /// flags" rule.
 #[derive(Debug, Clone, Copy)]
 enum PassiveSafetyOutcome {
@@ -80,7 +80,7 @@ pub fn mission_to_markdown(
 ) -> String {
     let mut out = String::with_capacity(4096);
 
-    let sc = input.config.safety.unwrap_or_default();
+    let sc = input.base.config.safety.unwrap_or_default();
     let enrichment_active = output.formation_design.is_some();
 
     // Summary block at top
@@ -148,7 +148,7 @@ pub fn validation_to_markdown(
 ) -> String {
     let mut out = String::with_capacity(8192);
 
-    let sc = input.config.safety.unwrap_or_default();
+    let sc = input.base.config.safety.unwrap_or_default();
     let enrichment_active = output.formation_design.is_some();
 
     let vr = determine_verdict(output, &sc, Some(report));
@@ -208,7 +208,7 @@ pub fn validation_to_markdown(
 
     // Insights
     let mut insight_lines = insights::validation_insights(report, &sc);
-    if let (Some(cola), Some(cola_config)) = (&output.safety.cola, &input.cola) {
+    if let (Some(cola), Some(cola_config)) = (&output.safety.cola, &input.base.cola) {
         insight_lines.extend(insights::cola_analytical_miss_insights(
             cola,
             cola_config.target_distance_km,
@@ -705,7 +705,7 @@ fn write_waypoint_section(
         total_dv += leg.total_dv_km_s;
         let v_target = fmt_velocity_target(&leg.target_velocity_ric_km_s);
         let label = input
-            .waypoints
+            .base.waypoints
             .get(i)
             .and_then(|wp| wp.label.as_deref())
             .unwrap_or("-");
@@ -1017,7 +1017,7 @@ fn write_cola_sections(
     context: ReportContext,
 ) {
     if let Some(ref cola) = output.safety.cola {
-        let target_distance_km = input.cola.as_ref().map(|c| c.target_distance_km);
+        let target_distance_km = input.base.cola.as_ref().map(|c| c.target_distance_km);
         write_cola_section(out, cola, target_distance_km, context);
     }
     if let Some(ref secondary) = output.safety.secondary_conjunctions {
@@ -1303,7 +1303,7 @@ fn write_validation_section(
     let _ = writeln!(out);
 
     // Safety comparison
-    write_safety_comparison(out, report, &input.config);
+    write_safety_comparison(out, report, &input.base.config);
 
     // COLA validation detail (post-validation section, before eclipse)
     write_cola_validation_detail(out, output, report);
@@ -1403,7 +1403,7 @@ fn write_cola_validation_detail(
 ///
 /// Avoids threading seven floats through helper function signatures. The
 /// `_km` suffixes are kept on every field per the project's mandatory unit
-/// naming rules (see `CLAUDE.md#naming-rules`), which means clippy's
+/// naming rules (see `Codebase#naming-rules`), which means clippy's
 /// `struct_field_names` lint fires here and is allowed locally.
 #[allow(clippy::struct_field_names)]
 struct SafetyComparisonValues {
@@ -1910,7 +1910,7 @@ mod tests {
         )
         .unwrap();
         let output = execute_mission(&input).unwrap();
-        let propagator = to_propagation_model(&input.propagator);
+        let propagator = to_propagation_model(&input.base.propagator);
         (input, output, propagator)
     }
 
@@ -1975,7 +1975,7 @@ mod tests {
             )
             .unwrap();
         let output = execute_mission(&input).unwrap();
-        let propagator = to_propagation_model(&input.propagator);
+        let propagator = to_propagation_model(&input.base.propagator);
         let md = mission_to_markdown(&output, &input, &propagator, false);
 
         assert!(md.contains("# Mission Summary"), "missing summary header");
@@ -2020,12 +2020,12 @@ mod tests {
             &std::fs::read_to_string(examples_dir().join("mission.json")).unwrap(),
         )
         .unwrap();
-        input.safety_requirements = Some(rpo_core::mission::SafetyRequirements {
+        input.base.safety_requirements = Some(rpo_core::mission::SafetyRequirements {
             min_separation_km: 0.100,
             alignment: rpo_core::mission::EiAlignment::default(),
         });
         let output = execute_mission(&input).unwrap();
-        let propagator = to_propagation_model(&input.propagator);
+        let propagator = to_propagation_model(&input.base.propagator);
         mission_to_markdown(&output, &input, &propagator, false)
     }
 
@@ -2125,12 +2125,12 @@ mod tests {
             &std::fs::read_to_string(examples_dir().join("mission.json")).unwrap(),
         )
         .unwrap();
-        input.safety_requirements = Some(rpo_core::mission::SafetyRequirements {
+        input.base.safety_requirements = Some(rpo_core::mission::SafetyRequirements {
             min_separation_km: 0.100,
             alignment: rpo_core::mission::EiAlignment::default(),
         });
         let output = execute_mission(&input).unwrap();
-        let propagator = to_propagation_model(&input.propagator);
+        let propagator = to_propagation_model(&input.base.propagator);
         (input, output, propagator)
     }
 

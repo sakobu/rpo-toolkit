@@ -358,8 +358,8 @@ async fn extract_drag_different_configs() {
     let msg = json!({
         "type": "extract_drag",
         "request_id": 40,
-        "chief": serde_json::to_value(&input.chief).unwrap(),
-        "deputy": serde_json::to_value(&input.deputy).unwrap(),
+        "chief": serde_json::to_value(&input.base.chief).unwrap(),
+        "deputy": serde_json::to_value(&input.base.deputy).unwrap(),
         "chief_config": serde_json::to_value(chief_config).unwrap(),
         "deputy_config": serde_json::to_value(deputy_config).unwrap()
     });
@@ -414,8 +414,8 @@ async fn validate_mission_roundtrip() {
         "type": "validate",
         "request_id": 20,
         "mission": serde_json::to_value(&output.mission).unwrap(),
-        "chief": serde_json::to_value(&input.chief).unwrap(),
-        "deputy": serde_json::to_value(&input.deputy).unwrap(),
+        "chief": serde_json::to_value(&input.base.chief).unwrap(),
+        "deputy": serde_json::to_value(&input.base.deputy).unwrap(),
         "chief_config": serde_json::to_value(chief_config).unwrap(),
         "deputy_config": serde_json::to_value(deputy_config).unwrap(),
         "samples_per_leg": 2
@@ -474,11 +474,11 @@ async fn mc_ensemble_roundtrip() {
         "type": "run_mc",
         "request_id": 30,
         "mission": serde_json::to_value(&output.mission).unwrap(),
-        "chief": serde_json::to_value(&input.chief).unwrap(),
-        "deputy": serde_json::to_value(&input.deputy).unwrap(),
+        "chief": serde_json::to_value(&input.base.chief).unwrap(),
+        "deputy": serde_json::to_value(&input.base.deputy).unwrap(),
         "chief_config": serde_json::to_value(chief_config).unwrap(),
         "deputy_config": serde_json::to_value(deputy_config).unwrap(),
-        "mission_config": serde_json::to_value(&input.config).unwrap(),
+        "mission_config": serde_json::to_value(&input.base.config).unwrap(),
         "propagator": "j2",
         "monte_carlo": {
             "num_samples": 3,
@@ -577,8 +577,8 @@ async fn cancel_active_validation() {
         "type": "validate",
         "request_id": 50,
         "mission": serde_json::to_value(&output.mission).unwrap(),
-        "chief": serde_json::to_value(&input.chief).unwrap(),
-        "deputy": serde_json::to_value(&input.deputy).unwrap(),
+        "chief": serde_json::to_value(&input.base.chief).unwrap(),
+        "deputy": serde_json::to_value(&input.base.deputy).unwrap(),
         "chief_config": serde_json::to_value(chief_config).unwrap(),
         "deputy_config": serde_json::to_value(deputy_config).unwrap(),
         "samples_per_leg": 2
@@ -648,8 +648,8 @@ async fn cancel_active_drag_no_late_result() {
     let drag_msg = json!({
         "type": "extract_drag",
         "request_id": 77,
-        "chief": serde_json::to_value(&input.chief).unwrap(),
-        "deputy": serde_json::to_value(&input.deputy).unwrap(),
+        "chief": serde_json::to_value(&input.base.chief).unwrap(),
+        "deputy": serde_json::to_value(&input.base.deputy).unwrap(),
         "chief_config": serde_json::to_value(chief_config).unwrap(),
         "deputy_config": serde_json::to_value(deputy_config).unwrap()
     });

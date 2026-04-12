@@ -33,7 +33,8 @@ pub use projections::{
     propagated_to_point, resample_propagated,
 };
 pub use types::{
-    EnrichmentSuggestion, PipelineInput, PipelineOutput, PlanVariant, PropagatorChoice,
-    SafetyAnalysis, SpacecraftChoice, TransferResult, WaypointInput,
-    TransferComputationInput,
+    default_perch, EnrichmentSuggestion, MissionInput, PipelineInput, PipelineOutput,
+    PlanVariant, PropagatorChoice, SafetyAnalysis, SpacecraftChoice,
+    TransferComputationInput, TransferResult, WaypointInput, DEFAULT_LAMBERT_TOF_S,
+    DEFAULT_PERCH_ALONG_TRACK_KM,
 };

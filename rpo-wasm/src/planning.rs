@@ -2,12 +2,11 @@
 
 use wasm_bindgen::prelude::*;
 
-use rpo_core::mission::config::ProximityConfig;
+use rpo_core::mission::config::{MissionConfig, ProximityConfig};
 use rpo_core::mission::types::{MissionPhase, Waypoint, WaypointMission};
+use rpo_core::pipeline::types::{PropagatorChoice, WaypointInput};
 use rpo_core::pipeline::{to_propagation_model, to_waypoints};
 use rpo_core::types::DepartureState;
-use rpo_core::mission::config::MissionConfig;
-use rpo_core::pipeline::types::{PropagatorChoice, WaypointInput};
 
 use crate::error::WasmError;
 

@@ -207,7 +207,7 @@ mod tests {
     // Tests intentionally mirror Koenig paper symbols (drag rates, δa/δe
     // components, multi-epoch state bindings) for equation traceability;
     // renaming to satisfy `similar_names` would break the paper-to-code
-    // mapping required by CLAUDE.md Published-method fidelity and
+    // mapping required by Codebase Published-method fidelity and
     // Traceability rules.
     #![allow(clippy::similar_names)]
 

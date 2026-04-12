@@ -13,6 +13,9 @@
 
 /reports/
 
+# WASM build output
+rpo-wasm/pkg/
+
 # OS
 .DS_Store
 Thumbs.db

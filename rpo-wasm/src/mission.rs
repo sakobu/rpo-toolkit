@@ -1,11 +1,11 @@
 //! Mission execution and replanning from a pre-computed transfer.
 
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use tsify_next::Tsify;
 use wasm_bindgen::prelude::*;
 
 use rpo_core::mission::types::WaypointMission;
-use rpo_core::pipeline::types::{PipelineInput, PipelineOutput, TransferResult};
+use rpo_core::pipeline::types::{MissionInput, PipelineOutput, TransferResult};
 
 use crate::error::WasmError;
 
@@ -13,8 +13,7 @@ use crate::error::WasmError;
 ///
 /// Core functions take `&mut TransferResult`; WASM cannot pass mutable
 /// references across the boundary, so this returns owned copies of both.
-#[derive(Debug, Serialize, Deserialize, Tsify)]
-// Output-only: no from_wasm_abi needed (never passed from JS to Rust).
+#[derive(Debug, Serialize, Tsify)]
 #[tsify(into_wasm_abi)]
 pub struct MissionResult {
     /// Pipeline output (mission, safety, covariance, etc.).
@@ -36,7 +35,7 @@ pub struct MissionResult {
 #[wasm_bindgen]
 pub fn execute_mission_from_transfer(
     mut transfer: TransferResult,
-    input: PipelineInput,
+    input: MissionInput,
 ) -> Result<MissionResult, WasmError> {
     let output =
         rpo_core::pipeline::execute_mission_from_transfer(&mut transfer, &input)
@@ -68,7 +67,7 @@ pub fn execute_mission_from_transfer(
 #[wasm_bindgen]
 pub fn replan_from_transfer(
     mut transfer: TransferResult,
-    input: PipelineInput,
+    input: MissionInput,
     modified_index: usize,
     cached_mission: Option<WaypointMission>,
 ) -> Result<MissionResult, WasmError> {

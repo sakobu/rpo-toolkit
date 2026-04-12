@@ -60,7 +60,7 @@ pub fn load_full_almanac() -> Result<Arc<Almanac>, NyxBridgeError> {
 /// Tests cannot proceed without SPICE kernels, so fail-fast is the right
 /// behavior; the `.expect` is the intended panic path, not an oversight.
 /// Because this function lives behind `#[cfg(feature = "test-support")]`,
-/// the `.expect` is not "library code" in the CLAUDE.md sense — it is
+/// the `.expect` is not "library code" in the Codebase sense — it is
 /// test-support code, and panics are conventional in test code.
 #[cfg(feature = "test-support")]
 #[must_use]

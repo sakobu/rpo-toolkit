@@ -1,8 +1,7 @@
 //! Display and alert thresholds for CLI output formatting.
 //!
 //! Presentation-layer thresholds only. Core algorithm tolerances live in
-//! `rpo-core`. Every constant in this module is named, categorized, and
-//! documented with its rationale per the CLAUDE.md tolerance policy.
+//! `rpo-core`.
 
 /// Monte Carlo convergence and safety thresholds for verdict/insight logic.
 pub mod mc {
@@ -14,7 +13,7 @@ pub mod mc {
     /// in `f64`. Any drift from a true `1.0` is at the ULP scale, so
     /// `f64::EPSILON` is the tightest principled guard that distinguishes
     /// "all converged" from "one or more failed" without risking false
-    /// negatives from float-equality pitfalls. CLAUDE.md forbids `==` on
+    /// negatives from float-equality pitfalls. Codebase forbids `==` on
     /// floats; this constant exists so the `all_converged` check in
     /// `determine_mc_verdict` can honor that rule.
     pub const CONVERGENCE_EXACT_TOL: f64 = f64::EPSILON;
@@ -40,7 +39,7 @@ pub mod rate {
     /// `keepout_violation_rate` are all computed as integer ratios
     /// (`violations / samples`), so an exact `0.0` comparison is
     /// well-defined here and is *not* the usual float-equality
-    /// anti-pattern CLAUDE.md warns against. This constant exists to
+    /// anti-pattern Codebase warns against. This constant exists to
     /// document that principled exception at every call site that
     /// checks "did anything happen at all?" against the ensemble.
     pub const ZERO_VIOLATIONS: f64 = 0.0;

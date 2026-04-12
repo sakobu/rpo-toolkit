@@ -63,7 +63,7 @@ pub struct OverlayFlags {
 pub fn apply_overlays(input: &mut PipelineInput, flags: &OverlayFlags) {
     // COLA overlay
     if let Some(threshold) = flags.cola_threshold {
-        input.cola = Some(ColaConfig {
+        input.base.cola = Some(ColaConfig {
             target_distance_km: threshold,
             max_dv_km_s: flags.cola_budget.unwrap_or(DEFAULT_COLA_BUDGET_KM_S),
         });
@@ -76,7 +76,7 @@ pub fn apply_overlays(input: &mut PipelineInput, flags: &OverlayFlags) {
         (None, false) => None,
     };
     if let Some(min_separation_km) = separation_km {
-        input.safety_requirements = Some(SafetyRequirements {
+        input.base.safety_requirements = Some(SafetyRequirements {
             min_separation_km,
             alignment: EiAlignment::default(),
         });
@@ -231,7 +231,7 @@ pub fn resolve_drag_and_propagator(
     };
     Ok(resolve_propagator(
         auto_drag_config,
-        to_propagation_model(&input.propagator),
+        to_propagation_model(&input.base.propagator),
     ))
 }
 

@@ -118,7 +118,7 @@ pub fn compute_validation_burns(
 pub fn execute_mission(input: &PipelineInput) -> Result<PipelineOutput, PipelineError> {
     let transfer_input = TransferComputationInput::from(input);
     let mut transfer = compute_transfer(&transfer_input)?;
-    Ok(execute_mission_from_transfer(&mut transfer, input)?)
+    Ok(execute_mission_from_transfer(&mut transfer, &input.base)?)
 }
 
 /// Server-side replan: computes Lambert transfer, then delegates to
@@ -137,17 +137,17 @@ pub fn replan_mission(
 ) -> Result<PipelineOutput, PipelineError> {
     let transfer_input = TransferComputationInput::from(input);
     let mut transfer = compute_transfer(&transfer_input)?;
-    Ok(replan_from_transfer(&mut transfer, input, modified_index, cached_mission)?)
+    Ok(replan_from_transfer(&mut transfer, &input.base, modified_index, cached_mission)?)
 }
 
 #[cfg(test)]
 mod tests {
     use rpo_core::mission::config::ProximityConfig;
-    use rpo_core::mission::types::PerchGeometry;
     use rpo_core::pipeline::{
-        apply_perch_enrichment, compute_safety_analysis, plan_waypoints_from_transfer,
-        suggest_enrichment, to_propagation_model, EnrichmentSuggestion, PipelineInput,
-        PropagatorChoice, WaypointInput,
+        apply_perch_enrichment, compute_safety_analysis, default_perch,
+        plan_waypoints_from_transfer, suggest_enrichment, to_propagation_model,
+        EnrichmentSuggestion, MissionInput, PipelineInput, PropagatorChoice, WaypointInput,
+        DEFAULT_LAMBERT_TOF_S,
     };
     use rpo_core::mission::formation::{
         EiAlignment, PerchEnrichmentResult, PerchFallbackReason, SafetyRequirements,
@@ -156,14 +156,6 @@ mod tests {
 
     use super::*;
     use rpo_core::test_helpers::iss_like_elements;
-
-    /// Default V-bar perch at 5 km along-track.
-    /// Inlined from `rpo_core::pipeline::types::default_perch` (pub(crate)).
-    fn default_perch() -> PerchGeometry {
-        PerchGeometry::VBar {
-            along_track_km: 5.0,
-        }
-    }
 
     /// Tolerance for pure data-copy fidelity tests (no arithmetic, exact IEEE 754 roundtrip).
     const COPY_FIDELITY_TOL: f64 = f64::EPSILON;
@@ -207,6 +199,27 @@ mod tests {
     /// drift without multi-revolution ambiguity.
     const TEST_WAYPOINT_TOF_S: f64 = 4200.0;
 
+    // ---- Proximity-regime test geometry ----
+
+    /// SMA offset placing deputy in proximity regime (1 km above chief).
+    /// Stays well below the default `ProximityConfig::roe_threshold` of 5e-3
+    /// (δa/a ≈ 1.5e-4 for ISS-like a ≈ 6778 km).
+    const PROXIMITY_SMA_OFFSET_KM: f64 = 1.0;
+
+    /// Small in-track phase offset to avoid collinear deputy placement (rad).
+    const PROXIMITY_PHASE_OFFSET_RAD: f64 = 0.01;
+
+    // ---- Waypoint test positions (RIC frame, km) ----
+
+    /// Far-field / proximity WP1: offset in all RIC axes (km).
+    const TEST_WP1_POSITION_RIC_KM: [f64; 3] = [0.5, 2.0, 0.5];
+
+    /// Far-field WP2: close approach in all axes (km).
+    const TEST_WP2_POSITION_RIC_KM: [f64; 3] = [0.5, 0.5, 0.5];
+
+    /// Far-field WP2: small in-track velocity target (km/s).
+    const TEST_WP2_VELOCITY_RIC_KM_S: [f64; 3] = [0.0, 0.001, 0.0];
+
     /// Lower bound on |delta(dv)| between baseline and enriched downstream legs
     /// (km/s). When enrichment modifies waypoint 0's arrival velocity, the
     /// solver must re-target leg 1 from a different initial state, producing
@@ -214,6 +227,19 @@ mod tests {
     /// (O(1e-3 km/s)) -- just above f64 noise -- so any physically meaningful
     /// cascade will exceed it.
     const CASCADE_DV_CHANGE_TOL_KM_S: f64 = 1e-10;
+
+    /// Wrap a [`MissionInput`] with default nyx-specific fields for tests.
+    fn wrap_mission(base: MissionInput) -> PipelineInput {
+        PipelineInput {
+            base,
+            lambert_tof_s: DEFAULT_LAMBERT_TOF_S,
+            lambert_config: LambertConfig::default(),
+            proximity: ProximityConfig::default(),
+            chief_config: None,
+            deputy_config: None,
+            monte_carlo: None,
+        }
+    }
 
     /// Build a minimal `PipelineInput` from the standard far-field test scenario.
     ///
@@ -249,37 +275,31 @@ mod tests {
         let chief = keplerian_to_state(&chief_ke, epoch).unwrap();
         let deputy = keplerian_to_state(&deputy_ke, epoch).unwrap();
 
-        PipelineInput {
+        wrap_mission(MissionInput {
             chief,
             deputy,
             perch: default_perch(),
-            lambert_tof_s: 3600.0,
-            lambert_config: LambertConfig::default(),
             waypoints: vec![
                 WaypointInput {
-                    position_ric_km: [0.5, 2.0, 0.5],
+                    position_ric_km: TEST_WP1_POSITION_RIC_KM,
                     velocity_ric_km_s: None,
                     tof_s: Some(TEST_WAYPOINT_TOF_S),
                     label: Some("WP1".into()),
                 },
                 WaypointInput {
-                    position_ric_km: [0.5, 0.5, 0.5],
-                    velocity_ric_km_s: Some([0.0, 0.001, 0.0]),
+                    position_ric_km: TEST_WP2_POSITION_RIC_KM,
+                    velocity_ric_km_s: Some(TEST_WP2_VELOCITY_RIC_KM_S),
                     tof_s: Some(TEST_WAYPOINT_TOF_S),
                     label: Some("WP2".into()),
                 },
             ],
-            proximity: ProximityConfig::default(),
             config: rpo_core::mission::config::MissionConfig::default(),
             propagator: PropagatorChoice::J2,
-            chief_config: None,
-            deputy_config: None,
+            cola: None,
             navigation_accuracy: None,
             maneuver_uncertainty: None,
-            monte_carlo: None,
-            cola: None,
             safety_requirements: None,
-        }
+        })
     }
 
     fn compute_transfer_from_pipeline(
@@ -334,7 +354,8 @@ mod tests {
         assert!(output.total_dv_km_s > 0.0);
     }
 
-    /// Build a proximity-regime `PipelineInput` (deputy 1 km higher than chief).
+    /// Build a proximity-regime `PipelineInput` (deputy [`PROXIMITY_SMA_OFFSET_KM`]
+    /// higher than chief).
     fn proximity_input() -> PipelineInput {
         use rpo_core::elements::keplerian_conversions::keplerian_to_state;
         use hifitime::Epoch;
@@ -342,35 +363,29 @@ mod tests {
         let epoch = Epoch::from_gregorian_str("2024-01-01T00:00:00 UTC").unwrap();
         let chief_ke = iss_like_elements();
         let mut deputy_ke = chief_ke;
-        deputy_ke.a_km += 1.0; // 1 km higher -> Proximity regime
-        deputy_ke.mean_anomaly_rad += 0.01;
+        deputy_ke.a_km += PROXIMITY_SMA_OFFSET_KM;
+        deputy_ke.mean_anomaly_rad += PROXIMITY_PHASE_OFFSET_RAD;
 
         let chief = keplerian_to_state(&chief_ke, epoch).unwrap();
         let deputy = keplerian_to_state(&deputy_ke, epoch).unwrap();
 
-        PipelineInput {
+        wrap_mission(MissionInput {
             chief,
             deputy,
             perch: default_perch(),
-            lambert_tof_s: 3600.0,
-            lambert_config: LambertConfig::default(),
             waypoints: vec![WaypointInput {
-                position_ric_km: [0.5, 2.0, 0.5],
+                position_ric_km: TEST_WP1_POSITION_RIC_KM,
                 velocity_ric_km_s: None,
                 tof_s: Some(TEST_WAYPOINT_TOF_S),
                 label: Some("WP1".into()),
             }],
-            proximity: ProximityConfig::default(),
             config: rpo_core::mission::config::MissionConfig::default(),
             propagator: PropagatorChoice::J2,
-            chief_config: None,
-            deputy_config: None,
+            cola: None,
             navigation_accuracy: None,
             maneuver_uncertainty: None,
-            monte_carlo: None,
-            cola: None,
             safety_requirements: None,
-        }
+        })
     }
 
     #[test]
@@ -387,7 +402,7 @@ mod tests {
 
         // arrival_epoch must equal the chief epoch (no Lambert offset)
         assert_eq!(
-            result.arrival_epoch, input.chief.epoch,
+            result.arrival_epoch, input.base.chief.epoch,
             "proximity arrival_epoch should equal chief epoch, not chief + lambert_tof_s"
         );
     }
@@ -398,11 +413,30 @@ mod tests {
         let json = serde_json::to_string(&input).expect("serialize");
         let roundtrip: PipelineInput = serde_json::from_str(&json).expect("deserialize");
 
-        assert_eq!(input.chief.epoch, roundtrip.chief.epoch);
-        assert_eq!(input.waypoints.len(), roundtrip.waypoints.len());
+        assert_eq!(input.base.chief.epoch, roundtrip.base.chief.epoch);
+        assert_eq!(input.base.waypoints.len(), roundtrip.base.waypoints.len());
         assert!(
             (input.lambert_tof_s - roundtrip.lambert_tof_s).abs() < COPY_FIDELITY_TOL,
             "lambert_tof_s serde roundtrip mismatch"
+        );
+    }
+
+    /// Guard against `#[serde(flatten)]` field-name collisions between
+    /// `MissionInput` and `PipelineInput`. If a future change introduces a
+    /// duplicate name, serde silently shadows one during deserialization.
+    /// This test catches it by asserting the flattened JSON has the expected
+    /// total number of distinct keys (`MissionInput`: 10 + `PipelineInput`: 6 = 16).
+    #[test]
+    fn pipeline_input_flatten_no_field_collision() {
+        let input = far_field_input();
+        let value = serde_json::to_value(&input).expect("serialize");
+        let map = value.as_object().expect("top-level object");
+        assert_eq!(
+            map.len(),
+            16,
+            "flatten collision: expected 16 distinct keys (MissionInput: 10 + PipelineInput: 6), \
+             got {}. A field name exists in both structs.",
+            map.len(),
         );
     }
 
@@ -425,7 +459,7 @@ mod tests {
     #[test]
     fn test_execute_mission_with_formation_design() {
         let mut input = far_field_input();
-        input.safety_requirements = Some(SafetyRequirements {
+        input.base.safety_requirements = Some(SafetyRequirements {
             min_separation_km: 0.1,
             alignment: EiAlignment::Parallel,
         });
@@ -501,7 +535,7 @@ mod tests {
     #[test]
     fn formation_report_has_drift_prediction() {
         let mut input = proximity_input();
-        input.safety_requirements = Some(SafetyRequirements {
+        input.base.safety_requirements = Some(SafetyRequirements {
             min_separation_km: 0.10,
             alignment: EiAlignment::Parallel,
         });
@@ -534,7 +568,7 @@ mod tests {
 
     fn proximity_input_with_enrichment() -> PipelineInput {
         let mut input = proximity_input();
-        input.safety_requirements = Some(SafetyRequirements {
+        input.base.safety_requirements = Some(SafetyRequirements {
             min_separation_km: 0.15,
             alignment: EiAlignment::Parallel,
         });
@@ -547,7 +581,7 @@ mod tests {
         let transfer = compute_transfer_from_pipeline(&input).expect("transfer");
 
         let original_perch_roe = transfer.plan.perch_roe;
-        let suggestion = suggest_enrichment(&transfer, &input);
+        let suggestion = suggest_enrichment(&transfer, &input.base);
 
         assert!(suggestion.is_some(), "should produce suggestion when safety_requirements set");
         assert!(
@@ -561,7 +595,7 @@ mod tests {
     fn test_suggest_enrichment_none_without_requirements() {
         let input = far_field_input();
         let transfer = compute_transfer_from_pipeline(&input).expect("transfer");
-        let suggestion = suggest_enrichment(&transfer, &input);
+        let suggestion = suggest_enrichment(&transfer, &input.base);
         assert!(suggestion.is_none());
     }
 
@@ -571,7 +605,7 @@ mod tests {
         let mut transfer = compute_transfer_from_pipeline(&input).expect("transfer");
 
         let original_perch_roe = transfer.plan.perch_roe;
-        let suggestion = suggest_enrichment(&transfer, &input).expect("suggestion");
+        let suggestion = suggest_enrichment(&transfer, &input.base).expect("suggestion");
 
         apply_perch_enrichment(&mut transfer, &suggestion);
 
@@ -618,7 +652,7 @@ mod tests {
         use rpo_core::mission::config::SafetyConfig;
 
         let mut input = far_field_input();
-        input.config.safety = Some(SafetyConfig {
+        input.base.config.safety = Some(SafetyConfig {
             min_ei_separation_km: 0.1,
             min_distance_3d_km: 0.05,
         });
@@ -629,16 +663,16 @@ mod tests {
 
         // Separately compute safety assessment from the same mission
         let transfer = compute_transfer_from_pipeline(&input).expect("transfer");
-        let propagator = to_propagation_model(&input.propagator);
+        let propagator = to_propagation_model(&input.base.propagator);
         let mut transfer2 = transfer;
-        let suggestion = suggest_enrichment(&transfer2, &input);
+        let suggestion = suggest_enrichment(&transfer2, &input.base);
         if let Some(ref s) = suggestion {
             apply_perch_enrichment(&mut transfer2, s);
         }
-        let wp_mission = plan_waypoints_from_transfer(&transfer2, &input, &propagator)
+        let wp_mission = plan_waypoints_from_transfer(&transfer2, &input.base, &propagator)
             .expect("waypoints");
         let safety = compute_safety_analysis(
-            &wp_mission, input.config.safety.as_ref(), input.cola.as_ref(), &propagator,
+            &wp_mission, input.base.config.safety.as_ref(), input.base.cola.as_ref(), &propagator,
         );
 
         // Free-drift: both should be Some when safety is enabled
@@ -686,7 +720,7 @@ mod tests {
 
         // Compute an enrichment suggestion at waypoint 0 using the baseline's
         // arrival chief.
-        let reqs = input.safety_requirements.expect("safety reqs set by fixture");
+        let reqs = input.base.safety_requirements.expect("safety reqs set by fixture");
         let leg = &baseline_output.mission.legs[0];
         let enriched = enrich_waypoint(
             &leg.to_position_ric_km,
@@ -699,7 +733,7 @@ mod tests {
         let mut updated_input = input.clone();
         let mut transfer = compute_transfer_from_pipeline(&updated_input).expect("transfer");
         let enriched_output = accept_waypoint_enrichment(
-            &mut updated_input,
+            &mut updated_input.base,
             &mut transfer,
             0,
             &enriched.roe,
@@ -724,7 +758,7 @@ mod tests {
 
         // Waypoint velocity must now be set (accepted enrichment -> concrete target)
         assert!(
-            updated_input.waypoints[0].velocity_ric_km_s.is_some(),
+            updated_input.base.waypoints[0].velocity_ric_km_s.is_some(),
             "accepted enrichment should populate waypoint velocity",
         );
 
@@ -747,7 +781,7 @@ mod tests {
         let input = proximity_input_with_enrichment();
         let baseline_output = execute_mission(&input).expect("baseline");
         let leg = &baseline_output.mission.legs[0];
-        let reqs = input.safety_requirements.expect("safety reqs set by fixture");
+        let reqs = input.base.safety_requirements.expect("safety reqs set by fixture");
         let enriched = enrich_waypoint(
             &leg.to_position_ric_km, None, &leg.arrival_chief_mean, &reqs,
         ).expect("enrichment");
@@ -755,7 +789,7 @@ mod tests {
         let mut updated_input = input.clone();
         let mut transfer = compute_transfer_from_pipeline(&updated_input).expect("transfer");
         let result = accept_waypoint_enrichment(
-            &mut updated_input, &mut transfer, 99, &enriched.roe, &leg.arrival_chief_mean,
+            &mut updated_input.base, &mut transfer, 99, &enriched.roe, &leg.arrival_chief_mean,
         );
         assert!(matches!(
             result,
@@ -790,7 +824,7 @@ mod tests {
 
         // Requires a mission with 2+ waypoints so waypoint 0 has a following leg.
         let mut input = proximity_input_with_enrichment();
-        input.waypoints.push(WaypointInput {
+        input.base.waypoints.push(WaypointInput {
             position_ric_km: [0.3, 1.5, 0.2],
             velocity_ric_km_s: None,
             tof_s: Some(TEST_WAYPOINT_TOF_S),
@@ -830,7 +864,7 @@ mod tests {
 
         // 1. Plan baseline mission with TWO position-only waypoints (cascade test).
         let mut input = proximity_input_with_enrichment();
-        input.waypoints.push(WaypointInput {
+        input.base.waypoints.push(WaypointInput {
             position_ric_km: [0.3, 1.5, 0.2],
             velocity_ric_km_s: None,
             tof_s: Some(TEST_WAYPOINT_TOF_S),
@@ -851,7 +885,7 @@ mod tests {
         let leg_0 = &baseline.mission.legs[0];
         let mut transfer = compute_transfer_from_pipeline(&input).expect("transfer");
         let enriched = accept_waypoint_enrichment(
-            &mut input,
+            &mut input.base,
             &mut transfer,
             0,
             &suggestion_0.roe,
@@ -876,7 +910,7 @@ mod tests {
 
         // 5. Waypoint 0's velocity should now be set (no longer position-only).
         assert!(
-            input.waypoints[0].velocity_ric_km_s.is_some(),
+            input.base.waypoints[0].velocity_ric_km_s.is_some(),
             "accepted enrichment should set waypoint velocity"
         );
 

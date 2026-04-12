@@ -26,7 +26,7 @@ pub fn run(
     match mode {
         OutputMode::Json => output_json(&result, output),
         OutputMode::Summary => {
-            let propagator = to_propagation_model(&input.propagator);
+            let propagator = to_propagation_model(&input.base.propagator);
             let md = markdown_fmt::mission_to_markdown(&result, &input, &propagator, false);
             output_text(&md, output)
         }

@@ -1,6 +1,6 @@
 //! Covariance, free-drift, POCA, and trajectory resampling analysis.
 
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use tsify_next::Tsify;
 use wasm_bindgen::prelude::*;
 
@@ -18,8 +18,7 @@ use rpo_core::types::KeplerianElements;
 use crate::error::WasmError;
 
 /// Wrapper for `Vec<FreeDriftAnalysis>` (wasm-bindgen compatibility).
-#[derive(Debug, Serialize, Deserialize, Tsify)]
-// Output-only: no from_wasm_abi needed (never passed from JS to Rust).
+#[derive(Debug, Serialize, Tsify)]
 #[tsify(into_wasm_abi)]
 pub struct FreeDriftResult {
     /// Per-leg free-drift analysis results.
@@ -27,8 +26,7 @@ pub struct FreeDriftResult {
 }
 
 /// Wrapper for `Vec<Vec<ClosestApproach>>` (wasm-bindgen compatibility).
-#[derive(Debug, Serialize, Deserialize, Tsify)]
-// Output-only: no from_wasm_abi needed (never passed from JS to Rust).
+#[derive(Debug, Serialize, Tsify)]
 #[tsify(into_wasm_abi)]
 pub struct PocaResult {
     /// Per-leg POCA results (outer = legs, inner = closest approaches).
@@ -36,8 +34,7 @@ pub struct PocaResult {
 }
 
 /// Wrapper for resampled trajectory states (wasm-bindgen compatibility).
-#[derive(Debug, Serialize, Deserialize, Tsify)]
-// Output-only: no from_wasm_abi needed (never passed from JS to Rust).
+#[derive(Debug, Serialize, Tsify)]
 #[tsify(into_wasm_abi)]
 pub struct ResampledTrajectory {
     /// Resampled propagated states along the leg.

@@ -18,7 +18,7 @@ pub fn run(input_path: &Path) -> Result<(), CliError> {
     )?;
     let output = execute_mission(&input)?;
 
-    let safety_config = input.config.safety.unwrap_or_default();
+    let safety_config = input.base.config.safety.unwrap_or_default();
     let result = output.mission.safety.as_ref().map(|s| {
         let assessment = assess_safety(s, &safety_config);
         serde_json::json!({

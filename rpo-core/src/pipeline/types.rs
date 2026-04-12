@@ -1,8 +1,8 @@
 //! Canonical pipeline types: input, output, and intermediate results.
 //!
-//! These types unify the CLI's `MissionInput` / `MissionOutput` and the
-//! API's `MissionDefinition` / `MissionResultPayload` into a single set
-//! of structs that live in `rpo-core`.
+//! [`MissionInput`] contains analytical mission fields shared with WASM.
+//! [`PipelineInput`] extends it with nyx-specific fields (Lambert,
+//! classification, spacecraft, Monte Carlo) for CLI and API use.
 
 use serde::{Deserialize, Serialize};
 
@@ -27,13 +27,14 @@ use crate::types::{SpacecraftConfig, StateVector, TransferEclipseData};
 // ---- Defaults ----
 
 /// Default V-bar hold distance for Lambert → proximity handoff (km).
-const DEFAULT_PERCH_ALONG_TRACK_KM: f64 = 5.0;
+pub const DEFAULT_PERCH_ALONG_TRACK_KM: f64 = 5.0;
 
 /// Default Lambert transfer time-of-flight (seconds, = 1 hour).
 pub const DEFAULT_LAMBERT_TOF_S: f64 = 3600.0;
 
 /// Default perch geometry: V-bar hold at [`DEFAULT_PERCH_ALONG_TRACK_KM`] km.
-pub(crate) fn default_perch() -> PerchGeometry {
+#[must_use]
+pub fn default_perch() -> PerchGeometry {
     PerchGeometry::VBar {
         along_track_km: DEFAULT_PERCH_ALONG_TRACK_KM,
     }
@@ -120,63 +121,85 @@ pub struct WaypointInput {
     pub label: Option<String>,
 }
 
-// ---- PipelineInput ----
+// ---- MissionInput ----
 
-/// Canonical mission input — single source of truth for CLI and API.
+/// Mission input — fields consumed by the analytical mission pipeline.
 ///
-/// Replaces the CLI's `MissionInput` and the API's `MissionDefinition`.
-/// Fields with serde defaults never need `unwrap_or` in pipeline code.
+/// This is the type accepted by WASM-exported mission functions and by core
+/// pipeline functions that do not require nyx-specific configuration. For
+/// the full CLI/API input (which adds Lambert, classification, spacecraft,
+/// and Monte Carlo fields), see [`PipelineInput`].
+///
+/// # Design rationale
+///
+/// Extracted from `PipelineInput` so that WASM-exported functions accept
+/// only the fields they need, without pulling in nyx-dependent types
+/// (see Codebase § Crate Boundary Rules).
 #[cfg_attr(feature = "wasm", derive(tsify_next::Tsify))]
 #[cfg_attr(feature = "wasm", tsify(into_wasm_abi, from_wasm_abi))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct PipelineInput {
+pub struct MissionInput {
     /// Chief spacecraft ECI state.
     pub chief: StateVector,
     /// Deputy spacecraft ECI state.
     pub deputy: StateVector,
-    /// Perch geometry for Lambert → proximity handoff (default: V-bar 5 km).
-    #[serde(default = "default_perch")]
-    pub perch: PerchGeometry,
-    /// Lambert transfer time-of-flight (seconds, default: 3600).
-    #[serde(default = "default_lambert_tof_s")]
-    pub lambert_tof_s: f64,
-    /// Lambert solver configuration (direction, revolutions).
-    #[serde(default)]
-    pub lambert_config: LambertConfig,
     /// Waypoint targets in RIC frame.
     pub waypoints: Vec<WaypointInput>,
-    /// Classification threshold configuration.
-    #[serde(default)]
-    pub proximity: ProximityConfig,
     /// Solver configuration (targeting, TOF optimization, safety).
     #[serde(default)]
     pub config: MissionConfig,
     /// Propagator selection: J2 or J2+Drag.
     #[serde(default)]
     pub propagator: PropagatorChoice,
-    /// Chief spacecraft selection: preset or custom (required for validate/mc/drag).
+    /// Perch geometry for Lambert → proximity handoff (default: V-bar 5 km).
+    #[serde(default = "default_perch")]
+    pub perch: PerchGeometry,
+    /// Collision avoidance (COLA) configuration.
     #[serde(default)]
-    pub chief_config: Option<SpacecraftChoice>,
-    /// Deputy spacecraft selection: preset or custom (required for validate/mc/drag).
-    #[serde(default)]
-    pub deputy_config: Option<SpacecraftChoice>,
+    pub cola: Option<ColaConfig>,
     /// Navigation accuracy for covariance propagation.
     #[serde(default)]
     pub navigation_accuracy: Option<NavigationAccuracy>,
     /// Maneuver execution uncertainty for covariance propagation.
     #[serde(default)]
     pub maneuver_uncertainty: Option<ManeuverUncertainty>,
-    /// Monte Carlo configuration (required for MC only).
-    #[serde(default)]
-    pub monte_carlo: Option<MonteCarloConfig>,
-    /// Collision avoidance (COLA) configuration.
-    #[serde(default)]
-    pub cola: Option<ColaConfig>,
     /// Safety requirements for formation design enrichment.
     /// When `Some`, perch ROE is enriched with safe e/i vectors before targeting
     /// (enforced), and waypoint enrichment + transit safety are computed (advisory).
     #[serde(default)]
     pub safety_requirements: Option<SafetyRequirements>,
+}
+
+// ---- PipelineInput ----
+
+/// Full pipeline input for CLI and API — extends [`MissionInput`] with
+/// nyx-specific fields (Lambert, classification, spacecraft, Monte Carlo).
+///
+/// JSON shape is flat (via `#[serde(flatten)]`), so existing CLI JSON files
+/// and API payloads are unaffected.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PipelineInput {
+    /// Mission-level fields (shared with WASM).
+    #[serde(flatten)]
+    pub base: MissionInput,
+    /// Lambert transfer time-of-flight (seconds, default: 3600).
+    #[serde(default = "default_lambert_tof_s")]
+    pub lambert_tof_s: f64,
+    /// Lambert solver configuration (direction, revolutions).
+    #[serde(default)]
+    pub lambert_config: LambertConfig,
+    /// Classification threshold configuration.
+    #[serde(default)]
+    pub proximity: ProximityConfig,
+    /// Chief spacecraft selection: preset or custom (required for validate/mc/drag).
+    #[serde(default)]
+    pub chief_config: Option<SpacecraftChoice>,
+    /// Deputy spacecraft selection: preset or custom (required for validate/mc/drag).
+    #[serde(default)]
+    pub deputy_config: Option<SpacecraftChoice>,
+    /// Monte Carlo configuration (required for MC only).
+    #[serde(default)]
+    pub monte_carlo: Option<MonteCarloConfig>,
 }
 
 /// Minimal input required to classify separation and compute transfer handoff.
@@ -204,9 +227,9 @@ pub struct TransferComputationInput {
 impl From<&PipelineInput> for TransferComputationInput {
     fn from(input: &PipelineInput) -> Self {
         Self {
-            chief: input.chief.clone(),
-            deputy: input.deputy.clone(),
-            perch: input.perch.clone(),
+            chief: input.base.chief.clone(),
+            deputy: input.base.deputy.clone(),
+            perch: input.base.perch.clone(),
             proximity: input.proximity,
             lambert_tof_s: input.lambert_tof_s,
             lambert_config: input.lambert_config.clone(),

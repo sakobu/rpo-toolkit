@@ -1,6 +1,6 @@
 //! Typed WASM error type with error codes for structured frontend handling.
 
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use tsify_next::Tsify;
 
 use rpo_core::mission::{
@@ -12,8 +12,9 @@ use rpo_core::propagation::{CovarianceError, PropagationError};
 /// Structured WASM error returned to JavaScript.
 ///
 /// Serialized as a JS object with `code`, `message`, and optional `details`.
-#[derive(Debug, Clone, Serialize, Deserialize, Tsify)]
-#[tsify(into_wasm_abi, from_wasm_abi)]
+#[derive(Debug, Clone, Serialize, Tsify)]
+#[tsify(into_wasm_abi)]
+#[cfg_attr(test, derive(serde::Deserialize))]
 pub struct WasmError {
     /// Machine-readable error category.
     pub code: WasmErrorCode,
@@ -25,8 +26,9 @@ pub struct WasmError {
 }
 
 /// Machine-readable error codes for frontend dispatch.
-#[derive(Debug, Clone, Serialize, Deserialize, Tsify)]
-#[tsify(into_wasm_abi, from_wasm_abi)]
+#[derive(Debug, Clone, Serialize, Tsify)]
+#[tsify(into_wasm_abi)]
+#[cfg_attr(test, derive(serde::Deserialize))]
 #[serde(rename_all = "snake_case")]
 pub enum WasmErrorCode {
     /// Mission planning error (classification, targeting, waypoints).
@@ -41,16 +43,12 @@ pub enum WasmErrorCode {
     MissingField,
     /// Trajectory data is empty.
     EmptyTrajectory,
-    /// Lambert solver error.
-    Lambert,
     /// Eclipse computation error.
     Eclipse,
     /// Formation design error.
     Formation,
     /// Input deserialization failed (invalid JSON shape or types).
     Deserialization,
-    /// Catch-all for unexpected errors.
-    Internal,
 }
 
 impl From<PipelineError> for WasmError {

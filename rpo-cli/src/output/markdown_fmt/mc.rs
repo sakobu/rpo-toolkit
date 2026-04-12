@@ -24,7 +24,7 @@ pub fn mc_to_markdown(
     derived_drag: Option<&DragConfig>,
 ) -> String {
     let mut out = String::with_capacity(8192);
-    let sc = input.config.safety.unwrap_or_default();
+    let sc = input.base.config.safety.unwrap_or_default();
     let stats = &report.statistics;
 
     let mc_vr = determine_mc_verdict(report, &sc);
@@ -561,7 +561,7 @@ mod tests {
     /// Regression test for Task 3 of the CLI report audit.
     ///
     /// The MC renderer previously appended [`insights::cola_analytical_miss_insights`]
-    /// to its insight list whenever both `output.safety.cola` and `input.cola`
+    /// to its insight list whenever both `output.safety.cola` and `input.base.cola`
     /// were set. That warning is narratively wrong in `mc.md`: MC samples
     /// propagate the pre-COLA baseline, so a warning *about* the analytical
     /// COLA solver belongs in the mission renderer, not here. This test asserts
@@ -585,10 +585,10 @@ mod tests {
         // actually needs avoidance.
         output.safety.cola = Some(vec![make_subthreshold_maneuver()]);
 
-        // Ensure `input.cola.target_distance_km` is comfortably above the
+        // Ensure `input.base.cola.target_distance_km` is comfortably above the
         // injected 0.050 km post-avoidance POCA so the insight is unambiguously
         // triggered (pre-fix).
-        input.cola = Some(ColaConfig {
+        input.base.cola = Some(ColaConfig {
             target_distance_km: 0.300,
             max_dv_km_s: 0.010,
         });
@@ -724,7 +724,7 @@ mod tests {
             &std::fs::read_to_string(examples_dir().join("mission.json")).unwrap(),
         )
         .unwrap();
-        input.cola = Some(ColaConfig {
+        input.base.cola = Some(ColaConfig {
             target_distance_km: 0.300,
             max_dv_km_s: 0.010,
         });
@@ -887,7 +887,7 @@ mod tests {
         )
         .unwrap();
         // Strip any COLA config so the renderer doesn't inject unrelated callouts.
-        input.cola = None;
+        input.base.cola = None;
 
         let mut output = execute_mission(&input).unwrap();
         output.safety.cola = None;

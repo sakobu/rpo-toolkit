@@ -121,7 +121,7 @@ pub fn convert_cola_to_burns(
 /// Bundled context for [`validate_mission_nyx`].
 ///
 /// Groups the 7 parameters that every validation call requires, following
-/// the CLAUDE.md "struct-based public APIs" rule. Borrows everything;
+/// the Codebase "struct-based public APIs" rule. Borrows everything;
 /// caller is responsible for building `dynamics` via
 /// [`build_full_physics_dynamics`](crate::nyx_bridge::build_full_physics_dynamics).
 ///

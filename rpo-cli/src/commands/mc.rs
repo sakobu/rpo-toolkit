@@ -53,13 +53,13 @@ pub fn run(
     };
 
     // Optional covariance propagation
-    let covariance_report = if let Some(ref nav) = input.navigation_accuracy {
+    let covariance_report = if let Some(ref nav) = input.base.navigation_accuracy {
         status!(plan.spinner, "Running covariance propagation...");
         Some(compute_mission_covariance(
             &plan.wp_mission,
             &plan.transfer.plan.chief_at_arrival,
             nav,
-            input.maneuver_uncertainty.as_ref(),
+            input.base.maneuver_uncertainty.as_ref(),
             &plan.propagator,
         )?)
     } else {
@@ -68,8 +68,8 @@ pub fn run(
 
     // Resolve MC dispersions: derive from top-level nav/maneuver if not explicitly set
     let resolved_mc = mc_config.with_resolved_dispersions(
-        input.navigation_accuracy.as_ref(),
-        input.maneuver_uncertainty.as_ref(),
+        input.base.navigation_accuracy.as_ref(),
+        input.base.maneuver_uncertainty.as_ref(),
     );
 
     // Run Monte Carlo
@@ -84,7 +84,7 @@ pub fn run(
         initial_chief: &plan.transfer.perch_chief,
         initial_deputy: &plan.transfer.perch_deputy,
         config: &resolved_mc,
-        mission_config: &input.config,
+        mission_config: &input.base.config,
         chief_config: &chief_config,
         deputy_config: &deputy_config,
         propagator: &plan.propagator,
@@ -105,12 +105,12 @@ pub fn run(
 
     // Build canonical output with nominal safety context (free-drift, POCA).
     let safety = compute_safety_analysis(
-        &plan.wp_mission, input.config.safety.as_ref(), input.cola.as_ref(), &plan.propagator,
+        &plan.wp_mission, input.base.config.safety.as_ref(), input.base.cola.as_ref(), &plan.propagator,
     );
     let mut result = build_output(
         rpo_core::pipeline::BuildOutputCtx {
             transfer: &plan.transfer,
-            input: &input,
+            input: &input.base,
             propagator: &plan.propagator,
             auto_drag: plan.derived_drag,
             suggestion: plan.suggestion,

@@ -313,7 +313,7 @@ mod tests {
     // Tests intentionally mirror D'Amico paper symbols (δe/δi components,
     // burn magnitudes, derived deltas) for equation traceability; renaming
     // to satisfy `similar_names` would break the paper-to-code mapping
-    // required by CLAUDE.md Published-method fidelity and Traceability rules.
+    // required by Codebase Published-method fidelity and Traceability rules.
     #![allow(clippy::similar_names)]
 
     use super::*;

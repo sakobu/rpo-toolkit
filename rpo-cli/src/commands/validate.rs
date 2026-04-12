@@ -48,7 +48,7 @@ pub fn run(
 
     // Compute safety analysis and derive COLA burns for nyx injection.
     let (safety, cola_burns) = compute_validation_burns(
-        &plan.wp_mission, input.config.safety.as_ref(), input.cola.as_ref(), &plan.propagator,
+        &plan.wp_mission, input.base.config.safety.as_ref(), input.base.cola.as_ref(), &plan.propagator,
     )?;
 
     status!(
@@ -63,7 +63,7 @@ pub fn run(
     let cola_input = ColaValidationInput {
         burns: cola_burns,
         analytical_maneuvers: safety.cola.clone().unwrap_or_default(),
-        target_distance_km: input.cola.as_ref().map(|c| c.target_distance_km),
+        target_distance_km: input.base.cola.as_ref().map(|c| c.target_distance_km),
     };
 
     let dynamics = build_full_physics_dynamics(&plan.almanac)?;
@@ -86,7 +86,7 @@ pub fn run(
     let result = rpo_core::pipeline::build_output(
         rpo_core::pipeline::BuildOutputCtx {
             transfer: &plan.transfer,
-            input: &input,
+            input: &input.base,
             propagator: &plan.propagator,
             auto_drag: plan.derived_drag,
             suggestion: plan.suggestion,
