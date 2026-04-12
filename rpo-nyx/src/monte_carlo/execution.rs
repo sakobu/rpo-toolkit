@@ -19,7 +19,7 @@ use rpo_core::mission::monte_carlo::MonteCarloError as CoreMonteCarloError;
 use rpo_core::mission::safety::analyze_trajectory_safety;
 use rpo_core::mission::types::{Waypoint, WaypointMission};
 use rpo_core::mission::waypoints::plan_waypoint_mission;
-use rpo_core::propagation::propagator::{PropagatedState, PropagationModel};
+use rpo_core::propagation::propagator::PropagationModel;
 use rpo_core::types::{DepartureState, SpacecraftConfig, StateVector};
 
 use nyx_space::md::prelude::SpacecraftDynamics;
@@ -31,15 +31,15 @@ use crate::nyx_bridge::{
 
 use super::sampling::{disperse_maneuver, sample_distribution};
 use super::statistics::{compute_dispersion_envelope, compute_percentile_stats};
-use super::types::MonteCarloInput;
+use super::types::{MonteCarloInput, SampleTrajectorySummary};
 use super::MonteCarloError;
 
 /// Result of a single MC sample execution (internal).
 pub(crate) struct SampleOutput {
     /// Lightweight result for the report.
     pub(crate) result: SampleResult,
-    /// Full trajectory for dispersion envelope computation.
-    pub(crate) trajectory: Vec<PropagatedState>,
+    /// Projected trajectory summary for dispersion envelope computation.
+    pub(crate) trajectory: SampleTrajectorySummary,
 }
 
 /// Accumulated results from propagating all mission legs with dispersed maneuvers.
@@ -182,7 +182,6 @@ fn propagate_dispersed_legs<R: Rng>(
     let mut total_dv = 0.0_f64;
     let mut waypoint_miss_km = Vec::with_capacity(active_mission.legs.len());
     let mut elapsed_total_s = 0.0_f64;
-    // u32 → usize: always widening on 32-bit and 64-bit platforms.
     let mut safety_pairs: Vec<ChiefDeputySnapshot> =
         Vec::with_capacity(traj_steps as usize * active_mission.legs.len());
 
@@ -351,7 +350,7 @@ pub(crate) fn run_single_sample(
             waypoint_miss_km: prop_result.waypoint_miss_km,
             converged,
         },
-        trajectory: safety_states,
+        trajectory: SampleTrajectorySummary::from_trajectory(&safety_states),
     })
 }
 
@@ -409,7 +408,7 @@ fn retarget_from_dispersed(
 ///
 /// # Invariants
 /// - `samples` must be non-empty (caller ensures this after filtering).
-/// - `trajectories.len() == samples.len()`.
+/// - `summaries.len() == samples.len()`.
 /// - `total_num_samples` is the total number of MC samples attempted (including failures).
 ///
 /// # Errors
@@ -417,7 +416,7 @@ fn retarget_from_dispersed(
 /// fails on an empty Δv vector (should not occur if `samples` is non-empty).
 pub(crate) fn collect_ensemble_statistics(
     samples: &[SampleResult],
-    trajectories: &[Vec<PropagatedState>],
+    summaries: &[SampleTrajectorySummary],
     config: &MonteCarloConfig,
     total_num_samples: u32,
     safety_config: Option<&SafetyConfig>,
@@ -512,7 +511,7 @@ pub(crate) fn collect_ensemble_statistics(
     let keepout_violation_rate = f64::from(keepout_violation_count) / n_total_f;
 
     // Dispersion envelope
-    let dispersion_envelope = compute_dispersion_envelope(trajectories, config.trajectory_steps);
+    let dispersion_envelope = compute_dispersion_envelope(summaries, config.trajectory_steps);
 
     Ok(EnsembleStatistics {
         total_dv_km_s: total_dv_stats,

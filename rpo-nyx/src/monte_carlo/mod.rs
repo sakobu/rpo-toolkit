@@ -20,6 +20,7 @@ use rpo_core::mission::monte_carlo::MonteCarloMode;
 use crate::nyx_bridge::build_full_physics_dynamics;
 use execution::{collect_ensemble_statistics, run_single_sample};
 use statistics::compute_covariance_cross_check;
+use types::SampleTrajectorySummary;
 pub use types::{MonteCarloControl, MonteCarloInput};
 
 /// Default master seed when `MonteCarloConfig.seed` is `None`.
@@ -155,7 +156,7 @@ pub fn run_monte_carlo(
 
     // Separate successes from failures
     let mut samples = Vec::new();
-    let mut trajectories = Vec::new();
+    let mut summaries: Vec<SampleTrajectorySummary> = Vec::new();
     let mut num_failures = 0_u32;
     let mut convergence_failures = 0_u32;
     let mut propagation_failures = 0_u32;
@@ -164,7 +165,7 @@ pub fn run_monte_carlo(
         match result {
             Ok(output) => {
                 samples.push(output.result);
-                trajectories.push(output.trajectory);
+                summaries.push(output.trajectory);
             }
             Err(MonteCarloError::Core(CoreMonteCarloError::Mission(_))) => {
                 convergence_failures += 1;
@@ -189,7 +190,7 @@ pub fn run_monte_carlo(
     // Compute ensemble statistics (denominator = total samples attempted, not just successes)
     let statistics = collect_ensemble_statistics(
         &samples,
-        &trajectories,
+        &summaries,
         config,
         config.num_samples,
         input.mission_config.safety.as_ref(),
@@ -203,7 +204,7 @@ pub fn run_monte_carlo(
         MonteCarloMode::OpenLoop => input
             .covariance_report
             .map(|cov_report| {
-                compute_covariance_cross_check(cov_report, &statistics, &trajectories)
+                compute_covariance_cross_check(cov_report, &statistics, &summaries)
             })
             .transpose()?,
         MonteCarloMode::ClosedLoop => None,

@@ -9,8 +9,8 @@ use rpo_core::mission::monte_carlo::{
 };
 use rpo_core::mission::monte_carlo::MonteCarloError as CoreMonteCarloError;
 use rpo_core::propagation::covariance::types::MissionCovarianceReport;
-use rpo_core::propagation::propagator::PropagatedState;
 
+use super::types::SampleTrajectorySummary;
 use super::MonteCarloError;
 
 /// Compute percentile statistics, returning [`MonteCarloError`] for empty input.
@@ -38,32 +38,31 @@ pub(crate) fn compute_percentile_stats(
 /// - Each trajectory may be shorter than `n_steps`; steps beyond a
 ///   trajectory's length are excluded from that step's statistics.
 pub(crate) fn compute_dispersion_envelope(
-    sample_trajectories: &[Vec<PropagatedState>],
+    summaries: &[SampleTrajectorySummary],
     n_steps: u32,
 ) -> Vec<DispersionEnvelope> {
-    if sample_trajectories.is_empty() || n_steps == 0 {
+    if summaries.is_empty() || n_steps == 0 {
         return Vec::new();
     }
 
-    // u32 → usize: always widening on 32-bit and 64-bit platforms.
     let mut envelopes = Vec::with_capacity(n_steps as usize + 1);
 
     for j in 0..=n_steps {
         let j_idx = j as usize;
-        let mut radial_values: Vec<f64> = Vec::with_capacity(sample_trajectories.len());
-        let mut intrack_values: Vec<f64> = Vec::with_capacity(sample_trajectories.len());
-        let mut crosstrack_values: Vec<f64> = Vec::with_capacity(sample_trajectories.len());
+        let mut radial_values: Vec<f64> = Vec::with_capacity(summaries.len());
+        let mut intrack_values: Vec<f64> = Vec::with_capacity(summaries.len());
+        let mut crosstrack_values: Vec<f64> = Vec::with_capacity(summaries.len());
         let mut elapsed_s = 0.0_f64;
         let mut needs_elapsed = true;
 
-        for traj in sample_trajectories {
-            if j_idx < traj.len() {
-                let state = &traj[j_idx];
-                radial_values.push(state.ric.position_ric_km.x);
-                intrack_values.push(state.ric.position_ric_km.y);
-                crosstrack_values.push(state.ric.position_ric_km.z);
+        for summary in summaries {
+            if j_idx < summary.positions_ric_km.len() {
+                let pos = &summary.positions_ric_km[j_idx];
+                radial_values.push(pos.x);
+                intrack_values.push(pos.y);
+                crosstrack_values.push(pos.z);
                 if needs_elapsed {
-                    elapsed_s = state.elapsed_s;
+                    elapsed_s = summary.elapsed_s[j_idx];
                     needs_elapsed = false;
                 }
             }
@@ -109,13 +108,13 @@ pub(crate) fn compute_dispersion_envelope(
 /// - If `statistics.dispersion_envelope` is empty, sigma ratios default to 1.0.
 /// - If predicted covariance sigma is below [`COVARIANCE_SIGMA_FLOOR`],
 ///   the corresponding sigma ratio defaults to 1.0 (avoids division by zero).
-/// - If `trajectories` is empty, containment defaults to 0.0.
-/// - Returns `CoreMonteCarloError::TooManySamples` if trajectory count exceeds u32
+/// - If `summaries` is empty, containment defaults to 0.0.
+/// - Returns `CoreMonteCarloError::TooManySamples` if summary count exceeds u32
 ///   (should not happen — bounded by `MonteCarloConfig::num_samples: u32`).
 pub(crate) fn compute_covariance_cross_check(
     cov_report: &MissionCovarianceReport,
     statistics: &EnsembleStatistics,
-    trajectories: &[Vec<PropagatedState>],
+    summaries: &[SampleTrajectorySummary],
 ) -> Result<CovarianceCrossCheck, MonteCarloError> {
     // Extract end-of-mission dispersion envelope.
     let last_env = statistics.dispersion_envelope.last();
@@ -158,13 +157,13 @@ pub(crate) fn compute_covariance_cross_check(
 
     // Terminal 3-sigma box containment: count samples whose terminal RIC position
     // falls within +/-3sigma of the nominal predicted position on all 3 axes.
-    let n_total = trajectories.len();
+    let n_total = summaries.len();
     let terminal_3sigma_containment = if n_total > 0 {
-        let n_within = trajectories
+        let n_within = summaries
             .iter()
-            .filter_map(|traj| traj.last())
-            .filter(|s| {
-                let d = s.ric.position_ric_km - nominal_center;
+            .filter_map(SampleTrajectorySummary::terminal_position_ric_km)
+            .filter(|pos| {
+                let d = pos - nominal_center;
                 d.x.abs() <= cov_sigma3.x
                     && d.y.abs() <= cov_sigma3.y
                     && d.z.abs() <= cov_sigma3.z
@@ -395,7 +394,9 @@ mod tests {
         // MC std_dev: R=1.0, I=10.0, C=0.3 (should give ratios of 1.0 per axis)
         let stats = mock_statistics(Vector3::new(1.0, 10.0, 0.3));
 
-        let cv = compute_covariance_cross_check(&cov, &stats, &[]).unwrap();
+        let cv = compute_covariance_cross_check(
+            &cov, &stats, &[] as &[SampleTrajectorySummary],
+        ).unwrap();
         let tol = COVARIANCE_VALIDATION_TOL;
         assert!(
             (cv.sigma_ratio_ric.x - 1.0).abs() < tol,
@@ -415,43 +416,29 @@ mod tests {
     }
 
     /// Terminal containment from sample-based counting. Constructs mock
-    /// trajectories with known terminal positions inside/outside the 3-sigma box.
+    /// summaries with known terminal positions inside/outside the 3-sigma box.
     #[test]
     fn terminal_containment_sample_fraction() {
-        use rpo_core::propagation::propagator::PropagatedState;
-        use rpo_core::test_helpers::iss_like_elements;
-        use rpo_core::types::{QuasiNonsingularROE, RICState};
-
         // Center at (0, 5, 0), 3-sigma box: R=3, I=30, C=0.9
         let center = Vector3::new(0.0, 5.0, 0.0);
         let sigma3 = Vector3::new(3.0, 30.0, 0.9);
         let cov = mock_cov_report_with_center(sigma3, center);
         let stats = mock_statistics(Vector3::new(1.0, 10.0, 0.3));
 
-        let epoch = Epoch::from_gregorian_utc_hms(2026, 1, 1, 0, 0, 0);
-        let chief = iss_like_elements();
-        let make_traj = |pos: Vector3<f64>| -> Vec<PropagatedState> {
-            vec![PropagatedState {
-                elapsed_s: 100.0,
-                epoch,
-                roe: QuasiNonsingularROE::default(),
-                chief_mean: chief,
-                ric: RICState {
-                    position_ric_km: pos,
-                    velocity_ric_km_s: Vector3::zeros(),
-                },
-            }]
+        let make_summary = |pos: Vector3<f64>| SampleTrajectorySummary {
+            positions_ric_km: vec![pos],
+            elapsed_s: vec![100.0],
         };
 
         // 3 samples inside the box, 1 outside (cross-track exceeds 0.9)
-        let trajectories = vec![
-            make_traj(center),                                    // inside (delta = 0)
-            make_traj(center + Vector3::new(1.0, 10.0, 0.5)),    // inside
-            make_traj(center + Vector3::new(-2.0, -20.0, -0.8)), // inside
-            make_traj(center + Vector3::new(0.0, 0.0, 1.0)),     // outside (C: 1.0 > 0.9)
+        let summaries = vec![
+            make_summary(center),                                    // inside (delta = 0)
+            make_summary(center + Vector3::new(1.0, 10.0, 0.5)),    // inside
+            make_summary(center + Vector3::new(-2.0, -20.0, -0.8)), // inside
+            make_summary(center + Vector3::new(0.0, 0.0, 1.0)),     // outside (C: 1.0 > 0.9)
         ];
 
-        let cv = compute_covariance_cross_check(&cov, &stats, &trajectories).unwrap();
+        let cv = compute_covariance_cross_check(&cov, &stats, &summaries).unwrap();
         // 3/4 = 0.75
         assert!(
             (cv.terminal_3sigma_containment - 0.75).abs() < COVARIANCE_VALIDATION_TOL,
@@ -460,16 +447,18 @@ mod tests {
         );
     }
 
-    /// Empty trajectories produce containment of 0.0.
+    /// Empty summaries produce containment of 0.0.
     #[test]
     fn terminal_containment_empty_trajectories() {
         let cov = mock_cov_report(Vector3::new(3.0, 30.0, 0.9));
         let stats = mock_statistics(Vector3::new(0.5, 5.0, 0.1));
 
-        let cv = compute_covariance_cross_check(&cov, &stats, &[]).unwrap();
+        let cv = compute_covariance_cross_check(
+            &cov, &stats, &[] as &[SampleTrajectorySummary],
+        ).unwrap();
         assert!(
             cv.terminal_3sigma_containment.abs() < COVARIANCE_VALIDATION_TOL,
-            "empty trajectories should give 0.0, got {}",
+            "empty summaries should give 0.0, got {}",
             cv.terminal_3sigma_containment
         );
     }
@@ -481,7 +470,9 @@ mod tests {
         let mut stats = mock_statistics(Vector3::new(0.5, 5.0, 0.1));
         stats.dispersion_envelope.clear();
 
-        let cv = compute_covariance_cross_check(&cov, &stats, &[]).unwrap();
+        let cv = compute_covariance_cross_check(
+            &cov, &stats, &[] as &[SampleTrajectorySummary],
+        ).unwrap();
         let tol = COVARIANCE_VALIDATION_TOL;
         assert!(
             (cv.sigma_ratio_ric.x - 1.0).abs() < tol

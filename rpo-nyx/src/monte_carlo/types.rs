@@ -10,7 +10,8 @@ use rpo_core::mission::config::MissionConfig;
 use rpo_core::mission::monte_carlo::MonteCarloConfig;
 use rpo_core::mission::types::WaypointMission;
 use rpo_core::propagation::covariance::types::MissionCovarianceReport;
-use rpo_core::propagation::propagator::PropagationModel;
+use nalgebra::Vector3;
+use rpo_core::propagation::propagator::{PropagatedState, PropagationModel};
 use rpo_core::types::{SpacecraftConfig, StateVector};
 
 /// Optional progress/cancel hooks for external callers (e.g., API server).
@@ -56,6 +57,56 @@ pub struct MonteCarloInput<'a> {
     pub covariance_report: Option<&'a MissionCovarianceReport>,
     /// Optional progress/cancel hooks (API server use). `None` for CLI/test callers.
     pub control: Option<&'a MonteCarloControl>,
+}
+
+/// Lightweight trajectory summary projected from a full MC sample trajectory.
+///
+/// Replaces `Vec<PropagatedState>` in [`super::execution::SampleOutput`] to
+/// reduce per-sample memory from ~19 f64 per state to ~4 f64 per state.
+/// Full `PropagatedState` fields (ROE, chief mean elements, velocity) are
+/// discarded after projection because downstream consumers only need RIC
+/// positions (for dispersion envelope) and the terminal position (for
+/// covariance cross-check).
+///
+/// # Invariants
+/// - `positions_ric_km.len() == elapsed_s.len()`: both vectors are produced
+///   from the same source trajectory in [`Self::from_trajectory`].
+pub(crate) struct SampleTrajectorySummary {
+    /// Per-time-step RIC positions (km), one per trajectory sample.
+    /// Used by [`super::statistics::compute_dispersion_envelope`] for per-axis
+    /// percentile statistics.
+    pub(crate) positions_ric_km: Vec<Vector3<f64>>,
+    /// Per-time-step elapsed seconds from mission start.
+    /// Used by [`super::statistics::compute_dispersion_envelope`] for time
+    /// axis labels on envelope entries.
+    pub(crate) elapsed_s: Vec<f64>,
+}
+
+impl SampleTrajectorySummary {
+    /// Project a full trajectory to a lightweight summary.
+    ///
+    /// Extracts only the RIC position and elapsed time at each step.
+    /// Discards ROE, chief mean elements, and velocity.
+    #[must_use]
+    pub(crate) fn from_trajectory(trajectory: &[PropagatedState]) -> Self {
+        let (positions_ric_km, elapsed_s) = trajectory
+            .iter()
+            .map(|s| (s.ric.position_ric_km, s.elapsed_s))
+            .unzip();
+        Self {
+            positions_ric_km,
+            elapsed_s,
+        }
+    }
+
+    /// Terminal (last) RIC position (km), or `None` if the trajectory is empty.
+    ///
+    /// Used by [`super::statistics::compute_covariance_cross_check`] for
+    /// 3-sigma box containment.
+    #[must_use]
+    pub(crate) fn terminal_position_ric_km(&self) -> Option<Vector3<f64>> {
+        self.positions_ric_km.last().copied()
+    }
 }
 
 impl fmt::Debug for MonteCarloInput<'_> {
