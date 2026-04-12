@@ -771,8 +771,7 @@ fn j2_stm_vs_nyx_two_body() {
 #[test]
 #[ignore = "requires MetaAlmanac (network on first run)"]
 fn full_almanac_loads() {
-    let almanac =
-        nyx_bridge::load_full_almanac().expect("MetaAlmanac::latest() should succeed");
+    let almanac = nyx_bridge::shared_almanac_for_tests();
     // Verify Earth frame data is available
     let earth = almanac
         .frame_info(anise::constants::frames::IAU_EARTH_FRAME)
@@ -786,8 +785,7 @@ fn full_almanac_loads() {
 #[test]
 #[ignore = "requires MetaAlmanac (network on first run)"]
 fn full_physics_propagate_one_orbit() {
-    let almanac =
-        nyx_bridge::load_full_almanac().expect("full almanac should load");
+    let almanac = nyx_bridge::shared_almanac_for_tests();
     let epoch = test_epoch();
     let chief_ke = iss_like_elements();
     let sv = keplerian_to_state(&chief_ke, epoch).unwrap();
@@ -842,7 +840,7 @@ fn full_physics_propagate_one_orbit() {
 #[test]
 #[ignore = "requires MetaAlmanac (network on first run)"]
 fn extract_dmf_rates_nonzero() {
-    let almanac = nyx_bridge::load_full_almanac().expect("full almanac should load");
+    let almanac = nyx_bridge::shared_almanac_for_tests();
     let epoch = test_epoch();
     let chief_ke = iss_like_elements();
     let sv = keplerian_to_state(&chief_ke, epoch).unwrap();
@@ -892,7 +890,7 @@ fn extract_dmf_rates_nonzero() {
 #[test]
 #[ignore = "requires MetaAlmanac (network on first run)"]
 fn extract_dmf_rates_identical() {
-    let almanac = nyx_bridge::load_full_almanac().expect("full almanac should load");
+    let almanac = nyx_bridge::shared_almanac_for_tests();
     let epoch = test_epoch();
     let chief_ke = iss_like_elements();
     let sv = keplerian_to_state(&chief_ke, epoch).unwrap();

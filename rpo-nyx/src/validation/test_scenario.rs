@@ -92,7 +92,7 @@ impl ValidationContext {
         let deputy_elements = deputy_from_roe(&chief_elements, formation_roe);
         let chief_state = keplerian_to_state(&chief_elements, epoch).unwrap();
         let deputy_state = keplerian_to_state(&deputy_elements, epoch).unwrap();
-        let almanac = nyx_bridge::load_full_almanac().expect("full almanac should load");
+        let almanac = nyx_bridge::shared_almanac_for_tests();
 
         // Hardening invariant: `deputy_state` was derived from `formation_roe`
         // via `deputy_from_roe` + `keplerian_to_state`. Re-run that
@@ -131,7 +131,7 @@ impl ValidationContext {
         let chief_elements = iss_like_elements();
         let chief_state = keplerian_to_state(&chief_elements, epoch).unwrap();
         let deputy_state = chief_state.clone();
-        let almanac = nyx_bridge::load_full_almanac().expect("full almanac should load");
+        let almanac = nyx_bridge::shared_almanac_for_tests();
         Self {
             epoch,
             chief_elements,

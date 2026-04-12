@@ -677,7 +677,7 @@ mod tests {
         use rpo_core::elements::eclipse::sun_position_eci_km;
         use anise::constants::frames::{SUN_J2000, EARTH_J2000 as ANISE_EARTH_J2000};
 
-        let almanac = nyx_bridge::load_full_almanac().expect("full almanac should load");
+        let almanac = nyx_bridge::shared_almanac_for_tests();
         let base_epoch = test_epoch();
 
         let mut max_err = 0.0_f64;
@@ -732,7 +732,7 @@ mod tests {
         use rpo_core::elements::eclipse::moon_position_eci_km;
         use anise::constants::frames::{MOON_J2000, EARTH_J2000 as ANISE_EARTH_J2000};
 
-        let almanac = nyx_bridge::load_full_almanac().expect("full almanac should load");
+        let almanac = nyx_bridge::shared_almanac_for_tests();
         let base_epoch = test_epoch();
 
         let mut max_err = 0.0_f64;

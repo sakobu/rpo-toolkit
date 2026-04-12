@@ -257,7 +257,7 @@ mod tests {
         std::sync::Arc<anise::prelude::Almanac>,
     ) {
         use rpo_core::elements::keplerian_conversions::keplerian_to_state;
-        use crate::nyx_bridge::load_full_almanac;
+        use crate::nyx_bridge::shared_almanac_for_tests;
         use rpo_core::test_helpers::{iss_like_elements, test_epoch};
 
         let epoch = test_epoch();
@@ -293,7 +293,7 @@ mod tests {
             trajectory_steps: 10,
         };
 
-        let almanac = load_full_almanac().expect("full almanac should load");
+        let almanac = shared_almanac_for_tests();
 
         (
             chief_sv,
@@ -612,7 +612,7 @@ mod tests {
     #[ignore = "requires MetaAlmanac (network on first run)"]
     fn nyx_mc_collision_prob_unsafe() {
         use rpo_core::elements::keplerian_conversions::keplerian_to_state;
-        use crate::nyx_bridge::load_full_almanac;
+        use crate::nyx_bridge::shared_almanac_for_tests;
         use rpo_core::test_helpers::{iss_like_elements, test_epoch};
 
         let epoch = test_epoch();
@@ -647,7 +647,7 @@ mod tests {
             trajectory_steps: 10,
         };
 
-        let almanac = load_full_almanac().expect("almanac should load");
+        let almanac = shared_almanac_for_tests();
 
         let input = MonteCarloInput {
             nominal_mission: &mission,

@@ -18,6 +18,13 @@ hifitime = "4"
 nalgebra = { version = "0.34", features = ["serde-serialize"] }
 serde = { version = "1", features = ["derive"] }
 
+[features]
+# Enables `shared_almanac_for_tests` in `nyx_bridge::almanac`. Activated only
+# for test builds via the self-referential dev-dependency below; never
+# compiled into production or downstream consumer builds.
+test-support = []
+
 [dev-dependencies]
 rpo-core = { path = "../rpo-core", features = ["test-fixtures"] }
+rpo-nyx = { path = ".", features = ["test-support"] }
 serde_json = "1"

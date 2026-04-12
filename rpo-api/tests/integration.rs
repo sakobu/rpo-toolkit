@@ -83,11 +83,11 @@ async fn start_test_server_full() -> String {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr: SocketAddr = listener.local_addr().unwrap();
 
-    // load_full_almanac() may download kernels — run on blocking thread.
-    let almanac = tokio::task::spawn_blocking(rpo_nyx::nyx_bridge::load_full_almanac)
+    // shared_almanac_for_tests() may download kernels on first call — run
+    // on blocking thread to avoid stalling the tokio runtime.
+    let almanac = tokio::task::spawn_blocking(rpo_nyx::nyx_bridge::shared_almanac_for_tests)
         .await
-        .unwrap()
-        .expect("load_full_almanac");
+        .expect("spawn_blocking join");
     let state = TestState { almanac };
 
     let app = axum::Router::new()

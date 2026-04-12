@@ -23,6 +23,8 @@ mod propagate;
 
 pub use errors::NyxBridgeError;
 pub use almanac::{load_default_almanac, load_full_almanac};
+#[cfg(feature = "test-support")]
+pub use almanac::shared_almanac_for_tests;
 pub use dynamics::{extract_dmf_rates, build_full_physics_dynamics};
 pub use propagate::{
     ChiefDeputySnapshot, TimedState, apply_impulse, build_nyx_safety_states,
