@@ -6,6 +6,7 @@ use anise::constants::frames::EARTH_J2000 as ANISE_EARTH_J2000;
 use anise::prelude::Almanac;
 use nalgebra::Vector3;
 use nyx_space::md::prelude::SpacecraftDynamics;
+use serde::Deserialize;
 
 use rpo_core::elements::eci_ric_dcm::eci_to_ric_relative;
 use rpo_core::mission::safety::analyze_trajectory_safety;
@@ -43,7 +44,7 @@ pub struct ValidationConfig {
 /// # Invariants
 /// - `elapsed_s` must be in `(0, leg.tof_s)` -- burn cannot be at leg boundaries
 /// - `dv_ric_km_s` must be finite
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Deserialize)]
 pub struct ColaBurn {
     /// Index of the mission leg this burn applies to.
     pub leg_index: usize,

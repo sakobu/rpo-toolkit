@@ -179,6 +179,41 @@ pub struct PipelineInput {
     pub safety_requirements: Option<SafetyRequirements>,
 }
 
+/// Minimal input required to classify separation and compute transfer handoff.
+///
+/// This keeps the transfer boundary explicit and decoupled from mission-wide
+/// fields used by waypoint targeting, covariance, or Monte Carlo execution.
+#[cfg_attr(feature = "wasm", derive(tsify_next::Tsify))]
+#[cfg_attr(feature = "wasm", tsify(into_wasm_abi, from_wasm_abi))]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TransferComputationInput {
+    /// Chief spacecraft ECI state.
+    pub chief: StateVector,
+    /// Deputy spacecraft ECI state.
+    pub deputy: StateVector,
+    /// Perch geometry for Lambert -> proximity handoff.
+    pub perch: PerchGeometry,
+    /// Classification threshold configuration.
+    pub proximity: ProximityConfig,
+    /// Lambert transfer time-of-flight (seconds).
+    pub lambert_tof_s: f64,
+    /// Lambert solver configuration (direction, revolutions).
+    pub lambert_config: LambertConfig,
+}
+
+impl From<&PipelineInput> for TransferComputationInput {
+    fn from(input: &PipelineInput) -> Self {
+        Self {
+            chief: input.chief.clone(),
+            deputy: input.deputy.clone(),
+            perch: input.perch.clone(),
+            proximity: input.proximity,
+            lambert_tof_s: input.lambert_tof_s,
+            lambert_config: input.lambert_config.clone(),
+        }
+    }
+}
+
 // ---- PlanVariant ----
 
 /// Identifies which plan variant the client wants active.

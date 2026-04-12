@@ -1,6 +1,7 @@
 //! Force model construction and density-model-free (DMF) drag rate extraction.
 
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use anise::constants::celestial_objects::{MOON, SUN};
 use anise::constants::frames::IAU_EARTH_FRAME;
@@ -21,6 +22,8 @@ use super::propagate::nyx_propagate_segment;
 /// and replaced with zero. For ISS-like orbits with identical ballistic
 /// coefficients, residual rates from numerical integration are O(1e-16).
 const DMF_NOISE_THRESHOLD: f64 = 1.0e-15;
+/// Fixed propagation chunk for cooperative cancellation checks.
+const DMF_CANCEL_CHECK_STEP_S: f64 = 120.0;
 
 /// Extract density-model-free (DMF) drag rates by running a short nyx simulation.
 ///
@@ -80,27 +83,125 @@ pub fn extract_dmf_rates(
     // Build dynamics once; clone is cheap (Arc ref-count bumps).
     let dynamics = build_full_physics_dynamics(almanac)?;
 
-    // Propagate chief and deputy in parallel (independent full-physics propagations)
+    // Propagate chief and deputy in parallel (independent full-physics propagations).
     let (chief_result, deputy_result) = rayon::join(
         || nyx_propagate_segment(chief_initial, duration, 0, chief_config, dynamics.clone(), almanac),
         || nyx_propagate_segment(deputy_initial, duration, 0, deputy_config, dynamics.clone(), almanac),
     );
-    let chief_results = chief_result?;
-    let deputy_results = deputy_result?;
-    let chief_final = &chief_results.last().ok_or(NyxBridgeError::EmptyResult)?.state;
-    let deputy_final = &deputy_results.last().ok_or(NyxBridgeError::EmptyResult)?.state;
+    let chief_states = chief_result?;
+    let deputy_states = deputy_result?;
+    let chief_final = &chief_states.last().ok_or(NyxBridgeError::EmptyResult)?.state;
+    let deputy_final = &deputy_states.last().ok_or(NyxBridgeError::EmptyResult)?.state;
 
-    // Compute final ROE
+    compute_drag_rates(&roe_0, chief_final, deputy_final, duration)
+}
+
+/// Extract DMF drag rates with cooperative cancellation support.
+///
+/// Identical algorithm to [`extract_dmf_rates`], but chief and deputy are
+/// propagated sequentially in `DMF_CANCEL_CHECK_STEP_S` chunks instead of
+/// in parallel via `rayon::join`. This trades ~2× wall-clock time for
+/// responsive cancellation — the flag is checked between every chunk.
+///
+/// # Errors
+/// Returns [`NyxBridgeError::Cancelled`] if `cancel` is set during execution,
+/// otherwise forwards the same error cases as [`extract_dmf_rates`].
+#[allow(clippy::similar_names)]
+pub fn extract_dmf_rates_with_cancel(
+    chief_initial: &StateVector,
+    deputy_initial: &StateVector,
+    chief_config: &SpacecraftConfig,
+    deputy_config: &SpacecraftConfig,
+    almanac: &Arc<Almanac>,
+    cancel: &AtomicBool,
+) -> Result<DragConfig, NyxBridgeError> {
+    if cancel.load(Ordering::Relaxed) {
+        return Err(NyxBridgeError::Cancelled);
+    }
+
+    // Compute initial ROE
+    let chief_ke_0 = state_to_keplerian(chief_initial)?;
+    let deputy_ke_0 = state_to_keplerian(deputy_initial)?;
+    let roe_0 = compute_roe(&chief_ke_0, &deputy_ke_0)?;
+
+    // Propagation duration: 2 orbital periods
+    let period = chief_ke_0.period()?;
+    let duration = 2.0 * period;
+
+    // Build dynamics once; clone is cheap (Arc ref-count bumps).
+    let dynamics = build_full_physics_dynamics(almanac)?;
+
+    // Sequential chunked propagation for responsive cancellation.
+    let chief_final = propagate_final_state_with_cancel(
+        chief_initial,
+        duration,
+        chief_config,
+        &dynamics,
+        almanac,
+        cancel,
+    )?;
+    let deputy_final = propagate_final_state_with_cancel(
+        deputy_initial,
+        duration,
+        deputy_config,
+        &dynamics,
+        almanac,
+        cancel,
+    )?;
+
+    if cancel.load(Ordering::Relaxed) {
+        return Err(NyxBridgeError::Cancelled);
+    }
+
+    compute_drag_rates(&roe_0, &chief_final, &deputy_final, duration)
+}
+
+fn propagate_final_state_with_cancel(
+    initial: &StateVector,
+    duration_s: f64,
+    config: &SpacecraftConfig,
+    dynamics: &SpacecraftDynamics,
+    almanac: &Arc<Almanac>,
+    cancel: &AtomicBool,
+) -> Result<StateVector, NyxBridgeError> {
+    let mut current = initial.clone();
+    let mut elapsed_s = 0.0_f64;
+
+    while elapsed_s < duration_s {
+        if cancel.load(Ordering::Relaxed) {
+            return Err(NyxBridgeError::Cancelled);
+        }
+
+        let remaining_s = duration_s - elapsed_s;
+        let step_s = remaining_s.min(DMF_CANCEL_CHECK_STEP_S);
+        let result = nyx_propagate_segment(&current, step_s, 0, config, dynamics.clone(), almanac)?;
+        let final_state = result.last().ok_or(NyxBridgeError::EmptyResult)?;
+        current = final_state.state.clone();
+        elapsed_s += step_s;
+    }
+
+    Ok(current)
+}
+
+/// Compute drag rates from initial ROE and propagated final states.
+///
+/// Shared by [`extract_dmf_rates`] (parallel) and
+/// [`extract_dmf_rates_with_cancel`] (sequential/cancellable).
+#[allow(clippy::similar_names)]
+fn compute_drag_rates(
+    roe_0: &rpo_core::types::roe::QuasiNonsingularROE,
+    chief_final: &StateVector,
+    deputy_final: &StateVector,
+    duration: f64,
+) -> Result<DragConfig, NyxBridgeError> {
     let chief_ke_f = state_to_keplerian(chief_final)?;
     let deputy_ke_f = state_to_keplerian(deputy_final)?;
     let roe_f = compute_roe(&chief_ke_f, &deputy_ke_f)?;
 
-    // Fit secular drift rates
     let rate_da = (roe_f.da - roe_0.da) / duration;
     let rate_ex = (roe_f.dex - roe_0.dex) / duration;
     let rate_ey = (roe_f.dey - roe_0.dey) / duration;
 
-    // Near-zero guard: treat sub-threshold rates as noise
     if rate_da.abs() < DMF_NOISE_THRESHOLD
         && rate_ex.abs() < DMF_NOISE_THRESHOLD
         && rate_ey.abs() < DMF_NOISE_THRESHOLD

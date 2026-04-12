@@ -59,6 +59,16 @@ enum JobResult {
     },
 }
 
+impl JobResult {
+    fn request_id(&self) -> u64 {
+        match self {
+            Self::Drag { request_id, .. }
+            | Self::Validation { request_id, .. }
+            | Self::MonteCarlo { request_id, .. } => *request_id,
+        }
+    }
+}
+
 /// Main per-connection WebSocket handler.
 ///
 /// Runs the message loop until the client disconnects. Holds no persistent
@@ -127,6 +137,16 @@ pub async fn handle_ws(mut ws: WebSocket, almanac: Arc<Almanac>) {
 
             // ---- Result from background job ----
             Some(result) = result_rx.recv() => {
+                let active_request_id = active_job.as_ref().map(|job| job.request_id);
+                if active_request_id != Some(result.request_id()) {
+                    debug!(
+                        result_request_id = result.request_id(),
+                        active_request_id,
+                        "Ignoring stale background result",
+                    );
+                    continue;
+                }
+
                 let response = match result {
                     JobResult::Drag { request_id, result } => match result {
                         Ok(drag) => ServerMessage::DragResult { request_id, drag },
@@ -212,9 +232,8 @@ async fn handle_text_message(
         }
 
         // ---- Background: ExtractDrag (~3s) ----
-        // Cancel flag is stored on ActiveJob but handle_extract_drag does not
-        // check it — drag extraction is short (~3s) and CPU-bound, so
-        // cancellation is best-effort.
+        // Drag extraction checks the cancellation flag cooperatively between
+        // propagation chunks and before result emission.
         ClientMessage::ExtractDrag {
             request_id,
             chief,
@@ -229,7 +248,7 @@ async fn handle_text_message(
             let cancel_clone = Arc::clone(&cancel);
             let handle = tokio::task::spawn_blocking(move || {
                 let result =
-                    handlers::handle_extract_drag(&chief, &deputy, &chief_config, &deputy_config, &almanac);
+                    handlers::handle_extract_drag(&chief, &deputy, &chief_config, &deputy_config, &almanac, &cancel);
                 let _ = tx.blocking_send(JobResult::Drag { request_id, result });
             });
             *active_job = Some(ActiveJob {
@@ -266,7 +285,7 @@ async fn handle_text_message(
                 chief_config,
                 deputy_config,
                 samples_per_leg,
-                cola_burn_inputs: cola_burns,
+                cola_burns,
                 analytical_cola,
                 cola_target_distance_km,
             };

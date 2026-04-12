@@ -20,7 +20,7 @@ use rpo_core::mission::config::SafetyConfig;
 use rpo_core::mission::avoidance::ColaConfig;
 use rpo_core::pipeline::{
     execute_mission_from_transfer, replan_from_transfer,
-    PipelineInput, PipelineOutput, SafetyAnalysis, TransferResult,
+    PipelineInput, PipelineOutput, SafetyAnalysis, TransferComputationInput, TransferResult,
     compute_safety_analysis,
 };
 use rpo_core::propagation::keplerian::propagate_keplerian;
@@ -42,7 +42,7 @@ use crate::validation::convert_cola_to_burns;
 ///
 /// Returns [`PipelineError`] if classification or Lambert solving fails,
 /// or if the chief trajectory is empty after Lambert propagation.
-pub fn compute_transfer(input: &PipelineInput) -> Result<TransferResult, PipelineError> {
+pub fn compute_transfer(input: &TransferComputationInput) -> Result<TransferResult, PipelineError> {
     let plan = plan_mission(
         &input.chief,
         &input.deputy,
@@ -116,7 +116,8 @@ pub fn compute_validation_burns(
 ///
 /// Returns [`PipelineError`] if Lambert solving or any pipeline phase fails.
 pub fn execute_mission(input: &PipelineInput) -> Result<PipelineOutput, PipelineError> {
-    let mut transfer = compute_transfer(input)?;
+    let transfer_input = TransferComputationInput::from(input);
+    let mut transfer = compute_transfer(&transfer_input)?;
     Ok(execute_mission_from_transfer(&mut transfer, input)?)
 }
 
@@ -134,7 +135,8 @@ pub fn replan_mission(
     modified_index: usize,
     cached_mission: Option<rpo_core::mission::types::WaypointMission>,
 ) -> Result<PipelineOutput, PipelineError> {
-    let mut transfer = compute_transfer(input)?;
+    let transfer_input = TransferComputationInput::from(input);
+    let mut transfer = compute_transfer(&transfer_input)?;
     Ok(replan_from_transfer(&mut transfer, input, modified_index, cached_mission)?)
 }
 
@@ -280,10 +282,17 @@ mod tests {
         }
     }
 
+    fn compute_transfer_from_pipeline(
+        input: &PipelineInput,
+    ) -> Result<TransferResult, PipelineError> {
+        let transfer_input = TransferComputationInput::from(input);
+        compute_transfer(&transfer_input)
+    }
+
     #[test]
     fn test_compute_transfer_far_field() {
         let input = far_field_input();
-        let result = compute_transfer(&input).expect("compute_transfer should succeed");
+        let result = compute_transfer_from_pipeline(&input).expect("compute_transfer should succeed");
 
         // Far-field scenario should produce a Lambert transfer
         assert!(result.plan.transfer.is_some());
@@ -367,7 +376,7 @@ mod tests {
     #[test]
     fn test_compute_transfer_proximity_arrival_epoch() {
         let input = proximity_input();
-        let result = compute_transfer(&input).expect("compute_transfer should succeed");
+        let result = compute_transfer_from_pipeline(&input).expect("compute_transfer should succeed");
 
         // Proximity scenario: no Lambert transfer
         assert!(result.plan.transfer.is_none());
@@ -400,7 +409,7 @@ mod tests {
     #[test]
     fn test_transfer_result_serde_roundtrip() {
         let input = far_field_input();
-        let result = compute_transfer(&input).expect("compute_transfer should succeed");
+        let result = compute_transfer_from_pipeline(&input).expect("compute_transfer should succeed");
         let json = serde_json::to_string(&result).expect("serialize TransferResult");
         let roundtrip: TransferResult =
             serde_json::from_str(&json).expect("deserialize TransferResult");
@@ -535,7 +544,7 @@ mod tests {
     #[test]
     fn test_suggest_enrichment_does_not_mutate() {
         let input = proximity_input_with_enrichment();
-        let transfer = compute_transfer(&input).expect("transfer");
+        let transfer = compute_transfer_from_pipeline(&input).expect("transfer");
 
         let original_perch_roe = transfer.plan.perch_roe;
         let suggestion = suggest_enrichment(&transfer, &input);
@@ -551,7 +560,7 @@ mod tests {
     #[test]
     fn test_suggest_enrichment_none_without_requirements() {
         let input = far_field_input();
-        let transfer = compute_transfer(&input).expect("transfer");
+        let transfer = compute_transfer_from_pipeline(&input).expect("transfer");
         let suggestion = suggest_enrichment(&transfer, &input);
         assert!(suggestion.is_none());
     }
@@ -559,7 +568,7 @@ mod tests {
     #[test]
     fn test_apply_perch_enrichment_mutates() {
         let input = proximity_input_with_enrichment();
-        let mut transfer = compute_transfer(&input).expect("transfer");
+        let mut transfer = compute_transfer_from_pipeline(&input).expect("transfer");
 
         let original_perch_roe = transfer.plan.perch_roe;
         let suggestion = suggest_enrichment(&transfer, &input).expect("suggestion");
@@ -576,7 +585,7 @@ mod tests {
     #[test]
     fn test_apply_perch_enrichment_fallback_no_mutate() {
         let input = proximity_input_with_enrichment();
-        let mut transfer = compute_transfer(&input).expect("transfer");
+        let mut transfer = compute_transfer_from_pipeline(&input).expect("transfer");
 
         let original_perch_roe = transfer.plan.perch_roe;
 
@@ -619,7 +628,7 @@ mod tests {
         let output = execute_mission(&input).expect("execute_mission should succeed");
 
         // Separately compute safety assessment from the same mission
-        let transfer = compute_transfer(&input).expect("transfer");
+        let transfer = compute_transfer_from_pipeline(&input).expect("transfer");
         let propagator = to_propagation_model(&input.propagator);
         let mut transfer2 = transfer;
         let suggestion = suggest_enrichment(&transfer2, &input);
@@ -688,7 +697,7 @@ mod tests {
 
         // Accept the enrichment -> replan
         let mut updated_input = input.clone();
-        let mut transfer = compute_transfer(&updated_input).expect("transfer");
+        let mut transfer = compute_transfer_from_pipeline(&updated_input).expect("transfer");
         let enriched_output = accept_waypoint_enrichment(
             &mut updated_input,
             &mut transfer,
@@ -744,7 +753,7 @@ mod tests {
         ).expect("enrichment");
 
         let mut updated_input = input.clone();
-        let mut transfer = compute_transfer(&updated_input).expect("transfer");
+        let mut transfer = compute_transfer_from_pipeline(&updated_input).expect("transfer");
         let result = accept_waypoint_enrichment(
             &mut updated_input, &mut transfer, 99, &enriched.roe, &leg.arrival_chief_mean,
         );
@@ -840,7 +849,7 @@ mod tests {
 
         // 3. Accept enrichment at waypoint 0.
         let leg_0 = &baseline.mission.legs[0];
-        let mut transfer = compute_transfer(&input).expect("transfer");
+        let mut transfer = compute_transfer_from_pipeline(&input).expect("transfer");
         let enriched = accept_waypoint_enrichment(
             &mut input,
             &mut transfer,

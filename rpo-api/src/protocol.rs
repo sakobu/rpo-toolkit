@@ -1,6 +1,5 @@
 //! WebSocket protocol types — 5 client message variants, 8 server message variants.
 
-use nalgebra::Vector3;
 use rpo_core::mission::config::{MissionConfig, ProximityConfig};
 use rpo_core::mission::monte_carlo::types::{MonteCarloConfig, MonteCarloReport};
 use rpo_core::mission::types::{PerchGeometry, ValidationReport, WaypointMission};
@@ -43,37 +42,6 @@ pub(crate) const PROGRESS_EXECUTING: f64 = 0.1;
 
 /// Operation complete (100%).
 pub(crate) const PROGRESS_COMPLETE: f64 = 1.0;
-
-// ---- COLA burn protocol type ----
-
-/// Protocol-level COLA burn input.
-///
-/// Mirrors `rpo_nyx::validation::ColaBurn` but with serde derives for
-/// WebSocket deserialization. The nyx type uses `Vector3<f64>` which
-/// serializes as `[f64; 3]` via nalgebra's serde support.
-#[derive(Debug, Clone, Deserialize)]
-pub struct ColaBurnInput {
-    /// Index of the mission leg this burn applies to.
-    pub leg_index: usize,
-    /// Time from leg departure to COLA burn (seconds).
-    pub elapsed_s: f64,
-    /// Delta-v in RIC frame (km/s) as `[R, I, C]`.
-    pub dv_ric_km_s: [f64; 3],
-}
-
-impl From<ColaBurnInput> for ColaBurn {
-    fn from(input: ColaBurnInput) -> Self {
-        Self {
-            leg_index: input.leg_index,
-            elapsed_s: input.elapsed_s,
-            dv_ric_km_s: Vector3::new(
-                input.dv_ric_km_s[0],
-                input.dv_ric_km_s[1],
-                input.dv_ric_km_s[2],
-            ),
-        }
-    }
-}
 
 // ---- Client messages ----
 
@@ -149,7 +117,7 @@ pub enum ClientMessage {
         samples_per_leg: u32,
         /// Optional COLA avoidance burns to inject during validation.
         #[serde(default)]
-        cola_burns: Vec<ColaBurnInput>,
+        cola_burns: Vec<ColaBurn>,
         /// Analytical COLA avoidance maneuvers for effectiveness comparison.
         /// The browser computes these via WASM `assess_cola()`; sending them
         /// here lets the server return a self-contained effectiveness comparison.

@@ -7,7 +7,7 @@
 //! extraction, full-physics validation, and Monte Carlo ensemble. All
 //! analytical operations run in the browser via WASM.
 
-pub mod error;
-pub mod handlers;
+pub(crate) mod error;
+pub(crate) mod handlers;
 pub mod protocol;
 pub mod ws;

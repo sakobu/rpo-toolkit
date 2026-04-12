@@ -3037,8 +3037,6 @@ dependencies = [
  "anise",
  "axum",
  "futures-util",
- "hifitime",
- "nalgebra 0.34.1",
  "rpo-core",
  "rpo-nyx",
  "serde",

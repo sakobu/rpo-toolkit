@@ -5,9 +5,9 @@ pub mod mc;
 pub mod transfer;
 pub mod validate;
 
-pub use drag::handle_extract_drag;
+pub(crate) use drag::handle_extract_drag;
 pub(crate) use mc::handle_mc;
-pub use transfer::handle_compute_transfer;
+pub(crate) use transfer::handle_compute_transfer;
 pub(crate) use validate::handle_validate;
 
 use crate::protocol::{ProgressPhase, ProgressUpdate};

@@ -8,7 +8,7 @@ use indicatif::ProgressBar;
 use rpo_core::mission::WaypointMission;
 use rpo_core::pipeline::{
     apply_perch_enrichment, plan_waypoints_from_transfer, suggest_enrichment,
-    EnrichmentSuggestion, PipelineInput, TransferResult,
+    EnrichmentSuggestion, PipelineInput, TransferComputationInput, TransferResult,
 };
 use rpo_core::propagation::{DragConfig, PropagationModel};
 use rpo_core::types::SpacecraftConfig;
@@ -58,7 +58,8 @@ pub fn plan_with_physics(
     let spinner = create_spinner();
 
     status!(spinner, "Classification + Lambert transfer...");
-    let mut transfer = compute_transfer(input)?;
+    let transfer_input = TransferComputationInput::from(input);
+    let mut transfer = compute_transfer(&transfer_input)?;
     let suggestion = suggest_enrichment(&transfer, input);
     if let Some(ref s) = suggestion {
         apply_perch_enrichment(&mut transfer, s);

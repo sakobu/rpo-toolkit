@@ -35,4 +35,5 @@ pub use projections::{
 pub use types::{
     EnrichmentSuggestion, PipelineInput, PipelineOutput, PlanVariant, PropagatorChoice,
     SafetyAnalysis, SpacecraftChoice, TransferResult, WaypointInput,
+    TransferComputationInput,
 };

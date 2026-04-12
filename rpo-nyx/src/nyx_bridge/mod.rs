@@ -25,7 +25,7 @@ pub use errors::NyxBridgeError;
 pub use almanac::{load_default_almanac, load_full_almanac};
 #[cfg(feature = "test-support")]
 pub use almanac::shared_almanac_for_tests;
-pub use dynamics::{extract_dmf_rates, build_full_physics_dynamics};
+pub use dynamics::{build_full_physics_dynamics, extract_dmf_rates, extract_dmf_rates_with_cancel};
 pub use propagate::{
     ChiefDeputySnapshot, TimedState, apply_impulse, build_nyx_safety_states,
     nyx_propagate_segment, query_anise_eclipse,

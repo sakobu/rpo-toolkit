@@ -1,14 +1,14 @@
 //! Full-physics validation handler — blocking, seconds to minutes.
 
 use crate::error::ServerError;
-use crate::protocol::{ColaBurnInput, ProgressPhase, PROGRESS_COMPLETE, PROGRESS_EXECUTING, PROGRESS_START};
+use crate::protocol::{ProgressPhase, PROGRESS_COMPLETE, PROGRESS_EXECUTING, PROGRESS_START};
 use anise::prelude::Almanac;
 use rpo_core::mission::types::{ValidationReport, WaypointMission};
 use rpo_core::types::spacecraft::SpacecraftConfig;
 use rpo_core::types::state::StateVector;
 use rpo_nyx::nyx_bridge::build_full_physics_dynamics;
 use rpo_nyx::validation::{
-    validate_mission_nyx, ColaValidationInput, ValidationConfig, ValidationPipelineCtx,
+    ColaBurn, ColaValidationInput, ValidationConfig, ValidationPipelineCtx, validate_mission_nyx,
 };
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -34,7 +34,7 @@ pub(crate) struct ValidateJobInput {
     /// Intermediate comparison samples per leg.
     pub samples_per_leg: u32,
     /// Optional COLA avoidance burns to inject during nyx propagation.
-    pub cola_burn_inputs: Vec<ColaBurnInput>,
+    pub cola_burns: Vec<ColaBurn>,
     /// Analytical COLA avoidance maneuvers for effectiveness comparison.
     pub analytical_cola: Vec<rpo_core::mission::AvoidanceManeuver>,
     /// Target COLA separation threshold (km) from `ColaConfig`.
@@ -64,7 +64,7 @@ pub(crate) fn handle_validate(
     }
 
     let cola_input = ColaValidationInput {
-        burns: input.cola_burn_inputs.into_iter().map(Into::into).collect(),
+        burns: input.cola_burns,
         analytical_maneuvers: input.analytical_cola,
         target_distance_km: input.cola_target_distance_km,
     };

@@ -12,6 +12,8 @@ use rpo_core::types::KeplerError;
 /// Errors from the nyx-space integration bridge.
 #[derive(Debug)]
 pub enum NyxBridgeError {
+    /// Operation cancelled cooperatively by caller.
+    Cancelled,
     /// `MetaAlmanac` / ANISE kernel loading failure.
     AlmanacLoad {
         /// The underlying almanac error.
@@ -51,6 +53,9 @@ pub enum NyxBridgeError {
 impl std::fmt::Display for NyxBridgeError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::Cancelled => {
+                write!(f, "operation cancelled")
+            }
             Self::AlmanacLoad { source } => {
                 write!(f, "almanac loading failed: {source}")
             }
@@ -89,7 +94,7 @@ impl std::error::Error for NyxBridgeError {
             Self::Propagation { source } => Some(source),
             Self::Conversion { source } => Some(source),
             Self::DcmFailure(e) => Some(e),
-            Self::EmptyResult => None,
+            Self::EmptyResult | Self::Cancelled => None,
         }
     }
 }

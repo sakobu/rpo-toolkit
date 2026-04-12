@@ -5,7 +5,8 @@ use anise::prelude::Almanac;
 use rpo_core::propagation::propagator::DragConfig;
 use rpo_core::types::spacecraft::SpacecraftConfig;
 use rpo_core::types::state::StateVector;
-use rpo_nyx::nyx_bridge::extract_dmf_rates;
+use rpo_nyx::nyx_bridge::{NyxBridgeError, extract_dmf_rates_with_cancel};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 /// Handle an `ExtractDrag` message.
@@ -23,9 +24,19 @@ pub fn handle_extract_drag(
     chief_config: &SpacecraftConfig,
     deputy_config: &SpacecraftConfig,
     almanac: &Arc<Almanac>,
+    cancel: &AtomicBool,
 ) -> Result<DragConfig, ServerError> {
+    if cancel.load(Ordering::Relaxed) {
+        return Err(ServerError::Cancelled);
+    }
+
     if chief_config == deputy_config {
         return Ok(DragConfig::zero());
     }
-    Ok(extract_dmf_rates(chief, deputy, chief_config, deputy_config, almanac)?)
+
+    extract_dmf_rates_with_cancel(chief, deputy, chief_config, deputy_config, almanac, cancel)
+        .map_err(|e| match e {
+            NyxBridgeError::Cancelled => ServerError::Cancelled,
+            other => ServerError::from(other),
+        })
 }

@@ -56,12 +56,10 @@ async fn ws_upgrade(
 }
 
 /// Start a test server on a random port and return the WebSocket URL.
-async fn start_test_server() -> String {
+async fn start_test_server_with_almanac(almanac: std::sync::Arc<anise::prelude::Almanac>) -> String {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr: SocketAddr = listener.local_addr().unwrap();
 
-    // load_default_almanac() returns Arc<Almanac> — no network download needed.
-    let almanac = rpo_nyx::nyx_bridge::load_default_almanac();
     let state = TestState { almanac };
 
     let app = axum::Router::new()
@@ -75,30 +73,24 @@ async fn start_test_server() -> String {
     format!("ws://{addr}/ws")
 }
 
+/// Start a test server on a random port and return the WebSocket URL.
+async fn start_test_server() -> String {
+    // load_default_almanac() returns Arc<Almanac> — no network download needed.
+    let almanac = rpo_nyx::nyx_bridge::load_default_almanac();
+    start_test_server_with_almanac(almanac).await
+}
+
 /// Start a test server with the full ANISE almanac (downloads on first run).
 ///
 /// Required for tests that invoke nyx full-physics propagation (validate, MC),
 /// which need planetary frame data (Earth ID 399) not present in the default almanac.
 async fn start_test_server_full() -> String {
-    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let addr: SocketAddr = listener.local_addr().unwrap();
-
     // shared_almanac_for_tests() may download kernels on first call — run
     // on blocking thread to avoid stalling the tokio runtime.
     let almanac = tokio::task::spawn_blocking(rpo_nyx::nyx_bridge::shared_almanac_for_tests)
         .await
         .expect("spawn_blocking join");
-    let state = TestState { almanac };
-
-    let app = axum::Router::new()
-        .route("/ws", axum::routing::get(ws_upgrade))
-        .with_state(state);
-
-    tokio::spawn(async move {
-        axum::serve(listener, app).await.unwrap();
-    });
-
-    format!("ws://{addr}/ws")
+    start_test_server_with_almanac(almanac).await
 }
 
 /// Send a JSON message and receive the next non-heartbeat text response within 10 seconds.
@@ -563,9 +555,8 @@ async fn cancel_without_active_job() {
 
 /// Start a Validate job then immediately cancel it.
 ///
-/// Cancellation is cooperative: the job may complete before the cancel flag is
-/// checked. Both `cancelled` and `validation_result` are valid outcomes.
-/// The key invariant is that the server returns a response and does not hang.
+/// Cancellation is terminal: once cancel is accepted, stale job results must be
+/// ignored and only `cancelled` is allowed as the terminal response.
 #[tokio::test]
 #[ignore = "nyx full-physics propagation (cancelled quickly)"]
 async fn cancel_active_validation() {
@@ -607,11 +598,10 @@ async fn cancel_active_validation() {
     .await
     .expect("send cancel message");
 
-    // Poll until we get a terminal response (cancelled or validation_result).
-    // Progress and heartbeat messages are skipped.
+    // Poll until we get terminal cancellation. Progress and heartbeat
+    // messages are skipped.
     let deadline = std::time::Instant::now() + CANCEL_TIMEOUT;
     let mut got_cancelled = false;
-    let mut got_result = false;
     loop {
         let remaining = deadline.saturating_duration_since(std::time::Instant::now());
         if remaining.is_zero() {
@@ -623,10 +613,6 @@ async fn cancel_active_validation() {
                 match val["type"].as_str().unwrap_or("") {
                     "cancelled" => {
                         got_cancelled = true;
-                        break;
-                    }
-                    "validation_result" => {
-                        got_result = true;
                         break;
                     }
                     "progress" | "heartbeat" => {}
@@ -641,10 +627,67 @@ async fn cancel_active_validation() {
         }
     }
 
-    assert!(
-        got_cancelled || got_result,
-        "expected either 'cancelled' or 'validation_result' within 15s"
-    );
+    assert!(got_cancelled, "expected 'cancelled' within 15s");
+}
+
+/// Start an ExtractDrag job, cancel immediately, and assert no late drag result.
+#[tokio::test]
+#[ignore = "nyx full-physics drag extraction cancellation (~3s)"]
+async fn cancel_active_drag_no_late_result() {
+    let input: PipelineInput = serde_json::from_reader(
+        std::fs::File::open("../examples/validate.json").expect("open examples/validate.json"),
+    )
+    .expect("parse validate.json as PipelineInput");
+    let chief_config = input.chief_config.unwrap_or_default().resolve();
+    let deputy_config = input.deputy_config.unwrap_or_default().resolve();
+    assert_ne!(chief_config, deputy_config, "test requires non-identical configs");
+
+    let url = start_test_server_full().await;
+    let (mut ws, _) = connect_async(&url).await.unwrap();
+
+    let drag_msg = json!({
+        "type": "extract_drag",
+        "request_id": 77,
+        "chief": serde_json::to_value(&input.chief).unwrap(),
+        "deputy": serde_json::to_value(&input.deputy).unwrap(),
+        "chief_config": serde_json::to_value(chief_config).unwrap(),
+        "deputy_config": serde_json::to_value(deputy_config).unwrap()
+    });
+    ws.send(Message::Text(drag_msg.to_string().into()))
+        .await
+        .expect("send extract_drag message");
+
+    ws.send(
+        Message::Text(
+            json!({ "type": "cancel", "request_id": 77 })
+                .to_string()
+                .into(),
+        ),
+    )
+    .await
+    .expect("send cancel message");
+
+    let cancelled = recv_until_type(&mut ws, "cancelled", DRAG_TIMEOUT_SECS).await;
+    assert_eq!(cancelled["request_id"], 77, "got: {cancelled}");
+
+    // After terminal cancellation, drag_result must not be emitted for the
+    // cancelled request.
+    let quiet_window = Duration::from_secs(5);
+    let end = std::time::Instant::now() + quiet_window;
+    while std::time::Instant::now() < end {
+        let remaining = end.saturating_duration_since(std::time::Instant::now());
+        match tokio::time::timeout(remaining, ws.next()).await {
+            Ok(Some(Ok(Message::Text(text)))) => {
+                let val: Value = serde_json::from_str(&text).expect("valid JSON response");
+                if val["type"] == "drag_result" && val["request_id"] == 77 {
+                    panic!("received late drag_result after cancellation: {val}");
+                }
+            }
+            Err(_) | Ok(None) => break,
+            Ok(Some(Ok(_))) => {}
+            Ok(Some(Err(e))) => panic!("ws error: {e}"),
+        }
+    }
 }
 
 // ===========================================================================

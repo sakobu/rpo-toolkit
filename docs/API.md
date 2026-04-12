@@ -101,11 +101,11 @@ Full-physics nyx validation of an analytical mission plan. Background job (secon
 | `chief_config`            | `SpacecraftConfig`    | yes      |         | Chief spacecraft physical properties                             |
 | `deputy_config`           | `SpacecraftConfig`    | yes      |         | Deputy spacecraft physical properties                            |
 | `samples_per_leg`         | `u32`                 | yes      |         | Intermediate comparison samples per leg                          |
-| `cola_burns`              | `ColaBurnInput[]`     | no       | `[]`    | Optional COLA avoidance burns to inject during validation        |
+| `cola_burns`              | `ColaBurn[]`          | no       | `[]`    | Optional COLA avoidance burns to inject during validation        |
 | `analytical_cola`         | `AvoidanceManeuver[]` | no       | `[]`    | Analytical COLA avoidance maneuvers for effectiveness comparison |
 | `cola_target_distance_km` | `f64 \| null`         | no       | `null`  | Target COLA separation threshold (km) from ColaConfig            |
 
-`ColaBurnInput` fields:
+`ColaBurn` fields:
 
 | Field         | Type        | Description                                    |
 | ------------- | ----------- | ---------------------------------------------- |
