@@ -26,7 +26,7 @@ use rpo_core::pipeline::{
 use rpo_core::propagation::keplerian::propagate_keplerian;
 use rpo_core::types::StateVector;
 
-use crate::planning::plan_mission;
+pub use crate::planning::plan_mission;
 use crate::validation::convert_cola_to_burns;
 
 /// Classify separation, solve Lambert if far-field, compute perch ECI states.
@@ -47,7 +47,7 @@ pub fn compute_transfer(input: &PipelineInput) -> Result<TransferResult, Pipelin
         &input.chief,
         &input.deputy,
         &input.perch,
-        &input.proximity,
+        input.proximity,
         input.lambert_tof_s,
         &input.lambert_config,
     )?;

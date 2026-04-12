@@ -31,7 +31,7 @@ use rpo_core::types::{KeplerianElements, QuasiNonsingularROE, SpacecraftConfig, 
 
 use rpo_nyx::lambert::solve_lambert;
 use rpo_nyx::nyx_bridge;
-use rpo_nyx::planning::plan_mission;
+use rpo_nyx::pipeline::plan_mission;
 
 // =========================================================================
 // Named tolerance constants
@@ -268,7 +268,7 @@ fn full_mission_scenario() {
         along_track_km: 5.0,
     };
 
-    let plan = plan_mission(&chief, &deputy, &perch, &config, 3600.0, &LambertConfig::default())
+    let plan = plan_mission(&chief, &deputy, &perch, config, 3600.0, &LambertConfig::default())
         .expect("mission plan should succeed");
 
     // Lambert transfer assertions

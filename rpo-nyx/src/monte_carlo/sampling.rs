@@ -170,17 +170,17 @@ mod tests {
         let n = 10_000_u32;
 
         let dist_1 = Distribution::Gaussian { sigma: 1.0 };
-        let samples_1: Vec<f64> = (0..n)
+        let mut samples_1: Vec<f64> = (0..n)
             .map(|_| sample_distribution(&dist_1, &mut rng).unwrap())
             .collect();
-        let std_1 = compute_percentile_stats(&samples_1).unwrap().std_dev;
+        let std_1 = compute_percentile_stats(&mut samples_1).unwrap().std_dev;
 
         let mut rng2 = ChaCha20Rng::seed_from_u64(99);
         let dist_half = Distribution::Gaussian { sigma: 0.5 };
-        let samples_half: Vec<f64> = (0..n)
+        let mut samples_half: Vec<f64> = (0..n)
             .map(|_| sample_distribution(&dist_half, &mut rng2).unwrap())
             .collect();
-        let std_half = compute_percentile_stats(&samples_half).unwrap().std_dev;
+        let std_half = compute_percentile_stats(&mut samples_half).unwrap().std_dev;
 
         let ratio = std_half / std_1;
         assert!(

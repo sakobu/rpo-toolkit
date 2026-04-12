@@ -22,5 +22,6 @@ pub mod lambert;
 pub mod monte_carlo;
 pub mod nyx_bridge;
 pub mod pipeline;
-pub mod planning;
+pub(crate) mod planning;
+pub(crate) mod statistics;
 pub mod validation;

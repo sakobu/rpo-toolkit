@@ -22,8 +22,10 @@ use rpo_core::mission::waypoints::plan_waypoint_mission;
 use rpo_core::propagation::propagator::{PropagatedState, PropagationModel};
 use rpo_core::types::{DepartureState, SpacecraftConfig, StateVector};
 
+use nyx_space::md::prelude::SpacecraftDynamics;
+
 use crate::nyx_bridge::{
-    apply_impulse, build_full_physics_dynamics, build_nyx_safety_states, nyx_propagate_segment,
+    apply_impulse, build_nyx_safety_states, nyx_propagate_segment,
     ChiefDeputySnapshot,
 };
 
@@ -170,6 +172,7 @@ fn propagate_dispersed_legs<R: Rng>(
     active_mission: &WaypointMission,
     sample_deputy_config: &SpacecraftConfig,
     rng: &mut R,
+    dynamics: &SpacecraftDynamics,
 ) -> Result<LegPropagationResult, MonteCarloError> {
     let maneuver_disp = input.config.dispersions.maneuver.as_ref();
     let traj_steps = input.config.trajectory_steps;
@@ -182,11 +185,6 @@ fn propagate_dispersed_legs<R: Rng>(
     // u32 → usize: always widening on 32-bit and 64-bit platforms.
     let mut safety_pairs: Vec<ChiefDeputySnapshot> =
         Vec::with_capacity(traj_steps as usize * active_mission.legs.len());
-
-    // Build dynamics once; clone per propagation call.
-    // SpacecraftDynamics derives Clone (lightweight Arc ref-count bumps)
-    // vs full construction (frame lookups, harmonics, drag/SRP setup).
-    let dynamics_template = build_full_physics_dynamics(input.almanac)?;
 
     for leg in &active_mission.legs {
         // Apply dispersed departure Δv
@@ -204,7 +202,7 @@ fn propagate_dispersed_legs<R: Rng>(
             leg.tof_s,
             traj_steps,
             input.chief_config,
-            dynamics_template.clone(),
+            dynamics.clone(),
             input.almanac,
         )?;
         let deputy_traj = nyx_propagate_segment(
@@ -212,7 +210,7 @@ fn propagate_dispersed_legs<R: Rng>(
             leg.tof_s,
             traj_steps,
             sample_deputy_config,
-            dynamics_template.clone(),
+            dynamics.clone(),
             input.almanac,
         )?;
 
@@ -287,6 +285,7 @@ pub(crate) fn run_single_sample(
     input: &MonteCarloInput<'_>,
     index: u32,
     master_seed: u64,
+    dynamics: &SpacecraftDynamics,
 ) -> Result<SampleOutput, MonteCarloError> {
     let config = input.config;
     let mut rng = ChaCha20Rng::seed_from_u64(master_seed.wrapping_add(u64::from(index)));
@@ -332,6 +331,7 @@ pub(crate) fn run_single_sample(
         active_mission,
         &sample_deputy_config,
         &mut rng,
+        dynamics,
     )?;
 
     // Phase 5: Safety analysis + result packaging
@@ -422,7 +422,7 @@ pub(crate) fn collect_ensemble_statistics(
     total_num_samples: u32,
     safety_config: Option<&SafetyConfig>,
 ) -> Result<EnsembleStatistics, MonteCarloError> {
-    let total_dvs: Vec<f64> = samples.iter().map(|s| s.total_dv_km_s).collect();
+    let mut total_dvs: Vec<f64> = samples.iter().map(|s| s.total_dv_km_s).collect();
 
     // Extract safety metrics from samples that have them
     let mut min_rc_values = Vec::new();
@@ -437,29 +437,29 @@ pub(crate) fn collect_ensemble_statistics(
         }
     }
 
-    let total_dv_stats = compute_percentile_stats(&total_dvs)?;
+    let total_dv_stats = compute_percentile_stats(&mut total_dvs)?;
 
     let min_rc_stats = if min_rc_values.is_empty() {
         None
     } else {
-        Some(compute_percentile_stats(&min_rc_values)?)
+        Some(compute_percentile_stats(&mut min_rc_values)?)
     };
     let min_3d_stats = if min_3d_values.is_empty() {
         None
     } else {
-        Some(compute_percentile_stats(&min_3d_values)?)
+        Some(compute_percentile_stats(&mut min_3d_values)?)
     };
     let min_ei_stats = if min_ei_values.is_empty() {
         None
     } else {
-        Some(compute_percentile_stats(&min_ei_values)?)
+        Some(compute_percentile_stats(&mut min_ei_values)?)
     };
 
     // Per-waypoint miss distance statistics
     let num_waypoints = samples.first().map_or(0, |s| s.waypoint_miss_km.len());
     let mut waypoint_miss_stats = Vec::with_capacity(num_waypoints);
     for wp_idx in 0..num_waypoints {
-        let misses: Vec<f64> = samples
+        let mut misses: Vec<f64> = samples
             .iter()
             .filter_map(|s| s.waypoint_miss_km.get(wp_idx).copied())
             .collect();
@@ -468,7 +468,7 @@ pub(crate) fn collect_ensemble_statistics(
         } else {
             // compute_percentile_stats filters NaN internally; if all values
             // are non-finite, fall back to None
-            match compute_percentile_stats(&misses) {
+            match compute_percentile_stats(&mut misses) {
                 Ok(stats) => waypoint_miss_stats.push(Some(stats)),
                 Err(MonteCarloError::Core(CoreMonteCarloError::EmptyEnsemble)) => {
                     waypoint_miss_stats.push(None);

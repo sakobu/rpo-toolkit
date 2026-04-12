@@ -229,15 +229,19 @@ pub(super) fn validate_planned(
         chief_config: input.chief_config,
         deputy_config: input.deputy_config,
     };
-    super::validate_mission_nyx(
+    let dynamics = crate::nyx_bridge::build_full_physics_dynamics(&ctx.almanac)
+        .expect("dynamics should build from test almanac");
+    let pipeline = super::ValidationPipelineCtx {
         mission,
-        &ctx.chief_state,
-        &ctx.deputy_state,
-        &val_config,
-        input.cola_input,
-        &ctx.almanac,
-    )
-    .expect("validation should succeed")
+        chief_initial: &ctx.chief_state,
+        deputy_initial: &ctx.deputy_state,
+        config: &val_config,
+        cola: input.cola_input,
+        almanac: &ctx.almanac,
+        dynamics: &dynamics,
+    };
+    super::validate_mission_nyx(&pipeline)
+        .expect("validation should succeed")
 }
 
 /// Standard plan → nyx-validate pipeline — a thin convenience wrapper over
@@ -501,11 +505,13 @@ pub(super) fn leg_propagation_ctx_from_scenario<'a>(
     chief_config: &'a SpacecraftConfig,
     deputy_config: &'a SpacecraftConfig,
     samples_per_leg: u32,
+    dynamics: &'a nyx_space::md::prelude::SpacecraftDynamics,
 ) -> LegPropagationCtx<'a> {
     LegPropagationCtx {
         samples_per_leg,
         chief_config,
         deputy_config,
         almanac: &ctx.almanac,
+        dynamics,
     }
 }

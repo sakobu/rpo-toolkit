@@ -17,6 +17,7 @@ use rayon::prelude::*;
 use rpo_core::mission::monte_carlo::MonteCarloError as CoreMonteCarloError;
 use rpo_core::mission::monte_carlo::MonteCarloMode;
 
+use crate::nyx_bridge::build_full_physics_dynamics;
 use execution::{collect_ensemble_statistics, run_single_sample};
 use statistics::compute_covariance_cross_check;
 pub use types::{MonteCarloControl, MonteCarloInput};
@@ -121,6 +122,10 @@ pub fn run_monte_carlo(
     let start = Instant::now();
     let master_seed = config.seed.unwrap_or(DEFAULT_MC_SEED);
 
+    // Build dynamics once for all samples. SpacecraftDynamics is Clone + Send + Sync
+    // (Arc-backed), so &dynamics is safely shared across rayon workers.
+    let dynamics = build_full_physics_dynamics(input.almanac)?;
+
     // Run samples in parallel with optional cancel/progress
     let results: Vec<Result<execution::SampleOutput, MonteCarloError>> = (0..config.num_samples)
         .into_par_iter()
@@ -131,7 +136,7 @@ pub fn run_monte_carlo(
             {
                 return Err(CoreMonteCarloError::Cancelled.into());
             }
-            let result = run_single_sample(input, i, master_seed);
+            let result = run_single_sample(input, i, master_seed, &dynamics);
             // Report progress after completion
             if let Some(ctrl) = input.control {
                 ctrl.progress

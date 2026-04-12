@@ -5,12 +5,12 @@ use std::sync::Arc;
 use anise::constants::frames::EARTH_J2000 as ANISE_EARTH_J2000;
 use anise::prelude::Almanac;
 use nalgebra::Vector3;
-use serde::Serialize;
+use nyx_space::md::prelude::SpacecraftDynamics;
 
 use rpo_core::elements::eci_ric_dcm::eci_to_ric_relative;
 use rpo_core::mission::safety::analyze_trajectory_safety;
 use crate::nyx_bridge::{
-    apply_impulse, build_full_physics_dynamics, build_nyx_safety_states, nyx_propagate_segment,
+    apply_impulse, build_nyx_safety_states, nyx_propagate_segment,
     query_anise_eclipse, state_to_orbit, ChiefDeputySnapshot, NyxBridgeError, TimedState,
 };
 use rpo_core::propagation::propagator::PropagatedState;
@@ -27,7 +27,7 @@ use super::statistics::{compute_leg_summaries, find_closest_analytical_ric, comp
 /// Configuration for nyx full-physics validation.
 ///
 /// Groups sampling density and spacecraft properties that are shared
-/// across [`validate_leg_nyx`] and [`validate_mission_nyx`].
+/// across [`validate_mission_nyx`] and its internal per-leg helpers.
 #[derive(Debug, Clone, Copy)]
 pub struct ValidationConfig {
     /// Number of intermediate comparison samples per leg (0 = final only).
@@ -117,26 +117,33 @@ pub fn convert_cola_to_burns(
     Ok(burns)
 }
 
-/// Output from validating a single mission leg against nyx full-physics.
+/// Bundled context for [`validate_mission_nyx`].
 ///
-/// Contains per-sample analytical vs numerical comparison points and updated
-/// chief/deputy ECI states for threading into the next leg.
+/// Groups the 7 parameters that every validation call requires, following
+/// the CLAUDE.md "struct-based public APIs" rule. Borrows everything;
+/// caller is responsible for building `dynamics` via
+/// [`build_full_physics_dynamics`](crate::nyx_bridge::build_full_physics_dynamics).
 ///
-/// All `StateVector` fields use ECI J2000 frame (`position_eci_km`,
-/// `velocity_eci_km_s`). When serialized for the API wire format,
-/// coordinates remain in ECI.
-///
-/// Used by the API server for per-leg progress streaming during validation.
-#[derive(Debug, Clone, Serialize)]
-pub struct LegValidationOutput {
-    /// Per-sample analytical vs numerical RIC comparison points.
-    pub points: Vec<ValidationPoint>,
-    /// Chief/deputy ECI snapshot pairs for safety analysis.
-    pub safety_pairs: Vec<ChiefDeputySnapshot>,
-    /// Updated chief ECI state at end of this leg.
-    pub chief_state_after: StateVector,
-    /// Updated deputy ECI state at end of this leg (arrival delta-v applied).
-    pub deputy_state_after: StateVector,
+/// # Invariants
+/// - `mission.legs` must be non-empty.
+/// - `chief_initial` and `deputy_initial` must be valid bound ECI states.
+/// - `almanac` must contain Earth frame data and planetary ephemerides.
+/// - `dynamics` must be built from the same `almanac`.
+pub struct ValidationPipelineCtx<'a> {
+    /// Analytical waypoint mission to validate.
+    pub mission: &'a WaypointMission,
+    /// Chief ECI state at mission start.
+    pub chief_initial: &'a StateVector,
+    /// Deputy ECI state at mission start.
+    pub deputy_initial: &'a StateVector,
+    /// Validation sampling and spacecraft configuration.
+    pub config: &'a ValidationConfig,
+    /// COLA burns and analytical maneuvers for effectiveness comparison.
+    pub cola: &'a ColaValidationInput,
+    /// ANISE almanac with ephemeris and frame data.
+    pub almanac: &'a Arc<Almanac>,
+    /// Pre-built full-physics dynamics.
+    pub dynamics: &'a SpacecraftDynamics,
 }
 
 /// Output from comparing nyx-propagated states against analytical trajectory for one leg.
@@ -170,61 +177,6 @@ fn advance_leg_states(
         .clone();
     let deputy = apply_impulse(&deputy_coast_end, &chief, arrival_dv_ric_km_s)?;
     Ok((chief, deputy))
-}
-
-/// Validate a single mission leg against nyx full-physics propagation.
-///
-/// Propagates chief and deputy through the leg using nyx full-physics dynamics,
-/// compares against the analytical trajectory, and returns comparison points plus
-/// updated ECI states for threading to the next leg.
-///
-/// This function does **not** collect eclipse samples; eclipse validation is only
-/// available through the mission-level [`validate_mission_nyx`] orchestrator.
-///
-/// # Invariants
-/// - `chief_state` and `deputy_state` must be valid bound ECI states
-/// - `almanac` must contain Earth frame data and planetary ephemerides
-///
-/// # Errors
-/// Returns [`ValidationError`] if propagation, impulse application, or frame conversion fails.
-pub fn validate_leg_nyx(
-    leg: &ManeuverLeg,
-    chief_state: &StateVector,
-    deputy_state: &StateVector,
-    config: &ValidationConfig,
-    almanac: &Arc<Almanac>,
-    cumulative_time_s: f64,
-) -> Result<LegValidationOutput, ValidationError> {
-    let ctx = LegPropagationCtx {
-        samples_per_leg: config.samples_per_leg,
-        chief_config: &config.chief_config,
-        deputy_config: &config.deputy_config,
-        almanac,
-    };
-    let (chief_results, deputy_results) = propagate_leg_parallel(
-        chief_state, deputy_state, leg, &ctx,
-    )?;
-
-    // Build comparison points (no eclipse or COLA -- those stay in validate_mission_nyx)
-    let leg_output = build_leg_comparison_points(
-        &chief_results,
-        &deputy_results,
-        &leg.trajectory,
-        cumulative_time_s,
-        None, // no eclipse frame for per-leg API
-        almanac,
-        None, // no COLA for per-leg API
-    )?;
-
-    let (chief_after, deputy_after) =
-        advance_leg_states(&chief_results, &deputy_results, &leg.arrival_maneuver.dv_ric_km_s)?;
-
-    Ok(LegValidationOutput {
-        points: leg_output.points,
-        safety_pairs: leg_output.safety_pairs,
-        chief_state_after: chief_after,
-        deputy_state_after: deputy_after,
-    })
 }
 
 /// Build comparison points for a single leg of the mission.
@@ -365,7 +317,6 @@ fn propagate_segment_parallel(
     deputy_state: &StateVector,
     duration_s: f64,
     n_samples: u32,
-    dynamics: &nyx_space::md::prelude::SpacecraftDynamics,
     ctx: &LegPropagationCtx<'_>,
 ) -> Result<(Vec<TimedState>, Vec<TimedState>), ValidationError> {
     let (chief_result, deputy_result) = rayon::join(
@@ -375,7 +326,7 @@ fn propagate_segment_parallel(
                 duration_s,
                 n_samples,
                 ctx.chief_config,
-                dynamics.clone(),
+                ctx.dynamics.clone(),
                 ctx.almanac,
             )?)
         },
@@ -385,7 +336,7 @@ fn propagate_segment_parallel(
                 duration_s,
                 n_samples,
                 ctx.deputy_config,
-                dynamics.clone(),
+                ctx.dynamics.clone(),
                 ctx.almanac,
             )?)
         },
@@ -426,8 +377,6 @@ fn propagate_leg(
     burn: Option<&MidLegBurn>,
     ctx: &LegPropagationCtx<'_>,
 ) -> Result<LegPropOutput, ValidationError> {
-    // Build dynamics once; clone is cheap (Arc ref-count bumps).
-    let dynamics = build_full_physics_dynamics(ctx.almanac)?;
     let deputy_post_departure =
         apply_impulse(deputy_state, chief_state, &leg.departure_maneuver.dv_ric_km_s)?;
 
@@ -439,7 +388,6 @@ fn propagate_leg(
             &deputy_post_departure,
             leg.tof_s,
             ctx.samples_per_leg,
-            &dynamics,
             ctx,
         )?;
         return Ok(LegPropOutput {
@@ -471,7 +419,6 @@ fn propagate_leg(
         &deputy_post_departure,
         burn.elapsed_s,
         n1,
-        &dynamics,
         ctx,
     )?;
 
@@ -499,7 +446,6 @@ fn propagate_leg(
         &deputy_seg2_start,
         remaining_s,
         n2,
-        &dynamics,
         ctx,
     )?;
 
@@ -541,6 +487,8 @@ pub(super) struct LegPropagationCtx<'a> {
     pub(super) deputy_config: &'a SpacecraftConfig,
     /// ANISE almanac with ephemeris and frame data.
     pub(super) almanac: &'a Arc<Almanac>,
+    /// Pre-built full-physics dynamics (hoisted out of per-leg construction).
+    pub(super) dynamics: &'a SpacecraftDynamics,
 }
 
 /// Output from propagating a single leg with a mid-coast COLA impulse.
@@ -792,19 +740,24 @@ fn assign_safety_leg_indices(
 /// Returns [`ValidationError`] if the mission has no legs, almanac frame lookup
 /// fails, dynamics setup fails, propagation fails, or safety analysis fails.
 pub fn validate_mission_nyx(
-    mission: &WaypointMission,
-    chief_initial: &StateVector,
-    deputy_initial: &StateVector,
-    config: &ValidationConfig,
-    cola: &ColaValidationInput,
-    almanac: &Arc<Almanac>,
+    pipeline: &ValidationPipelineCtx<'_>,
 ) -> Result<ValidationReport, ValidationError> {
+    let ValidationPipelineCtx {
+        mission,
+        chief_initial,
+        deputy_initial,
+        config,
+        cola,
+        almanac,
+        dynamics,
+    } = pipeline;
+
     if mission.legs.is_empty() {
         return Err(ValidationError::EmptyTrajectory);
     }
 
-    let mut chief_state = chief_initial.clone();
-    let mut deputy_state = deputy_initial.clone();
+    let mut chief_state = (*chief_initial).clone();
+    let mut deputy_state = (*deputy_initial).clone();
     let mut cumulative_time = 0.0_f64;
     let mut leg_points = Vec::with_capacity(mission.legs.len());
     let mut cola_effectiveness: Vec<ColaEffectivenessEntry> =
@@ -827,6 +780,7 @@ pub fn validate_mission_nyx(
         chief_config: &config.chief_config,
         deputy_config: &config.deputy_config,
         almanac,
+        dynamics,
     };
 
     // Pre-COLA pass: when COLA burns exist, propagate without COLA to
@@ -1542,11 +1496,14 @@ mod tests {
 
         let chief_cfg = SpacecraftConfig::SERVICER_500KG;
         let deputy_cfg = SpacecraftConfig::SERVICER_500KG;
+        let dynamics = crate::nyx_bridge::build_full_physics_dynamics(&ctx.almanac)
+            .expect("dynamics should build from test almanac");
         let leg_ctx = leg_propagation_ctx_from_scenario(
             &ctx,
             &chief_cfg,
             &deputy_cfg,
             DEFAULT_VALIDATION_SAMPLES_PER_LEG,
+            &dynamics,
         );
 
         // Single-segment baseline (no COLA).
@@ -1635,11 +1592,14 @@ mod tests {
 
         let chief_cfg = SpacecraftConfig::SERVICER_500KG;
         let deputy_cfg = SpacecraftConfig::SERVICER_500KG;
+        let dynamics = crate::nyx_bridge::build_full_physics_dynamics(&ctx.almanac)
+            .expect("dynamics should build from test almanac");
         let leg_ctx = leg_propagation_ctx_from_scenario(
             &ctx,
             &chief_cfg,
             &deputy_cfg,
             DEFAULT_VALIDATION_SAMPLES_PER_LEG,
+            &dynamics,
         );
 
         // COLA fires at COLA_SAMPLE_PERCENT % of the leg tof.
@@ -1846,11 +1806,14 @@ mod tests {
 
         let chief_cfg = SpacecraftConfig::SERVICER_500KG;
         let deputy_cfg = SpacecraftConfig::SERVICER_500KG;
+        let dynamics = crate::nyx_bridge::build_full_physics_dynamics(&ctx.almanac)
+            .expect("dynamics should build from test almanac");
         let leg_ctx = leg_propagation_ctx_from_scenario(
             &ctx,
             &chief_cfg,
             &deputy_cfg,
             DEFAULT_VALIDATION_SAMPLES_PER_LEG,
+            &dynamics,
         );
 
         let burn_none = super::MidLegBurn {
@@ -2001,15 +1964,19 @@ mod tests {
             deputy_config: SpacecraftConfig::SERVICER_500KG,
         };
 
-        let report = crate::validation::validate_mission_nyx(
-            &mission,
-            &ctx.chief_state,
-            &ctx.deputy_state,
-            &val_config,
-            &cola,
-            &ctx.almanac,
-        )
-        .expect("validation should succeed");
+        let dynamics = crate::nyx_bridge::build_full_physics_dynamics(&ctx.almanac)
+            .expect("dynamics should build from test almanac");
+        let pipeline = crate::validation::ValidationPipelineCtx {
+            mission: &mission,
+            chief_initial: &ctx.chief_state,
+            deputy_initial: &ctx.deputy_state,
+            config: &val_config,
+            cola: &cola,
+            almanac: &ctx.almanac,
+            dynamics: &dynamics,
+        };
+        let report = crate::validation::validate_mission_nyx(&pipeline)
+            .expect("validation should succeed");
 
         let pre_cola = report
             .pre_cola_numerical_safety

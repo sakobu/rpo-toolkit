@@ -13,74 +13,18 @@ use rpo_core::propagation::propagator::PropagatedState;
 
 use super::MonteCarloError;
 
-/// Compute percentile statistics from a slice of scalar values.
+/// Compute percentile statistics, returning [`MonteCarloError`] for empty input.
 ///
-/// Uses nearest-rank method for percentile extraction.
-/// Converts the slice length to `u32` for lossless `f64::from` conversion.
-/// Standard deviation uses Bessel correction (n-1 denominator) for n > 1;
-/// returns 0.0 for n = 1.
+/// Delegates to [`crate::statistics::compute_percentile_stats`] for the actual
+/// computation. This wrapper converts the `Option` return to a `Result`,
+/// mapping `None` to [`CoreMonteCarloError::EmptyEnsemble`].
 ///
-/// # Invariants
-/// - `values` must be non-empty.
-/// - For n = 1, all percentiles equal the single value and `std_dev = 0`.
-///
-/// # Errors
-/// Returns [`CoreMonteCarloError::EmptyEnsemble`] if no finite values remain
-/// after filtering NaN/Inf.
+/// The input slice is sorted in place; non-finite values are compacted to the end.
 pub(crate) fn compute_percentile_stats(
-    values: &[f64],
+    values: &mut [f64],
 ) -> Result<PercentileStats, MonteCarloError> {
-    // Filter non-finite values (NaN, Inf) that can arise from degenerate
-    // nyx propagation states or frame conversions.
-    let mut sorted: Vec<f64> = values.iter().copied().filter(|x| x.is_finite()).collect();
-    if sorted.is_empty() {
-        return Err(CoreMonteCarloError::EmptyEnsemble.into());
-    }
-    // Convert length to u32 for lossless f64 conversion.
-    // MC sample counts are always bounded by MonteCarloConfig.num_samples (u32),
-    // so this conversion is infallible in practice.
-    let n = u32::try_from(sorted.len()).unwrap_or(u32::MAX);
-    let n_f = f64::from(n);
-
-    // Compute mean/variance before sorting (order doesn't matter for summation).
-    let sum: f64 = sorted.iter().sum();
-    let mean = sum / n_f;
-    let variance = if n > 1 {
-        sorted.iter().map(|x| (x - mean).powi(2)).sum::<f64>() / f64::from(n - 1)
-    } else {
-        0.0
-    };
-
-    sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-
-    // Nearest-rank percentile using integer arithmetic only.
-    // rank = ceil(p * n / 100) computed as (p * n + 99) / 100 in u32.
-    // Ceil is required by the nearest-rank definition — do NOT switch to
-    // `rpo_core::constants::round_half_up_percent`, which has different
-    // semantics (round-half-up) and would misreport percentile indices
-    // for `p*n` values whose fractional part is ≤ 0.5.
-    let percentile = |p_percent: u32| -> f64 {
-        if n == 1 {
-            return sorted[0];
-        }
-        let rank = (p_percent * n).div_ceil(100);
-        let idx = rank.saturating_sub(1).min(n - 1) as usize;
-        sorted[idx]
-    };
-
-    Ok(PercentileStats {
-        min: sorted[0],
-        p01: percentile(1),
-        p05: percentile(5),
-        p25: percentile(25),
-        p50: percentile(50),
-        p75: percentile(75),
-        p95: percentile(95),
-        p99: percentile(99),
-        max: sorted[sorted.len() - 1],
-        mean,
-        std_dev: variance.sqrt(),
-    })
+    crate::statistics::compute_percentile_stats(values)
+        .ok_or_else(|| CoreMonteCarloError::EmptyEnsemble.into())
 }
 
 /// Compute trajectory dispersion envelope from per-sample trajectories.
@@ -106,9 +50,9 @@ pub(crate) fn compute_dispersion_envelope(
 
     for j in 0..=n_steps {
         let j_idx = j as usize;
-        let mut radial_values = Vec::with_capacity(sample_trajectories.len());
-        let mut intrack_values = Vec::with_capacity(sample_trajectories.len());
-        let mut crosstrack_values = Vec::with_capacity(sample_trajectories.len());
+        let mut radial_values: Vec<f64> = Vec::with_capacity(sample_trajectories.len());
+        let mut intrack_values: Vec<f64> = Vec::with_capacity(sample_trajectories.len());
+        let mut crosstrack_values: Vec<f64> = Vec::with_capacity(sample_trajectories.len());
         let mut elapsed_s = 0.0_f64;
         let mut needs_elapsed = true;
 
@@ -130,13 +74,13 @@ pub(crate) fn compute_dispersion_envelope(
         }
 
         // These succeed because the vecs are non-empty (checked above)
-        let Ok(r_stats) = compute_percentile_stats(&radial_values) else {
+        let Some(r_stats) = crate::statistics::compute_percentile_stats(&mut radial_values) else {
             continue;
         };
-        let Ok(i_stats) = compute_percentile_stats(&intrack_values) else {
+        let Some(i_stats) = crate::statistics::compute_percentile_stats(&mut intrack_values) else {
             continue;
         };
-        let Ok(c_stats) = compute_percentile_stats(&crosstrack_values) else {
+        let Some(c_stats) = crate::statistics::compute_percentile_stats(&mut crosstrack_values) else {
             continue;
         };
 
@@ -358,13 +302,13 @@ mod tests {
     #[test]
     fn percentile_ordering() {
         let mut rng = ChaCha20Rng::seed_from_u64(42);
-        let values: Vec<f64> = (0..500)
+        let mut values: Vec<f64> = (0..500)
             .map(|_| {
                 let dist = Distribution::Gaussian { sigma: 1.0 };
                 sample_distribution(&dist, &mut rng).unwrap()
             })
             .collect();
-        let stats = compute_percentile_stats(&values).unwrap();
+        let stats = compute_percentile_stats(&mut values).unwrap();
         assert!(stats.min <= stats.p01);
         assert!(stats.p01 <= stats.p05);
         assert!(stats.p05 <= stats.p25);
@@ -377,8 +321,8 @@ mod tests {
 
     #[test]
     fn percentile_known_uniform() {
-        let values: Vec<f64> = (0..1000).map(f64::from).collect();
-        let stats = compute_percentile_stats(&values).unwrap();
+        let mut values: Vec<f64> = (0..1000).map(f64::from).collect();
+        let stats = compute_percentile_stats(&mut values).unwrap();
         assert!(
             (stats.p50 - 499.0).abs() < PERCENTILE_ACCURACY_TOL,
             "median should be ~499, got {}",
@@ -395,7 +339,7 @@ mod tests {
     fn percentile_single_value() {
         // All stats are pure copies / degenerate reductions, so bitwise
         // equality is the correct contract — no arithmetic rounding budget.
-        let stats = compute_percentile_stats(&[SINGLE_VALUE_INPUT]).unwrap();
+        let stats = compute_percentile_stats(&mut [SINGLE_VALUE_INPUT]).unwrap();
         assert_eq!(stats.min.to_bits(), SINGLE_VALUE_INPUT.to_bits());
         assert_eq!(stats.max.to_bits(), SINGLE_VALUE_INPUT.to_bits());
         assert_eq!(stats.p50.to_bits(), SINGLE_VALUE_INPUT.to_bits());
@@ -409,7 +353,7 @@ mod tests {
     fn percentile_filters_nan() {
         // Same bitwise rationale as `percentile_single_value`: after NaN
         // filtering the surviving [1, 2, 3, 4, 5] yields exact integer stats.
-        let values = vec![
+        let mut values = vec![
             NAN_FILTER_FINITE_MIN,
             NAN_FILTER_FINITE_FILLER_LOW,
             f64::NAN,
@@ -418,7 +362,7 @@ mod tests {
             NAN_FILTER_FINITE_FILLER_HIGH,
             NAN_FILTER_FINITE_MAX,
         ];
-        let stats = compute_percentile_stats(&values).unwrap();
+        let stats = compute_percentile_stats(&mut values).unwrap();
         assert_eq!(stats.min.to_bits(), NAN_FILTER_FINITE_MIN.to_bits());
         assert_eq!(stats.max.to_bits(), NAN_FILTER_FINITE_MAX.to_bits());
         assert_eq!(stats.p50.to_bits(), NAN_FILTER_FINITE_MEDIAN.to_bits());
@@ -432,8 +376,8 @@ mod tests {
     /// All-NaN input produces `EmptyEnsemble` error (no finite data to summarize).
     #[test]
     fn percentile_all_nan_is_error() {
-        let values = vec![f64::NAN, f64::NAN, f64::NAN];
-        let result = compute_percentile_stats(&values);
+        let mut values = vec![f64::NAN, f64::NAN, f64::NAN];
+        let result = compute_percentile_stats(&mut values);
         assert!(
             matches!(
                 result,

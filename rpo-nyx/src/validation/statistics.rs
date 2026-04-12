@@ -107,55 +107,47 @@ pub(super) fn compute_report_statistics(summaries: &[LegValidationSummary]) -> R
 /// Compute per-leg validation summaries (post-COLA points excluded).
 ///
 /// Returns one [`LegValidationSummary`] per leg. Empty legs or legs where all
-/// points are post-COLA produce zero-valued summaries.
-///
-/// # Invariants
-/// - Each inner `Vec<ValidationPoint>` represents a single leg's trajectory samples
-/// - `position_error_km` and `velocity_error_km_s` values must be non-negative
+/// points are post-COLA produce zero-valued summaries. Uses [`BasicStats`]
+/// from the shared statistics primitive for the position-error reduction.
 pub(super) fn compute_leg_summaries(
     leg_points: &[Vec<ValidationPoint>],
 ) -> Vec<LegValidationSummary> {
-    leg_points.iter().map(|points| {
-        let mut max_pos = 0.0_f64;
-        let mut max_vel = 0.0_f64;
-        let mut sum_pos = 0.0_f64;
-        let mut sum_pos_sq = 0.0_f64;
-        let mut count = 0_u32;
-        let mut excluded = 0_u32;
+    leg_points
+        .iter()
+        .map(|points| {
+            let mut pos_errors = Vec::new();
+            let mut max_vel = 0.0_f64;
+            let mut excluded = 0_u32;
 
-        for p in points {
-            if p.post_cola {
-                excluded += 1;
-                continue;
+            for point in points {
+                if point.post_cola {
+                    excluded += 1;
+                    continue;
+                }
+                pos_errors.push(point.position_error_km);
+                max_vel = max_vel.max(point.velocity_error_km_s);
             }
-            max_pos = max_pos.max(p.position_error_km);
-            max_vel = max_vel.max(p.velocity_error_km_s);
-            sum_pos += p.position_error_km;
-            sum_pos_sq += p.position_error_km * p.position_error_km;
-            count += 1;
-        }
 
-        if count == 0 {
-            return LegValidationSummary {
-                max_position_error_km: 0.0,
-                mean_position_error_km: 0.0,
-                rms_position_error_km: 0.0,
-                max_velocity_error_km_s: 0.0,
-                num_points: 0,
-                num_post_cola_excluded: excluded,
-            };
-        }
-
-        let n = f64::from(count);
-        LegValidationSummary {
-            max_position_error_km: max_pos,
-            mean_position_error_km: sum_pos / n,
-            rms_position_error_km: (sum_pos_sq / n).sqrt(),
-            max_velocity_error_km_s: max_vel,
-            num_points: count,
-            num_post_cola_excluded: excluded,
-        }
-    }).collect()
+            match crate::statistics::BasicStats::from_slice(&pos_errors) {
+                Some(stats) => LegValidationSummary {
+                    max_position_error_km: stats.max,
+                    mean_position_error_km: stats.mean,
+                    rms_position_error_km: stats.rms,
+                    max_velocity_error_km_s: max_vel,
+                    num_points: u32::try_from(stats.count).unwrap_or(u32::MAX),
+                    num_post_cola_excluded: excluded,
+                },
+                None => LegValidationSummary {
+                    max_position_error_km: 0.0,
+                    mean_position_error_km: 0.0,
+                    rms_position_error_km: 0.0,
+                    max_velocity_error_km_s: 0.0,
+                    num_points: 0,
+                    num_post_cola_excluded: excluded,
+                },
+            }
+        })
+        .collect()
 }
 
 #[cfg(test)]

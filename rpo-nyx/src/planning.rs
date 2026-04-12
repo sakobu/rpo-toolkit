@@ -59,11 +59,11 @@ pub fn plan_mission(
     chief: &StateVector,
     deputy: &StateVector,
     perch: &PerchGeometry,
-    config: &ProximityConfig,
+    config: ProximityConfig,
     lambert_tof_s: f64,
     lambert_config: &LambertConfig,
 ) -> Result<MissionPlan, MissionError> {
-    let phase = classify_separation(chief, deputy, config)?;
+    let phase = classify_separation(chief, deputy, &config)?;
 
     match phase {
         MissionPhase::Proximity {
@@ -286,7 +286,7 @@ mod tests {
             along_track_km: 5.0,
         };
 
-        let plan = plan_mission(&chief, &deputy, &perch, &config, TEST_LAMBERT_TOF_S, &LambertConfig::default())
+        let plan = plan_mission(&chief, &deputy, &perch, config, TEST_LAMBERT_TOF_S, &LambertConfig::default())
             .expect("far-field mission should succeed");
 
         assert!(matches!(plan.phase, MissionPhase::FarField { .. }));
@@ -309,7 +309,7 @@ mod tests {
         let deputy = keplerian_to_state(&deputy_ke, epoch).unwrap();
         let config = ProximityConfig::default();
 
-        let plan = plan_mission(&chief, &deputy, perch, &config, TEST_LAMBERT_TOF_S, &LambertConfig::default())
+        let plan = plan_mission(&chief, &deputy, perch, config, TEST_LAMBERT_TOF_S, &LambertConfig::default())
             .expect("proximity mission should succeed");
         (plan, chief_ke)
     }
@@ -356,7 +356,7 @@ mod tests {
         let config = ProximityConfig::default();
         let perch = PerchGeometry::VBar { along_track_km: 5.0 };
 
-        let plan = plan_mission(&chief, &deputy, &perch, &config, TEST_LAMBERT_TOF_S, &LambertConfig::default())
+        let plan = plan_mission(&chief, &deputy, &perch, config, TEST_LAMBERT_TOF_S, &LambertConfig::default())
             .expect("mission should succeed");
 
         let json = serde_json::to_string(&plan).expect("serialize should work");
@@ -411,9 +411,9 @@ mod tests {
             revolutions: 1,
         };
 
-        let plan_0 = plan_mission(&chief, &deputy, &perch, &config, tof_s, &config_0rev)
+        let plan_0 = plan_mission(&chief, &deputy, &perch, config, tof_s, &config_0rev)
             .expect("0-rev far-field mission should succeed");
-        let plan_1 = plan_mission(&chief, &deputy, &perch, &config, tof_s, &config_1rev)
+        let plan_1 = plan_mission(&chief, &deputy, &perch, config, tof_s, &config_1rev)
             .expect("1-rev far-field mission should succeed");
 
         assert!(matches!(plan_1.phase, MissionPhase::FarField { .. }));
@@ -451,7 +451,7 @@ mod tests {
         let perch = PerchGeometry::VBar { along_track_km: 5.0 };
 
         let plan = plan_mission(
-            &chief, &deputy, &perch, &config, TEST_LAMBERT_TOF_S, &LambertConfig::default(),
+            &chief, &deputy, &perch, config, TEST_LAMBERT_TOF_S, &LambertConfig::default(),
         )
         .expect("far-field mission should succeed");
 
@@ -486,7 +486,7 @@ mod tests {
         let perch = PerchGeometry::VBar { along_track_km: 5.0 };
 
         let plan = plan_mission(
-            &chief, &deputy, &perch, &config, TEST_LAMBERT_TOF_S, &LambertConfig::default(),
+            &chief, &deputy, &perch, config, TEST_LAMBERT_TOF_S, &LambertConfig::default(),
         )
         .expect("proximity mission should succeed");
 

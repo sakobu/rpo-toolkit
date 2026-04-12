@@ -4,8 +4,11 @@ use std::path::Path;
 
 use rpo_core::mission::ValidationReport;
 use rpo_core::pipeline::PipelineOutput;
+use rpo_nyx::nyx_bridge::build_full_physics_dynamics;
 use rpo_nyx::pipeline::compute_validation_burns;
-use rpo_nyx::validation::{validate_mission_nyx, ColaValidationInput, ValidationConfig};
+use rpo_nyx::validation::{
+    validate_mission_nyx, ColaValidationInput, ValidationConfig, ValidationPipelineCtx,
+};
 
 use crate::cli::OutputMode;
 use crate::error::CliError;
@@ -63,14 +66,17 @@ pub fn run(
         target_distance_km: input.cola.as_ref().map(|c| c.target_distance_km),
     };
 
-    let report = validate_mission_nyx(
-        &plan.wp_mission,
-        &plan.transfer.perch_chief,
-        &plan.transfer.perch_deputy,
-        &val_config,
-        &cola_input,
-        &plan.almanac,
-    )?;
+    let dynamics = build_full_physics_dynamics(&plan.almanac)?;
+    let pipeline = ValidationPipelineCtx {
+        mission: &plan.wp_mission,
+        chief_initial: &plan.transfer.perch_chief,
+        deputy_initial: &plan.transfer.perch_deputy,
+        config: &val_config,
+        cola: &cola_input,
+        almanac: &plan.almanac,
+        dynamics: &dynamics,
+    };
+    let report = validate_mission_nyx(&pipeline)?;
 
     if let Some(s) = plan.spinner {
         s.finish_and_clear();

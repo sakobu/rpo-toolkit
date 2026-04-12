@@ -6,7 +6,10 @@ use anise::prelude::Almanac;
 use rpo_core::mission::types::{ValidationReport, WaypointMission};
 use rpo_core::types::spacecraft::SpacecraftConfig;
 use rpo_core::types::state::StateVector;
-use rpo_nyx::validation::{validate_mission_nyx, ColaValidationInput, ValidationConfig};
+use rpo_nyx::nyx_bridge::build_full_physics_dynamics;
+use rpo_nyx::validation::{
+    validate_mission_nyx, ColaValidationInput, ValidationConfig, ValidationPipelineCtx,
+};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use tokio::sync::mpsc;
@@ -74,14 +77,17 @@ pub(crate) fn handle_validate(
 
     send_progress(progress_tx, ProgressPhase::Validate, "Running nyx validation...", PROGRESS_EXECUTING);
 
-    let report = validate_mission_nyx(
-        &input.mission,
-        &input.chief,
-        &input.deputy,
-        &config,
-        &cola_input,
+    let dynamics = build_full_physics_dynamics(almanac)?;
+    let pipeline = ValidationPipelineCtx {
+        mission: &input.mission,
+        chief_initial: &input.chief,
+        deputy_initial: &input.deputy,
+        config: &config,
+        cola: &cola_input,
         almanac,
-    )?;
+        dynamics: &dynamics,
+    };
+    let report = validate_mission_nyx(&pipeline)?;
 
     send_progress(progress_tx, ProgressPhase::Validate, "Validation complete", PROGRESS_COMPLETE);
 
