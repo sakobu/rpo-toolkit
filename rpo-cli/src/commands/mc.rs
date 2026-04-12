@@ -24,7 +24,7 @@ pub fn run(
     auto_drag: bool,
     flags: &OverlayFlags,
 ) -> Result<(), CliError> {
-    let mut input: PipelineInput = load_json(input_path)?;
+    let mut input: PipelineInput = load_json(input_path, None)?;
     apply_overlays(&mut input, flags);
 
     let chief_config = input

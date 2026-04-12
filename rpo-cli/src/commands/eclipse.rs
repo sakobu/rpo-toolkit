@@ -7,7 +7,7 @@ use rpo_core::types::EclipseState;
 use rpo_nyx::pipeline::execute_mission;
 
 use crate::error::CliError;
-use crate::input::load_json_with_hint;
+use crate::input::load_json;
 use crate::output::common::print_json;
 
 /// Compute eclipse data for a planned mission and print summary JSON.
@@ -15,9 +15,9 @@ use crate::output::common::print_json;
 /// Emits only the eclipse summary (intervals, durations, fractions) and
 /// per-leg shadow counts — not the full per-sample celestial snapshots.
 pub fn run(input_path: &Path) -> Result<(), CliError> {
-    let input: PipelineInput = load_json_with_hint(
+    let input: PipelineInput = load_json(
         input_path,
-        "eclipse expects full PipelineInput (same as mission); see examples/mission.json",
+        Some("eclipse expects full PipelineInput (same as mission); see examples/mission.json"),
     )?;
     let output = execute_mission(&input)?;
 

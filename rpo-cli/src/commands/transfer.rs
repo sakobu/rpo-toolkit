@@ -9,7 +9,7 @@ use rpo_core::types::StateVector;
 use rpo_nyx::lambert::solve_lambert_with_config;
 
 use crate::error::CliError;
-use crate::input::load_json_with_hint;
+use crate::input::load_json;
 use crate::output::common::print_json;
 
 #[derive(Deserialize)]
@@ -22,9 +22,9 @@ struct TransferInput {
 
 /// Solve Lambert transfer and print JSON result.
 pub fn run(input_path: &Path) -> Result<(), CliError> {
-    let input: TransferInput = load_json_with_hint(
+    let input: TransferInput = load_json(
         input_path,
-        "transfer expects { departure, arrival, config? }; see examples/transfer.json",
+        Some("transfer expects { departure, arrival, config? }; see examples/transfer.json"),
     )?;
     let transfer = solve_lambert_with_config(&input.departure, &input.arrival, &input.config)?;
     print_json(&transfer)
