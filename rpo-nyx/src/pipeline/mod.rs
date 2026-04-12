@@ -213,40 +213,39 @@ mod tests {
     /// cascade will exceed it.
     const CASCADE_DV_CHANGE_TOL_KM_S: f64 = 1e-10;
 
-    // --- Far-field test fixture state vectors (ECI) -----------------------
-    // ISS-like orbit, chief and deputy separated by ~1600 km so the
-    // classification path exits the proximity regime and exercises the
-    // full Lambert solve + propagation pipeline.
-
-    /// Far-field fixture: chief position in ECI (km).
-    const FAR_FIELD_CHIEF_POSITION_ECI_KM: [f64; 3] = [5876.261, 3392.661, 0.0];
-
-    /// Far-field fixture: chief velocity in ECI (km/s).
-    const FAR_FIELD_CHIEF_VELOCITY_ECI_KM_S: [f64; 3] = [-2.380_512, 4.123_167, 6.006_917];
-
-    /// Far-field fixture: deputy position in ECI (km).
-    const FAR_FIELD_DEPUTY_POSITION_ECI_KM: [f64; 3] =
-        [5_199.839_421, 4_281.648_523, 1_398.070_066];
-
-    /// Far-field fixture: deputy velocity in ECI (km/s).
-    const FAR_FIELD_DEPUTY_VELOCITY_ECI_KM_S: [f64; 3] = [-3.993_103, 2.970_313, 5.764_540];
-
     /// Build a minimal `PipelineInput` from the standard far-field test scenario.
+    ///
+    /// Chief is an ISS-like orbit; deputy is offset by `FAR_FIELD_SMA_OFFSET_KM`
+    /// in semi-major axis and `FAR_FIELD_PHASE_OFFSET_RAD` in mean anomaly so
+    /// that `dimensionless_norm(roe) = δa/a ≈ 7.4e-3` crosses the default
+    /// `ProximityConfig::roe_threshold` of 5e-3, classifying the pair as
+    /// `FarField` and exercising the full Lambert solve + propagation pipeline.
+    ///
+    /// Note: δλ (along-track phase) is deliberately excluded from
+    /// `dimensionless_norm` per Koenig Sec. V, so a pure in-track offset would
+    /// always classify as Proximity no matter how large. δa is the lightest
+    /// component that crosses the threshold with a physically sensible value.
     fn far_field_input() -> PipelineInput {
         use hifitime::Epoch;
-        use nalgebra::Vector3;
+        use rpo_core::elements::keplerian_conversions::keplerian_to_state;
+        use rpo_core::test_helpers::iss_like_elements;
 
-        let chief = StateVector {
-            epoch: Epoch::from_gregorian_str("2024-01-01T00:00:00 UTC").unwrap(),
-            position_eci_km: Vector3::from(FAR_FIELD_CHIEF_POSITION_ECI_KM),
-            velocity_eci_km_s: Vector3::from(FAR_FIELD_CHIEF_VELOCITY_ECI_KM_S),
-        };
+        // Altitude offset producing δa ≈ 7.4e-3 for an ISS-like chief (a ≈ 6778 km).
+        // Comfortably above the default 5e-3 FarField threshold without entering
+        // a regime where Lambert needs multi-rev handling.
+        const FAR_FIELD_SMA_OFFSET_KM: f64 = 50.0;
+        // In-track phase shift giving the deputy a physically interpretable
+        // separation from the chief at t = 0. ~0.2 rad ≈ 1.4 Mm along-track.
+        const FAR_FIELD_PHASE_OFFSET_RAD: f64 = 0.2;
 
-        let deputy = StateVector {
-            epoch: Epoch::from_gregorian_str("2024-01-01T00:00:00 UTC").unwrap(),
-            position_eci_km: Vector3::from(FAR_FIELD_DEPUTY_POSITION_ECI_KM),
-            velocity_eci_km_s: Vector3::from(FAR_FIELD_DEPUTY_VELOCITY_ECI_KM_S),
-        };
+        let epoch = Epoch::from_gregorian_str("2024-01-01T00:00:00 UTC").unwrap();
+        let chief_ke = iss_like_elements();
+        let mut deputy_ke = chief_ke;
+        deputy_ke.a_km += FAR_FIELD_SMA_OFFSET_KM;
+        deputy_ke.mean_anomaly_rad += FAR_FIELD_PHASE_OFFSET_RAD;
+
+        let chief = keplerian_to_state(&chief_ke, epoch).unwrap();
+        let deputy = keplerian_to_state(&deputy_ke, epoch).unwrap();
 
         PipelineInput {
             chief,

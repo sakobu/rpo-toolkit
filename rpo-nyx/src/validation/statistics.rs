@@ -24,7 +24,6 @@ pub(super) fn find_closest_analytical_ric(trajectory: &[PropagatedState], elapse
     // Trajectory is time-sorted by construction; binary search for insertion point
     let idx = trajectory.partition_point(|s| s.elapsed_s < elapsed_s);
 
-    // Compare the two candidates bracketing the insertion point
     let best = if idx == 0 {
         &trajectory[0]
     } else if idx >= trajectory.len() {
@@ -249,10 +248,6 @@ mod tests {
     }
 
     /// Verify `compute_leg_summaries` with mixed pre/post-COLA points across legs.
-    ///
-    /// Leg 0: errors [1.0, 3.0, 2.0], no post-COLA → max=3.0, mean=2.0, rms=sqrt(14/3)
-    /// Leg 1: errors [1.0(pre), 2.0(pre), 10.0(post)] → max=2.0, mean=1.5, 1 excluded
-    /// Leg 2: all post-COLA → `num_points=0`, 2 excluded
     #[test]
     fn leg_summaries_mixed_cola() {
         let make = |pos_err: f64, vel_err: f64, post_cola: bool| ValidationPoint {
@@ -297,7 +292,6 @@ mod tests {
         assert_eq!(summaries[1].num_points, 2);
         assert_eq!(summaries[1].num_post_cola_excluded, 1);
 
-        // Leg 2: all excluded — max starts at +0.0 and never updates.
         assert_eq!(summaries[2].max_position_error_km.to_bits(), 0_u64);
         assert_eq!(summaries[2].num_points, 0);
         assert_eq!(summaries[2].num_post_cola_excluded, 2);
@@ -317,7 +311,6 @@ mod tests {
         assert_eq!(summaries.len(), 1);
         assert_eq!(summaries[0].num_points, 0);
         assert_eq!(summaries[0].num_post_cola_excluded, 0);
-        // No input means no update to `max_position_error_km`; stays at +0.0.
         assert_eq!(summaries[0].max_position_error_km.to_bits(), 0_u64);
     }
 }
