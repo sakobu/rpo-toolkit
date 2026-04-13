@@ -39,6 +39,55 @@ pub fn write_formation_design_md(out: &mut String, report: &FormationDesignRepor
     write_transit_safety_md(out, report);
 }
 
+/// Write a condensed Formation Design summary for validate/MC reports.
+///
+/// Emits perch status, mission-wide minimum e/i, and the worst transit e/i —
+/// enough for an operator to confirm the design unchanged from the mission tier
+/// without repeating ~50 lines of detail. Points at the mission report for the
+/// full breakdown.
+pub fn write_formation_design_condensed_md(out: &mut String, report: &FormationDesignReport) {
+    let _ = writeln!(out, "## Formation Design\n");
+    let _ = writeln!(out, "| Parameter | Value |");
+    let _ = writeln!(out, "| --- | --- |");
+
+    // Perch status summary
+    let perch_line = match &report.perch {
+        PerchEnrichmentResult::Enriched(safe_perch) => format!(
+            "ENRICHED ({}, \u{03b4}e = {}, \u{03b4}i = {})",
+            format_alignment(safe_perch.alignment),
+            fmt_m(safe_perch.de_magnitude_km, 1),
+            fmt_m(safe_perch.di_magnitude_km, 1),
+        ),
+        PerchEnrichmentResult::Baseline(_) => "NOT APPLIED (baseline)".to_string(),
+        PerchEnrichmentResult::Fallback { reason, .. } => {
+            format!("FALLBACK ({})", format_fallback_reason(reason))
+        }
+    };
+    let _ = writeln!(out, "| Perch | {perch_line} |");
+
+    // Worst transit e/i across all legs (look at transit_safety)
+    let worst_transit: Option<(usize, f64)> = report
+        .transit_safety
+        .iter()
+        .enumerate()
+        .filter_map(|(i, ts)| ts.as_ref().map(|t| (i + 1, t.min_ei_separation_km)))
+        .min_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
+    if let Some((leg, min_km)) = worst_transit {
+        let _ = writeln!(out, "| Min transit e/i | {} (leg {leg}) |", fmt_m(min_km, 1));
+    }
+
+    // Mission-wide min e/i
+    if let Some(min_km) = report.mission_min_ei_separation_km {
+        let _ = writeln!(out, "| Mission min e/i | {} |", fmt_m(min_km, 1));
+    }
+
+    let _ = writeln!(out);
+    let _ = writeln!(
+        out,
+        "> Full formation design detail is available in the `mission` report.\n",
+    );
+}
+
 // ---------------------------------------------------------------------------
 // Markdown helpers
 // ---------------------------------------------------------------------------

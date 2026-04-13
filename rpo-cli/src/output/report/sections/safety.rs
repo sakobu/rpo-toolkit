@@ -6,7 +6,7 @@ use rpo_core::mission::{
     assess_safety, RcContext, SafetyAssessment, SafetyConfig, SafetyMetrics, ValidationReport,
 };
 
-use crate::output::fmt::{fmt_m, oxford_join, KM_TO_M};
+use crate::output::fmt::{fmt_m, fmt_ric_position, oxford_join, KM_TO_M};
 use crate::output::thresholds::{insight as insight_thresh, safety as safety_thresh};
 use crate::output::verdict::{
     analytical_overestimate, margin_or_shortfall_row, margin_ratio, SafetyTier, VerdictResult,
@@ -114,8 +114,8 @@ pub(crate) fn write_safety_section(
     let ric = safety.operational.min_3d_ric_position_km;
     let _ = writeln!(
         out,
-        "| \u{2014} RIC | [{:.4}, {:.4}, {:.4}] km |",
-        ric[0], ric[1], ric[2],
+        "| \u{2014} RIC | {} |",
+        fmt_ric_position(&ric),
     );
 
     // R/C plane
@@ -145,8 +145,8 @@ pub(crate) fn write_safety_section(
     );
     let _ = writeln!(
         out,
-        "| \u{2014} RIC | [{:.4}, {:.4}, {:.4}] km |",
-        rc_ric[0], rc_ric[1], rc_ric[2],
+        "| \u{2014} RIC | {} |",
+        fmt_ric_position(&rc_ric),
     );
     let _ = writeln!(out);
 
@@ -427,17 +427,20 @@ struct SafetyAnnotationCtx<'a> {
     mode: SafetyAnnotationMode,
 }
 
-/// Write the non-conservative footnote and the 3D overestimation annotation.
+/// Write the Safety Comparison annotation beneath the table.
 ///
-/// Footnote: when the 3D value is non-conservative, quote the actual margin
-/// reduction (analytical margin vs Nyx margin) as an absolute percentage so
-/// an 85%-level reduction is not hidden behind the prior "`>10% smaller`"
-/// phrasing that understated it by almost an order of magnitude.
+/// A single merged block (was two separate blockquotes pre-merge — a `*`
+/// footnote on margin reduction and a `>` annotation on absolute delta; they
+/// overlapped ~80% and read as redundant). The merged annotation carries:
 ///
-/// Annotation: show the absolute overestimate delta (`+117 m`) AND the
-/// analytical/Nyx ratio (`≈ 2.6× Nyx`). Readers routinely misparse the
-/// older "overestimated by 165%" phrasing as "analytical is 1.65× Nyx",
-/// losing a factor of ~1.6 in their mental model.
+/// - absolute delta (`+117 m`) — prevents the "165% overestimate" misparse
+/// - ratio (`~2.7×`) — same
+/// - margin reduction (`85%`) when analytical passes the keep-out — quantifies
+///   how much of the analytical cushion the full-physics solution gives back
+/// - Nyx threshold margin (`21 m above the 50 m keep-out, 1.4× threshold`)
+///
+/// The block is written as a `*` footnote so the `\*` marker in the table
+/// cell still has a referent.
 fn write_safety_annotations(out: &mut String, ctx: &SafetyAnnotationCtx<'_>) {
     let threshold_m = ctx.config.min_distance_3d_km * KM_TO_M;
     let ana_3d_m = ctx.ana_3d_km * KM_TO_M;
@@ -452,20 +455,37 @@ fn write_safety_annotations(out: &mut String, ctx: &SafetyAnnotationCtx<'_>) {
     let overestimate = analytical_overestimate(ctx.ana_3d_km, ctx.num_3d_km);
 
     match (overestimate.as_ref(), ctx.noncons_ei) {
-        (Some(ovr), _) if ana_margin_m > 0.0 => {
-            let reduction_pct = ((ana_margin_m - nyx_margin_m) / ana_margin_m)
-                * insight_thresh::PERCENT_PER_UNIT;
+        (Some(ovr), _) => {
+            let thr_ratio = margin_ratio(ctx.num_3d_km, ctx.config.min_distance_3d_km);
+            let nyx_label = match ctx.mode {
+                SafetyAnnotationMode::PreCola => "Nyx pre-COLA trajectory",
+                SafetyAnnotationMode::Standard => "Nyx",
+            };
+            // Margin-reduction clause only fires when analytical passed the
+            // keep-out — otherwise "reduction" is meaningless.
+            let reduction_clause = if ana_margin_m > 0.0 {
+                let reduction_pct = ((ana_margin_m - nyx_margin_m) / ana_margin_m)
+                    * insight_thresh::PERCENT_PER_UNIT;
+                format!(
+                    " Full-physics margin is {nyx_margin_m:.0} m vs {ana_margin_m:.0} m \
+                     analytical \u{2014} a {reduction_pct:.0}% reduction of the analytical \
+                     cushion."
+                )
+            } else {
+                String::new()
+            };
             let _ = writeln!(
                 out,
-                "\\* Full-physics 3D margin is {nyx_margin_m:.0} m (vs {ana_margin_m:.0} m \
-                 analytical) \u{2014} a {reduction_pct:.0}% reduction. Analytical 3D distance \
-                 is approximately {:.1}\u{00d7} Nyx. Use the Nyx column as the governing value.",
+                "\n\\* Analytical overestimates min 3D distance: {ana_3d_m:.0} m analytical vs \
+                 {num_3d_m:.0} m {nyx_label} (+{:.0} m, ~{:.1}\u{00d7}).{reduction_clause} \
+                 The Nyx value governs for operations \u{2014} it sits {nyx_margin_m:.0} m \
+                 above the {threshold_m:.0} m keep-out ({thr_ratio:.1}\u{00d7} threshold).\n",
+                ovr.delta_m,
                 ovr.ratio,
             );
         }
-        // e/i is flagged but 3D reduction wording does not apply — emit a
-        // terser footnote so the `\*` marker in the table has a referent.
-        // Fires only when 3D is consistent but e/i disagrees.
+        // e/i is flagged but 3D agrees — emit a terser footnote so the `\*`
+        // marker in the table has a referent.
         (None, true) => {
             let _ = writeln!(
                 out,
@@ -474,22 +494,5 @@ fn write_safety_annotations(out: &mut String, ctx: &SafetyAnnotationCtx<'_>) {
             );
         }
         _ => {}
-    }
-
-    if let Some(ovr) = overestimate {
-        let thr_ratio = margin_ratio(ctx.num_3d_km, ctx.config.min_distance_3d_km);
-        let nyx_label = match ctx.mode {
-            SafetyAnnotationMode::PreCola => "Nyx pre-COLA trajectory",
-            SafetyAnnotationMode::Standard => "Nyx",
-        };
-        let _ = writeln!(
-            out,
-            "\n> Analytical overestimates min 3D distance: {ana_3d_m:.0} m analytical vs \
-             {num_3d_m:.0} m {nyx_label} (+{:.0} m, ~{:.1}\u{00d7}). The Nyx value \
-             governs for operations \u{2014} it sits {nyx_margin_m:.0} m above the \
-             {threshold_m:.0} m keep-out ({thr_ratio:.1}\u{00d7} threshold).\n",
-            ovr.delta_m,
-            ovr.ratio,
-        );
     }
 }

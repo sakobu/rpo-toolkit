@@ -3,28 +3,19 @@
 use std::fmt::Write;
 
 use rpo_core::pipeline::{PipelineInput, PipelineOutput};
-use rpo_core::propagation::PropagationModel;
 
 use crate::output::fmt::{fmt_duration, fmt_velocity_target, KM_TO_M};
-use crate::output::report::helpers::propagator_label;
 
 /// Write the Waypoint Targeting section.
 pub(crate) fn write_waypoint_section(
     out: &mut String,
     output: &PipelineOutput,
     input: &PipelineInput,
-    propagator: &PropagationModel,
-    auto_drag: bool,
 ) {
     let _ = writeln!(
         out,
         "## Waypoint Targeting ({} legs)\n",
         output.mission.legs.len(),
-    );
-    let _ = writeln!(
-        out,
-        "**Propagator:** {}\n",
-        propagator_label(propagator, auto_drag),
     );
 
     let _ = writeln!(

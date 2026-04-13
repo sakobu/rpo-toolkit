@@ -20,31 +20,44 @@ pub(crate) fn write_summary_block_mission(
     let _ = writeln!(out, "# Mission Summary\n");
     let _ = writeln!(
         out,
-        "**Verdict: {}{}** ({}) | {} total \u{0394}v | {} duration | {} waypoints\n",
-        verdict_result.verdict,
-        verdict_result.qualifier,
-        verdict_result.reason,
-        fmt_m_s(output.total_dv_km_s, 1),
-        fmt_duration(output.total_duration_s),
-        output.mission.legs.len(),
+        "**Verdict: {}{}**\n",
+        verdict_result.verdict, verdict_result.qualifier,
     );
+    let _ = writeln!(out, "{}\n", verdict_result.reason);
 
-    // Safety summary table
+    // Safety summary table — mission stats + safety metrics
     let safety = if let Some(report) = validation {
         Some(&report.numerical_safety)
     } else {
         output.mission.safety.as_ref()
     };
 
+    let tier = if validation.is_some() {
+        " (Nyx)"
+    } else {
+        " (analytical)"
+    };
+
+    let _ = writeln!(out, "| Metric | Value | Threshold | Status |");
+    let _ = writeln!(out, "| --- | --- | --- | --- |");
+    let _ = writeln!(
+        out,
+        "| Total \u{0394}v | {} | \u{2014} | \u{2014} |",
+        fmt_m_s(output.total_dv_km_s, 1),
+    );
+    let _ = writeln!(
+        out,
+        "| Duration | {} | \u{2014} | \u{2014} |",
+        fmt_duration(output.total_duration_s),
+    );
+    let _ = writeln!(
+        out,
+        "| Waypoints | {} | \u{2014} | \u{2014} |",
+        output.mission.legs.len(),
+    );
+
     if let Some(safety) = safety {
         let assessment = assess_safety(safety, config);
-        let tier = if validation.is_some() {
-            " (Nyx)"
-        } else {
-            " (analytical)"
-        };
-        let _ = writeln!(out, "| Metric | Value | Threshold | Status |");
-        let _ = writeln!(out, "| --- | --- | --- | --- |");
         let _ = writeln!(
             out,
             "| Min 3D distance{tier} | {} | {} | {} |",
@@ -78,10 +91,6 @@ pub(crate) fn write_summary_block_mission(
                 "| Max position error | {} | \u{2014} | \u{2014} |",
                 fmt_m(report.max_position_error_km, 0),
             );
-            // Analytical bias row: absolute delta + ratio (not a single percentage,
-            // which readers routinely misparse as "analytical is 1.65× Nyx" when it
-            // is actually 2.6× Nyx). Uses the same helper as `validation_insights`
-            // so the summary row and the insight list stay in lockstep.
             if let Some(ref ana) = report.analytical_safety {
                 let ana_3d = ana.operational.min_distance_3d_km;
                 let num_3d = safety.operational.min_distance_3d_km;
@@ -99,8 +108,8 @@ pub(crate) fn write_summary_block_mission(
                 }
             }
         }
-        let _ = writeln!(out);
     }
+    let _ = writeln!(out);
     write_cola_callout(out, output);
     if output.auto_drag_config.is_some() {
         let _ = writeln!(

@@ -23,6 +23,23 @@ pub enum Severity {
     Info,
 }
 
+impl Severity {
+    /// Markdown prefix for this severity level, used by both the
+    /// above-the-fold alert box and the bottom insights list so the
+    /// labels never drift. Canonical labels:
+    /// - `Critical` → `"**CRITICAL:**"`
+    /// - `Warning`  → `"**Warning:**"`
+    /// - `Info`     → `"**Insight:**"`
+    #[must_use]
+    pub fn markdown_prefix(self) -> &'static str {
+        match self {
+            Self::Critical => "**CRITICAL:**",
+            Self::Warning => "**Warning:**",
+            Self::Info => "**Insight:**",
+        }
+    }
+}
+
 /// A cross-tier insight with severity and message.
 #[derive(Debug, Clone)]
 pub struct Insight {
@@ -344,8 +361,14 @@ pub fn mc_insights(
                 ),
             });
         } else if let Some(nom_m) = nominal_failure_m {
+            // Info (not Warning) because this branch reports a nominal-inherited
+            // fact, not a dispersion-induced finding. MC adds no new information
+            // here — the operator already saw the nominal e/i failure in the
+            // nominal report, and operational safety (3D distance) holds.
+            // Dispersion-induced e/i violations (the else branch below) stay at
+            // Warning because they surface findings the nominal design did not.
             insights.push(Insight {
-                severity: Severity::Warning,
+                severity: Severity::Info,
                 message: format!(
                     "{rate_pct:.0}% e/i violation rate{p05_part}. Nominal e/i separation is \
                      already {nom_m:.1} m \u{2014} the MC ensemble inherits this, it is not \
@@ -427,18 +450,17 @@ fn mc_waypoint_last_p95_insight(stats: &EnsembleStatistics) -> Option<Insight> {
     }
     let last_idx = stats.waypoint_miss_km.len();
     let last = stats.waypoint_miss_km.last()?.as_ref()?;
-    let last_p95_metres = last.p95 * KM_TO_M;
-    if last_p95_metres <= insight_thresh::MC_FINAL_WAYPOINT_P95_ALERT_M {
+    let last_p95_km = last.p95;
+    if last_p95_km * KM_TO_M <= insight_thresh::MC_FINAL_WAYPOINT_P95_ALERT_M {
         return None;
     }
     let first = stats.waypoint_miss_km.first()?.as_ref()?;
-    let first_p95_metres = first.p95 * KM_TO_M;
-    let last_p95_kilometres = last.p95;
+    let first_p95_m = first.p95 * KM_TO_M;
     Some(Insight {
         severity: Severity::Info,
         message: format!(
-            "WP{last_idx} p95 miss is {last_p95_kilometres:.2} km (vs {first_p95_metres:.0} m at \
-             WP1). In 5% of samples, the final waypoint is missed by more than a kilometre in \
+            "WP{last_idx} p95 miss is {last_p95_km:.2} km (vs {first_p95_m:.0} m at \
+             WP1). In 5% of samples, the final waypoint is missed by more than a kilometer in \
              closed-loop targeting \u{2014} consider tighter tolerances, an additional \
              intermediate waypoint, or a re-targeting gate before the WP{last_idx} arrival burn.",
         ),
@@ -758,8 +780,10 @@ mod tests {
     #[test]
     fn mc_insights_does_not_compare_rc_plane_p05_against_3d_keepout() {
         // Build an EnsembleStatistics with a very tight R/C-plane p05 (15 m)
-        // but a healthy 3D p05 (131.6 m) — matches the audit's mc.md scenario.
-        // No insight should reference 'R/C-plane' or 'breach safety'.
+        // but a healthy 3D p05 (131.6 m). The R/C-plane p05 is below the 50 m
+        // 3D keep-out, but the 3D distance is not — the renderer must not
+        // conflate the two. No insight should reference 'R/C-plane' or
+        // 'breach safety'.
         let report = mc_report_with_tight_rc_plane(
             /* rc_p05_km = */ 0.015,
             /* min_3d_p05_km = */ 0.1316,
@@ -890,5 +914,12 @@ mod tests {
         assert_eq!(insights.len(), 2);
         assert!(insights[0].message.contains("leg 2"));
         assert!(insights[1].message.contains("leg 4"));
+    }
+
+    #[test]
+    fn severity_markdown_prefixes_are_canonical() {
+        assert_eq!(Severity::Critical.markdown_prefix(), "**CRITICAL:**");
+        assert_eq!(Severity::Warning.markdown_prefix(), "**Warning:**");
+        assert_eq!(Severity::Info.markdown_prefix(), "**Insight:**");
     }
 }

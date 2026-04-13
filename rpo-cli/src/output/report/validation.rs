@@ -4,28 +4,25 @@ use std::fmt::Write;
 
 use rpo_core::mission::{assess_safety, ValidationReport};
 use rpo_core::pipeline::{PipelineInput, PipelineOutput};
-use rpo_core::propagation::{DragConfig, PropagationModel};
 
 use crate::output::fmt::{fmt_m, fmt_m_s, KM_TO_M};
 use crate::output::insights;
 use crate::output::verdict::{determine_verdict, SafetyTier};
 
-use super::helpers::{propagator_label, write_drag_table, write_insights, ReportContext};
+use super::helpers::{
+    emit_alert_box, write_insights, ReportContext,
+};
 use super::sections::{
-    cola, eclipse, formation::write_formation_design_md, free_drift, safety, schedule, summary,
-    transfer, waypoints,
+    cola, configuration, eclipse, formation::write_formation_design_condensed_md, free_drift,
+    recommendations, safety, schedule, summary, transfer, waypoints,
 };
 
 /// Validation-specific parameters for markdown formatting.
-pub struct ValidationContext<'a> {
-    /// Propagation model used for analytical targeting.
-    pub propagator: &'a PropagationModel,
+pub struct ValidationContext {
     /// Whether drag was auto-derived from spacecraft properties.
     pub auto_drag: bool,
     /// Number of nyx sample points per leg.
     pub samples_per_leg: u32,
-    /// Auto-derived drag config, if any.
-    pub derived_drag: Option<&'a DragConfig>,
 }
 
 /// Generate a complete markdown report for the `validate` command.
@@ -34,7 +31,7 @@ pub fn validation_to_markdown(
     output: &PipelineOutput,
     input: &PipelineInput,
     report: &ValidationReport,
-    ctx: &ValidationContext<'_>,
+    ctx: &ValidationContext,
 ) -> String {
     let mut out = String::with_capacity(8192);
 
@@ -44,7 +41,19 @@ pub fn validation_to_markdown(
     let vr = determine_verdict(output, &sc, Some(report));
     summary::write_summary_block_mission(&mut out, &vr, output, &sc, Some(report));
 
-    let prop_label = propagator_label(ctx.propagator, ctx.auto_drag);
+    // Compute insights once, then partition: top-of-report alert gets the most
+    // urgent items, bottom insights list gets the rest. No insight is shown twice.
+    let mut insight_lines = insights::validation_insights(report, &sc);
+    if let (Some(cola_maneuvers), Some(cola_config)) = (&output.safety.cola, &input.base.cola) {
+        insight_lines.extend(insights::cola_analytical_miss_insights(
+            cola_maneuvers,
+            cola_config.target_distance_km,
+        ));
+    }
+    let bottom_items = emit_alert_box(&mut out, insight_lines.clone());
+
+    let prop_label = configuration::propagator_label(input, output, ctx.auto_drag);
+    configuration::write_configuration_section(&mut out, input, output, prop_label);
     let _ = writeln!(
         out,
         "> \u{0394}v values below reflect the analytical targeting plan ({prop_label}). \
@@ -54,7 +63,7 @@ pub fn validation_to_markdown(
 
     transfer::write_transfer_section(&mut out, output, input);
 
-    waypoints::write_waypoint_section(&mut out, output, input, ctx.propagator, ctx.auto_drag);
+    waypoints::write_waypoint_section(&mut out, output, input);
 
     schedule::write_maneuver_schedule(&mut out, output);
 
@@ -71,7 +80,7 @@ pub fn validation_to_markdown(
     }
 
     if let Some(ref fd) = output.formation_design {
-        write_formation_design_md(&mut out, fd);
+        write_formation_design_condensed_md(&mut out, fd);
     }
 
     if let Some(ref poca) = output.safety.poca {
@@ -99,34 +108,33 @@ pub fn validation_to_markdown(
         input,
         report,
         ctx.samples_per_leg,
-        ctx.derived_drag,
     );
 
-    // Insights
-    let mut insight_lines = insights::validation_insights(report, &sc);
-    if let (Some(cola_maneuvers), Some(cola_config)) =
-        (&output.safety.cola, &input.base.cola)
-    {
-        insight_lines.extend(insights::cola_analytical_miss_insights(
-            cola_maneuvers,
-            cola_config.target_distance_km,
-        ));
-    }
-    write_insights(&mut out, &insight_lines);
+    // Covariance propagation is intentionally NOT rendered in validate.md.
+    // The validate tier's central claim is "analytical is non-conservative vs
+    // Nyx" (see the Safety Comparison and bias callouts). Rendering an
+    // analytical-STM covariance prediction in a report that just finished
+    // telling the reader not to trust the analytical STM is a category
+    // mismatch. The covariance section lives only in mc.md.
+
+    // Bottom insights: items NOT already surfaced in the alert box.
+    // Recommendations get the full list so they can reason about every finding.
+    write_insights(&mut out, &bottom_items);
+
+    recommendations::write_validate_recommendations(&mut out, output, &insight_lines);
 
     out
 }
 
 // ── Validation-only section ─────────────────────────────────────────
 
-/// Write the Nyx validation section (position error, per-leg error, spacecraft, safety comparison, COLA detail, eclipse, drag).
+/// Write the Nyx validation section (position error, per-leg error, spacecraft, safety comparison, COLA detail, eclipse).
 fn write_validation_section(
     out: &mut String,
     output: &PipelineOutput,
     input: &PipelineInput,
     report: &ValidationReport,
     samples_per_leg: u32,
-    derived_drag: Option<&DragConfig>,
 ) {
     let _ = writeln!(
         out,
@@ -210,11 +218,6 @@ fn write_validation_section(
     if let Some(ref ev) = report.eclipse_validation {
         eclipse::write_eclipse_validation(out, ev, output);
     }
-
-    // Auto-derived drag
-    if let Some(drag) = derived_drag {
-        write_drag_table(out, drag);
-    }
 }
 
 #[cfg(test)]
@@ -225,7 +228,6 @@ mod tests {
         MissionConfig, OperationalSafety, PassiveSafety, SafetyConfig, SafetyMetrics,
         ValidationReport,
     };
-    use rpo_core::pipeline::to_propagation_model;
     use rpo_nyx::pipeline::execute_mission;
     use std::path::PathBuf;
 
@@ -404,7 +406,7 @@ mod tests {
         );
     }
 
-    /// Build a synthetic [`ValidationReport`] mimicking the audit dataset:
+    /// Build a synthetic [`ValidationReport`] with a tight-margin geometry:
     /// analytical 188 m 3D, Nyx 71 m 3D, against a 50 m keep-out. When
     /// `cola_miss` is true, injects a COLA effectiveness entry flagged as
     /// threshold-not-met so the `(AT MARGIN)` qualifier and the CRITICAL
@@ -443,7 +445,7 @@ mod tests {
     /// `(AT MARGIN)` verdict qualifier path is reachable (the qualifier only
     /// downgrades from `OperationallyFeasible`, which in turn requires
     /// enrichment to be active when e/i fails).
-    fn load_example_mission_with_enrichment() -> (PipelineInput, PipelineOutput, PropagationModel) {
+    fn load_example_mission_with_enrichment() -> (PipelineInput, PipelineOutput) {
         let mut input: PipelineInput = serde_json::from_str(
             &std::fs::read_to_string(examples_dir().join("mission.json")).unwrap(),
         )
@@ -453,19 +455,16 @@ mod tests {
             alignment: rpo_core::mission::EiAlignment::default(),
         });
         let output = execute_mission(&input).unwrap();
-        let propagator = to_propagation_model(&input.base.propagator);
-        (input, output, propagator)
+        (input, output)
     }
 
     #[test]
     fn validate_report_emits_at_margin_qualifier_on_tight_margin_and_cola_miss() {
-        let (input, output, propagator) = load_example_mission_with_enrichment();
+        let (input, output) = load_example_mission_with_enrichment();
         let report = synthetic_validation_report(/* tight */ true, /* cola_miss */ true);
         let ctx = ValidationContext {
-            propagator: &propagator,
             auto_drag: true,
             samples_per_leg: 50,
-            derived_drag: None,
         };
         let md = validation_to_markdown(&output, &input, &report, &ctx);
 
@@ -484,13 +483,11 @@ mod tests {
 
     #[test]
     fn validate_report_safety_comparison_uses_absolute_delta_and_ratio() {
-        let (input, output, propagator) = load_example_mission_with_enrichment();
+        let (input, output) = load_example_mission_with_enrichment();
         let report = synthetic_validation_report(/* tight */ true, /* cola_miss */ false);
         let ctx = ValidationContext {
-            propagator: &propagator,
             auto_drag: true,
             samples_per_leg: 50,
-            derived_drag: None,
         };
         let md = validation_to_markdown(&output, &input, &report, &ctx);
 
@@ -515,13 +512,11 @@ mod tests {
 
     #[test]
     fn validate_report_adds_pre_post_cola_equality_footnote() {
-        let (input, output, propagator) = load_example_mission_with_enrichment();
+        let (input, output) = load_example_mission_with_enrichment();
         let report = synthetic_validation_report(/* tight */ true, /* cola_miss */ true);
         let ctx = ValidationContext {
-            propagator: &propagator,
             auto_drag: true,
             samples_per_leg: 50,
-            derived_drag: None,
         };
         let md = validation_to_markdown(&output, &input, &report, &ctx);
 

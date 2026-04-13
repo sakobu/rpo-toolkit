@@ -141,6 +141,14 @@ impl McBaseline {
 ///
 /// Both classes are surfaced in the verdict reason so a skim reader sees the
 /// per-leg distinction instead of a single soft "marginal" label.
+///
+/// # Invariants
+/// - When `config.min_ei_separation_km <= 0.0`, the free-drift
+///   classification branch (`EiClassification::classify`) routes away
+///   from the `NominalFailure` tier — a zero threshold disables the
+///   e/i gate entirely.
+/// - An empty `output.safety.free_drift` list yields no free-drift
+///   degradation; the verdict is driven by operational safety alone.
 #[must_use]
 pub fn determine_verdict(
     output: &PipelineOutput,
@@ -263,12 +271,11 @@ fn classify_abort_case_passive_safety(
         if separation_km >= threshold_km {
             continue;
         }
-        let leg = i + 1;
-        let separation_metres = separation_km * KM_TO_M;
+        let entry = (i + 1, separation_km * KM_TO_M);
         if separation_km < lost_cutoff_km {
-            lost.push((leg, separation_metres));
+            lost.push(entry);
         } else {
-            marginal.push((leg, separation_metres));
+            marginal.push(entry);
         }
     }
 
@@ -294,7 +301,7 @@ fn classify_abort_case_passive_safety(
     Some(parts.join(" and "))
 }
 
-/// Render a list of `(leg_1_based, separation_metres)` pairs as a
+/// Render a list of `(leg_1_based, separation_m)` pairs as a
 /// human-readable string with Oxford-comma style: `"leg 1 (99.8 m)"`,
 /// `"leg 2 (0.1 m) and leg 3 (0.2 m)"`, or `"leg 2 (0.1 m), leg 3 (0.2 m),
 /// and leg 4 (0.3 m)"`.
@@ -305,7 +312,7 @@ fn classify_abort_case_passive_safety(
 fn render_leg_sep_list(items: &[(usize, f64)]) -> String {
     let formatted: Vec<String> = items
         .iter()
-        .map(|(leg, separation_metres)| format!("leg {leg} ({separation_metres:.1} m)"))
+        .map(|(leg, separation_m)| format!("leg {leg} ({separation_m:.1} m)"))
         .collect();
     oxford_join(&formatted)
 }
@@ -343,6 +350,14 @@ pub(crate) struct WaypointMissGrowth {
 /// emit the matching info-level insight). Keeping the walk in one
 /// place — and returning all four values from a single pass — prevents
 /// the two consumers from drifting.
+///
+/// # Invariants
+/// - `last_waypoint_index` matches `waypoint_miss_km.len()` in 1-based
+///   terms (the index the rendered text cites).
+/// - Returns `None` when the list has a single entry (no growth to
+///   measure).
+/// - Returns `None` when the first waypoint's `p50_km <= 0.0` — a
+///   zero denominator makes the growth ratio meaningless.
 pub(crate) fn waypoint_miss_growth(stats: &EnsembleStatistics) -> Option<WaypointMissGrowth> {
     let mut iter = stats.waypoint_miss_km.iter().filter_map(|opt| opt.as_ref());
     let first_stats = iter.next()?;
@@ -393,6 +408,13 @@ impl EiClassification {
     /// `ei_degraded` MUST match `stats.ei_violation_rate > 0` — it is
     /// passed in so the caller can reuse the same value for verdict
     /// category dispatch without recomputing the comparison.
+    ///
+    /// # Invariants
+    /// - `threshold_km <= 0.0` disables the `NominalFailure` branch: the
+    ///   classifier cannot flag "below threshold" when the threshold is
+    ///   zero or negative.
+    /// - Strict comparison semantics follow `determine_verdict` — the
+    ///   boundary at exactly `threshold_km` is classified as passing.
     fn classify(
         report: &MonteCarloReport,
         config: &SafetyConfig,
@@ -432,6 +454,14 @@ impl EiClassification {
 /// WPN (…p50)" — growth alone never flips the verdict tier. The metric name
 /// is deliberately distinct from validate.md's "position error" (Nyx vs
 /// analytical RIC residual) so cross-report comparisons are unambiguous.
+///
+/// # Invariants
+/// - When `config.min_ei_separation_km <= 0.0`, `EiClassification::classify`
+///   routes away from `NominalFailure` — a zero threshold disables the
+///   nominal-e/i failure tier the same way it does for `determine_verdict`.
+/// - Convergence is treated as `100%` only when
+///   `|convergence_rate - 1.0| < thresholds::mc::CONVERGENCE_EXACT_TOL`
+///   (ULP-scale float guard).
 #[must_use]
 pub fn determine_mc_verdict(report: &MonteCarloReport, config: &SafetyConfig) -> VerdictResult {
     let stats = &report.statistics;
@@ -496,9 +526,13 @@ pub fn determine_mc_verdict(report: &MonteCarloReport, config: &SafetyConfig) ->
             let last_m = growth.last_p50_km * KM_TO_M;
             let last_wp = growth.last_waypoint_index;
             let ratio = growth.ratio;
+            // Semi-colon separator (not nested parens). The previous format
+            // wrapped the growth clause in (...) which then contained its own
+            // (...) per waypoint, producing `... nominal (… WP1 (90 m p50) to
+            // WP3 (381 m p50))` — unreadable at a glance.
             result.reason = Cow::Owned(format!(
-                "{} (waypoint-miss dispersion grows {ratio:.1}\u{00d7} from WP1 \
-                 ({first_m:.0} m p50) to WP{last_wp} ({last_m:.0} m p50))",
+                "{}; waypoint-miss dispersion grows {ratio:.1}\u{00d7} from \
+                 WP1 {first_m:.0} m p50 to WP{last_wp} {last_m:.0} m p50",
                 result.reason,
             ));
         }
@@ -607,16 +641,15 @@ pub(crate) fn margin_ratio(value_km: f64, threshold_km: f64) -> f64 {
 /// pipe and excludes the trailing newline — callers append `"\n"` as needed.
 #[must_use]
 pub(crate) fn margin_or_shortfall_row(value_km: f64, threshold_km: f64) -> String {
-    let value_metres = value_km * KM_TO_M;
-    let threshold_metres = threshold_km * KM_TO_M;
     if value_km >= threshold_km {
-        format!("| Margin | +{:.1} m |", value_metres - threshold_metres)
+        let margin_m = (value_km - threshold_km) * KM_TO_M;
+        format!("| Margin | +{margin_m:.1} m |")
     } else {
+        let shortfall_m = (threshold_km - value_km) * KM_TO_M;
+        let separation_m = value_km * KM_TO_M;
+        let required_m = threshold_km * KM_TO_M;
         format!(
-            "| Shortfall | {:.1} m (separation {:.1} m / {:.0} m required) |",
-            threshold_metres - value_metres,
-            value_metres,
-            threshold_metres,
+            "| Shortfall | {shortfall_m:.1} m (separation {separation_m:.1} m / {required_m:.0} m required) |",
         )
     }
 }

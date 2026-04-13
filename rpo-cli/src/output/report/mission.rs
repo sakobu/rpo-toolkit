@@ -2,14 +2,14 @@
 
 use rpo_core::mission::assess_safety;
 use rpo_core::pipeline::{PipelineInput, PipelineOutput};
-use rpo_core::propagation::PropagationModel;
 
+use crate::output::insights;
 use crate::output::verdict::{determine_verdict, SafetyTier};
 
-use super::helpers::ReportContext;
+use super::helpers::{emit_alert_box, ReportContext};
 use super::sections::{
-    cola, eclipse, formation::write_formation_design_md, free_drift, safety, schedule, summary,
-    transfer, waypoints,
+    cola, configuration, eclipse, formation::write_formation_design_md, free_drift,
+    recommendations, safety, schedule, summary, transfer, waypoints,
 };
 
 /// Generate a complete markdown report for the `mission` command.
@@ -17,7 +17,6 @@ use super::sections::{
 pub fn mission_to_markdown(
     output: &PipelineOutput,
     input: &PipelineInput,
-    propagator: &PropagationModel,
     auto_drag: bool,
 ) -> String {
     let mut out = String::with_capacity(4096);
@@ -29,9 +28,23 @@ pub fn mission_to_markdown(
     let vr = determine_verdict(output, &sc, None);
     summary::write_summary_block_mission(&mut out, &vr, output, &sc, None);
 
+    // Alert box: surface COLA analytical miss warnings early
+    let cola_target_km = input.base.cola.as_ref().map(|c| c.target_distance_km);
+    let alert_insights: Vec<insights::Insight> = if let (Some(cola), Some(target_km)) =
+        (&output.safety.cola, cola_target_km)
+    {
+        insights::cola_analytical_miss_insights(cola, target_km)
+    } else {
+        Vec::new()
+    };
+    let _ = emit_alert_box(&mut out, alert_insights);
+
+    let prop_label = configuration::propagator_label(input, output, auto_drag);
+    configuration::write_configuration_section(&mut out, input, output, prop_label);
+
     transfer::write_transfer_section(&mut out, output, input);
 
-    waypoints::write_waypoint_section(&mut out, output, input, propagator, auto_drag);
+    waypoints::write_waypoint_section(&mut out, output, input);
 
     schedule::write_maneuver_schedule(&mut out, output);
 
@@ -46,6 +59,13 @@ pub fn mission_to_markdown(
             outcome,
         );
     }
+
+    // Covariance propagation is intentionally NOT rendered here. The mission
+    // tier is a point-estimate report; a linear-Gaussian statistical prediction
+    // needs the MC ensemble alongside to be trustworthy (the analytical
+    // linearization can break down silently for large dispersions). The
+    // covariance section lives in mc.md where empirical MC dispersion can
+    // validate it side-by-side.
 
     if let Some(ref fd) = output.formation_design {
         write_formation_design_md(&mut out, fd);
@@ -71,13 +91,14 @@ pub fn mission_to_markdown(
 
     eclipse::write_eclipse_section(&mut out, output);
 
+    recommendations::write_mission_recommendations(&mut out, output, input);
+
     out
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rpo_core::pipeline::to_propagation_model;
     use rpo_nyx::pipeline::execute_mission;
     use std::path::PathBuf;
 
@@ -89,19 +110,18 @@ mod tests {
     }
 
     /// Load `examples/mission.json` and drive the real pipeline, returning
-    /// the `(input, output, propagator)` tuple used by report-rendering tests.
+    /// the `(input, output)` tuple used by report-rendering tests.
     ///
     /// Mirrors the pattern in `mission_markdown_contains_expected_sections`.
     /// The default `examples/mission.json` does not enable enrichment, so
     /// `output.formation_design` is `None` on return.
-    fn load_example_mission() -> (PipelineInput, PipelineOutput, PropagationModel) {
+    fn load_example_mission() -> (PipelineInput, PipelineOutput) {
         let input: PipelineInput = serde_json::from_str(
             &std::fs::read_to_string(examples_dir().join("mission.json")).unwrap(),
         )
         .unwrap();
         let output = execute_mission(&input).unwrap();
-        let propagator = to_propagation_model(&input.base.propagator);
-        (input, output, propagator)
+        (input, output)
     }
 
     /// Build a minimal synthetic [`rpo_core::mission::FormationDesignReport`]
@@ -122,10 +142,10 @@ mod tests {
 
     #[test]
     fn perch_roe_heading_says_enriched_when_formation_design_present() {
-        let (input, mut output, propagator) = load_example_mission();
+        let (input, mut output) = load_example_mission();
         output.formation_design = Some(synthetic_formation_design_report());
 
-        let md = mission_to_markdown(&output, &input, &propagator, false);
+        let md = mission_to_markdown(&output, &input, false);
 
         assert!(
             md.contains("### Enriched Perch ROE"),
@@ -139,13 +159,13 @@ mod tests {
 
     #[test]
     fn perch_roe_heading_stays_bare_when_formation_design_absent() {
-        let (input, output, propagator) = load_example_mission();
+        let (input, output) = load_example_mission();
         assert!(
             output.formation_design.is_none(),
             "baseline example must not enable enrichment",
         );
 
-        let md = mission_to_markdown(&output, &input, &propagator, false);
+        let md = mission_to_markdown(&output, &input, false);
 
         assert!(
             md.contains("### Perch ROE"),
@@ -165,8 +185,7 @@ mod tests {
             )
             .unwrap();
         let output = execute_mission(&input).unwrap();
-        let propagator = to_propagation_model(&input.base.propagator);
-        let md = mission_to_markdown(&output, &input, &propagator, false);
+        let md = mission_to_markdown(&output, &input, false);
 
         assert!(md.contains("# Mission Summary"), "missing summary header");
         assert!(md.contains("**Verdict:"), "missing verdict");
@@ -197,10 +216,10 @@ mod tests {
 
     // ── Report-wording regression tests ─────────────────────────────
     //
-    // These lock the load-bearing phrasing from the 2026-04-10 CLI report
-    // wording cleanup. Each test asserts both the presence of the NEW
-    // wording and the absence of the LEGACY wording so regressions either
-    // direction surface immediately.
+    // These lock the load-bearing phrasing produced by `mission.md`. Each
+    // test asserts both the presence of the intended wording and the
+    // absence of earlier phrasings so regressions in either direction
+    // surface immediately.
 
     /// End-to-end render from `examples/mission.json` with enrichment
     /// enabled via `safety_requirements`. Returns the rendered markdown
@@ -215,8 +234,7 @@ mod tests {
             alignment: rpo_core::mission::EiAlignment::default(),
         });
         let output = execute_mission(&input).unwrap();
-        let propagator = to_propagation_model(&input.base.propagator);
-        mission_to_markdown(&output, &input, &propagator, false)
+        mission_to_markdown(&output, &input, false)
     }
 
     #[test]

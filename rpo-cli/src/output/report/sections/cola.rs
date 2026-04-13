@@ -5,7 +5,7 @@ use std::fmt::Write;
 use rpo_core::mission::ValidationReport;
 use rpo_core::pipeline::{PipelineInput, PipelineOutput};
 
-use crate::output::fmt::KM_TO_M;
+use crate::output::fmt::{fmt_ric_position, KM_TO_M};
 use crate::output::report::helpers::ReportContext;
 
 use super::safety::format_leg_list;
@@ -70,11 +70,11 @@ fn write_cola_section(
     }
     let _ = writeln!(
         out,
-        "| Leg | \u{0394}v (km/s) | u (rad) | Post-COLA POCA | Cost (m/s) | Type |",
+        "| Leg | \u{0394}v (m/s) | u (deg) | Post-COLA POCA | Cost (m/s) | Type |",
     );
     let _ = writeln!(
         out,
-        "|-----|-----------|---------|---------------|------------|------|",
+        "|-----|----------|---------|---------------|------------|------|",
     );
     // Track offending legs with their achieved POCA and fuel cost so the
     // callout below can quote per-leg values instead of a generic "leg(s) X"
@@ -99,19 +99,20 @@ fn write_cola_section(
         };
         let _ = writeln!(
             out,
-            "| {} | [{:.6}, {:.6}, {:.6}] | {:.4} | {} | {:.2} | {} |",
+            "| {} | [{:.2}, {:.2}, {:.2}] | {:.1}\u{00b0} | {} | {:.2} | {} |",
             m.leg_index + 1,
-            m.dv_ric_km_s.x,
-            m.dv_ric_km_s.y,
-            m.dv_ric_km_s.z,
-            m.maneuver_location_rad,
+            m.dv_ric_km_s.x * KM_TO_M,
+            m.dv_ric_km_s.y * KM_TO_M,
+            m.dv_ric_km_s.z * KM_TO_M,
+            m.maneuver_location_rad.to_degrees(),
             poca_cell,
             m.fuel_cost_km_s * KM_TO_M,
             correction,
         );
     }
     let _ = writeln!(out);
-    if !offending.is_empty() {
+    let offending_fired = !offending.is_empty();
+    if offending_fired {
         let target_m = target_distance_km.unwrap_or(0.0) * KM_TO_M;
         let (leg_desc, per_leg_suffix) = match offending.as_slice() {
             [OffendingCola { leg_1_based, achieved_poca_m, fuel_cost_m_s }] => (
@@ -132,17 +133,31 @@ fn write_cola_section(
              margins further \u{2014} run `validate` before relying on this burn.\n",
         );
     }
-    let note = match context {
-        ReportContext::Mission => {
-            "> Post-COLA POCA distances are analytical (J2 STM). Full-physics propagation \
-             typically reduces these margins \u{2014} run `validate` to confirm effectiveness.\n"
+    // General analytical-POCA caveat. Skip it in the Mission context when the
+    // offending callout already fired — the callout says "run validate before
+    // relying on this burn" which strictly supersedes the generic "run
+    // validate to confirm effectiveness" note, and printing both back-to-back
+    // reads as redundant. In the Validate context the note points at Safety
+    // Comparison, so there is no redundancy and we always print it.
+    match context {
+        ReportContext::Mission if !offending_fired => {
+            let _ = writeln!(
+                out,
+                "> Post-COLA POCA distances are analytical (J2 STM). Full-physics propagation \
+                 typically reduces these margins \u{2014} run `validate` to confirm effectiveness.\n",
+            );
         }
         ReportContext::Validate => {
-            "> Post-COLA POCA distances are analytical (J2 STM). See Safety Comparison below \
-             for full-physics effectiveness.\n"
+            let _ = writeln!(
+                out,
+                "> Post-COLA POCA distances are analytical (J2 STM). See Safety Comparison below \
+                 for full-physics effectiveness.\n",
+            );
         }
-    };
-    let _ = writeln!(out, "{note}");
+        ReportContext::Mission => {
+            // Offending callout already carries the run-validate guidance.
+        }
+    }
 }
 
 /// Write the secondary conjunctions table (COLA-induced close approaches on other legs).
@@ -157,23 +172,22 @@ fn write_secondary_conjunction_section(
     }
     let _ = writeln!(
         out,
-        "| COLA Leg | Violated Leg | Distance (m) | Elapsed (s) | Position (RIC km) |",
+        "| COLA Leg | Violated Leg | Distance (m) | Elapsed (s) | Position (RIC) |",
     );
     let _ = writeln!(
         out,
-        "|----------|-------------|-------------|-------------|-------------------|",
+        "|----------|-------------|-------------|-------------|----------------|",
     );
     for sv in violations {
+        let ric = fmt_ric_position(&sv.poca.position_ric_km);
         let _ = writeln!(
             out,
-            "| {} | {} | {:.1} | {:.1} | [{:.4}, {:.4}, {:.4}] |",
+            "| {} | {} | {:.1} | {:.1} | {} |",
             sv.original_leg_index + 1,
             sv.violated_leg_index + 1,
             sv.poca.distance_km * KM_TO_M,
             sv.poca.elapsed_s,
-            sv.poca.position_ric_km.x,
-            sv.poca.position_ric_km.y,
-            sv.poca.position_ric_km.z,
+            ric,
         );
     }
     let _ = writeln!(out);

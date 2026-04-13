@@ -2,9 +2,10 @@
 
 use std::fmt::Write;
 
+use hifitime::Epoch;
 use rpo_core::pipeline::PipelineOutput;
 
-use crate::output::fmt::fmt_duration;
+use crate::output::fmt::{fmt_duration, fmt_epoch_rounded};
 use crate::output::thresholds::insight as insight_thresh;
 
 /// Write the Eclipse section.
@@ -46,7 +47,67 @@ pub(crate) fn write_eclipse_section(out: &mut String, output: &PipelineOutput) {
             }
         }
         let _ = writeln!(out);
+
+        // Burns-in-shadow check: cross-reference maneuver epochs with
+        // eclipse intervals so an operator can identify thermal/attitude
+        // concerns at a glance.
+        write_burns_in_shadow(out, output);
     }
+}
+
+/// Write the burns-in-shadow sub-section.
+///
+/// Cross-references every burn in the consolidated mission timeline
+/// (from [`super::super::helpers::collect_burns`]) against the eclipse
+/// intervals and flags any burns that fire in umbra.
+fn write_burns_in_shadow(out: &mut String, output: &PipelineOutput) {
+    let intervals = output
+        .mission
+        .eclipse
+        .as_ref()
+        .map(|e| &e.summary.intervals[..])
+        .unwrap_or_default();
+
+    let burns = super::super::helpers::collect_burns(output);
+    if burns.is_empty() {
+        return;
+    }
+
+    let shadow_status = |epoch: Epoch| -> &'static str {
+        for iv in intervals {
+            if epoch >= iv.start && epoch <= iv.end {
+                return "Umbra";
+            }
+        }
+        "Sunlit"
+    };
+
+    let any_in_shadow = burns.iter().any(|b| shadow_status(b.epoch) == "Umbra");
+
+    let _ = writeln!(out, "### Burns in Shadow\n");
+    if !any_in_shadow {
+        let _ = writeln!(out, "No burns fire during shadow intervals.\n");
+        return;
+    }
+
+    let _ = writeln!(out, "| Burn | Epoch | Status |");
+    let _ = writeln!(out, "| --- | --- | --- |");
+    for burn in &burns {
+        let status = shadow_status(burn.epoch);
+        let status_cell = if status == "Umbra" {
+            "\u{26a0}\u{fe0f} Umbra"
+        } else {
+            "Sunlit"
+        };
+        let _ = writeln!(
+            out,
+            "| {} | {} | {} |",
+            burn.kind,
+            fmt_epoch_rounded(burn.epoch),
+            status_cell,
+        );
+    }
+    let _ = writeln!(out);
 }
 
 /// Write the Eclipse Validation sub-section (analytical vs ANISE).

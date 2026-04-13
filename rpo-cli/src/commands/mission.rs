@@ -2,7 +2,7 @@
 
 use std::path::Path;
 
-use rpo_core::pipeline::{to_propagation_model, PipelineInput};
+use rpo_core::pipeline::PipelineInput;
 use rpo_nyx::pipeline::execute_mission;
 
 use crate::cli::OutputMode;
@@ -27,8 +27,7 @@ pub fn run(
     match mode {
         OutputMode::Json => output_json(&result, output),
         OutputMode::Summary => {
-            let propagator = to_propagation_model(&input.base.propagator);
-            let md = report::mission_to_markdown(&result, &input, &propagator, false);
+            let md = report::mission_to_markdown(&result, &input, false);
             output_text(&md, output)
         }
     }

@@ -4,45 +4,7 @@ use std::fmt::Write;
 
 use rpo_core::pipeline::PipelineOutput;
 
-use crate::output::fmt::KM_TO_M;
-
-/// Maneuver type for the consolidated schedule table.
-enum ScheduleEntryKind {
-    /// Lambert transfer departure impulse (ECI frame).
-    LambertDeparture,
-    /// Lambert transfer arrival impulse (ECI frame).
-    LambertArrival,
-    /// Waypoint-leg departure impulse (RIC frame).
-    WaypointDeparture { leg: usize },
-    /// Waypoint-leg arrival impulse (RIC frame).
-    WaypointArrival { leg: usize },
-    /// Collision avoidance maneuver (RIC frame).
-    Cola { leg: usize },
-}
-
-impl std::fmt::Display for ScheduleEntryKind {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::LambertDeparture => write!(f, "Lambert dep"),
-            Self::LambertArrival => write!(f, "Lambert arr"),
-            Self::WaypointDeparture { leg } => write!(f, "WP{} dep", leg + 1),
-            Self::WaypointArrival { leg } => write!(f, "WP{} arr", leg + 1),
-            Self::Cola { leg } => write!(f, "COLA (L{})", leg + 1),
-        }
-    }
-}
-
-/// A single row in the consolidated maneuver schedule table.
-struct ScheduleEntry {
-    /// Burn epoch (UTC).
-    epoch: hifitime::Epoch,
-    /// Maneuver classification.
-    kind: ScheduleEntryKind,
-    /// RIC Dv components (`None` for Lambert burns which are ECI-only).
-    dv_ric_km_s: Option<nalgebra::Vector3<f64>>,
-    /// Total Dv magnitude (km/s).
-    dv_mag_km_s: f64,
-}
+use crate::output::fmt::{fmt_epoch_rounded, KM_TO_M};
 
 /// Which report the maneuver schedule is being rendered into.
 ///
@@ -89,8 +51,9 @@ pub(crate) fn write_maneuver_schedule(out: &mut String, output: &PipelineOutput)
 
 /// Write a consolidated chronological maneuver schedule table.
 ///
-/// Collects Lambert, waypoint, and COLA burns from the pipeline output,
-/// sorts by epoch, and renders a single table.
+/// Collects Lambert, waypoint, and COLA burns from the pipeline output
+/// (via [`super::super::helpers::collect_burns`]), then renders them in
+/// chronological order.
 ///
 /// # Arguments
 /// - `out` — output buffer; the rendered table is appended.
@@ -102,61 +65,10 @@ pub(crate) fn write_maneuver_schedule_with(
     output: &PipelineOutput,
     variant: ScheduleVariant,
 ) {
-    let cola_count = output.safety.cola.as_ref().map_or(0, Vec::len);
-    let capacity = output.mission.legs.len() * 2
-        + if output.transfer.is_some() { 2 } else { 0 }
-        + cola_count;
-    let mut entries: Vec<ScheduleEntry> = Vec::with_capacity(capacity);
-
-    // Lambert burns (ECI Dv — no RIC decomposition)
-    if let Some(ref transfer) = output.transfer {
-        entries.push(ScheduleEntry {
-            epoch: transfer.departure_state.epoch,
-            kind: ScheduleEntryKind::LambertDeparture,
-            dv_ric_km_s: None,
-            dv_mag_km_s: transfer.departure_dv_eci_km_s.norm(),
-        });
-        entries.push(ScheduleEntry {
-            epoch: transfer.arrival_state.epoch,
-            kind: ScheduleEntryKind::LambertArrival,
-            dv_ric_km_s: None,
-            dv_mag_km_s: transfer.arrival_dv_eci_km_s.norm(),
-        });
-    }
-
-    // Waypoint departure / arrival burns (RIC Dv)
-    for (i, leg) in output.mission.legs.iter().enumerate() {
-        entries.push(ScheduleEntry {
-            epoch: leg.departure_maneuver.epoch,
-            kind: ScheduleEntryKind::WaypointDeparture { leg: i },
-            dv_ric_km_s: Some(leg.departure_maneuver.dv_ric_km_s),
-            dv_mag_km_s: leg.departure_maneuver.dv_ric_km_s.norm(),
-        });
-        entries.push(ScheduleEntry {
-            epoch: leg.arrival_maneuver.epoch,
-            kind: ScheduleEntryKind::WaypointArrival { leg: i },
-            dv_ric_km_s: Some(leg.arrival_maneuver.dv_ric_km_s),
-            dv_mag_km_s: leg.arrival_maneuver.dv_ric_km_s.norm(),
-        });
-    }
-
-    // COLA burns (RIC Dv)
-    if let Some(ref cola) = output.safety.cola {
-        for m in cola {
-            entries.push(ScheduleEntry {
-                epoch: m.epoch,
-                kind: ScheduleEntryKind::Cola { leg: m.leg_index },
-                dv_ric_km_s: Some(m.dv_ric_km_s),
-                dv_mag_km_s: m.dv_ric_km_s.norm(),
-            });
-        }
-    }
-
-    if entries.is_empty() {
+    let burns = super::super::helpers::collect_burns(output);
+    if burns.is_empty() {
         return;
     }
-
-    entries.sort_by_key(|e| e.epoch);
 
     let _ = writeln!(out, "{}\n", variant.section_title());
     let _ = writeln!(
@@ -169,26 +81,27 @@ pub(crate) fn write_maneuver_schedule_with(
     );
 
     let cola_marker = variant.cola_marker();
-    for (i, entry) in entries.iter().enumerate() {
+    for (i, burn) in burns.iter().enumerate() {
         // Mark COLA rows with the configured suffix (e.g. `"†"`) so mc.md can
         // visually flag the row as "not executed in Monte Carlo samples".
-        let type_cell = match (&entry.kind, cola_marker) {
-            (ScheduleEntryKind::Cola { .. }, Some(mark)) => {
-                format!("{kind} {mark}", kind = entry.kind)
+        let type_cell = match (&burn.kind, cola_marker) {
+            (super::super::helpers::BurnKind::Cola { .. }, Some(mark)) => {
+                format!("{kind} {mark}", kind = burn.kind)
             }
-            _ => format!("{}", entry.kind),
+            _ => format!("{}", burn.kind),
         };
-        match entry.dv_ric_km_s {
+        let epoch_str = fmt_epoch_rounded(burn.epoch);
+        match burn.dv_ric_km_s {
             Some(v) => {
                 let _ = writeln!(
                     out,
                     "| {} | {} | {type_cell} | {:.2} | {:.2} | {:.2} | {:.1} |",
                     i + 1,
-                    entry.epoch,
+                    epoch_str,
                     v.x * KM_TO_M,
                     v.y * KM_TO_M,
                     v.z * KM_TO_M,
-                    entry.dv_mag_km_s * KM_TO_M,
+                    burn.dv_mag_km_s * KM_TO_M,
                 );
             }
             None => {
@@ -196,11 +109,40 @@ pub(crate) fn write_maneuver_schedule_with(
                     out,
                     "| {} | {} | {type_cell} | \u{2014} | \u{2014} | \u{2014} | {:.1} |",
                     i + 1,
-                    entry.epoch,
-                    entry.dv_mag_km_s * KM_TO_M,
+                    epoch_str,
+                    burn.dv_mag_km_s * KM_TO_M,
                 );
             }
         }
     }
     let _ = writeln!(out);
+
+    write_same_epoch_footnote(out, &burns);
+}
+
+/// Emit an explanatory footnote when a Lambert arrival row and a WP1 departure
+/// row share the same epoch. Without context an operator asks "is this a
+/// combined burn? two impulses? a coast?"
+fn write_same_epoch_footnote(out: &mut String, burns: &[super::super::helpers::Burn]) {
+    use super::super::helpers::BurnKind;
+    let lambert_arr = burns
+        .iter()
+        .find(|b| matches!(b.kind, BurnKind::LambertArrival))
+        .map(|b| b.epoch);
+    let wp1_dep = burns
+        .iter()
+        .find(|b| matches!(b.kind, BurnKind::WaypointDeparture { leg: 0 }))
+        .map(|b| b.epoch);
+
+    if let (Some(arr), Some(dep)) = (lambert_arr, wp1_dep) {
+        if arr == dep {
+            let _ = writeln!(
+                out,
+                "> Lambert arrival and WP1 departure share the same epoch. \
+                 The Lambert arrival impulse transitions the deputy onto the proximity orbit; \
+                 the WP1 departure impulse begins the first waypoint-targeting leg. Both are \
+                 applied instantaneously at the handoff point.\n",
+            );
+        }
+    }
 }

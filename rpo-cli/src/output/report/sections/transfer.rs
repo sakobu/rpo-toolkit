@@ -26,7 +26,7 @@ pub(crate) fn write_transfer_section(
         } => {
             let _ = writeln!(out, "| Classification | PROXIMITY |");
             let _ = writeln!(out, "| ECI separation | {separation_km:.1} km |");
-            let _ = writeln!(out, "| \u{03b4}r/r | {delta_r_over_r:.3e} |");
+            let _ = writeln!(out, "| \u{03b4}r/r (relative separation ratio) | {delta_r_over_r:.3e} |");
         }
         MissionPhase::FarField {
             separation_km,
@@ -38,7 +38,7 @@ pub(crate) fn write_transfer_section(
                 "| Classification | FAR-FIELD (Lambert transfer required) |",
             );
             let _ = writeln!(out, "| ECI separation | {separation_km:.1} km |");
-            let _ = writeln!(out, "| \u{03b4}r/r | {delta_r_over_r:.3e} |");
+            let _ = writeln!(out, "| \u{03b4}r/r (relative separation ratio) | {delta_r_over_r:.3e} |");
         }
     }
     let _ = writeln!(out);

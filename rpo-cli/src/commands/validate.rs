@@ -107,10 +107,8 @@ pub fn run(
         }
         OutputMode::Summary => {
             let ctx = ValidationContext {
-                propagator: &plan.propagator,
                 auto_drag,
                 samples_per_leg,
-                derived_drag: plan.derived_drag.as_ref(),
             };
             let md = report::validation_to_markdown(&result, &input, &report, &ctx);
             output_text(&md, output)

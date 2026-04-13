@@ -4,7 +4,7 @@ use std::fmt::Write;
 
 use rpo_core::mission::{assess_safety, FreeDriftAnalysis, RcContext, SafetyConfig};
 
-use crate::output::fmt::{fmt_bounded_motion_residual, fmt_m, KM_TO_M};
+use crate::output::fmt::{fmt_bounded_motion_residual, fmt_m, fmt_ric_position, KM_TO_M};
 use crate::output::thresholds::safety as safety_thresh;
 
 /// Write the Free-Drift Safety section (abort case).
@@ -121,10 +121,8 @@ pub(crate) fn write_poca_section(
         );
         let _ = writeln!(
             out,
-            "| Position (RIC) | [{:.4}, {:.4}, {:.4}] km |",
-            closest.position_ric_km.x,
-            closest.position_ric_km.y,
-            closest.position_ric_km.z,
+            "| Position (RIC) | {} |",
+            fmt_ric_position(&closest.position_ric_km),
         );
         let _ = writeln!(out);
     }

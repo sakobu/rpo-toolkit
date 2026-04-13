@@ -15,7 +15,7 @@ pub mod mc {
     /// "all converged" from "one or more failed" without risking false
     /// negatives from float-equality pitfalls. Codebase forbids `==` on
     /// floats; this constant exists so the `all_converged` check in
-    /// `determine_mc_verdict` can honor that rule.
+    /// `determine_mc_verdict` (see `verdict.rs`) can honor that rule.
     pub const CONVERGENCE_EXACT_TOL: f64 = f64::EPSILON;
 
     /// Convergence rate below which the top-line Monte Carlo verdict
@@ -27,8 +27,22 @@ pub mod mc {
     /// is a heuristic — it is not derived from a confidence interval on
     /// the collision probability, so it should be re-tuned if the default
     /// sample count changes materially. Used by `determine_mc_verdict` in
-    /// `common.rs`.
+    /// `verdict.rs`.
     pub const CONVERGENCE_ALERT: f64 = 0.95;
+
+    /// Open-loop 3σ / closed-loop p95 ratio below which the closed-loop
+    /// retargeting-benefit callout is suppressed as not operationally
+    /// interesting.
+    ///
+    /// Less than 2× suppression is barely a difference — either the
+    /// dispersion is already small or the two propagations agree, in
+    /// which case the operator can read the individual numbers from
+    /// their respective tables. Empirical.
+    pub const RETARGETING_SUPPRESSION_MIN_RATIO: f64 = 2.0;
+
+    /// Seed displayed when a Monte Carlo config omits one. Arbitrary
+    /// but fixed so example rendering stays deterministic.
+    pub const DISPLAY_DEFAULT_SEED: u64 = 42;
 }
 
 /// Rate-comparison thresholds for verdict zero-checks.
@@ -91,7 +105,7 @@ pub mod insight {
     /// the Safety Comparison table. Lives at the boundary where
     /// analytical and numerical tiers begin to disagree in an
     /// operationally meaningful way. See `analytical_overestimate`
-    /// in `common.rs` for the single source-of-truth computation.
+    /// in `verdict.rs` for the single source-of-truth computation.
     pub const SIGNIFICANT_DELTA_PCT: f64 = 10.0;
 
     /// Monte Carlo Δv spread ratio (`p95 / p05`) above which an
@@ -119,14 +133,22 @@ pub mod insight {
 
     /// Final-waypoint p95 miss (metres) above which the MC report
     /// emits the "closed-loop targeting degraded" insight. A
-    /// kilometre-scale miss on the arrival waypoint implies a
+    /// kilometer-scale miss on the arrival waypoint implies a
     /// failed approach even with COLA active, so the operator
     /// needs visibility even when the ensemble otherwise reports
     /// clean statistics. Separate from [`ERROR_GROWTH_RATIO_ALERT`]:
     /// this is an absolute-scale gate, that one is a ratio gate.
-    /// Empirical; matches the 1 km p95 limit flagged in the CLI
-    /// report audit.
+    /// Empirical; a kilometer is the smallest round number at which
+    /// "missed the waypoint" becomes unambiguous regardless of mission
+    /// scale.
     pub const MC_FINAL_WAYPOINT_P95_ALERT_M: f64 = 1000.0;
+
+    /// Maximum number of insights surfaced in the above-the-fold alert
+    /// box. Empirical UX limit: three keeps the alert block scan-length
+    /// bounded so an operator does not need to page past it to reach
+    /// the Summary table. Anything beyond three rolls into the bottom
+    /// insights list, which is where exhaustive findings belong.
+    pub const ALERT_BOX_MAX_ITEMS: usize = 3;
 }
 
 /// Velocity target display thresholds.
@@ -193,4 +215,32 @@ pub mod safety {
     /// does not suppress the footnote and integer-metre display does
     /// not spuriously trigger it.
     pub const POCA_PRE_POST_EQUAL_TOL_M: f64 = 0.05;
+}
+
+/// Covariance-section display and interpretation thresholds.
+pub mod covariance {
+    /// Nominal position magnitude (km) below which the open-loop
+    /// fragility ratio is skipped as numerically meaningless.
+    ///
+    /// 3σ / 0 is undefined; 1 mm ≈ 1 ppm of a typical 1 km chief-deputy
+    /// separation — below this, "3σ exceeds nominal" is roundoff noise,
+    /// not a real operational warning.
+    pub const NEAR_ZERO_NOMINAL_KM: f64 = 1.0e-6;
+
+    /// Terminal 3σ / |nominal| ratio above which the covariance section
+    /// emits the open-loop fragility warning. At exactly 1.0 the 3σ
+    /// bound equals the nominal magnitude — the uncertainty ellipsoid
+    /// is on the verge of swallowing the nominal point. Strict `>`:
+    /// the warning does not fire at the boundary.
+    pub const OPEN_LOOP_FRAGILITY_RATIO: f64 = 1.0;
+
+    /// Mahalanobis distance below which the chief is considered
+    /// "inside the deputy's 1σ uncertainty ellipsoid". Standard
+    /// Gauss/χ² interpretation with 3 DOF (3σ ≈ 97.07% containment).
+    pub const MAHALANOBIS_INSIDE_1SIGMA: f64 = 1.0;
+
+    /// Mahalanobis distance below which the deputy is considered
+    /// "within the 3σ ellipsoid" but not well-separated. 3σ ≈ 97.07%
+    /// containment under a 3-DOF Gaussian.
+    pub const MAHALANOBIS_INSIDE_3SIGMA: f64 = 3.0;
 }
