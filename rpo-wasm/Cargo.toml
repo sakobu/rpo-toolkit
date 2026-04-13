@@ -4,6 +4,7 @@ description = "WASM bindings for the RPO analytical engine"
 version.workspace = true
 edition.workspace = true
 authors.workspace = true
+repository.workspace = true
 license = "MIT OR Apache-2.0"
 
 [lib]

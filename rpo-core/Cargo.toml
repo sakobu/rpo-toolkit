@@ -4,6 +4,7 @@ description = "Core astrodynamics library for RPO mission planning"
 version.workspace = true
 edition.workspace = true
 authors.workspace = true
+repository.workspace = true
 license = "MIT OR Apache-2.0"
 
 [features]

@@ -4,6 +4,7 @@ description = "WebSocket API server for RPO mission planning"
 version.workspace = true
 edition.workspace = true
 authors.workspace = true
+repository.workspace = true
 license = "AGPL-3.0-or-later"
 
 [dependencies]

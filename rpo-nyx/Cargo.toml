@@ -4,6 +4,7 @@ description = "nyx-space integration for RPO mission planning: Lambert solver, f
 version.workspace = true
 edition.workspace = true
 authors.workspace = true
+repository.workspace = true
 license = "AGPL-3.0-or-later"
 
 [dependencies]
