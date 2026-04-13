@@ -3,8 +3,8 @@
 use serde::Serialize;
 use tsify_next::Tsify;
 
-use rpo_core::elements::eclipse::EclipseComputeError;
-use rpo_core::mission::{AvoidanceError, FormationDesignError, MissionError};
+use rpo_core::elements::eclipse::EclipseGeometryError;
+use rpo_core::mission::{AvoidanceError, FormationDesignError, MissionEclipseError, MissionError};
 use rpo_core::pipeline::PipelineError;
 use rpo_core::propagation::{CovarianceError, PropagationError};
 
@@ -107,8 +107,18 @@ impl From<AvoidanceError> for WasmError {
     }
 }
 
-impl From<EclipseComputeError> for WasmError {
-    fn from(e: EclipseComputeError) -> Self {
+impl From<EclipseGeometryError> for WasmError {
+    fn from(e: EclipseGeometryError) -> Self {
+        Self {
+            code: WasmErrorCode::Eclipse,
+            message: e.to_string(),
+            details: std::error::Error::source(&e).map(ToString::to_string),
+        }
+    }
+}
+
+impl From<MissionEclipseError> for WasmError {
+    fn from(e: MissionEclipseError) -> Self {
         Self {
             code: WasmErrorCode::Eclipse,
             message: e.to_string(),

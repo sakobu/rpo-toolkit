@@ -4,13 +4,14 @@
 //! then merges eclipse intervals across leg boundaries (the chief does not
 //! maneuver, so shadow state is continuous).
 
-use crate::elements::eclipse::{build_celestial_snapshot, is_deeper_shadow};
-use crate::elements::{
-    compute_eclipse_state, extract_eclipse_intervals, keplerian_to_state, ric_to_eci_position,
+use crate::elements::eclipse::{
+    build_celestial_snapshot, compute_eclipse_state, extract_eclipse_intervals, is_deeper_shadow,
 };
-use crate::elements::eclipse::EclipseComputeError;
+use crate::elements::{keplerian_to_state, ric_to_eci_position};
 use crate::mission::types::ManeuverLeg;
 use crate::types::{EclipseInterval, EclipseSummary, LegEclipseData, MissionEclipseData};
+
+use super::errors::MissionEclipseError;
 
 /// Compute eclipse data across all mission legs (chief and deputy).
 ///
@@ -19,20 +20,37 @@ use crate::types::{EclipseInterval, EclipseSummary, LegEclipseData, MissionEclip
 /// [`CelestialSnapshot`](crate::types::CelestialSnapshot) (via `build_celestial_snapshot`) and the deputy
 /// eclipse state (via [`ric_to_eci_position`] + [`compute_eclipse_state`]).
 ///
+/// # Invariants
+///
+/// - Each leg's trajectory carries matching `chief_mean` and `ric` fields per
+///   point (structurally enforced by [`ManeuverLeg`]).
+/// - Per-point `chief_mean` must describe a bound orbit (`e < 1`, `a > 0`);
+///   degenerate elements surface as [`MissionEclipseError::Geometry`] wrapping
+///   a `Conversion` error.
+/// - Epochs within each leg must be monotonically increasing for meaningful
+///   interval extraction; non-monotonic input is not rejected but produces
+///   negative or incorrect interval durations.
+/// - Legs must be time-contiguous — the cross-leg `merge_intervals` step
+///   assumes the chief's shadow state is continuous across leg boundaries.
+/// - **The chief is assumed not to maneuver.** Passing leg data from a
+///   maneuvering chief produces incorrect cross-leg merged intervals because
+///   the merge step cannot detect chief discontinuities.
+/// - Deputy RIC reconstruction uses the chief-centered Sun-direction
+///   approximation, valid when `|δr| << 1 AU` (~1e-11 relative error at LEO
+///   km-scale separations).
+///
 /// # Errors
 ///
-/// Returns [`EclipseComputeError::Conversion`] if a Keplerian-to-ECI
-/// conversion fails, [`EclipseComputeError::Dcm`] if an RIC-to-ECI frame
-/// transformation fails, or [`EclipseComputeError::EmptyTrajectory`] if
-/// all legs have empty trajectories.
+/// Returns [`MissionEclipseError::Geometry`] (wrapping `Conversion` or `Dcm`)
+/// if a per-point Keplerian-to-ECI or RIC-to-ECI conversion fails, or
+/// [`MissionEclipseError::EmptyTrajectory`] if all legs have empty trajectories.
 ///
 /// # Cross-leg interval merging
 ///
 /// Eclipse intervals are extracted per-leg, then merged across boundaries.
-/// The chief does not maneuver, so its eclipse state is continuous across
-/// leg boundaries. If the last interval of leg N ends at the same epoch as
-/// (or later than) the first interval of leg N+1, they are merged into one
-/// contiguous interval.
+/// If the last interval of leg N ends at the same epoch as (or later than)
+/// the first interval of leg N+1, they are merged into one contiguous
+/// interval. This relies on the chief-no-maneuver invariant above.
 ///
 /// # Deputy eclipse
 ///
@@ -46,7 +64,7 @@ use crate::types::{EclipseInterval, EclipseSummary, LegEclipseData, MissionEclip
 /// avoiding a redundant ephemeris call.
 pub fn compute_mission_eclipse(
     legs: &[ManeuverLeg],
-) -> Result<MissionEclipseData, EclipseComputeError> {
+) -> Result<MissionEclipseData, MissionEclipseError> {
     let mut leg_data = Vec::with_capacity(legs.len());
     let mut merged_intervals: Vec<EclipseInterval> = Vec::new();
 
@@ -94,7 +112,7 @@ pub fn compute_mission_eclipse(
     }
 
     if leg_data.iter().all(|d| d.chief_celestial.is_empty()) {
-        return Err(EclipseComputeError::EmptyTrajectory);
+        return Err(MissionEclipseError::EmptyTrajectory);
     }
 
     // Recompute aggregate metrics from merged intervals.
@@ -285,8 +303,63 @@ mod tests {
 
         let result = compute_mission_eclipse(&legs);
         assert!(
-            matches!(result, Err(EclipseComputeError::EmptyTrajectory)),
+            matches!(result, Err(MissionEclipseError::EmptyTrajectory)),
             "all-empty trajectories should return EmptyTrajectory, got {result:?}"
+        );
+    }
+
+    /// A degenerate `chief_mean` in a trajectory point surfaces as
+    /// `MissionEclipseError::Geometry` wrapping an `EclipseGeometryError::Conversion`.
+    #[test]
+    fn degenerate_chief_mean_returns_geometry_error() {
+        use crate::elements::eclipse::EclipseGeometryError;
+        use crate::elements::keplerian_conversions::ConversionError;
+        use crate::propagation::propagator::PropagatedState;
+        use crate::types::{KeplerianElements, QuasiNonsingularROE, RICState};
+        use nalgebra::Vector3;
+
+        let bad_chief = KeplerianElements {
+            a_km: -1.0, // invalid SMA → KeplerError::InvalidSemiMajorAxis
+            e: 0.0,
+            i_rad: 0.0,
+            raan_rad: 0.0,
+            aop_rad: 0.0,
+            mean_anomaly_rad: 0.0,
+        };
+
+        let mut leg = test_leg_stub();
+        leg.trajectory = vec![PropagatedState {
+            epoch: test_epoch(),
+            roe: QuasiNonsingularROE::default(),
+            chief_mean: bad_chief,
+            ric: RICState {
+                position_ric_km: Vector3::zeros(),
+                velocity_ric_km_s: Vector3::zeros(),
+            },
+            elapsed_s: 0.0,
+        }];
+
+        let result = compute_mission_eclipse(std::slice::from_ref(&leg));
+        assert!(
+            matches!(
+                result,
+                Err(MissionEclipseError::Geometry(
+                    EclipseGeometryError::Conversion(ConversionError::KeplerFailure(_))
+                ))
+            ),
+            "degenerate chief SMA should surface as Geometry(Conversion(KeplerFailure)), got {result:?}"
+        );
+
+        // Lock the flattened Display output — no redundant type-name prefixes.
+        let err = result.err().unwrap();
+        let msg = err.to_string();
+        assert!(
+            !msg.contains("MissionEclipseError:"),
+            "Display output should not carry the outer type name, got {msg:?}"
+        );
+        assert!(
+            !msg.contains("EclipseGeometryError:"),
+            "Display output should not carry the middle type name, got {msg:?}"
         );
     }
 

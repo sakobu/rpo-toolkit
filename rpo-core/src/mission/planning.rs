@@ -1,12 +1,12 @@
-//! Mission phase classification, separation analysis, and perch geometry.
+//! Analytical mission-planning primitives: phase classification, separation
+//! metrics, perch geometry, and transfer eclipse aggregation.
 //!
-//! Determines whether two spacecraft are within ROE-valid proximity
-//! or require a far-field transfer, using a physically-motivated
-//! dimensionless threshold based on D'Amico Sec. 2.3.4 and Koenig Sec. V.
+//! Classification uses a physically-motivated dimensionless threshold based
+//! on D'Amico Sec. 2.3.4 and Koenig Sec. V to decide whether two spacecraft
+//! are within ROE-valid proximity or require a far-field transfer.
 //!
 //! The `plan_mission` function (classify + Lambert) that requires nyx-space
-//! lives in `rpo-nyx`. This module retains the analytical functions:
-//! classification, perch ROE construction, and transfer eclipse computation.
+//! lives in `rpo-nyx`; everything else WASM-compatible stays here.
 
 use crate::elements::eclipse::{compute_eclipse_from_states, extract_eclipse_intervals};
 use crate::elements::keplerian_conversions::{state_to_keplerian, ConversionError};
@@ -15,8 +15,6 @@ use crate::propagation::lambert::LambertTransfer;
 use crate::types::{
     EclipseState, KeplerianElements, QuasiNonsingularROE, StateVector, TransferEclipseData,
 };
-
-use crate::elements::eclipse::EclipseComputeError;
 
 use super::config::ProximityConfig;
 use super::errors::MissionError;
@@ -184,15 +182,23 @@ pub fn perch_to_roe(
 /// * `arc_steps` — Number of arc steps for densification (e.g., 200).
 ///   Produces `arc_steps + 1` sample points along each trajectory.
 ///
+/// # Invariants
+///
+/// - `transfer.tof_s > 0`
+/// - `arc_steps >= 1`
+/// - `chief` must be at the transfer departure epoch — both trajectories are
+///   propagated over the same `tof_s` window, so a chief at a different epoch
+///   yields time-misaligned samples.
+///
 /// # Errors
 ///
-/// Returns [`EclipseComputeError::Conversion`] if arc densification or
-/// chief propagation fails (degenerate orbit geometry).
+/// Returns [`ConversionError`] if arc densification or chief propagation fails
+/// (degenerate orbit geometry).
 pub fn compute_transfer_eclipse(
     transfer: &LambertTransfer,
     chief: &StateVector,
     arc_steps: u32,
-) -> Result<TransferEclipseData, EclipseComputeError> {
+) -> Result<TransferEclipseData, ConversionError> {
     let deputy_trajectory = transfer.densify_arc(arc_steps)?;
     let chief_trajectory =
         crate::propagation::keplerian::propagate_keplerian(chief, transfer.tof_s, arc_steps)?;

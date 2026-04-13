@@ -26,6 +26,20 @@ pub enum EclipseState {
     Umbra,
 }
 
+impl EclipseState {
+    /// Monotone shadow depth score: Sunlit = 0.0, Penumbra = `shadow_fraction` ∈ (0, 1),
+    /// Umbra = 1.0. Strictly ordered so `a.shadow_depth() > b.shadow_depth()` iff `a`
+    /// represents a deeper shadow than `b`.
+    #[must_use]
+    pub(crate) fn shadow_depth(&self) -> f64 {
+        match self {
+            Self::Sunlit => 0.0,
+            Self::Penumbra { shadow_fraction } => *shadow_fraction,
+            Self::Umbra => 1.0,
+        }
+    }
+}
+
 /// Sun and Moon directions at a single trajectory point.
 ///
 /// Directions are unit vectors from the chief spacecraft toward each body,
@@ -170,6 +184,33 @@ mod tests {
     use super::*;
     use hifitime::Epoch;
     use nalgebra::Vector3;
+
+    #[test]
+    fn shadow_depth_orders_states_monotonically() {
+        let sunlit = EclipseState::Sunlit;
+        let light_penumbra = EclipseState::Penumbra {
+            shadow_fraction: 0.1,
+        };
+        let deep_penumbra = EclipseState::Penumbra {
+            shadow_fraction: 0.9,
+        };
+        let umbra = EclipseState::Umbra;
+
+        assert!(sunlit.shadow_depth() < light_penumbra.shadow_depth());
+        assert!(light_penumbra.shadow_depth() < deep_penumbra.shadow_depth());
+        assert!(deep_penumbra.shadow_depth() < umbra.shadow_depth());
+        assert!(sunlit.shadow_depth() < umbra.shadow_depth());
+    }
+
+    #[test]
+    fn shadow_depth_boundary_values() {
+        assert!((EclipseState::Sunlit.shadow_depth() - 0.0).abs() < f64::EPSILON);
+        assert!((EclipseState::Umbra.shadow_depth() - 1.0).abs() < f64::EPSILON);
+        let penumbra = EclipseState::Penumbra {
+            shadow_fraction: 0.42,
+        };
+        assert!((penumbra.shadow_depth() - 0.42).abs() < f64::EPSILON);
+    }
 
     #[test]
     fn serde_roundtrip_eclipse_state() {

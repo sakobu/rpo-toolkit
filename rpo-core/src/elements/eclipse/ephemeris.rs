@@ -24,7 +24,7 @@ fn julian_centuries_from_j2000(epoch: Epoch) -> f64 {
 
 /// Accumulated general precession in longitude (degrees) at Julian centuries `t`.
 ///
-/// Lieske (1979) / Meeus Ch. 21: `ψ_A` = 5029.0966″ T + 1.1120″ T².
+/// Meeus Ch. 21: `ψ_A` = 5029.0966″ T + 1.1120″ T².
 /// Used to convert ecliptic longitudes from mean equinox of date to J2000.
 fn precession_in_longitude_deg(t: f64) -> f64 {
     (5029.0966 + 1.1120 * t) / 3600.0 * t
@@ -92,7 +92,7 @@ pub fn sun_position_eci_km(epoch: Epoch) -> Vector3<f64> {
     // Precession correction: Meeus L₀ includes precession (~1.397°/century),
     // so λ is referred to the mean equinox of the date. To get J2000 ecliptic
     // longitude, subtract the accumulated general precession in longitude.
-    // Lieske (1979) / Meeus Ch. 21: ψ_A = 5029.0966" T + 1.1120" T²
+    // Meeus Ch. 21: ψ_A = 5029.0966" T + 1.1120" T²
     let precession_deg = precession_in_longitude_deg(t);
     let lambda_deg = lambda_date_deg - precession_deg;
     let lambda_rad = lambda_deg.to_radians();

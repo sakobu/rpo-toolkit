@@ -122,6 +122,14 @@ pub fn compute_eclipse_state(
 ///
 /// Shared by both [`super::compute_celestial_snapshots`] and
 /// [`super::compute_eclipse_from_states`].
+///
+/// # Invariants
+///
+/// - `sc_eci_km` must be non-zero (an on-Earth-center position would produce
+///   a zero-norm Sun direction).
+/// - Sun/Moon positions are sampled via the chief-centered ephemeris
+///   approximation inherited from [`shadow_geometry`]; accurate at LEO, see
+///   the module-level accuracy budget.
 pub(crate) fn build_celestial_snapshot(epoch: Epoch, sc_eci_km: &Vector3<f64>) -> CelestialSnapshot {
     let sun_pos = sun_position_eci_km(epoch);
     let moon_pos = moon_position_eci_km(epoch);

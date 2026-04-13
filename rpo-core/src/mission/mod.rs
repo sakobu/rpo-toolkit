@@ -46,7 +46,7 @@ pub use monte_carlo::{
 };
 pub use waypoints::{
     compute_mission_eclipse, get_mission_state_at_time, plan_waypoint_mission,
-    replan_from_waypoint, resample_leg_trajectory,
+    replan_from_waypoint, resample_leg_trajectory, MissionEclipseError,
 };
 pub use cola_assessment::{
     assess_cola, ColaAssessment, SecondaryViolation, SkippedLeg,

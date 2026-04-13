@@ -90,6 +90,14 @@ pub fn compute_celestial_snapshots(
 /// * `states` — ECI state vectors. Each must have a valid `epoch` and
 ///   non-zero `position_eci_km`.
 ///
+/// # Invariants
+///
+/// - Each `state.position_eci_km` must be non-zero; an on-Earth-center sample
+///   would yield a zero-norm Sun direction.
+/// - Epochs within the slice should be monotonically increasing for meaningful
+///   downstream interval extraction; this function does not enforce ordering.
+/// - Infallible and marked `#[must_use]`; empty input returns an empty `Vec`.
+///
 /// # Performance
 ///
 /// ~250 ns per point (Sun + Moon ephemeris + shadow test, no Keplerian conversion).

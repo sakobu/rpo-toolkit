@@ -7,7 +7,7 @@ use rpo_core::propagation::lambert::LambertTransfer;
 use rpo_core::types::eclipse::{MissionEclipseData, TransferEclipseData};
 use rpo_core::types::StateVector;
 
-use crate::error::WasmError;
+use crate::error::{WasmError, WasmErrorCode};
 
 /// Compute eclipse data along a Lambert transfer arc.
 ///
@@ -30,8 +30,13 @@ pub fn compute_transfer_eclipse(
     chief: StateVector,
     arc_steps: u32,
 ) -> Result<TransferEclipseData, WasmError> {
-    rpo_core::mission::planning::compute_transfer_eclipse(&transfer, &chief, arc_steps)
-        .map_err(WasmError::from)
+    rpo_core::mission::planning::compute_transfer_eclipse(&transfer, &chief, arc_steps).map_err(
+        |e| WasmError {
+            code: WasmErrorCode::Eclipse,
+            message: format!("transfer eclipse: {e}"),
+            details: std::error::Error::source(&e).map(ToString::to_string),
+        },
+    )
 }
 
 /// Compute per-leg eclipse data for a planned mission.

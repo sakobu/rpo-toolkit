@@ -4,21 +4,29 @@
 //! low-precision analytical series (Meeus Ch. 25 and Ch. 47). No ephemeris
 //! files, no ANISE dependency. Microseconds per call.
 //!
+//! # Accuracy budgets
+//!
+//! - Sun direction: ~0.01° (Meeus Eqs. 25.2–25.6, precession correction applied).
+//! - Moon direction: ~0.5° (truncated Meeus Ch. 47 series; E-correction factor
+//!   and quadratic mean-element terms omitted). Adequate for shadow geometry
+//!   at LEO — the Sun subtends ~0.5° and Earth ~60°, so this level of
+//!   directional error shifts shadow boundaries by well under a second.
+//!
 //! # References
 //!
 //! - Meeus, Jean — *Astronomical Algorithms* (2nd ed., 1998), Ch. 25 (Sun), Ch. 47 (Moon)
 //! - Montenbruck & Gill — *Satellite Orbits* (2000), Sec. 3.4 (shadow models)
 
-pub(crate) mod ephemeris;
-pub(crate) mod shadow;
+mod ephemeris;
 mod errors;
-mod snapshots;
 mod intervals;
+mod shadow;
+mod snapshots;
 #[cfg(test)]
 mod test_fixtures;
 
 // Public API (visible outside the crate)
-pub use errors::EclipseComputeError;
+pub use errors::EclipseGeometryError;
 pub use ephemeris::{moon_position_eci_km, sun_position_eci_km};
 pub use shadow::compute_eclipse_state;
 pub use snapshots::{compute_celestial_snapshots, compute_eclipse_from_states};

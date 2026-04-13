@@ -20,5 +20,5 @@ pub use roe_to_ric::{
 pub use roe::{compute_roe, wrap_angle};
 pub use eclipse::{
     compute_celestial_snapshots, compute_eclipse_from_states, compute_eclipse_state,
-    extract_eclipse_intervals, moon_position_eci_km, sun_position_eci_km,
+    extract_eclipse_intervals, moon_position_eci_km, sun_position_eci_km, EclipseGeometryError,
 };

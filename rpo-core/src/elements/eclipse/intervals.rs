@@ -124,24 +124,10 @@ pub fn extract_eclipse_intervals(snapshots: &[CelestialSnapshot]) -> EclipseSumm
     }
 }
 
-/// Returns `true` if `new` represents a deeper shadow than `current`.
-///
-/// Depth ordering: Umbra > Penumbra (by increasing `shadow_fraction`) > Sunlit.
-/// Returns `false` for equal or lesser shadow states, and for transitions
-/// from any state to Sunlit.
+/// Returns `true` if `new` represents a strictly deeper shadow than `current`,
+/// using [`EclipseState::shadow_depth`] as the ordering function.
 pub(crate) fn is_deeper_shadow(new: &EclipseState, current: &EclipseState) -> bool {
-    match (new, current) {
-        (EclipseState::Umbra, EclipseState::Penumbra { .. }) => true,
-        (
-            EclipseState::Penumbra {
-                shadow_fraction: f_new,
-            },
-            EclipseState::Penumbra {
-                shadow_fraction: f_cur,
-            },
-        ) => f_new > f_cur,
-        _ => false,
-    }
+    new.shadow_depth() > current.shadow_depth()
 }
 
 #[cfg(test)]
@@ -286,6 +272,43 @@ mod tests {
             "Interval sum {manual_sum} != total_shadow_duration_s {}",
             summary.total_shadow_duration_s
         );
+    }
+
+    /// `is_deeper_shadow` respects the `shadow_depth` ordering across every
+    /// state combination, including all transitions involving `Sunlit`.
+    #[test]
+    fn is_deeper_shadow_respects_full_ordering() {
+        let sunlit = EclipseState::Sunlit;
+        let light_pen = EclipseState::Penumbra {
+            shadow_fraction: 0.2,
+        };
+        let deep_pen = EclipseState::Penumbra {
+            shadow_fraction: 0.8,
+        };
+        let umbra = EclipseState::Umbra;
+
+        // Transitions from Sunlit to any shadow state are strictly deeper.
+        assert!(is_deeper_shadow(&light_pen, &sunlit));
+        assert!(is_deeper_shadow(&deep_pen, &sunlit));
+        assert!(is_deeper_shadow(&umbra, &sunlit));
+
+        // Transitions to Sunlit are not deeper.
+        assert!(!is_deeper_shadow(&sunlit, &light_pen));
+        assert!(!is_deeper_shadow(&sunlit, &umbra));
+        assert!(!is_deeper_shadow(&sunlit, &sunlit));
+
+        // Penumbra deepening.
+        assert!(is_deeper_shadow(&deep_pen, &light_pen));
+        assert!(!is_deeper_shadow(&light_pen, &deep_pen));
+
+        // Umbra vs any penumbra.
+        assert!(is_deeper_shadow(&umbra, &light_pen));
+        assert!(is_deeper_shadow(&umbra, &deep_pen));
+        assert!(!is_deeper_shadow(&light_pen, &umbra));
+
+        // Equal states are not strictly deeper.
+        assert!(!is_deeper_shadow(&umbra, &umbra));
+        assert!(!is_deeper_shadow(&light_pen, &light_pen));
     }
 
     /// Eclipse intervals are sorted by start epoch and non-overlapping.
