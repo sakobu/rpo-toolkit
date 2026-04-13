@@ -27,7 +27,7 @@ rpo-nyx (AGPL-3.0)  <--  rpo-cli (AGPL-3.0)
 
 ```bash
 cargo build                     # build workspace
-cargo test                      # 597 tests across 5 crates (565 + 32 ignored full-physics; 597 total with -- --include-ignored)
+cargo test                      # 619 tests across 5 crates (587 + 32 ignored full-physics; 619 total with -- --include-ignored)
 ```
 
 Run an example mission (CLI):
@@ -226,7 +226,7 @@ The CLI provides batch execution and shell-composable plumbing for scripting. Th
 
 ## Testing
 
-597 tests across 5 crates (361 rpo-core, 132 rpo-nyx, 55 rpo-cli, 36 rpo-wasm, 13 rpo-api). 32 full-physics tests are `#[ignore]` by default (require ANISE kernels, ~50 MB cached download).
+619 tests across 5 crates (361 rpo-core, 132 rpo-nyx, 77 rpo-cli, 36 rpo-wasm, 13 rpo-api). 32 full-physics tests are `#[ignore]` by default (require ANISE kernels, ~50 MB cached download).
 
 ```bash
 cargo test                      # full suite (5 crates)

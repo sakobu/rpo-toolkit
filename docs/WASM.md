@@ -86,11 +86,9 @@ All codes are `snake_case` strings.
 | `avoidance`        | Collision avoidance maneuver error                            |
 | `missing_field`    | A required field is missing                                   |
 | `empty_trajectory` | Trajectory data is empty                                      |
-| `lambert`          | Lambert solver error                                          |
 | `eclipse`          | Eclipse computation error                                     |
 | `formation`        | Formation design error                                        |
 | `deserialization`  | Input deserialization failed (invalid JSON shape or types)    |
-| `internal`         | Catch-all for unexpected errors                               |
 
 ### Error handling in TypeScript
 
@@ -163,8 +161,8 @@ Mission execution and replanning from a pre-computed Lambert transfer.
 | `replan_from_transfer`          | `MissionResult` | yes      |
 
 ```typescript
-execute_mission_from_transfer(transfer: TransferResult, input: PipelineInput): MissionResult
-replan_from_transfer(transfer: TransferResult, input: PipelineInput, modified_index: number, cached_mission?: WaypointMission | null): MissionResult
+execute_mission_from_transfer(transfer: TransferResult, input: MissionInput): MissionResult
+replan_from_transfer(transfer: TransferResult, input: MissionInput, modified_index: number, cached_mission?: WaypointMission | null): MissionResult
 ```
 
 `execute_mission_from_transfer` runs the full analytical pipeline from a server-provided Lambert transfer result.
@@ -371,9 +369,9 @@ Formation design enrichment: suggest safe-perch alternatives, apply them, and re
 | `enrich_waypoint`            | `EnrichedWaypoint`       | yes      |
 
 ```typescript
-suggest_enrichment(transfer: TransferResult, input: PipelineInput): EnrichmentSuggestion | undefined
+suggest_enrichment(transfer: TransferResult, input: MissionInput): EnrichmentSuggestion | undefined
 apply_perch_enrichment(transfer: TransferResult, suggestion: EnrichmentSuggestion): TransferResult
-accept_waypoint_enrichment(input: PipelineInput, transfer: TransferResult, waypoint_index: number, enriched_roe: QuasiNonsingularROE, chief_at_waypoint: KeplerianElements): EnrichmentAcceptResult
+accept_waypoint_enrichment(input: MissionInput, transfer: TransferResult, waypoint_index: number, enriched_roe: QuasiNonsingularROE, chief_at_waypoint: KeplerianElements): EnrichmentAcceptResult
 enrich_waypoint(position_ric_km: [number, number, number], velocity_ric_km_s: [number, number, number] | null, chief_mean: KeplerianElements, requirements: SafetyRequirements): EnrichedWaypoint
 ```
 
@@ -430,7 +428,7 @@ Output-only structs that exist solely for WASM boundary compatibility. These wra
 | Type                     | Fields                                                                       | Description                                             |
 | ------------------------ | ---------------------------------------------------------------------------- | ------------------------------------------------------- |
 | `MissionResult`          | `output: PipelineOutput`, `transfer: TransferResult`                         | Combined pipeline output and mutated transfer           |
-| `EnrichmentAcceptResult` | `output: PipelineOutput`, `input: PipelineInput`, `transfer: TransferResult` | Pipeline output, mutated input, and mutated transfer    |
+| `EnrichmentAcceptResult` | `output: PipelineOutput`, `input: MissionInput`, `transfer: TransferResult` | Pipeline output, mutated input, and mutated transfer    |
 | `FreeDriftResult`        | `analyses: FreeDriftAnalysis[]`                                              | Per-leg free-drift analysis results                     |
 | `PocaResult`             | `legs: ClosestApproach[][]`                                                  | Per-leg POCA results (outer = legs, inner = approaches) |
 | `ResampledTrajectory`    | `states: PropagatedState[]`                                                  | Resampled propagated states along a leg                 |
