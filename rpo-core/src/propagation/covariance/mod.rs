@@ -21,6 +21,7 @@ pub use propagate::{
     propagate_covariance_with_params, ric_accuracy_to_roe_covariance,
     roe_covariance_to_ric_position, update_covariance_at_maneuver,
 };
+
 pub use types::{
     CovarianceState, LegCovarianceReport, ManeuverUncertainty, MissionCovarianceReport,
     NavigationAccuracy,

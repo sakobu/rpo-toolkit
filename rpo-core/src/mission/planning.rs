@@ -16,8 +16,10 @@ use crate::types::{
     EclipseState, KeplerianElements, QuasiNonsingularROE, StateVector, TransferEclipseData,
 };
 
+use crate::elements::eclipse::EclipseComputeError;
+
 use super::config::ProximityConfig;
-use super::errors::{EclipseComputeError, MissionError};
+use super::errors::MissionError;
 use super::types::{MissionPhase, PerchGeometry};
 
 /// Minimum perch offset (km) — guards against degenerate zero-offset perch geometry.

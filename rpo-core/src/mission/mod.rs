@@ -16,7 +16,7 @@ pub mod types;
 pub mod waypoints;
 
 pub use config::{MissionConfig, ProximityConfig, SafetyConfig, TargetingConfig, TofOptConfig};
-pub use errors::{EclipseComputeError, MissionError};
+pub use errors::MissionError;
 pub use closest_approach::{find_closest_approaches, ClosestApproach, PocaError};
 pub use formation::{
     DriftPrediction, EiAlignment, EiSample, EnrichedWaypoint,

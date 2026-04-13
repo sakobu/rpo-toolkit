@@ -8,7 +8,7 @@ use crate::elements::eclipse::{build_celestial_snapshot, is_deeper_shadow};
 use crate::elements::{
     compute_eclipse_state, extract_eclipse_intervals, keplerian_to_state, ric_to_eci_position,
 };
-use crate::mission::errors::EclipseComputeError;
+use crate::elements::eclipse::EclipseComputeError;
 use crate::mission::types::ManeuverLeg;
 use crate::types::{EclipseInterval, EclipseSummary, LegEclipseData, MissionEclipseData};
 

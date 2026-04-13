@@ -232,7 +232,7 @@ fn covariance_error_maps_to_covariance_code() {
 
 #[test]
 fn eclipse_error_maps_to_eclipse_code() {
-    use rpo_core::mission::EclipseComputeError;
+    use rpo_core::elements::eclipse::EclipseComputeError;
     use rpo_wasm::error::{WasmError, WasmErrorCode};
 
     let err = EclipseComputeError::EmptyTrajectory;

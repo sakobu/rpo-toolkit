@@ -11,12 +11,14 @@
 
 pub(crate) mod ephemeris;
 pub(crate) mod shadow;
+mod errors;
 mod snapshots;
 mod intervals;
 #[cfg(test)]
 mod test_fixtures;
 
 // Public API (visible outside the crate)
+pub use errors::EclipseComputeError;
 pub use ephemeris::{moon_position_eci_km, sun_position_eci_km};
 pub use shadow::compute_eclipse_state;
 pub use snapshots::{compute_celestial_snapshots, compute_eclipse_from_states};

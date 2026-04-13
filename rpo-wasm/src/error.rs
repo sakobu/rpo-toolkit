@@ -3,9 +3,8 @@
 use serde::Serialize;
 use tsify_next::Tsify;
 
-use rpo_core::mission::{
-    AvoidanceError, EclipseComputeError, FormationDesignError, MissionError,
-};
+use rpo_core::elements::eclipse::EclipseComputeError;
+use rpo_core::mission::{AvoidanceError, FormationDesignError, MissionError};
 use rpo_core::pipeline::PipelineError;
 use rpo_core::propagation::{CovarianceError, PropagationError};
 

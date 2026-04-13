@@ -1,6 +1,5 @@
 //! Mission planning error types.
 
-use crate::elements::eci_ric_dcm::DcmError;
 use crate::elements::keplerian_conversions::ConversionError;
 use crate::elements::roe_to_ric::RicError;
 use crate::propagation::lambert::LambertError;
@@ -27,13 +26,6 @@ pub enum MissionError {
     InvalidRBarOffset {
         /// The invalid radial offset (km).
         radial_km: f64,
-    },
-    /// Spacecraft are not in proximity for ROE-based operations.
-    NotInProximity {
-        /// Actual dimensionless separation δr/r
-        delta_r_over_r: f64,
-        /// Configured proximity threshold
-        threshold: f64,
     },
     /// Targeting solver failed to converge.
     TargetingConvergence {
@@ -80,10 +72,6 @@ impl std::fmt::Display for MissionError {
             Self::InvalidRBarOffset { radial_km } => write!(
                 f,
                 "MissionError: invalid R-bar perch — radial offset = {radial_km:.6e} km (must be nonzero)"
-            ),
-            Self::NotInProximity { delta_r_over_r, threshold } => write!(
-                f,
-                "MissionError: not in proximity — δr/r = {delta_r_over_r:.6} exceeds threshold {threshold:.6}"
             ),
             Self::TargetingConvergence { final_error_km, iterations } => write!(
                 f,
@@ -144,55 +132,5 @@ impl From<ConversionError> for MissionError {
 impl From<RicError> for MissionError {
     fn from(e: RicError) -> Self {
         Self::Ric(e)
-    }
-}
-
-/// Errors from eclipse computation.
-///
-/// Eclipse computation is advisory — callers may convert these to `Option`
-/// via `.ok()` when eclipse data is non-critical. The error preserves
-/// diagnostic information for callers that need it.
-#[derive(Debug, Clone)]
-pub enum EclipseComputeError {
-    /// ECI ↔ Keplerian conversion failure (degenerate orbit geometry).
-    Conversion(ConversionError),
-    /// ECI ↔ RIC frame transformation failure during deputy eclipse
-    /// reconstruction (degenerate chief state).
-    Dcm(DcmError),
-    /// No non-empty trajectory legs available for eclipse computation.
-    EmptyTrajectory,
-}
-
-impl std::fmt::Display for EclipseComputeError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Conversion(e) => write!(f, "EclipseComputeError: {e}"),
-            Self::Dcm(e) => write!(f, "EclipseComputeError: {e}"),
-            Self::EmptyTrajectory => {
-                write!(f, "EclipseComputeError: no non-empty trajectory legs")
-            }
-        }
-    }
-}
-
-impl std::error::Error for EclipseComputeError {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        match self {
-            Self::Conversion(e) => Some(e),
-            Self::Dcm(e) => Some(e),
-            Self::EmptyTrajectory => None,
-        }
-    }
-}
-
-impl From<ConversionError> for EclipseComputeError {
-    fn from(e: ConversionError) -> Self {
-        Self::Conversion(e)
-    }
-}
-
-impl From<DcmError> for EclipseComputeError {
-    fn from(e: DcmError) -> Self {
-        Self::Dcm(e)
     }
 }
