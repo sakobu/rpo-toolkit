@@ -124,14 +124,19 @@ impl ClosestApproach {
 }
 
 /// Errors from POCA computation.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, thiserror::Error)]
 pub enum PocaError {
     /// Trajectory has fewer than 2 points.
+    #[error("POCA requires >= 2 trajectory points, got {count}")]
     InsufficientPoints {
         /// Number of points provided.
         count: usize,
     },
     /// Brent's method did not converge within iteration limit.
+    #[error(
+        "Brent's method did not converge after {iterations} iterations \
+         (residual: {residual_km_s:.2e} km/s, bracket: [{bracket_start_s:.1}, {bracket_end_s:.1}] s)"
+    )]
     NoConvergence {
         /// Number of iterations attempted.
         iterations: usize,
@@ -143,48 +148,14 @@ pub enum PocaError {
         bracket_end_s: f64,
     },
     /// Propagation failed during a Brent trial evaluation.
+    #[error("propagation failed at trial time {trial_time_s:.3} s: {source}")]
     PropagationFailure {
         /// Trial time at which propagation failed (s).
         trial_time_s: f64,
         /// Underlying propagation error.
+        #[source]
         source: PropagationError,
     },
-}
-
-impl std::fmt::Display for PocaError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::InsufficientPoints { count } => {
-                write!(f, "POCA requires >= 2 trajectory points, got {count}")
-            }
-            Self::NoConvergence {
-                iterations,
-                residual_km_s,
-                bracket_start_s,
-                bracket_end_s,
-            } => write!(
-                f,
-                "Brent's method did not converge after {iterations} iterations \
-                 (residual: {residual_km_s:.2e} km/s, bracket: [{bracket_start_s:.1}, {bracket_end_s:.1}] s)"
-            ),
-            Self::PropagationFailure {
-                trial_time_s,
-                source,
-            } => write!(
-                f,
-                "propagation failed at trial time {trial_time_s:.3} s: {source}"
-            ),
-        }
-    }
-}
-
-impl std::error::Error for PocaError {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        match self {
-            Self::PropagationFailure { source, .. } => Some(source),
-            _ => None,
-        }
-    }
 }
 
 // ---------------------------------------------------------------------------

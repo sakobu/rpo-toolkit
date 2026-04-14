@@ -10,33 +10,14 @@ use crate::elements::keplerian_conversions::ConversionError;
 use crate::types::{KeplerianElements, QuasiNonsingularROE, RICState};
 
 /// Errors from RIC ↔ ROE operations.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, thiserror::Error)]
 pub enum RicError {
     /// `T_pos` · `T_pos^T` is singular; cannot compute pseudo-inverse.
+    #[error("T_pos · T_pos^T is singular; cannot compute pseudo-inverse")]
     SingularPositionMatrix,
     /// Chief Keplerian elements are invalid (e.g., `a <= 0` or `e >= 1`).
-    InvalidChiefElements(ConversionError),
-}
-
-impl std::fmt::Display for RicError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::SingularPositionMatrix => {
-                write!(f, "T_pos · T_pos^T is singular; cannot compute pseudo-inverse")
-            }
-            Self::InvalidChiefElements(e) => {
-                write!(f, "RicError: invalid chief elements — {e}")
-            }
-        }
-    }
-}
-
-impl std::error::Error for RicError {}
-
-impl From<ConversionError> for RicError {
-    fn from(e: ConversionError) -> Self {
-        Self::InvalidChiefElements(e)
-    }
+    #[error("invalid chief elements: {0}")]
+    InvalidChiefElements(#[from] ConversionError),
 }
 
 /// Compute the full 6×6 ROE→RIC transformation matrix (D'Amico Eq. 2.17).

@@ -14,8 +14,8 @@
 mod helpers;
 mod mc;
 mod mission;
-mod validation;
 pub(crate) mod sections;
+mod validation;
 
 pub use mc::mc_to_markdown;
 pub use mission::mission_to_markdown;

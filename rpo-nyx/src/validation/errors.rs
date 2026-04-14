@@ -5,20 +5,26 @@ use rpo_core::mission::safety::SafetyError;
 use crate::nyx_bridge::NyxBridgeError;
 
 /// Errors from nyx high-fidelity validation.
-#[derive(Debug)]
+#[derive(Debug, thiserror::Error)]
 pub enum ValidationError {
     /// Nyx bridge failure (almanac, dynamics, propagation, conversion).
-    NyxBridge(Box<NyxBridgeError>),
+    #[error("nyx bridge: {0}")]
+    NyxBridge(#[source] Box<NyxBridgeError>),
     /// Safety analysis failure.
+    #[error("safety analysis failed: {source}")]
     Safety {
         /// The underlying safety error.
+        #[source]
         source: SafetyError,
     },
     /// No trajectory points to analyze.
+    #[error("no trajectory points to analyze")]
     EmptyTrajectory,
     /// ECI-RIC frame conversion failed.
-    DcmFailure(DcmError),
+    #[error("frame conversion failed: {0}")]
+    DcmFailure(#[from] DcmError),
     /// COLA burn epoch falls outside the valid range for its leg.
+    #[error("COLA burn elapsed_s={elapsed_s:.3} outside (0, {tof_s:.3}) on leg {leg_index}")]
     ColaEpochOutOfBounds {
         /// Computed elapsed time from leg departure (seconds).
         elapsed_s: f64,
@@ -29,51 +35,16 @@ pub enum ValidationError {
     },
 }
 
-impl std::fmt::Display for ValidationError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::NyxBridge(e) => write!(f, "nyx bridge: {e}"),
-            Self::Safety { source } => {
-                write!(f, "safety analysis failed: {source}")
-            }
-            Self::EmptyTrajectory => {
-                write!(f, "no trajectory points to analyze")
-            }
-            Self::DcmFailure(e) => write!(f, "frame conversion failed: {e}"),
-            Self::ColaEpochOutOfBounds { elapsed_s, tof_s, leg_index } => {
-                write!(
-                    f,
-                    "COLA burn elapsed_s={elapsed_s:.3} outside (0, {tof_s:.3}) on leg {leg_index}"
-                )
-            }
-        }
-    }
-}
-
-impl std::error::Error for ValidationError {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        match self {
-            Self::NyxBridge(e) => Some(e.as_ref()),
-            Self::Safety { source } => Some(source),
-            Self::DcmFailure(e) => Some(e),
-            Self::EmptyTrajectory
-            | Self::ColaEpochOutOfBounds { .. } => None,
-        }
-    }
-}
-
+// Boxed target — hand-rolled per migration plan §4; thiserror's #[from]
+// does not auto-box.
 impl From<NyxBridgeError> for ValidationError {
     fn from(e: NyxBridgeError) -> Self {
         Self::NyxBridge(Box::new(e))
     }
 }
 
-impl From<DcmError> for ValidationError {
-    fn from(e: DcmError) -> Self {
-        Self::DcmFailure(e)
-    }
-}
-
+// Struct-form target variant (Safety { source }) — #[from] only works on
+// tuple variants, so this routing is hand-rolled.
 impl From<SafetyError> for ValidationError {
     fn from(e: SafetyError) -> Self {
         Self::Safety { source: e }

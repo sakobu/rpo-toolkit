@@ -3041,6 +3041,7 @@ dependencies = [
  "rpo-nyx",
  "serde",
  "serde_json",
+ "thiserror 2.0.18",
  "tokio",
  "tokio-tungstenite 0.26.2",
  "tower-http",
@@ -3062,6 +3063,7 @@ dependencies = [
  "rpo-nyx",
  "serde",
  "serde_json",
+ "thiserror 2.0.18",
 ]
 
 [[package]]
@@ -3073,6 +3075,7 @@ dependencies = [
  "nalgebra 0.34.1",
  "serde",
  "serde_json",
+ "thiserror 2.0.18",
  "tsify-next",
  "wasm-bindgen",
 ]
@@ -3093,6 +3096,7 @@ dependencies = [
  "rpo-nyx",
  "serde",
  "serde_json",
+ "thiserror 2.0.18",
 ]
 
 [[package]]

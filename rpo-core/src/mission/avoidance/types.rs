@@ -33,6 +33,12 @@ pub(super) const COLA_MIN_ROE_MAGNITUDE: f64 = 1e-10;
 /// |R| / |C| dominance ratio for correction classification.
 /// When the radial/in-track (eccentricity) component exceeds the cross-track
 /// (inclination) component by this factor, in-plane correction is preferred.
+///
+/// **Classification heuristic**, not a physics-derived threshold. A 2× factor
+/// is conservative: it ensures the axis ranking is stable against small
+/// numerical noise in the B-matrix (D'Amico Eq. 2.38/2.44), so round-trip
+/// classification won't toggle on a conjunction's sub-meter position
+/// uncertainty.
 pub(super) const COLA_DOMINANCE_RATIO: f64 = 2.0;
 
 /// Number of trajectory samples for post-avoidance POCA verification.
@@ -98,9 +104,10 @@ pub struct AvoidanceManeuver {
 }
 
 /// Errors from collision avoidance computation.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, thiserror::Error)]
 pub enum AvoidanceError {
     /// POCA already satisfies the threshold; no avoidance needed.
+    #[error("POCA distance {poca_km:.6} km already exceeds threshold {threshold_km:.6} km")]
     NoPocaViolation {
         /// Current POCA distance (km).
         poca_km: f64,
@@ -108,6 +115,7 @@ pub enum AvoidanceError {
         threshold_km: f64,
     },
     /// Required delta-v exceeds the available budget.
+    #[error("required delta-v {required_km_s:.6e} km/s exceeds budget {budget_km_s:.6e} km/s")]
     ExceedsBudget {
         /// Required delta-v magnitude (km/s).
         required_km_s: f64,
@@ -115,6 +123,9 @@ pub enum AvoidanceError {
         budget_km_s: f64,
     },
     /// Newton iteration did not converge within the iteration limit.
+    #[error(
+        "Newton iteration did not converge after {iterations} iterations (residual: {residual_km:.6e} km)"
+    )]
     NoConvergence {
         /// Number of iterations attempted.
         iterations: usize,
@@ -122,6 +133,7 @@ pub enum AvoidanceError {
         residual_km: f64,
     },
     /// ROE geometry is too small for meaningful correction direction.
+    #[error("degenerate ROE geometry: |de| = {de_mag:.6e}, |di| = {di_mag:.6e}")]
     DegenerateGeometry {
         /// Eccentricity vector magnitude (dimensionless).
         de_mag: f64,
@@ -129,73 +141,12 @@ pub enum AvoidanceError {
         di_mag: f64,
     },
     /// Underlying POCA computation failed.
-    PocaFailure(PocaError),
+    #[error(transparent)]
+    PocaFailure(#[from] PocaError),
     /// Underlying propagation failed.
-    PropagationFailure(PropagationError),
+    #[error(transparent)]
+    PropagationFailure(#[from] PropagationError),
     /// GVE maneuver application failed.
-    GveFailure(ConversionError),
-}
-
-impl std::fmt::Display for AvoidanceError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::NoPocaViolation {
-                poca_km,
-                threshold_km,
-            } => write!(
-                f,
-                "POCA distance {poca_km:.6} km already exceeds threshold {threshold_km:.6} km"
-            ),
-            Self::ExceedsBudget {
-                required_km_s,
-                budget_km_s,
-            } => write!(
-                f,
-                "required delta-v {required_km_s:.6e} km/s exceeds budget {budget_km_s:.6e} km/s"
-            ),
-            Self::NoConvergence {
-                iterations,
-                residual_km,
-            } => write!(
-                f,
-                "Newton iteration did not converge after {iterations} iterations (residual: {residual_km:.6e} km)"
-            ),
-            Self::DegenerateGeometry { de_mag, di_mag } => write!(
-                f,
-                "degenerate ROE geometry: |de| = {de_mag:.6e}, |di| = {di_mag:.6e}"
-            ),
-            Self::PocaFailure(e) => write!(f, "POCA computation failed: {e}"),
-            Self::PropagationFailure(e) => write!(f, "propagation failed: {e}"),
-            Self::GveFailure(e) => write!(f, "GVE maneuver application failed: {e}"),
-        }
-    }
-}
-
-impl std::error::Error for AvoidanceError {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        match self {
-            Self::PocaFailure(e) => Some(e),
-            Self::PropagationFailure(e) => Some(e),
-            Self::GveFailure(e) => Some(e),
-            _ => None,
-        }
-    }
-}
-
-impl From<PocaError> for AvoidanceError {
-    fn from(e: PocaError) -> Self {
-        Self::PocaFailure(e)
-    }
-}
-
-impl From<PropagationError> for AvoidanceError {
-    fn from(e: PropagationError) -> Self {
-        Self::PropagationFailure(e)
-    }
-}
-
-impl From<ConversionError> for AvoidanceError {
-    fn from(e: ConversionError) -> Self {
-        Self::GveFailure(e)
-    }
+    #[error(transparent)]
+    GveFailure(#[from] ConversionError),
 }

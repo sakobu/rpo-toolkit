@@ -15,13 +15,32 @@ use super::config::{TargetingConfig, TofOptConfig};
 use super::errors::MissionError;
 use super::types::{Maneuver, ManeuverLeg};
 
-/// Dimensionless `n*t` threshold below which the CW short-transfer (linear) approximation is used.
+/// Dimensionless `n*t` threshold below which the CW short-transfer (linear)
+/// approximation is used.
+///
+/// The 0.1 bound is an engineering heuristic: at `n*t = 0.1` the second-order
+/// CW linearization error stays below ~0.5% of the transfer magnitude for
+/// LEO separations, which dominates the `TargetingConfig::position_tol_km =
+/// 1e-6` convergence floor (see `mission::config`). Above 0.1, the full CW
+/// closed-form is used.
 const CW_SHORT_TRANSFER_NT: f64 = 0.1;
 
 /// SVD pseudo-inverse regularization epsilon for near-singular Jacobians.
+///
+/// Chosen four orders of magnitude below the default
+/// `TargetingConfig::position_tol_km = 1e-6` (= 1 mm) convergence tolerance.
+/// Below this cutoff, Newton-step directions along degenerate singular values
+/// are numerically indistinguishable from zero relative to the termination
+/// criterion, so zeroing them is safe.
 const JACOBIAN_PINV_TOL: f64 = 1e-10;
 
-/// Golden-section bracket half-width in orbital periods around the best multi-start TOF.
+/// Golden-section bracket half-width in orbital periods around the best
+/// multi-start TOF.
+///
+/// Set to half the multi-start grid spacing (1 period). This guarantees the
+/// refinement window covers the full interval between two adjacent seeds
+/// without overlap, so any local minimum within ±0.5 periods of the best
+/// seed is reachable by golden-section search.
 const TOF_REFINE_HALF_WINDOW: f64 = 0.5;
 
 /// Golden ratio for golden-section TOF refinement: (√5 − 1) / 2.

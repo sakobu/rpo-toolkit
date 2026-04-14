@@ -3,23 +3,25 @@
 //! Wraps all rpo-core error types that can occur during pipeline execution
 //! into a single enum with `From` impls for ergonomic `?` propagation.
 
-use std::fmt;
-
 use crate::elements::keplerian_conversions::ConversionError;
 use crate::mission::errors::MissionError;
 use crate::propagation::covariance::CovarianceError;
 use crate::propagation::propagator::PropagationError;
 
 /// Unified error type for pipeline operations.
-#[derive(Debug)]
+#[derive(Debug, thiserror::Error)]
 pub enum PipelineError {
     /// Mission planning error (classification, targeting, waypoints).
-    Mission(MissionError),
+    #[error(transparent)]
+    Mission(#[from] MissionError),
     /// Propagation error (STM, Keplerian).
-    Propagation(PropagationError),
+    #[error(transparent)]
+    Propagation(#[from] PropagationError),
     /// Covariance propagation error.
-    Covariance(CovarianceError),
+    #[error(transparent)]
+    Covariance(#[from] CovarianceError),
     /// A required field is missing for the requested operation.
+    #[error("{field} required for {context}")]
     MissingField {
         /// Name of the missing field.
         field: &'static str,
@@ -27,54 +29,12 @@ pub enum PipelineError {
         context: &'static str,
     },
     /// Trajectory data is empty when a non-empty trajectory was expected.
+    #[error("empty chief trajectory")]
     EmptyTrajectory,
 }
 
-impl fmt::Display for PipelineError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Mission(e) => write!(f, "{e}"),
-            Self::Propagation(e) => write!(f, "{e}"),
-            Self::Covariance(e) => write!(f, "{e}"),
-            Self::MissingField { field, context } => {
-                write!(f, "{field} required for {context}")
-            }
-            Self::EmptyTrajectory => write!(f, "empty chief trajectory"),
-        }
-    }
-}
-
-impl std::error::Error for PipelineError {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        match self {
-            Self::Mission(e) => Some(e),
-            Self::Propagation(e) => Some(e),
-            Self::Covariance(e) => Some(e),
-            Self::MissingField { .. } | Self::EmptyTrajectory => None,
-        }
-    }
-}
-
-// ---- From impls ----
-
-impl From<MissionError> for PipelineError {
-    fn from(e: MissionError) -> Self {
-        Self::Mission(e)
-    }
-}
-
-impl From<PropagationError> for PipelineError {
-    fn from(e: PropagationError) -> Self {
-        Self::Propagation(e)
-    }
-}
-
-impl From<CovarianceError> for PipelineError {
-    fn from(e: CovarianceError) -> Self {
-        Self::Covariance(e)
-    }
-}
-
+// Transitive tunnel: ConversionError → MissionError::Conversion → PipelineError::Mission.
+// Hand-rolled because thiserror's #[from] only synthesizes one-hop conversions.
 impl From<ConversionError> for PipelineError {
     fn from(e: ConversionError) -> Self {
         Self::Mission(MissionError::Conversion(e))

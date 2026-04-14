@@ -5,26 +5,35 @@ use rpo_core::propagation::lambert::LambertError;
 use rpo_nyx::monte_carlo::MonteCarloError;
 use rpo_nyx::nyx_bridge::NyxBridgeError;
 use rpo_nyx::validation::ValidationError;
-use std::fmt;
 
 /// Errors that can occur during server-side operations.
 ///
 /// Each variant wraps the native error type from `rpo-nyx`. Boxed variants
 /// (`NyxBridge`, `MonteCarlo`) reduce enum size since those error types are large.
-#[derive(Debug)]
+///
+/// Display strings are the user-facing WebSocket API boundary and intentionally
+/// use title-case phase prefixes (e.g. `"Lambert solver error:"`). Do **not**
+/// convert these variants to `#[error(transparent)]` — the prefixes are what
+/// client UIs render, and dropping them breaks the protocol contract.
+#[derive(Debug, thiserror::Error)]
 pub enum ServerError {
     /// Lambert solver failure (convergence, degenerate geometry).
-    Lambert(LambertError),
+    #[error("Lambert solver error: {0}")]
+    Lambert(#[from] LambertError),
     /// Nyx bridge error (almanac load, dynamics setup, propagation).
-    NyxBridge(Box<NyxBridgeError>),
+    #[error("Nyx bridge error: {0}")]
+    NyxBridge(#[source] Box<NyxBridgeError>),
     /// Full-physics validation error.
-    Validation(ValidationError),
+    #[error("Validation error: {0}")]
+    Validation(#[from] ValidationError),
     /// Monte Carlo execution error (propagation, cancelled, zero samples).
-    MonteCarlo(Box<MonteCarloError>),
+    #[error("Monte Carlo error: {0}")]
+    MonteCarlo(#[source] Box<MonteCarloError>),
     /// Client sent malformed JSON that could not be deserialized.
     ///
     /// The `serde_message` field carries the serde error description — a string
     /// is the appropriate representation here because serde errors are opaque.
+    #[error("Malformed JSON: {serde_message}")]
     MalformedJson {
         /// serde deserialization error message.
         serde_message: String,
@@ -33,44 +42,14 @@ pub enum ServerError {
     ///
     /// Wraps the `Display` output of upstream `rpo_nyx::pipeline::PipelineError`
     /// variants that are not Lambert-specific (e.g., classification failures).
+    #[error("Pipeline error: {source_message}")]
     PipelineFailure {
         /// Upstream error description.
         source_message: String,
     },
     /// Operation cancelled by the client.
+    #[error("Operation cancelled")]
     Cancelled,
-}
-
-impl fmt::Display for ServerError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Lambert(e) => write!(f, "Lambert solver error: {e}"),
-            Self::NyxBridge(e) => write!(f, "Nyx bridge error: {e}"),
-            Self::Validation(e) => write!(f, "Validation error: {e}"),
-            Self::MonteCarlo(e) => write!(f, "Monte Carlo error: {e}"),
-            Self::MalformedJson { serde_message } => {
-                write!(f, "Malformed JSON: {serde_message}")
-            }
-            Self::PipelineFailure { source_message } => {
-                write!(f, "Pipeline error: {source_message}")
-            }
-            Self::Cancelled => write!(f, "Operation cancelled"),
-        }
-    }
-}
-
-impl std::error::Error for ServerError {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        match self {
-            Self::Lambert(e) => Some(e),
-            Self::NyxBridge(e) => Some(e.as_ref()),
-            Self::Validation(e) => Some(e),
-            Self::MonteCarlo(e) => Some(e.as_ref()),
-            Self::MalformedJson { .. }
-            | Self::PipelineFailure { .. }
-            | Self::Cancelled => None,
-        }
-    }
 }
 
 impl ServerError {
@@ -118,23 +97,11 @@ fn lambert_detail(err: &LambertError) -> Option<serde_json::Value> {
     }
 }
 
-// ---- From impls for ergonomic `?` ----
-
-impl From<LambertError> for ServerError {
-    fn from(e: LambertError) -> Self {
-        Self::Lambert(e)
-    }
-}
-
+// Boxed From impls — hand-rolled because thiserror's #[from] does not auto-box.
+// See migration plan §4.
 impl From<NyxBridgeError> for ServerError {
     fn from(e: NyxBridgeError) -> Self {
         Self::NyxBridge(Box::new(e))
-    }
-}
-
-impl From<ValidationError> for ServerError {
-    fn from(e: ValidationError) -> Self {
-        Self::Validation(e)
     }
 }
 
@@ -149,6 +116,8 @@ impl From<MonteCarloError> for ServerError {
 /// `rpo_nyx::pipeline::PipelineError` has a `Lambert(LambertError)` variant
 /// which maps to `ServerError::Lambert`. All other variants (classification
 /// failures, propagation errors) are input problems and map to `PipelineFailure`.
+/// Hand-rolled dispatch — not a straight `#[from]` — because Lambert failures
+/// need a dedicated user-facing variant for protocol-level classification.
 impl From<rpo_nyx::pipeline::PipelineError> for ServerError {
     fn from(e: rpo_nyx::pipeline::PipelineError) -> Self {
         match e {

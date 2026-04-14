@@ -39,29 +39,30 @@ pub(crate) const ROE_MAG_EPSILON: f64 = 1e-15;
 /// Minimum along-track distance (km) to qualify as along-track dominated.
 /// Prevents degenerate classification when both R/C and along-track are
 /// near zero.
+///
+/// **Display-layer only.** This is a threshold for picking the human-readable
+/// `RcContext::AlongTrackDominated` label in reports. It does not gate any
+/// safety computation and has no physical derivation — 100 m is a
+/// "not-effectively-zero" floor chosen by engineering judgement.
 const RC_ALONG_TRACK_MIN_KM: f64 = 0.1;
 
 /// Along-track must exceed R/C by this factor to classify as along-track
 /// dominated. A ratio of 10 means the along-track separation is at least
 /// an order of magnitude larger than the radial/cross-track distance.
+///
+/// **Display-layer only.** Like `RC_ALONG_TRACK_MIN_KM`, this gates label
+/// selection, not any safety computation. The 10× threshold is an engineering
+/// heuristic for "order-of-magnitude dominance" and is not derived from any
+/// physics model.
 const RC_ALONG_TRACK_RATIO: f64 = 10.0;
 
 /// Errors from safety analysis operations.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, thiserror::Error)]
 pub enum SafetyError {
     /// Trajectory slice is empty; cannot analyze safety.
+    #[error("trajectory is empty; cannot analyze safety")]
     EmptyTrajectory,
 }
-
-impl std::fmt::Display for SafetyError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::EmptyTrajectory => write!(f, "trajectory is empty; cannot analyze safety"),
-        }
-    }
-}
-
-impl std::error::Error for SafetyError {}
 
 /// E/I vector separation metrics for a single ROE state.
 ///

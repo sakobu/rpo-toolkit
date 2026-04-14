@@ -11,51 +11,20 @@ use crate::constants::{ECC_TOL, INC_TOL, MIN_POSITION_NORM_KM, MU_EARTH, TWO_PI}
 use crate::types::{KeplerError, KeplerianElements, StateVector};
 
 /// Errors from ECI ↔ Keplerian conversions.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, thiserror::Error)]
 pub enum ConversionError {
     /// Position vector is zero; cannot compute orbital elements.
+    #[error("position vector is zero")]
     ZeroPositionVector,
     /// Orbit is unbound (specific energy >= 0); semi-major axis would be negative.
+    #[error("unbound orbit — specific energy = {energy_km2_s2:.6e} km²/s² (must be negative)")]
     UnboundOrbit {
         /// Specific orbital energy (km²/s²).
         energy_km2_s2: f64,
     },
     /// Kepler's equation solution or element validation failure.
-    KeplerFailure(KeplerError),
-}
-
-impl std::fmt::Display for ConversionError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::ZeroPositionVector => {
-                write!(f, "ConversionError: position vector is zero")
-            }
-            Self::UnboundOrbit { energy_km2_s2 } => {
-                write!(
-                    f,
-                    "ConversionError: unbound orbit — specific energy = {energy_km2_s2:.6e} km²/s² (must be negative)"
-                )
-            }
-            Self::KeplerFailure(e) => {
-                write!(f, "ConversionError: {e}")
-            }
-        }
-    }
-}
-
-impl std::error::Error for ConversionError {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        match self {
-            Self::KeplerFailure(e) => Some(e),
-            _ => None,
-        }
-    }
-}
-
-impl From<KeplerError> for ConversionError {
-    fn from(e: KeplerError) -> Self {
-        Self::KeplerFailure(e)
-    }
+    #[error(transparent)]
+    KeplerFailure(#[from] KeplerError),
 }
 
 /// Convert an ECI state vector to Keplerian orbital elements.
@@ -83,6 +52,11 @@ impl From<KeplerError> for ConversionError {
 /// # Errors
 /// Returns `ConversionError::ZeroPositionVector` if the position vector norm is < `MIN_POSITION_NORM_KM`.
 /// Returns `ConversionError::UnboundOrbit` if specific energy >= 0 (escape trajectory).
+///
+/// # References
+/// - Vallado, *Fundamentals of Astrodynamics and Applications*, 4e,
+///   Algorithm 9 (state → classical elements). Edge-case handling for
+///   circular and equatorial orbits follows Vallado Sec. 2.6.
 #[allow(clippy::many_single_char_names)]
 pub fn state_to_keplerian(sv: &StateVector) -> Result<KeplerianElements, ConversionError> {
     let r_vec = sv.position_eci_km;
@@ -196,6 +170,10 @@ pub fn state_to_keplerian(sv: &StateVector) -> Result<KeplerianElements, Convers
 ///
 /// # Errors
 /// Returns `ConversionError::KeplerFailure` if `ke.a_km <= 0` or `ke.e` is outside [0, 1).
+///
+/// # References
+/// - Vallado, *Fundamentals of Astrodynamics and Applications*, 4e,
+///   Algorithm 10 (classical elements → state).
 pub fn keplerian_to_state(ke: &KeplerianElements, epoch: Epoch) -> Result<StateVector, ConversionError> {
     ke.validate()?;
 

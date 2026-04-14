@@ -12,14 +12,15 @@ test-fixtures = []
 wasm = ["dep:tsify-next", "dep:wasm-bindgen"]
 
 [dependencies]
-nalgebra = { version = "0.34", features = ["serde-serialize"] }
-hifitime = "4"
-serde = { version = "1", features = ["derive"] }
+nalgebra = { workspace = true, features = ["serde-serialize"] }
+hifitime = { workspace = true }
+serde = { workspace = true }
+thiserror = { workspace = true }
 tsify-next = { version = "0.5", optional = true, default-features = false, features = ["js"] }
 wasm-bindgen = { version = "0.2", optional = true }
 
 [dev-dependencies]
-serde_json = "1"
+serde_json = { workspace = true }
 criterion = { version = "0.5", features = ["html_reports"] }
 
 [[bench]]

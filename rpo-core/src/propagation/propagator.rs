@@ -58,58 +58,23 @@ pub struct PropagatedState {
 }
 
 /// Error type for propagation failures.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, thiserror::Error)]
 pub enum PropagationError {
     /// Number of steps must be greater than zero.
+    #[error("n_steps must be > 0")]
     ZeroSteps,
     /// Step count exceeds representable range.
+    #[error("n_steps = {n_steps} exceeds u32::MAX")]
     StepCountOverflow {
         /// The requested number of steps.
         n_steps: usize,
     },
     /// ROE→RIC conversion failed (theoretically unreachable after STM validation).
-    RicConversion(ConversionError),
+    #[error(transparent)]
+    RicConversion(#[from] ConversionError),
     /// Kepler equation or derived-quantity failure.
-    KeplerFailure(KeplerError),
-}
-
-impl std::fmt::Display for PropagationError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::ZeroSteps => write!(f, "PropagationError: n_steps must be > 0"),
-            Self::StepCountOverflow { n_steps } => {
-                write!(f, "PropagationError: n_steps = {n_steps} exceeds u32::MAX")
-            }
-            Self::RicConversion(e) => {
-                write!(f, "PropagationError: RIC conversion failed — {e}")
-            }
-            Self::KeplerFailure(e) => {
-                write!(f, "PropagationError: {e}")
-            }
-        }
-    }
-}
-
-impl From<ConversionError> for PropagationError {
-    fn from(e: ConversionError) -> Self {
-        Self::RicConversion(e)
-    }
-}
-
-impl From<KeplerError> for PropagationError {
-    fn from(e: KeplerError) -> Self {
-        Self::KeplerFailure(e)
-    }
-}
-
-impl std::error::Error for PropagationError {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        match self {
-            Self::RicConversion(e) => Some(e),
-            Self::KeplerFailure(e) => Some(e),
-            _ => None,
-        }
-    }
+    #[error(transparent)]
+    KeplerFailure(#[from] KeplerError),
 }
 
 /// Analytical relative-orbit propagator, selected at construction time.
@@ -139,6 +104,11 @@ impl PropagationModel {
     ///
     /// # Errors
     /// Returns `PropagationError` if eccentricity or SMA are out of range.
+    ///
+    /// # References
+    /// Per-variant equation citations live on the enum variants themselves:
+    /// see [`Self::J2Stm`] (Koenig Eq. A6) and [`Self::J2DragStm`]
+    /// (Koenig Sec. VIII / Appendix D).
     pub fn propagate(
         &self,
         roe_0: &QuasiNonsingularROE,
@@ -169,6 +139,11 @@ impl PropagationModel {
     ///
     /// # Errors
     /// Returns `PropagationError` if `n_steps` is zero.
+    ///
+    /// # References
+    /// Per-variant equation citations live on the enum variants themselves:
+    /// see [`Self::J2Stm`] (Koenig Eq. A6) and [`Self::J2DragStm`]
+    /// (Koenig Sec. VIII / Appendix D).
     pub fn propagate_with_steps(
         &self,
         roe_0: &QuasiNonsingularROE,

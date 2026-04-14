@@ -61,42 +61,14 @@ pub struct FreeDriftAnalysis {
 }
 
 /// Errors from free-drift computation.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, thiserror::Error)]
 pub enum FreeDriftError {
     /// Propagation of the free-drift trajectory failed.
-    Propagation(PropagationError),
+    #[error("free-drift propagation failed: {0}")]
+    Propagation(#[from] PropagationError),
     /// Safety analysis on the free-drift trajectory failed.
-    Safety(SafetyError),
-}
-
-impl std::fmt::Display for FreeDriftError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Propagation(e) => write!(f, "free-drift propagation failed: {e}"),
-            Self::Safety(e) => write!(f, "free-drift safety analysis failed: {e}"),
-        }
-    }
-}
-
-impl std::error::Error for FreeDriftError {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        match self {
-            Self::Propagation(e) => Some(e),
-            Self::Safety(e) => Some(e),
-        }
-    }
-}
-
-impl From<PropagationError> for FreeDriftError {
-    fn from(e: PropagationError) -> Self {
-        Self::Propagation(e)
-    }
-}
-
-impl From<SafetyError> for FreeDriftError {
-    fn from(e: SafetyError) -> Self {
-        Self::Safety(e)
-    }
+    #[error("free-drift safety analysis failed: {0}")]
+    Safety(#[from] SafetyError),
 }
 
 /// Divisor for the δa term in D'Amico Eq. 2.33 bounded-motion condition.

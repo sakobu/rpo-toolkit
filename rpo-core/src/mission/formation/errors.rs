@@ -8,14 +8,18 @@ use crate::propagation::propagator::PropagationError;
 use crate::types::KeplerError;
 
 /// Errors from formation design operations.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, thiserror::Error)]
 pub enum FormationDesignError {
     /// `T_pos` null-space computation produced degenerate geometry.
+    #[error("singular T_pos geometry at mean arg lat = {mean_arg_lat_rad:.6} rad")]
     SingularGeometry {
         /// Chief mean argument of latitude where singularity occurs (rad).
         mean_arg_lat_rad: f64,
     },
     /// Requested `d_min` cannot be achieved within linearization bounds.
+    #[error(
+        "requested separation {requested_km:.6} km exceeds achievable {achievable_km:.6} km within linearization bounds"
+    )]
     SeparationUnachievable {
         /// Requested separation (km).
         requested_km: f64,
@@ -23,10 +27,13 @@ pub enum FormationDesignError {
         achievable_km: f64,
     },
     /// Chief mean elements are invalid (e.g., `a_km` <= 0, e >= 1).
-    InvalidChiefElements(ConversionError),
+    #[error(transparent)]
+    InvalidChiefElements(#[from] ConversionError),
     /// Safety analysis computation failed.
-    SafetyAnalysis(SafetyError),
+    #[error(transparent)]
+    SafetyAnalysis(#[from] SafetyError),
     /// Transit trajectory has insufficient sampling density for reliable e/i monitoring.
+    #[error("{total_samples} total samples < {required_per_orbit} required per orbit")]
     InsufficientSampling {
         /// Total samples in the provided trajectory.
         total_samples: u32,
@@ -34,83 +41,11 @@ pub enum FormationDesignError {
         required_per_orbit: u32,
     },
     /// J2 parameter computation failed.
-    Propagation(PropagationError),
+    #[error(transparent)]
+    Propagation(#[from] PropagationError),
     /// Kepler equation or derived-quantity failure (period, mean motion).
-    KeplerFailure(KeplerError),
-}
-
-impl std::fmt::Display for FormationDesignError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::SingularGeometry { mean_arg_lat_rad } => write!(
-                f,
-                "FormationDesignError: singular T_pos geometry at mean arg lat = {mean_arg_lat_rad:.6} rad"
-            ),
-            Self::SeparationUnachievable {
-                requested_km,
-                achievable_km,
-            } => write!(
-                f,
-                "FormationDesignError: requested separation {requested_km:.6} km \
-                 exceeds achievable {achievable_km:.6} km within linearization bounds"
-            ),
-            Self::InvalidChiefElements(e) => {
-                write!(f, "FormationDesignError: invalid chief elements — {e}")
-            }
-            Self::SafetyAnalysis(e) => {
-                write!(f, "FormationDesignError: safety analysis — {e}")
-            }
-            Self::InsufficientSampling {
-                total_samples,
-                required_per_orbit,
-            } => write!(
-                f,
-                "FormationDesignError: {total_samples} total samples < {required_per_orbit} required per orbit"
-            ),
-            Self::Propagation(e) => {
-                write!(f, "FormationDesignError: propagation — {e}")
-            }
-            Self::KeplerFailure(e) => {
-                write!(f, "FormationDesignError: kepler failure — {e}")
-            }
-        }
-    }
-}
-
-impl std::error::Error for FormationDesignError {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        match self {
-            Self::InvalidChiefElements(e) => Some(e),
-            Self::SafetyAnalysis(e) => Some(e),
-            Self::Propagation(e) => Some(e),
-            Self::KeplerFailure(e) => Some(e),
-            _ => None,
-        }
-    }
-}
-
-impl From<ConversionError> for FormationDesignError {
-    fn from(e: ConversionError) -> Self {
-        Self::InvalidChiefElements(e)
-    }
-}
-
-impl From<SafetyError> for FormationDesignError {
-    fn from(e: SafetyError) -> Self {
-        Self::SafetyAnalysis(e)
-    }
-}
-
-impl From<PropagationError> for FormationDesignError {
-    fn from(e: PropagationError) -> Self {
-        Self::Propagation(e)
-    }
-}
-
-impl From<KeplerError> for FormationDesignError {
-    fn from(e: KeplerError) -> Self {
-        Self::KeplerFailure(e)
-    }
+    #[error(transparent)]
+    KeplerFailure(#[from] KeplerError),
 }
 
 /// Structured reason for perch enrichment fallback.

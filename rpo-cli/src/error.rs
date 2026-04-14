@@ -1,6 +1,5 @@
 //! CLI error type and exit codes.
 
-use std::fmt;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
@@ -15,27 +14,34 @@ use rpo_nyx::pipeline::PipelineError as NyxPipelineError;
 use rpo_nyx::validation::ValidationError;
 
 /// Unified CLI error type.
-#[derive(Debug)]
+#[derive(Debug, thiserror::Error)]
 pub enum CliError {
     /// File I/O error.
+    #[error("I/O error: {}: {source}", path.display())]
     Io {
         /// Path to the file that caused the error.
         path: PathBuf,
         /// Underlying I/O error.
+        #[source]
         source: std::io::Error,
     },
     /// JSON parsing error.
+    #[error("failed to parse {}: {source}", path.display())]
     Json {
         /// Path to the file that caused the error.
         path: PathBuf,
         /// Underlying `serde_json` error.
+        #[source]
         source: serde_json::Error,
     },
     /// Pipeline error (planning, propagation, nyx operations, etc.).
-    Pipeline(NyxPipelineError),
+    #[error(transparent)]
+    Pipeline(#[from] NyxPipelineError),
     /// JSON serialization error (output).
-    Serialize(serde_json::Error),
+    #[error("JSON serialization failed: {0}")]
+    Serialize(#[source] serde_json::Error),
     /// A required field is missing for the requested operation.
+    #[error("'{context}' subcommand requires '{field}' in input JSON")]
     MissingField {
         /// Name of the missing field.
         field: &'static str,
@@ -43,13 +49,15 @@ pub enum CliError {
         context: &'static str,
     },
     /// Epoch string could not be parsed.
+    #[error("invalid epoch '{input}': {detail}")]
     EpochParse {
         /// The input string that failed to parse.
         input: String,
-        /// The parse error detail.
-        source: String,
+        /// The parse error detail (formatted upstream error).
+        detail: String,
     },
     /// Unknown output format requested.
+    #[error("unknown target format: {format}. Valid: {}", valid.join(", "))]
     UnknownFormat {
         /// The format string the user provided.
         format: String,
@@ -58,38 +66,11 @@ pub enum CliError {
     },
 }
 
-impl fmt::Display for CliError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Io { path, source } => {
-                write!(f, "I/O error: {}: {source}", path.display())
-            }
-            Self::Json { path, source } => {
-                write!(f, "failed to parse {}: {source}", path.display())
-            }
-            Self::Pipeline(e) => write!(f, "{e}"),
-            Self::Serialize(e) => write!(f, "JSON serialization failed: {e}"),
-            Self::MissingField { field, context } => {
-                write!(f, "'{context}' subcommand requires '{field}' in input JSON")
-            }
-            Self::EpochParse { input, source } => {
-                write!(f, "invalid epoch '{input}': {source}")
-            }
-            Self::UnknownFormat { format, valid } => {
-                write!(f, "unknown target format: {format}. Valid: {}", valid.join(", "))
-            }
-        }
-    }
-}
-
-impl std::error::Error for CliError {}
-
-impl From<NyxPipelineError> for CliError {
-    fn from(e: NyxPipelineError) -> Self {
-        Self::Pipeline(e)
-    }
-}
-
+// Adapter From impls — hand-rolled because every CLI error funnels through a
+// single `Pipeline(NyxPipelineError)` arm, so upstream errors must tunnel
+// through two wrappers (`CliError::Pipeline(NyxPipelineError::...)`). Thiserror's
+// #[from] only synthesizes one-hop conversions; we need two, so these impls
+// stay hand-rolled on purpose.
 impl From<rpo_core::pipeline::PipelineError> for CliError {
     fn from(e: rpo_core::pipeline::PipelineError) -> Self {
         Self::Pipeline(NyxPipelineError::from(e))

@@ -7,8 +7,6 @@
 
 pub mod types;
 
-use std::fmt;
-
 use crate::elements::eci_ric_dcm::DcmError;
 use crate::mission::errors::MissionError;
 use crate::propagation::propagator::PropagationError;
@@ -25,13 +23,19 @@ pub use types::{
 /// Defined in `rpo-core` so both the analytical engine and consumers can
 /// inspect error variants in error chains. `MonteCarloError` values are
 /// produced by the nyx-backed runner in `rpo-nyx::monte_carlo`.
-#[derive(Debug)]
+#[derive(Debug, thiserror::Error)]
 pub enum MonteCarloError {
     /// `num_samples` must be > 0.
+    #[error("num_samples must be > 0")]
     ZeroSamples,
     /// `trajectory_steps` must be > 0.
+    #[error("trajectory_steps must be > 0")]
     ZeroTrajectorySteps,
     /// All MC samples failed (none converged or propagated successfully).
+    #[error(
+        "all {num_samples} MC samples failed: {convergence_failures} convergence, \
+         {propagation_failures} propagation"
+    )]
     AllSamplesFailed {
         /// Total number of samples attempted.
         num_samples: u32,
@@ -41,6 +45,7 @@ pub enum MonteCarloError {
         propagation_failures: u32,
     },
     /// Dispersed state produced negative semi-major axis.
+    #[error("sample {sample_index}: negative SMA = {a_km} km")]
     NegativeSma {
         /// Which sample produced the invalid state.
         sample_index: u32,
@@ -48,6 +53,7 @@ pub enum MonteCarloError {
         a_km: f64,
     },
     /// Dispersed state produced invalid eccentricity.
+    #[error("sample {sample_index}: invalid eccentricity = {e}")]
     InvalidEccentricity {
         /// Which sample produced the invalid state.
         sample_index: u32,
@@ -55,95 +61,36 @@ pub enum MonteCarloError {
         e: f64,
     },
     /// Dispersion sigma must be non-negative.
+    #[error("dispersion sigma must be non-negative, got {value}")]
     NegativeSigma {
         /// The invalid sigma value.
         value: f64,
     },
     /// Dispersion half-width must be non-negative.
+    #[error("dispersion half-width must be non-negative, got {value}")]
     NegativeHalfWidth {
         /// The invalid half-width value.
         value: f64,
     },
     /// Mission planning failure during closed-loop re-targeting.
-    Mission(MissionError),
+    #[error(transparent)]
+    Mission(#[from] MissionError),
     /// Propagation failure during sample execution.
-    Propagation(PropagationError),
+    #[error(transparent)]
+    Propagation(#[from] PropagationError),
     /// Empty ensemble (no samples to compute statistics from).
+    #[error("empty ensemble: no samples to compute statistics")]
     EmptyEnsemble,
     /// Trajectory count exceeds u32 range (should not happen — bounded by `num_samples`: u32).
+    #[error("trajectory count {count} exceeds u32 range")]
     TooManySamples {
         /// The count that overflowed u32.
         count: usize,
     },
     /// ECI↔RIC frame conversion failed.
-    DcmFailure(DcmError),
+    #[error(transparent)]
+    DcmFailure(#[from] DcmError),
     /// Operation was cancelled by the caller.
+    #[error("Monte Carlo cancelled by caller")]
     Cancelled,
-}
-
-impl fmt::Display for MonteCarloError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::ZeroSamples => write!(f, "num_samples must be > 0"),
-            Self::ZeroTrajectorySteps => write!(f, "trajectory_steps must be > 0"),
-            Self::AllSamplesFailed {
-                num_samples,
-                convergence_failures,
-                propagation_failures,
-            } => write!(
-                f,
-                "all {num_samples} MC samples failed: {convergence_failures} convergence, \
-                 {propagation_failures} propagation"
-            ),
-            Self::NegativeSma { sample_index, a_km } => {
-                write!(f, "sample {sample_index}: negative SMA = {a_km} km")
-            }
-            Self::InvalidEccentricity { sample_index, e } => {
-                write!(f, "sample {sample_index}: invalid eccentricity = {e}")
-            }
-            Self::NegativeSigma { value } => {
-                write!(f, "dispersion sigma must be non-negative, got {value}")
-            }
-            Self::NegativeHalfWidth { value } => {
-                write!(f, "dispersion half-width must be non-negative, got {value}")
-            }
-            Self::Mission(e) => write!(f, "mission planning failure: {e}"),
-            Self::Propagation(e) => write!(f, "propagation failure: {e}"),
-            Self::EmptyEnsemble => write!(f, "empty ensemble: no samples to compute statistics"),
-            Self::TooManySamples { count } => {
-                write!(f, "trajectory count {count} exceeds u32 range")
-            }
-            Self::DcmFailure(e) => write!(f, "frame conversion failed: {e}"),
-            Self::Cancelled => write!(f, "Monte Carlo cancelled by caller"),
-        }
-    }
-}
-
-impl std::error::Error for MonteCarloError {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        match self {
-            Self::Mission(e) => Some(e),
-            Self::Propagation(e) => Some(e),
-            Self::DcmFailure(e) => Some(e),
-            _ => None,
-        }
-    }
-}
-
-impl From<DcmError> for MonteCarloError {
-    fn from(e: DcmError) -> Self {
-        Self::DcmFailure(e)
-    }
-}
-
-impl From<MissionError> for MonteCarloError {
-    fn from(e: MissionError) -> Self {
-        Self::Mission(e)
-    }
-}
-
-impl From<PropagationError> for MonteCarloError {
-    fn from(e: PropagationError) -> Self {
-        Self::Propagation(e)
-    }
 }

@@ -1,8 +1,8 @@
 //! Mission-level orchestration: classification, Lambert transfers, targeting, safety, and validation.
 
-pub mod cola_assessment;
 pub mod avoidance;
 pub mod closest_approach;
+pub mod cola_assessment;
 pub mod config;
 pub mod covariance;
 pub mod errors;
@@ -15,15 +15,27 @@ pub mod targeting;
 pub mod types;
 pub mod waypoints;
 
-pub use config::{MissionConfig, ProximityConfig, SafetyConfig, TargetingConfig, TofOptConfig};
-pub use errors::MissionError;
+pub use avoidance::{
+    compute_avoidance, AvoidanceError, AvoidanceManeuver, ColaConfig, CorrectionType,
+};
 pub use closest_approach::{find_closest_approaches, ClosestApproach, PocaError};
+pub use cola_assessment::{
+    assess_cola, ColaAssessment, SecondaryViolation, SkippedLeg,
+};
+pub use config::{MissionConfig, ProximityConfig, SafetyConfig, TargetingConfig, TofOptConfig};
+pub use covariance::propagate_mission_covariance;
+pub use errors::MissionError;
 pub use formation::{
     DriftPrediction, EiAlignment, EiSample, EnrichedWaypoint,
     EnrichmentMode, FormationDesignError, FormationDesignReport, PerchEnrichmentResult,
     PerchFallbackReason, SafePerch, SafetyRequirements, TransitSafetyReport,
 };
 pub use free_drift::{bounded_motion_residual, compute_free_drift, FreeDriftAnalysis, FreeDriftError};
+pub use monte_carlo::{
+    CovarianceCrossCheck, DispersionConfig, DispersionEnvelope, Distribution,
+    EnsembleStatistics, ManeuverDispersion, MonteCarloConfig, MonteCarloError, MonteCarloMode,
+    MonteCarloReport, PercentileStats, SampleResult, SpacecraftDispersion, StateDispersion,
+};
 pub use planning::{
     classify_separation, compute_transfer_eclipse, dimensionless_separation, eci_separation_km,
 };
@@ -38,19 +50,7 @@ pub use types::{
     PassiveSafety, PerchGeometry, SafetyMetrics, ValidationPoint, ValidationReport, Waypoint,
     WaypointMission,
 };
-pub use covariance::propagate_mission_covariance;
-pub use monte_carlo::{
-    CovarianceCrossCheck, DispersionConfig, DispersionEnvelope, Distribution,
-    EnsembleStatistics, ManeuverDispersion, MonteCarloConfig, MonteCarloError, MonteCarloMode,
-    MonteCarloReport, PercentileStats, SampleResult, SpacecraftDispersion, StateDispersion,
-};
 pub use waypoints::{
     compute_mission_eclipse, get_mission_state_at_time, plan_waypoint_mission,
     replan_from_waypoint, resample_leg_trajectory, MissionEclipseError,
-};
-pub use cola_assessment::{
-    assess_cola, ColaAssessment, SecondaryViolation, SkippedLeg,
-};
-pub use avoidance::{
-    compute_avoidance, AvoidanceError, AvoidanceManeuver, ColaConfig, CorrectionType,
 };

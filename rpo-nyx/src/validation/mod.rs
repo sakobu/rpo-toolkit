@@ -1,12 +1,11 @@
 //! Full-physics validation via nyx-space: trajectory comparison, statistics, and eclipse cross-check.
 
-mod errors;
 mod eclipse;
+mod errors;
 mod statistics;
-mod trajectory;
-
 #[cfg(test)]
 mod test_scenario;
+mod trajectory;
 
 pub use errors::ValidationError;
 pub use trajectory::{

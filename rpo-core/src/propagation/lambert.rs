@@ -89,14 +89,16 @@ impl LambertTransfer {
 }
 
 /// Errors from the Lambert solver.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, thiserror::Error)]
 pub enum LambertError {
     /// Time of flight must be positive.
+    #[error("non-positive time of flight — tof = {tof_s:.6} s")]
     NonPositiveTimeOfFlight {
         /// The non-positive TOF value (seconds).
         tof_s: f64,
     },
     /// Departure and arrival positions are too close.
+    #[error("identical positions — separation = {separation_km:.6e} km")]
     IdenticalPositions {
         /// The separation distance (km).
         separation_km: f64,
@@ -106,6 +108,7 @@ pub enum LambertError {
     /// The nyx-space Lambert API does not expose structured error data (iteration count,
     /// residual, etc.), so this variant carries the formatted upstream message string.
     /// If nyx ever surfaces structured errors, migrate to dedicated fields here.
+    #[error("invalid input — {details}")]
     InvalidInput {
         /// Formatted upstream error message.
         details: String,
@@ -115,29 +118,9 @@ pub enum LambertError {
     /// The nyx-space Izzo implementation does not expose iteration count or residual
     /// values in its error type, so structured fields cannot be populated. The
     /// formatted message is the best available diagnostic from the upstream crate.
+    #[error("Izzo convergence failure — {details}")]
     IzzoConvergenceFailure {
         /// Formatted upstream error message.
         details: String,
     },
 }
-
-impl std::fmt::Display for LambertError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::NonPositiveTimeOfFlight { tof_s } => {
-                write!(f, "LambertError: non-positive time of flight — tof = {tof_s:.6} s")
-            }
-            Self::IdenticalPositions { separation_km } => {
-                write!(f, "LambertError: identical positions — separation = {separation_km:.6e} km")
-            }
-            Self::InvalidInput { details } => {
-                write!(f, "LambertError: invalid input — {details}")
-            }
-            Self::IzzoConvergenceFailure { details } => {
-                write!(f, "LambertError: Izzo convergence failure — {details}")
-            }
-        }
-    }
-}
-
-impl std::error::Error for LambertError {}

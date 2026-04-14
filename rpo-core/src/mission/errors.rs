@@ -7,27 +7,34 @@ use crate::propagation::propagator::PropagationError;
 use crate::types::KeplerError;
 
 /// Errors from mission planning.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, thiserror::Error)]
 pub enum MissionError {
     /// Propagation failure during proximity phase.
-    Propagation(PropagationError),
+    #[error(transparent)]
+    Propagation(#[from] PropagationError),
     /// Lambert solver failure during transfer phase.
-    Lambert(LambertError),
+    #[error(transparent)]
+    Lambert(#[from] LambertError),
     /// ECI ↔ Keplerian conversion failure.
-    Conversion(ConversionError),
+    #[error(transparent)]
+    Conversion(#[from] ConversionError),
     /// ROE ↔ RIC pseudo-inverse failure.
-    Ric(RicError),
+    #[error(transparent)]
+    Ric(#[from] RicError),
     /// V-bar perch offset must be nonzero.
+    #[error("invalid V-bar perch — along-track offset = {along_track_km:.6e} km (must be nonzero)")]
     InvalidVBarOffset {
         /// The invalid along-track offset (km).
         along_track_km: f64,
     },
     /// R-bar perch offset must be nonzero.
+    #[error("invalid R-bar perch — radial offset = {radial_km:.6e} km (must be nonzero)")]
     InvalidRBarOffset {
         /// The invalid radial offset (km).
         radial_km: f64,
     },
     /// Targeting solver failed to converge.
+    #[error("targeting failed to converge — error = {final_error_km:.6e} km after {iterations} iterations")]
     TargetingConvergence {
         /// Final position error (km)
         final_error_km: f64,
@@ -35,10 +42,15 @@ pub enum MissionError {
         iterations: u32,
     },
     /// Jacobian is singular and cannot be inverted.
+    #[error("singular Jacobian in targeting solver")]
     SingularJacobian,
     /// No waypoints provided.
+    #[error("no waypoints provided")]
     EmptyWaypoints,
     /// TOF optimization failed to find a valid solution.
+    #[error(
+        "TOF optimization failed — no valid TOF in [{min_tof:.1}, {max_tof:.1}] s ({num_starts} starts)"
+    )]
     TofOptimizationFailure {
         /// Minimum TOF searched (seconds)
         min_tof: f64,
@@ -48,6 +60,7 @@ pub enum MissionError {
         num_starts: u32,
     },
     /// Replan index is out of bounds for the waypoint list.
+    #[error("replan index {index} out of bounds for {num_waypoints} waypoints")]
     InvalidReplanIndex {
         /// The invalid index provided
         index: usize,
@@ -55,82 +68,6 @@ pub enum MissionError {
         num_waypoints: usize,
     },
     /// Kepler equation or derived-quantity failure.
-    Kepler(KeplerError),
-}
-
-impl std::fmt::Display for MissionError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Propagation(e) => write!(f, "MissionError: {e}"),
-            Self::Lambert(e) => write!(f, "MissionError: {e}"),
-            Self::Conversion(e) => write!(f, "MissionError: {e}"),
-            Self::Ric(e) => write!(f, "MissionError: {e}"),
-            Self::InvalidVBarOffset { along_track_km } => write!(
-                f,
-                "MissionError: invalid V-bar perch — along-track offset = {along_track_km:.6e} km (must be nonzero)"
-            ),
-            Self::InvalidRBarOffset { radial_km } => write!(
-                f,
-                "MissionError: invalid R-bar perch — radial offset = {radial_km:.6e} km (must be nonzero)"
-            ),
-            Self::TargetingConvergence { final_error_km, iterations } => write!(
-                f,
-                "MissionError: targeting failed to converge — error = {final_error_km:.6e} km after {iterations} iterations"
-            ),
-            Self::SingularJacobian => write!(f, "MissionError: singular Jacobian in targeting solver"),
-            Self::EmptyWaypoints => write!(f, "MissionError: no waypoints provided"),
-            Self::TofOptimizationFailure { min_tof, max_tof, num_starts } => write!(
-                f,
-                "MissionError: TOF optimization failed — no valid TOF in [{min_tof:.1}, {max_tof:.1}] s ({num_starts} starts)"
-            ),
-            Self::InvalidReplanIndex { index, num_waypoints } => write!(
-                f,
-                "MissionError: replan index {index} out of bounds for {num_waypoints} waypoints"
-            ),
-            Self::Kepler(e) => write!(f, "MissionError: {e}"),
-        }
-    }
-}
-
-impl std::error::Error for MissionError {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        match self {
-            Self::Propagation(e) => Some(e),
-            Self::Lambert(e) => Some(e),
-            Self::Conversion(e) => Some(e),
-            Self::Ric(e) => Some(e),
-            Self::Kepler(e) => Some(e),
-            _ => None,
-        }
-    }
-}
-
-impl From<KeplerError> for MissionError {
-    fn from(e: KeplerError) -> Self {
-        Self::Kepler(e)
-    }
-}
-
-impl From<PropagationError> for MissionError {
-    fn from(e: PropagationError) -> Self {
-        Self::Propagation(e)
-    }
-}
-
-impl From<LambertError> for MissionError {
-    fn from(e: LambertError) -> Self {
-        Self::Lambert(e)
-    }
-}
-
-impl From<ConversionError> for MissionError {
-    fn from(e: ConversionError) -> Self {
-        Self::Conversion(e)
-    }
-}
-
-impl From<RicError> for MissionError {
-    fn from(e: RicError) -> Self {
-        Self::Ric(e)
-    }
+    #[error(transparent)]
+    Kepler(#[from] KeplerError),
 }

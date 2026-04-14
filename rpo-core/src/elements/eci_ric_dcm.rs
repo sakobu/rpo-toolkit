@@ -13,29 +13,16 @@ use crate::types::{RICState, StateVector};
 type Matrix3 = SMatrix<f64, 3, 3>;
 
 /// Errors from ECI ↔ RIC frame transformations.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, thiserror::Error)]
 pub enum DcmError {
     /// Chief position vector is zero; cannot define radial direction.
+    #[error("chief position vector is zero")]
     ZeroPositionVector,
     /// Chief angular momentum (r × v) is zero; cannot define orbital plane.
     /// This occurs for rectilinear orbits or collinear position/velocity.
+    #[error("chief angular momentum (r × v) is zero")]
     ZeroAngularMomentum,
 }
-
-impl std::fmt::Display for DcmError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::ZeroPositionVector => {
-                write!(f, "DcmError: chief position vector is zero")
-            }
-            Self::ZeroAngularMomentum => {
-                write!(f, "DcmError: chief angular momentum (r × v) is zero")
-            }
-        }
-    }
-}
-
-impl std::error::Error for DcmError {}
 
 /// Compute the ECI→RIC Direction Cosine Matrix from the chief state vector.
 ///
@@ -57,6 +44,13 @@ impl std::error::Error for DcmError {}
 /// # Errors
 /// Returns `DcmError::ZeroPositionVector` if `chief.position_eci_km` is zero.
 /// Returns `DcmError::ZeroAngularMomentum` if `r × v` is zero (rectilinear orbit).
+///
+/// # References
+/// - Vallado, *Fundamentals of Astrodynamics and Applications*, 4e, Ch. 3:
+///   RSW/RIC frame definition (radial–in-track–cross-track triad).
+/// - D'Amico, *Formation Flying Guidance and Control* (`PhD` thesis),
+///   Sec. 2.1: RIC-frame conventions used throughout the ROE derivations
+///   (`R` radial, `I` along-track, `C` cross-track).
 pub fn eci_to_ric_dcm(chief: &StateVector) -> Result<Matrix3, DcmError> {
     let r = chief.position_eci_km;
     let v = chief.velocity_eci_km_s;
@@ -148,6 +142,12 @@ pub fn eci_to_ric_dv(dv_eci: &Vector3<f64>, chief: &StateVector) -> Result<Vecto
 ///
 /// # Errors
 /// Returns `DcmError` if the chief state cannot define a valid RIC frame.
+///
+/// # References
+/// - Vallado, *Fundamentals of Astrodynamics and Applications*, 4e, Ch. 3:
+///   rotating-frame kinematics. The `ρ̇ = C(ṙ_dep − ṙ_chief) − ω × ρ`
+///   correction comes from the RIC angular velocity `ω = (0, 0, |h|/r²)`
+///   about the cross-track axis.
 pub fn eci_to_ric_relative(chief: &StateVector, deputy: &StateVector) -> Result<RICState, DcmError> {
     let dcm = eci_to_ric_dcm(chief)?;
 

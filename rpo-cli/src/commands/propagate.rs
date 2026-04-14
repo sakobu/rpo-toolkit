@@ -31,7 +31,7 @@ pub fn run(input_path: &Path) -> Result<(), CliError> {
     let epoch = hifitime::Epoch::from_gregorian_str(&input.epoch).map_err(|e| {
         CliError::EpochParse {
             input: input.epoch.clone(),
-            source: e.to_string(),
+            detail: e.to_string(),
         }
     })?;
     let model = to_propagation_model(&input.propagator);

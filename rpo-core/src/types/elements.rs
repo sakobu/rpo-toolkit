@@ -5,20 +5,23 @@ use serde::{Deserialize, Serialize};
 use crate::constants::{KEPLER_MAX_ITER, KEPLER_TOL, TWO_PI};
 
 /// Errors from Kepler's equation solution and orbital element derived quantities.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, thiserror::Error)]
 pub enum KeplerError {
     /// Eccentricity out of valid range [0, 1) for Kepler's equation.
+    #[error("eccentricity = {e} out of range [0, 1)")]
     InvalidEccentricity {
         /// The invalid eccentricity value.
         e: f64,
     },
     /// Semi-major axis must be positive for mean motion / period computation.
+    #[error("semi-major axis = {a_km} km must be positive")]
     InvalidSemiMajorAxis {
         /// The invalid semi-major axis (km).
         a_km: f64,
     },
     /// Newton-Raphson iteration for Kepler's equation did not converge
     /// within the maximum number of iterations.
+    #[error("Kepler's equation did not converge — {iterations} iterations, residual = {residual:.6e}, e = {e}")]
     KeplerNoConvergence {
         /// Number of iterations completed.
         iterations: usize,
@@ -28,27 +31,6 @@ pub enum KeplerError {
         e: f64,
     },
 }
-
-impl std::fmt::Display for KeplerError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::InvalidEccentricity { e } => {
-                write!(f, "KeplerError: eccentricity = {e} out of range [0, 1)")
-            }
-            Self::InvalidSemiMajorAxis { a_km } => {
-                write!(f, "KeplerError: semi-major axis = {a_km} km must be positive")
-            }
-            Self::KeplerNoConvergence { iterations, residual, e } => {
-                write!(
-                    f,
-                    "KeplerError: Kepler's equation did not converge — {iterations} iterations, residual = {residual:.6e}, e = {e}"
-                )
-            }
-        }
-    }
-}
-
-impl std::error::Error for KeplerError {}
 
 /// Classical Keplerian orbital elements
 #[cfg_attr(feature = "wasm", derive(tsify_next::Tsify))]
