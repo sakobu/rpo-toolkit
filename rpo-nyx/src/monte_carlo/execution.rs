@@ -30,7 +30,7 @@ use crate::nyx_bridge::{
 };
 
 use super::sampling::{disperse_maneuver, sample_distribution};
-use super::statistics::{compute_dispersion_envelope, compute_percentile_stats};
+use super::statistics::{compute_dispersion_envelope, require_percentile_stats};
 use super::types::{MonteCarloInput, SampleTrajectorySummary};
 use super::MonteCarloError;
 
@@ -413,7 +413,7 @@ fn retarget_from_dispersed(
 /// - `total_num_samples` is the total number of MC samples attempted (including failures).
 ///
 /// # Errors
-/// Returns [`CoreMonteCarloError::EmptyEnsemble`] if `compute_percentile_stats`
+/// Returns [`CoreMonteCarloError::EmptyEnsemble`] if `require_percentile_stats`
 /// fails on an empty Δv vector (should not occur if `samples` is non-empty).
 pub(crate) fn collect_ensemble_statistics(
     samples: &[SampleResult],
@@ -437,22 +437,22 @@ pub(crate) fn collect_ensemble_statistics(
         }
     }
 
-    let total_dv_stats = compute_percentile_stats(&mut total_dvs)?;
+    let total_dv_stats = require_percentile_stats(&mut total_dvs)?;
 
     let min_rc_stats = if min_rc_values.is_empty() {
         None
     } else {
-        Some(compute_percentile_stats(&mut min_rc_values)?)
+        Some(require_percentile_stats(&mut min_rc_values)?)
     };
     let min_3d_stats = if min_3d_values.is_empty() {
         None
     } else {
-        Some(compute_percentile_stats(&mut min_3d_values)?)
+        Some(require_percentile_stats(&mut min_3d_values)?)
     };
     let min_ei_stats = if min_ei_values.is_empty() {
         None
     } else {
-        Some(compute_percentile_stats(&mut min_ei_values)?)
+        Some(require_percentile_stats(&mut min_ei_values)?)
     };
 
     // Per-waypoint miss distance statistics
@@ -466,9 +466,9 @@ pub(crate) fn collect_ensemble_statistics(
         if misses.is_empty() {
             waypoint_miss_stats.push(None);
         } else {
-            // compute_percentile_stats filters NaN internally; if all values
+            // require_percentile_stats filters NaN internally; if all values
             // are non-finite, fall back to None
-            match compute_percentile_stats(&mut misses) {
+            match require_percentile_stats(&mut misses) {
                 Ok(stats) => waypoint_miss_stats.push(Some(stats)),
                 Err(MonteCarloError::Core(CoreMonteCarloError::EmptyEnsemble)) => {
                     waypoint_miss_stats.push(None);
