@@ -634,7 +634,7 @@ fn compute_pre_cola_safety(
     cola: &ColaValidationInput,
     ctx: &LegPropagationCtx<'_>,
 ) -> Result<rpo_core::mission::types::SafetyMetrics, ValidationError> {
-    let estimated_samples = ctx.samples_per_leg as usize // u32 -> usize: safe (usize >= 32 bits)
+    let estimated_samples = ctx.samples_per_leg as usize // u32 → usize: always safe (usize ≥ 32 bits)
         * mission.legs.len();
     let mut chief = chief_initial.clone();
     let mut deputy = deputy_initial.clone();
@@ -763,7 +763,7 @@ pub fn validate_mission_nyx(
     let mut leg_points = Vec::with_capacity(mission.legs.len());
     let mut cola_effectiveness: Vec<ColaEffectivenessEntry> =
         Vec::with_capacity(cola.burns.len());
-    let estimated_total_samples = config.samples_per_leg as usize // u32 -> usize: safe (usize >= 32 bits)
+    let estimated_total_samples = config.samples_per_leg as usize // u32 → usize: always safe (usize ≥ 32 bits)
         * mission.legs.len();
     let mut safety_pairs: Vec<ChiefDeputySnapshot> =
         Vec::with_capacity(estimated_total_samples);

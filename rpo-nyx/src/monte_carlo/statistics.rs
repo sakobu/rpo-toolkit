@@ -45,10 +45,10 @@ pub(crate) fn compute_dispersion_envelope(
         return Vec::new();
     }
 
-    let mut envelopes = Vec::with_capacity(n_steps as usize + 1);
+    let mut envelopes = Vec::with_capacity(n_steps as usize + 1); // u32 → usize: always safe (usize ≥ 32 bits)
 
     for j in 0..=n_steps {
-        let j_idx = j as usize;
+        let j_idx = j as usize; // u32 → usize: always safe (usize ≥ 32 bits)
         let mut radial_values: Vec<f64> = Vec::with_capacity(summaries.len());
         let mut intrack_values: Vec<f64> = Vec::with_capacity(summaries.len());
         let mut crosstrack_values: Vec<f64> = Vec::with_capacity(summaries.len());

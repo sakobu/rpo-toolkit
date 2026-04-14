@@ -182,8 +182,9 @@ fn propagate_dispersed_legs<R: Rng>(
     let mut total_dv = 0.0_f64;
     let mut waypoint_miss_km = Vec::with_capacity(active_mission.legs.len());
     let mut elapsed_total_s = 0.0_f64;
-    let mut safety_pairs: Vec<ChiefDeputySnapshot> =
-        Vec::with_capacity(traj_steps as usize * active_mission.legs.len());
+    let mut safety_pairs: Vec<ChiefDeputySnapshot> = Vec::with_capacity(
+        traj_steps as usize * active_mission.legs.len(), // u32 → usize: always safe (usize ≥ 32 bits)
+    );
 
     for leg in &active_mission.legs {
         // Apply dispersed departure Δv
