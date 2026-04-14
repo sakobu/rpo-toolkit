@@ -2,7 +2,7 @@
 
 RPO Toolkit is a paper-traceable implementation of spacecraft rendezvous and proximity-operations mission design in Rust. Every algorithm — quasi-nonsingular ROE, J2 and DMF-drag analytical STMs, e/i-separation passive safety, null-space-projected formation design, Brent-refined closest-approach — cites its source equation (Koenig 2017, D'Amico 2010, Meeus) and is validated against nyx-space full-physics propagation to the meter.
 
-The workspace is split into two engines with a compile-time license boundary: a microsecond, browser-deployable analytical core (MIT/Apache) and a full-physics numerical engine (AGPL, via nyx-space) for Lambert transfers, validation, and Monte Carlo. The same mission designer that plans a formation in a browser tab runs Monte Carlo on a server.
+The workspace is split into two engines: a microsecond, browser-deployable analytical core (MIT/Apache) and a full-physics numerical engine (AGPL, via nyx-space) for Lambert transfers, validation, and Monte Carlo. The same mission designer that plans a formation in a browser tab runs Monte Carlo on a server.
 
 ## Who this is for
 
@@ -34,9 +34,11 @@ rpo-nyx (AGPL-3.0)  <--  rpo-cli (AGPL-3.0)
 
 ## Quick Start
 
+**Prerequisites:** Rust `1.88.0` (pinned via `rust-toolchain.toml`, edition 2024). For the WASM crate, install `wasm-pack` with `cargo install wasm-pack`.
+
 ```bash
 cargo build                     # build workspace
-cargo test                      # 625 tests across 5 crates (see Testing below)
+cargo test                      # run all tests
 ```
 
 Run an example mission (CLI):
@@ -54,8 +56,6 @@ wasm-pack build rpo-wasm --target web
 ```
 
 See [CLI Reference](docs/CLI.md) for all commands and flags.
-
-**Full-physics prerequisites.** Running `validate`, `mc`, or any test with `--include-ignored` downloads ~50 MB of ANISE kernels (DE440s, PCK) on first use. Analytical-only operations (`mission` without `--auto-drag`, all WASM functions) have no external dependencies.
 
 ## Mission Pipeline
 
@@ -104,33 +104,26 @@ RPO Toolkit    : compute baseline + enriched plans → present both →
                  (advisory, human-in-the-loop, ground)
 ```
 
-The toolkit implements the quasi-nonsingular ROE formation-design vocabulary from D'Amico 2010 — e/i vector separation, null-space waypoint enrichment, perch enrichment, transit monitoring, free-drift abort — as an advisory layer with accept/dismiss affordance. Short maneuver legs naturally produce poor intermediate e/i geometry even when 3D keep-out is fully satisfied, so the tool enforces what must not be violated (keep-out distance, checked at every trajectory sample) and evaluates what requires analyst judgment (passive safety, advisory cards with explicit opt-in).
+The toolkit implements the quasi-nonsingular ROE formation-design vocabulary from D'Amico 2010 as an advisory layer with accept/dismiss affordance. Short maneuver legs naturally produce poor intermediate e/i geometry even when 3D keep-out is fully satisfied, so the tool enforces what must not be violated (keep-out distance, checked at every trajectory sample) and evaluates what requires analyst judgment (passive safety, advisory cards with explicit opt-in).
 
-See [docs/formation-design.md](docs/formation-design.md) for primitive-by-primitive detail and the D'Amico equation-to-function mapping.
+See [docs/formation-design.md](docs/formation-design.md) for the primitives (e/i separation, null-space waypoint enrichment, perch enrichment, transit monitoring, free-drift abort) and their equation-to-function mapping.
 
 ## Performance
 
 Analytical engine benchmarks (Apple M-series, single core, `cargo bench -p rpo-core`):
 
-| Operation                  | Time    | Notes                                        |
-| -------------------------- | ------- | -------------------------------------------- |
-| `roe_to_ric`               | 7.5 ns  | ROE -> RIC mapping                           |
-| `compute_ei_separation`    | 7.8 ns  | e/i vector separation                        |
-| `analyze_safety`           | 12.8 ns | passive safety analysis                      |
-| `state_to_keplerian`       | 23.9 ns | ECI -> Keplerian conversion                  |
-| `keplerian_to_state`       | 39.0 ns | Keplerian -> ECI conversion                  |
-| `propagate_j2stm`          | 85.9 ns | J2 STM propagation (1 orbit)                 |
-| `propagate_j2_drag_stm`    | 87.3 ns | J2+drag STM propagation (1 orbit)            |
-| `classify_separation`      | 133 ns  | ECI -> Keplerian -> ROE -> classify          |
-| `find_closest_approaches`  | 4.0 us  | Brent-refined POCA (1 leg)                   |
-| `solve_leg`                | 14.6 us | Newton-Raphson dv targeting (1 leg)          |
-| `compute_free_drift`       | 17.7 us | abort-case trajectory (200 steps)            |
-| `assess_cola`              | 39.0 us | COLA assessment (2-leg mission)              |
-| `compute_transfer_eclipse` | 160 us  | transfer arc eclipse (200 steps)             |
-| `compute_mission_eclipse`  | 168 us  | mission eclipse (2 legs, 200 steps/leg)      |
-| `plan_waypoint_mission`    | 198 us  | full 2-waypoint mission plan (incl. eclipse) |
+| Operation                 | Time    | Notes                                        |
+| ------------------------- | ------- | -------------------------------------------- |
+| `roe_to_ric`              | 7.5 ns  | ROE -> RIC mapping                           |
+| `analyze_safety`          | 12.8 ns | passive safety analysis                      |
+| `propagate_j2_drag_stm`   | 87.3 ns | J2+drag STM propagation (1 orbit)            |
+| `classify_separation`     | 133 ns  | ECI -> Keplerian -> ROE -> classify          |
+| `find_closest_approaches` | 4.0 us  | Brent-refined POCA (1 leg)                   |
+| `solve_leg`               | 14.6 us | Newton-Raphson dv targeting (1 leg)          |
+| `assess_cola`             | 39.0 us | COLA assessment (2-leg mission)              |
+| `plan_waypoint_mission`   | 198 us  | full 2-waypoint mission plan (incl. eclipse) |
 
-Criterion HTML reports are generated in `target/criterion/`.
+Full benchmark suite (component conversions, intermediate eclipse stages, free-drift, etc.) runs via `cargo bench -p rpo-core`; Criterion HTML reports land in `target/criterion/`.
 
 ## Validated Accuracy
 
@@ -152,44 +145,31 @@ cargo run -p rpo-cli -- validate --input examples/validate.json --auto-drag  # J
 
 Velocity error stays under 40 mm/s (no-drag) and 55 mm/s (auto-drag) across the same run. Per-leg growth under drag: position RMS grows roughly 3× from leg 1 to leg 3 (41 m → 92 m → 138 m) as DMF linearization accumulates — a known linear-regime characteristic, not a bug.
 
-**Test-suite gates (conservative pass/fail with ~10× margin over observed).** The regression tests enforce `FULL_PHYSICS_SINGLE_LEG_POS_TOL_KM = 500 m`, `DRAG_STM_VS_NYX_POS_TOL_KM = 1 km`, and `FULL_PHYSICS_MULTI_LEG_POS_TOL_KM = 3 km` (all in `rpo-nyx/src/validation/trajectory/pipeline.rs`); eclipse gates are `SUN_DIRECTION_VALIDATION_TOL_RAD = 3.5e-4 rad` (≈ 0.02°) and `ECLIPSE_TIMING_VALIDATION_TOL_S = 120 s` (`rpo-core/src/constants.rs`).
+Regression tests enforce conservative pass/fail gates with ~10× margin over observed errors, and the J2 STM is independently validated against the per-component ROE bounds in Koenig et al. (2017), Table 4 Case 1. See [docs/validation.md](docs/validation.md) for the exact constants and test names.
 
-**Per-component ROE validation against Koenig Table 4 Case 1.** The J2 STM is independently validated against the per-component error bounds in Koenig et al. (2017), Table 4 Case 1. Each quasi-nonsingular ROE component (`δa`, `δλ`, `δex`, `δey`, `δix`, `δiy`) is bounded within ~10× of the published errors — e.g. `KOENIG_T4C1_DA_BOUND_M = 385 m`, `KOENIG_T4C1_DIX_BOUND_M = 9 m`. See the `koenig_table4_j2_stm_accuracy_case1` test in `rpo-nyx/tests/regression_tests.rs`.
-
-**Outside the validated regime:** GEO, HEO, highly eccentric orbits, and formations outside the ROE-linear regime (`δr/r > 0.5%`) are not currently validated against full physics. See _Status & Roadmap_.
+**Outside this regime:** GEO, HEO, highly eccentric orbits, and formations with `δr/r > 0.5%` are not currently validated against full physics. See _Status & Roadmap_.
 
 ## Library Usage
 
 ### Rust
 
-For the full pipeline (classify -> Lambert -> waypoints -> covariance -> eclipse), use `rpo_nyx::pipeline::execute_mission()`. For WASM/browser contexts, use `rpo_core::pipeline::execute_mission_from_transfer()` with a server-provided `TransferResult`. The example below shows the lower-level waypoint planning API (analytical only, no nyx dependency):
+For the full pipeline (classify -> Lambert -> waypoints -> covariance -> eclipse), use `rpo_nyx::pipeline::execute_mission()`. For WASM/browser contexts, use `rpo_core::pipeline::execute_mission_from_transfer()` with a server-provided `TransferResult`. The sketch below shows the lower-level waypoint planning API (analytical only, no nyx dependency); `examples/mission.json` is a complete runnable scenario driven via `rpo-cli`.
 
 ```rust
 use rpo_core::prelude::*;
 use rpo_core::elements::{state_to_keplerian, compute_roe};
 use rpo_core::mission::ProximityConfig;
-use hifitime::Epoch;
 use nalgebra::Vector3;
 
-// ~300 m formation at ISS altitude
-let epoch = Epoch::from_gregorian_utc(2024, 1, 1, 0, 0, 0, 0);
-let chief = StateVector {
-    epoch,
-    position_eci_km: Vector3::new(5876.261, 3392.661, 0.0),
-    velocity_eci_km_s: Vector3::new(-2.380512, 4.123167, 6.006917),
-};
-let deputy = StateVector {
-    epoch,
-    position_eci_km: Vector3::new(5876.561, 3392.261, 0.3),
-    velocity_eci_km_s: Vector3::new(-2.380612, 4.123067, 6.006817),
-};
+// chief, deputy: ECI StateVector values from your scenario
+// (see examples/mission.json for a ~300 m formation at ISS altitude)
 
 let phase = classify_separation(&chief, &deputy, &ProximityConfig::default())?;
 let chief_elements = state_to_keplerian(&chief)?;
 let departure = DepartureState {
     roe: compute_roe(&chief_elements, &state_to_keplerian(&deputy)?)?,
     chief: chief_elements,
-    epoch,
+    epoch: chief.epoch,
 };
 let waypoints = vec![Waypoint {
     position_ric_km: Vector3::new(0.0, 0.5, 0.0),
@@ -254,13 +234,15 @@ All input/output types have full TypeScript definitions. See [docs/WASM.md](docs
 - [CLI Reference](docs/CLI.md) -- all commands, flags, input formats
 - [API Reference](docs/API.md) -- WebSocket protocol, message types, error codes
 - [WASM Reference](docs/WASM.md) -- WASM bindings, TypeScript API, browser usage
+- [Formation Design](docs/formation-design.md) -- D'Amico primitive-to-equation mapping
+- [Validation](docs/validation.md) -- test-suite gates, per-component Koenig accuracy
 - [Input Schema](docs/schema/pipeline-input.schema.json) -- shared JSON schema for `PipelineInput`
 
 The CLI provides batch execution and shell-composable plumbing for scripting. The WebSocket API is a stateless backend for the 4 nyx-dependent operations (Lambert transfer, drag extraction, validation, Monte Carlo) with progress streaming. The WASM crate exposes the full analytical engine to the browser with auto-generated TypeScript definitions.
 
 ## Testing
 
-625 tests across 5 crates (363 rpo-core, 136 rpo-nyx, 77 rpo-cli, 36 rpo-wasm, 13 rpo-api). 32 full-physics tests are `#[ignore]` by default (require ANISE kernels, ~50 MB cached download).
+625 tests across 5 crates (363 rpo-core, 136 rpo-nyx, 77 rpo-cli, 36 rpo-wasm, 13 rpo-api). 32 full-physics tests are `#[ignore]` by default — running `validate`, `mc`, or `cargo test -- --ignored` downloads ~50 MB of ANISE kernels (DE440s, PCK) on first use and caches them. Analytical-only operations (`mission` without `--auto-drag`, all WASM functions) have no external dependencies.
 
 ```bash
 cargo test                      # full suite (5 crates)
@@ -281,13 +263,29 @@ Every module traces to specific equations in these papers; see inline doc-commen
 
 ## Status & Roadmap
 
-Solo-authored, actively developed, research-grade Rust. Not on `crates.io` — build from source at the workspace root. Validated for LEO ISS-class orbits (~400 km altitude, ~51.6° inclination) with ~300–400 m formation separations; other regimes are on the roadmap below.
+Solo-authored, actively developed, research-grade Rust. Not on `crates.io` — build from source at the workspace root. See _Validated Accuracy_ above for the regime in which numerical results are backed by full-physics tests; GEO, HEO, and larger separations are on the roadmap below.
 
 **In progress / next:**
 
 1. **React Three Fiber frontend** — interactive 3D mission designer running in the browser via the WASM analytical engine, WebSocket to `rpo-api` for nyx-dependent operations (Lambert, validation, Monte Carlo). Analytical ops stay sub-frame; numerical ops stream progress.
 2. **Drag-aware formation design** — DMF-rate feedback into waypoint null-space enrichment so drift compensation happens upstream of the analyst advisory rather than as a post-hoc warning.
 3. **Extended orbit regimes** — GEO and HEO validation; appropriate STM extensions; finite-burn modeling for maneuvers that cannot be treated as impulsive.
+
+## Contact & Citation
+
+Bug reports and questions: [GitHub issues](https://github.com/sakobu/rpo-toolkit/issues).
+
+If you use RPO Toolkit in research, please cite:
+
+```bibtex
+@software{melkonian_rpo_toolkit,
+  author = {Melkonian, Sarkis},
+  title  = {RPO Toolkit: A Paper-Traceable Implementation of Spacecraft
+            Rendezvous and Proximity-Operations Mission Design in Rust},
+  year   = {2026},
+  url    = {https://github.com/sakobu/rpo-toolkit}
+}
+```
 
 ## License
 
