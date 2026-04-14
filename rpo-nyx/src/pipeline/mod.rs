@@ -12,8 +12,10 @@
 //! - [`execute_mission`] -- full pipeline: Lambert + mission planning
 
 pub mod errors;
+mod planning;
 
 pub use errors::PipelineError;
+pub use planning::plan_mission;
 
 use rpo_core::mission::config::SafetyConfig;
 use rpo_core::mission::avoidance::ColaConfig;
@@ -25,7 +27,6 @@ use rpo_core::pipeline::{
 use rpo_core::propagation::keplerian::propagate_keplerian;
 use rpo_core::types::StateVector;
 
-pub use crate::planning::plan_mission;
 use crate::validation::convert_cola_to_burns;
 
 /// Classify separation, solve Lambert if far-field, compute perch ECI states.
