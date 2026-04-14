@@ -2,7 +2,7 @@
 //!
 //! These compose the core planning primitives (classify, waypoint
 //! targeting, covariance, eclipse) into a complete mission pipeline.
-//! Server-only wrappers (`compute_transfer`, `execute_mission`, `replan_mission`)
+//! Server-only wrappers (`compute_transfer`, `execute_mission`)
 //! that require nyx-space live in `rpo-nyx`.
 
 use crate::constants::DEFAULT_COVARIANCE_SAMPLES_PER_LEG;
@@ -423,7 +423,7 @@ pub fn apply_perch_enrichment(
 /// replans from that waypoint onward.
 ///
 /// This is the waypoint-level analog of [`apply_perch_enrichment`] +
-/// `replan_mission`: the user sees the enriched suggestion, accepts it,
+/// `replan_from_transfer`: the user sees the enriched suggestion, accepts it,
 /// and the system replans with the enriched target.
 ///
 /// # Arguments

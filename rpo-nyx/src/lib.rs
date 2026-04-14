@@ -18,10 +18,14 @@
 #![allow(clippy::module_name_repetitions)]
 #![warn(missing_docs)]
 
-pub mod lambert;
-pub mod monte_carlo;
+// Primitives -- direct nyx-space wrappers, no internal dependencies.
 pub mod nyx_bridge;
-pub mod pipeline;
-pub(crate) mod planning;
+pub mod lambert;
+
+// Utilities -- internal support, used by orchestration layers.
 pub(crate) mod statistics;
+
+// Orchestration -- composes primitives + utilities into higher-level flows.
+pub mod monte_carlo;
 pub mod validation;
+pub mod pipeline;

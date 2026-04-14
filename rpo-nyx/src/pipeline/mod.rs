@@ -1,32 +1,32 @@
 //! Server-side pipeline: Lambert-dependent mission orchestration.
 //!
-//! Contains the 4 server-only pipeline functions that require nyx-space
+//! Contains the 3 server-only pipeline functions that require nyx-space
 //! (via the Lambert solver). The WASM-eligible pipeline functions
-//! ([`execute_mission_from_transfer`],
-//! [`replan_from_transfer`]) remain in `rpo-core`.
+//! ([`rpo_core::pipeline::execute_mission_from_transfer`],
+//! [`rpo_core::pipeline::replan_from_transfer`]) remain in `rpo-core`.
 //!
 //! ## Functions
 //!
 //! - [`compute_transfer`] -- classify separation, solve Lambert, compute perch states
 //! - [`compute_validation_burns`] -- derive COLA burns for validation injection
 //! - [`execute_mission`] -- full pipeline: Lambert + mission planning
-//! - [`replan_mission`] -- full pipeline: Lambert + replanning from a modified waypoint
 
 pub mod errors;
+mod planning;
 
 pub use errors::PipelineError;
+pub use planning::plan_mission;
 
 use rpo_core::mission::config::SafetyConfig;
 use rpo_core::mission::avoidance::ColaConfig;
 use rpo_core::pipeline::{
-    execute_mission_from_transfer, replan_from_transfer,
+    execute_mission_from_transfer,
     PipelineInput, PipelineOutput, SafetyAnalysis, TransferComputationInput, TransferResult,
     compute_safety_analysis,
 };
 use rpo_core::propagation::keplerian::propagate_keplerian;
 use rpo_core::types::StateVector;
 
-pub use crate::planning::plan_mission;
 use crate::validation::convert_cola_to_burns;
 
 /// Classify separation, solve Lambert if far-field, compute perch ECI states.
@@ -87,7 +87,7 @@ pub fn compute_transfer(input: &TransferComputationInput) -> Result<TransferResu
 /// Compute safety analysis and derive COLA burns for validation injection.
 ///
 /// Combines [`compute_safety_analysis`]
-/// and [`convert_cola_to_burns`] into a
+/// and `convert_cola_to_burns` into a
 /// single call, ensuring COLA burns are always derived consistently from the
 /// safety analysis. Used by both CLI and API validate handlers.
 ///
@@ -119,25 +119,6 @@ pub fn execute_mission(input: &PipelineInput) -> Result<PipelineOutput, Pipeline
     let transfer_input = TransferComputationInput::from(input);
     let mut transfer = compute_transfer(&transfer_input)?;
     Ok(execute_mission_from_transfer(&mut transfer, &input.base)?)
-}
-
-/// Server-side replan: computes Lambert transfer, then delegates to
-/// [`replan_from_transfer`].
-///
-/// For WASM clients that already hold a [`TransferResult`], call
-/// [`replan_from_transfer`] directly.
-///
-/// # Errors
-///
-/// Returns [`PipelineError`] if Lambert solving or replanning fails.
-pub fn replan_mission(
-    input: &PipelineInput,
-    modified_index: usize,
-    cached_mission: Option<rpo_core::mission::types::WaypointMission>,
-) -> Result<PipelineOutput, PipelineError> {
-    let transfer_input = TransferComputationInput::from(input);
-    let mut transfer = compute_transfer(&transfer_input)?;
-    Ok(replan_from_transfer(&mut transfer, &input.base, modified_index, cached_mission)?)
 }
 
 #[cfg(test)]
@@ -329,29 +310,6 @@ mod tests {
         assert!(!output.mission.legs.is_empty());
         assert!(output.total_dv_km_s > 0.0);
         assert!(output.total_duration_s > 0.0);
-    }
-
-    #[test]
-    fn test_replan_mission() {
-        let input = far_field_input();
-        let output = replan_mission(&input, 0, None).expect("replan_mission should succeed");
-
-        assert!(!output.mission.legs.is_empty());
-        assert!(output.total_dv_km_s > 0.0);
-    }
-
-    #[test]
-    fn test_replan_mission_with_cache() {
-        let input = far_field_input();
-        // First run a full mission to get a cached result
-        let full_output = execute_mission(&input).expect("execute_mission should succeed");
-
-        // Replan from waypoint 1 using the cached mission
-        let output = replan_mission(&input, 1, Some(full_output.mission))
-            .expect("replan_mission with cache should succeed");
-
-        assert!(!output.mission.legs.is_empty());
-        assert!(output.total_dv_km_s > 0.0);
     }
 
     /// Build a proximity-regime `PipelineInput` (deputy [`PROXIMITY_SMA_OFFSET_KM`]

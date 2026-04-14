@@ -125,7 +125,7 @@ pub(crate) fn disperse_maneuver<R: Rng>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use super::super::statistics::compute_percentile_stats;
+    use crate::statistics::compute_percentile_stats;
     use rand::SeedableRng;
     use rand_chacha::ChaCha20Rng;
 

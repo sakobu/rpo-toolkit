@@ -9,6 +9,11 @@ cargo clippy --workspace -- -D warnings         # lint (must pass)
 cargo doc --workspace --no-deps                 # generate docs
 ```
 
+**Ignored tests.** 23 tests in `rpo-nyx/src/validation/` are `#[ignore]`d because they
+require `MetaAlmanac` ephemeris data. Run them with `cargo test -p rpo-nyx -- --ignored`;
+the first run downloads SPICE kernels (outbound network required) and caches them under
+the `anise` default path. Subsequent runs hit the cache.
+
 ## Coding Standards
 
 ### General
@@ -68,7 +73,7 @@ Astrodynamics code must cite source equations (Koenig, D'Amico). Cross-check aga
 
 The dependency graph is `rpo-core` <- `rpo-cli` and `rpo-core` <- `rpo-api`. The two binaries never depend on each other.
 
-Shared orchestration lives in `rpo-core/src/pipeline/`. Both the CLI and API call `execute_mission()`, `compute_transfer()`, and `replan_mission()` from this module.
+Shared orchestration primitives (`execute_mission_from_transfer`, `replan_from_transfer`) live in `rpo-core/src/pipeline/`. The server-side Lambert-inclusive wrappers (`execute_mission`, `compute_transfer`) live in `rpo-nyx/src/pipeline/`; the CLI and API call them.
 
 ## How to Add a New CLI Command
 

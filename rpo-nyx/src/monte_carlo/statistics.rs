@@ -13,14 +13,15 @@ use rpo_core::propagation::covariance::types::MissionCovarianceReport;
 use super::types::SampleTrajectorySummary;
 use super::MonteCarloError;
 
-/// Compute percentile statistics, returning [`MonteCarloError`] for empty input.
+/// Compute percentile statistics, erroring if the input has no finite values.
 ///
-/// Delegates to [`crate::statistics::compute_percentile_stats`] for the actual
-/// computation. This wrapper converts the `Option` return to a `Result`,
-/// mapping `None` to [`CoreMonteCarloError::EmptyEnsemble`].
+/// Wraps [`crate::statistics::compute_percentile_stats`] (which returns
+/// `Option<PercentileStats>`) with a `Result` signature that maps the empty
+/// case to [`CoreMonteCarloError::EmptyEnsemble`]. The distinct name avoids
+/// shadowing the core function at call sites inside `monte_carlo/`.
 ///
 /// The input slice is sorted in place; non-finite values are compacted to the end.
-pub(crate) fn compute_percentile_stats(
+pub(crate) fn require_percentile_stats(
     values: &mut [f64],
 ) -> Result<PercentileStats, MonteCarloError> {
     crate::statistics::compute_percentile_stats(values)
@@ -45,10 +46,10 @@ pub(crate) fn compute_dispersion_envelope(
         return Vec::new();
     }
 
-    let mut envelopes = Vec::with_capacity(n_steps as usize + 1);
+    let mut envelopes = Vec::with_capacity(n_steps as usize + 1); // u32 → usize: always safe (usize ≥ 32 bits)
 
     for j in 0..=n_steps {
-        let j_idx = j as usize;
+        let j_idx = j as usize; // u32 → usize: always safe (usize ≥ 32 bits)
         let mut radial_values: Vec<f64> = Vec::with_capacity(summaries.len());
         let mut intrack_values: Vec<f64> = Vec::with_capacity(summaries.len());
         let mut crosstrack_values: Vec<f64> = Vec::with_capacity(summaries.len());
@@ -307,7 +308,7 @@ mod tests {
                 sample_distribution(&dist, &mut rng).unwrap()
             })
             .collect();
-        let stats = compute_percentile_stats(&mut values).unwrap();
+        let stats = require_percentile_stats(&mut values).unwrap();
         assert!(stats.min <= stats.p01);
         assert!(stats.p01 <= stats.p05);
         assert!(stats.p05 <= stats.p25);
@@ -321,7 +322,7 @@ mod tests {
     #[test]
     fn percentile_known_uniform() {
         let mut values: Vec<f64> = (0..1000).map(f64::from).collect();
-        let stats = compute_percentile_stats(&mut values).unwrap();
+        let stats = require_percentile_stats(&mut values).unwrap();
         assert!(
             (stats.p50 - 499.0).abs() < PERCENTILE_ACCURACY_TOL,
             "median should be ~499, got {}",
@@ -338,7 +339,7 @@ mod tests {
     fn percentile_single_value() {
         // All stats are pure copies / degenerate reductions, so bitwise
         // equality is the correct contract — no arithmetic rounding budget.
-        let stats = compute_percentile_stats(&mut [SINGLE_VALUE_INPUT]).unwrap();
+        let stats = require_percentile_stats(&mut [SINGLE_VALUE_INPUT]).unwrap();
         assert_eq!(stats.min.to_bits(), SINGLE_VALUE_INPUT.to_bits());
         assert_eq!(stats.max.to_bits(), SINGLE_VALUE_INPUT.to_bits());
         assert_eq!(stats.p50.to_bits(), SINGLE_VALUE_INPUT.to_bits());
@@ -361,7 +362,7 @@ mod tests {
             NAN_FILTER_FINITE_FILLER_HIGH,
             NAN_FILTER_FINITE_MAX,
         ];
-        let stats = compute_percentile_stats(&mut values).unwrap();
+        let stats = require_percentile_stats(&mut values).unwrap();
         assert_eq!(stats.min.to_bits(), NAN_FILTER_FINITE_MIN.to_bits());
         assert_eq!(stats.max.to_bits(), NAN_FILTER_FINITE_MAX.to_bits());
         assert_eq!(stats.p50.to_bits(), NAN_FILTER_FINITE_MEDIAN.to_bits());
@@ -376,7 +377,7 @@ mod tests {
     #[test]
     fn percentile_all_nan_is_error() {
         let mut values = vec![f64::NAN, f64::NAN, f64::NAN];
-        let result = compute_percentile_stats(&mut values);
+        let result = require_percentile_stats(&mut values);
         assert!(
             matches!(
                 result,
