@@ -4,12 +4,12 @@
 //! states and Δv execution errors. Uses rayon for parallel execution with
 //! deterministic per-sample seeding via `ChaCha20Rng`.
 
+pub mod errors;
 pub mod execution;
 pub mod sampling;
 pub mod statistics;
 pub mod types;
 
-use std::fmt;
 use std::time::Instant;
 
 use rayon::prelude::*;
@@ -21,69 +21,11 @@ use crate::nyx_bridge::build_full_physics_dynamics;
 use execution::{collect_ensemble_statistics, run_single_sample};
 use statistics::compute_covariance_cross_check;
 use types::SampleTrajectorySummary;
+pub use errors::MonteCarloError;
 pub use types::{MonteCarloControl, MonteCarloInput};
 
 /// Default master seed when `MonteCarloConfig.seed` is `None`.
 const DEFAULT_MC_SEED: u64 = 42;
-
-/// Errors from Monte Carlo ensemble analysis (nyx-backed).
-///
-/// Wraps the core analytical error and adds nyx-specific failure modes.
-#[derive(Debug)]
-pub enum MonteCarloError {
-    /// Error from the analytical engine.
-    Core(CoreMonteCarloError),
-    /// Nyx bridge failure.
-    NyxBridge(Box<crate::nyx_bridge::NyxBridgeError>),
-}
-
-impl fmt::Display for MonteCarloError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Core(e) => write!(f, "{e}"),
-            Self::NyxBridge(e) => write!(f, "nyx bridge failure: {e}"),
-        }
-    }
-}
-
-impl std::error::Error for MonteCarloError {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        match self {
-            Self::Core(e) => Some(e),
-            Self::NyxBridge(e) => Some(e.as_ref()),
-        }
-    }
-}
-
-impl From<CoreMonteCarloError> for MonteCarloError {
-    fn from(e: CoreMonteCarloError) -> Self {
-        Self::Core(e)
-    }
-}
-
-impl From<crate::nyx_bridge::NyxBridgeError> for MonteCarloError {
-    fn from(e: crate::nyx_bridge::NyxBridgeError) -> Self {
-        Self::NyxBridge(Box::new(e))
-    }
-}
-
-impl From<rpo_core::elements::eci_ric_dcm::DcmError> for MonteCarloError {
-    fn from(e: rpo_core::elements::eci_ric_dcm::DcmError) -> Self {
-        Self::Core(CoreMonteCarloError::from(e))
-    }
-}
-
-impl From<rpo_core::mission::errors::MissionError> for MonteCarloError {
-    fn from(e: rpo_core::mission::errors::MissionError) -> Self {
-        Self::Core(CoreMonteCarloError::from(e))
-    }
-}
-
-impl From<rpo_core::propagation::propagator::PropagationError> for MonteCarloError {
-    fn from(e: rpo_core::propagation::propagator::PropagationError) -> Self {
-        Self::Core(CoreMonteCarloError::from(e))
-    }
-}
 
 /// Run full-physics Monte Carlo ensemble analysis using nyx propagation.
 ///
