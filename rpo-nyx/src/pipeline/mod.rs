@@ -86,7 +86,7 @@ pub fn compute_transfer(input: &TransferComputationInput) -> Result<TransferResu
 /// Compute safety analysis and derive COLA burns for validation injection.
 ///
 /// Combines [`compute_safety_analysis`]
-/// and [`convert_cola_to_burns`] into a
+/// and `convert_cola_to_burns` into a
 /// single call, ensuring COLA burns are always derived consistently from the
 /// safety analysis. Used by both CLI and API validate handlers.
 ///

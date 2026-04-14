@@ -87,7 +87,7 @@ pub struct ColaValidationInput {
 /// # Errors
 /// Returns [`ValidationError::ColaEpochOutOfBounds`] if a maneuver's epoch
 /// falls outside `(0, leg.tof_s)` for the corresponding leg.
-pub fn convert_cola_to_burns(
+pub(crate) fn convert_cola_to_burns(
     maneuvers: Option<&[AvoidanceManeuver]>,
     mission: &WaypointMission,
 ) -> Result<Vec<ColaBurn>, ValidationError> {

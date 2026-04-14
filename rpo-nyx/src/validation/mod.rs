@@ -10,6 +10,6 @@ mod test_scenario;
 
 pub use errors::ValidationError;
 pub use trajectory::{
-    validate_mission_nyx, ColaBurn, ColaValidationInput,
-    ValidationConfig, ValidationPipelineCtx, convert_cola_to_burns,
+    validate_mission_nyx, ColaBurn, ColaValidationInput, ValidationConfig, ValidationPipelineCtx,
 };
+pub(crate) use trajectory::convert_cola_to_burns;
