@@ -9,6 +9,11 @@ cargo clippy --workspace -- -D warnings         # lint (must pass)
 cargo doc --workspace --no-deps                 # generate docs
 ```
 
+**Ignored tests.** 23 tests in `rpo-nyx/src/validation/` are `#[ignore]`d because they
+require `MetaAlmanac` ephemeris data. Run them with `cargo test -p rpo-nyx -- --ignored`;
+the first run downloads SPICE kernels (outbound network required) and caches them under
+the `anise` default path. Subsequent runs hit the cache.
+
 ## Coding Standards
 
 ### General
