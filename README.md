@@ -36,7 +36,7 @@ rpo-nyx (AGPL-3.0)  <--  rpo-cli (AGPL-3.0)
 
 ```bash
 cargo build                     # build workspace
-cargo test                      # 621 tests across 5 crates (see Testing below)
+cargo test                      # 625 tests across 5 crates (see Testing below)
 ```
 
 Run an example mission (CLI):
@@ -152,7 +152,7 @@ cargo run -p rpo-cli -- validate --input examples/validate.json --auto-drag  # J
 
 Velocity error stays under 40 mm/s (no-drag) and 55 mm/s (auto-drag) across the same run. Per-leg growth under drag: position RMS grows roughly 3× from leg 1 to leg 3 (41 m → 92 m → 138 m) as DMF linearization accumulates — a known linear-regime characteristic, not a bug.
 
-**Test-suite gates (conservative pass/fail with ~10× margin over observed).** The regression tests enforce `FULL_PHYSICS_SINGLE_LEG_POS_TOL_KM = 500 m`, `DRAG_STM_VS_NYX_POS_TOL_KM = 1 km`, and `FULL_PHYSICS_MULTI_LEG_POS_TOL_KM = 3 km` (all in `rpo-nyx/src/validation/trajectory.rs`); eclipse gates are `SUN_DIRECTION_VALIDATION_TOL_RAD = 3.5e-4 rad` (≈ 0.02°) and `ECLIPSE_TIMING_VALIDATION_TOL_S = 120 s` (`rpo-core/src/constants.rs`).
+**Test-suite gates (conservative pass/fail with ~10× margin over observed).** The regression tests enforce `FULL_PHYSICS_SINGLE_LEG_POS_TOL_KM = 500 m`, `DRAG_STM_VS_NYX_POS_TOL_KM = 1 km`, and `FULL_PHYSICS_MULTI_LEG_POS_TOL_KM = 3 km` (all in `rpo-nyx/src/validation/trajectory/pipeline.rs`); eclipse gates are `SUN_DIRECTION_VALIDATION_TOL_RAD = 3.5e-4 rad` (≈ 0.02°) and `ECLIPSE_TIMING_VALIDATION_TOL_S = 120 s` (`rpo-core/src/constants.rs`).
 
 **Per-component ROE validation against Koenig Table 4 Case 1.** The J2 STM is independently validated against the per-component error bounds in Koenig et al. (2017), Table 4 Case 1. Each quasi-nonsingular ROE component (`δa`, `δλ`, `δex`, `δey`, `δix`, `δiy`) is bounded within ~10× of the published errors — e.g. `KOENIG_T4C1_DA_BOUND_M = 385 m`, `KOENIG_T4C1_DIX_BOUND_M = 9 m`. See the `koenig_table4_j2_stm_accuracy_case1` test in `rpo-nyx/tests/regression_tests.rs`.
 
@@ -260,7 +260,7 @@ The CLI provides batch execution and shell-composable plumbing for scripting. Th
 
 ## Testing
 
-621 tests across 5 crates (363 rpo-core, 132 rpo-nyx, 77 rpo-cli, 36 rpo-wasm, 13 rpo-api). 32 full-physics tests are `#[ignore]` by default (require ANISE kernels, ~50 MB cached download).
+625 tests across 5 crates (363 rpo-core, 136 rpo-nyx, 77 rpo-cli, 36 rpo-wasm, 13 rpo-api). 32 full-physics tests are `#[ignore]` by default (require ANISE kernels, ~50 MB cached download).
 
 ```bash
 cargo test                      # full suite (5 crates)
