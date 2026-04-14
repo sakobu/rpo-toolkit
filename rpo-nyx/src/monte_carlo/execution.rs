@@ -527,3 +527,242 @@ pub(crate) fn collect_ensemble_statistics(
         dispersion_envelope,
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{disperse_deputy_state, disperse_spacecraft};
+    use hifitime::Epoch;
+    use nalgebra::Vector3;
+    use rand::SeedableRng;
+    use rand_chacha::ChaCha20Rng;
+    use rpo_core::constants::MIN_SPACECRAFT_MASS_KG;
+    use rpo_core::mission::monte_carlo::{
+        Distribution, SpacecraftDispersion, StateDispersion,
+    };
+    use rpo_core::types::{SpacecraftConfig, StateVector};
+
+    /// Pass-through results must match the nominal input exactly (no arithmetic).
+    const PASSTHROUGH_TOL: f64 = 0.0;
+
+    /// Position sigma (km) for a small Gaussian perturbation kept well within
+    /// the HCW linearization regime for a 400-km chief (~10 m).
+    const POS_SIGMA_KM: f64 = 0.010;
+
+    /// Velocity sigma (km/s) paired with `POS_SIGMA_KM` (~0.1 mm/s). Small
+    /// enough that the dispersed deputy remains a bound orbit for any seed.
+    const VEL_SIGMA_KM_S: f64 = 1.0e-7;
+
+    /// Loose 10-sigma upper bound on a single Gaussian draw. Used to confirm
+    /// the output moved *some* non-trivial amount without asserting a specific
+    /// realization (tests must be seed-independent in their semantics).
+    const TEN_SIGMA: f64 = 10.0;
+
+    /// Build a simple circular ~400 km chief state (ISS-like) in ECI.
+    fn chief_state() -> StateVector {
+        StateVector {
+            epoch: Epoch::from_gregorian_utc_hms(2025, 1, 1, 0, 0, 0),
+            position_eci_km: Vector3::new(6778.0, 0.0, 0.0),
+            velocity_eci_km_s: Vector3::new(0.0, 7.668, 0.0),
+        }
+    }
+
+    /// Deputy nominally 100 m in-track behind the chief (well within the HCW
+    /// linearization regime).
+    fn deputy_state() -> StateVector {
+        let chief = chief_state();
+        StateVector {
+            epoch: chief.epoch,
+            position_eci_km: chief.position_eci_km + Vector3::new(0.0, 0.1, 0.0),
+            velocity_eci_km_s: chief.velocity_eci_km_s,
+        }
+    }
+
+    /// Representative LEO spacecraft: 500 kg, 2.5 m² drag/SRP area.
+    fn nominal_spacecraft() -> SpacecraftConfig {
+        SpacecraftConfig {
+            dry_mass_kg: 500.0,
+            drag_area_m2: 2.5,
+            coeff_drag: 2.2,
+            srp_area_m2: 2.5,
+            coeff_reflectivity: 1.3,
+        }
+    }
+
+    fn gaussian(sigma: f64) -> Distribution {
+        Distribution::Gaussian { sigma }
+    }
+
+    fn state_dispersion(pos_sigma_km: f64, vel_sigma_km_s: f64) -> StateDispersion {
+        StateDispersion {
+            position_radial_km: gaussian(pos_sigma_km),
+            position_intrack_km: gaussian(pos_sigma_km),
+            position_crosstrack_km: gaussian(pos_sigma_km),
+            velocity_radial_km_s: gaussian(vel_sigma_km_s),
+            velocity_intrack_km_s: gaussian(vel_sigma_km_s),
+            velocity_crosstrack_km_s: gaussian(vel_sigma_km_s),
+        }
+    }
+
+    /// `disperse_deputy_state` with `state_disp = None` returns the nominal
+    /// deputy bitwise-unchanged (pass-through is a zero-arithmetic path).
+    #[test]
+    fn disperse_deputy_state_no_dispersion_is_passthrough() {
+        let chief = chief_state();
+        let deputy = deputy_state();
+        let mut rng = ChaCha20Rng::seed_from_u64(1);
+
+        let out = disperse_deputy_state(&chief, &deputy, None, 0, &mut rng)
+            .expect("pass-through must not fail for a valid nominal deputy");
+
+        assert_eq!(out.epoch, deputy.epoch);
+        for i in 0..3 {
+            assert!(
+                (out.position_eci_km[i] - deputy.position_eci_km[i]).abs() <= PASSTHROUGH_TOL,
+                "position component {i} drifted on pass-through",
+            );
+            assert!(
+                (out.velocity_eci_km_s[i] - deputy.velocity_eci_km_s[i]).abs() <= PASSTHROUGH_TOL,
+                "velocity component {i} drifted on pass-through",
+            );
+        }
+    }
+
+    /// With a small non-zero Gaussian sigma the dispersed deputy differs from
+    /// the nominal, and the perturbation magnitude lies within a generous
+    /// 10-sigma band on any single draw.
+    #[test]
+    fn disperse_deputy_state_applies_gaussian_dispersion() {
+        let chief = chief_state();
+        let deputy = deputy_state();
+        let disp = state_dispersion(POS_SIGMA_KM, VEL_SIGMA_KM_S);
+        let mut rng = ChaCha20Rng::seed_from_u64(42);
+
+        let out = disperse_deputy_state(&chief, &deputy, Some(&disp), 0, &mut rng)
+            .expect("small Gaussian dispersion must yield a bound orbit");
+
+        let dpos = (out.position_eci_km - deputy.position_eci_km).norm();
+        let dvel = (out.velocity_eci_km_s - deputy.velocity_eci_km_s).norm();
+
+        // A ChaCha20(42) draw is non-zero for a non-degenerate Gaussian, so
+        // the dispersed state must actually differ from the nominal.
+        assert!(dpos > 0.0, "expected a non-zero position perturbation");
+        assert!(dvel > 0.0, "expected a non-zero velocity perturbation");
+
+        // Three independent 1-sigma draws combine into ||delta|| <= 3*sigma
+        // in expectation; the 10*sigma ceiling is a very loose upper bound
+        // that any reasonable single draw must satisfy.
+        let pos_ceiling_km = TEN_SIGMA * (3.0_f64).sqrt() * POS_SIGMA_KM;
+        let vel_ceiling_km_s = TEN_SIGMA * (3.0_f64).sqrt() * VEL_SIGMA_KM_S;
+        assert!(
+            dpos < pos_ceiling_km,
+            "|dpos| = {dpos} km exceeded 10-sigma ceiling {pos_ceiling_km} km",
+        );
+        assert!(
+            dvel < vel_ceiling_km_s,
+            "|dvel| = {dvel} km/s exceeded 10-sigma ceiling {vel_ceiling_km_s} km/s",
+        );
+    }
+
+    /// Identical seeds must yield identical dispersed states — same sample
+    /// index, same chief/deputy, same dispersion spec → bitwise match.
+    #[test]
+    fn disperse_deputy_state_is_deterministic_for_fixed_seed() {
+        let chief = chief_state();
+        let deputy = deputy_state();
+        let disp = state_dispersion(POS_SIGMA_KM, VEL_SIGMA_KM_S);
+
+        let mut rng_a = ChaCha20Rng::seed_from_u64(12345);
+        let mut rng_b = ChaCha20Rng::seed_from_u64(12345);
+
+        let out_a = disperse_deputy_state(&chief, &deputy, Some(&disp), 7, &mut rng_a)
+            .expect("run A must succeed");
+        let out_b = disperse_deputy_state(&chief, &deputy, Some(&disp), 7, &mut rng_b)
+            .expect("run B must succeed");
+
+        assert_eq!(out_a.epoch, out_b.epoch);
+        assert_eq!(out_a.position_eci_km, out_b.position_eci_km);
+        assert_eq!(out_a.velocity_eci_km_s, out_b.velocity_eci_km_s);
+    }
+
+    /// `disperse_spacecraft` with `sc_disp = None` returns the nominal config
+    /// field-for-field unchanged.
+    #[test]
+    fn disperse_spacecraft_no_dispersion_is_passthrough() {
+        let nominal = nominal_spacecraft();
+        let mut rng = ChaCha20Rng::seed_from_u64(2);
+
+        let out = disperse_spacecraft(&nominal, None, &mut rng)
+            .expect("pass-through must not fail");
+
+        assert!((out.dry_mass_kg - nominal.dry_mass_kg).abs() <= PASSTHROUGH_TOL);
+        assert!((out.drag_area_m2 - nominal.drag_area_m2).abs() <= PASSTHROUGH_TOL);
+        assert!((out.coeff_drag - nominal.coeff_drag).abs() <= PASSTHROUGH_TOL);
+        assert!((out.srp_area_m2 - nominal.srp_area_m2).abs() <= PASSTHROUGH_TOL);
+        assert!((out.coeff_reflectivity - nominal.coeff_reflectivity).abs() <= PASSTHROUGH_TOL);
+    }
+
+    /// Every sample must respect the physical floors regardless of the draw:
+    /// `drag_area_m2 >= 0` and `dry_mass_kg >= MIN_SPACECRAFT_MASS_KG`. With
+    /// sigmas much larger than the nominals, a significant fraction of draws
+    /// hits the clamp, so the property is genuinely exercised.
+    #[test]
+    fn disperse_spacecraft_clamps_to_physical_bounds() {
+        let near_floor = SpacecraftConfig {
+            dry_mass_kg: 0.2,
+            drag_area_m2: 0.5,
+            coeff_drag: 2.2,
+            srp_area_m2: 2.5,
+            coeff_reflectivity: 1.3,
+        };
+        let disp = SpacecraftDispersion {
+            coeff_drag: gaussian(0.5),
+            drag_area_m2: gaussian(100.0),
+            dry_mass_kg: gaussian(10.0),
+        };
+
+        for seed in 0..200_u64 {
+            let mut rng = ChaCha20Rng::seed_from_u64(seed);
+            let out = disperse_spacecraft(&near_floor, Some(&disp), &mut rng)
+                .expect("dispersion must succeed for valid sigma");
+            assert!(
+                out.drag_area_m2 >= 0.0,
+                "drag_area_m2 = {} < 0 for seed {seed}",
+                out.drag_area_m2,
+            );
+            assert!(
+                out.dry_mass_kg >= MIN_SPACECRAFT_MASS_KG,
+                "dry_mass_kg = {} < {MIN_SPACECRAFT_MASS_KG} for seed {seed}",
+                out.dry_mass_kg,
+            );
+            // Untouched fields must come through via `..*nominal`.
+            assert!((out.srp_area_m2 - near_floor.srp_area_m2).abs() <= PASSTHROUGH_TOL);
+            assert!(
+                (out.coeff_reflectivity - near_floor.coeff_reflectivity).abs() <= PASSTHROUGH_TOL,
+            );
+        }
+    }
+
+    /// Identical seeds must yield identical dispersed spacecraft configs on
+    /// all three perturbed fields.
+    #[test]
+    fn disperse_spacecraft_is_deterministic_for_fixed_seed() {
+        let nominal = nominal_spacecraft();
+        let disp = SpacecraftDispersion {
+            coeff_drag: gaussian(0.1),
+            drag_area_m2: gaussian(0.2),
+            dry_mass_kg: gaussian(5.0),
+        };
+
+        let mut rng_a = ChaCha20Rng::seed_from_u64(9001);
+        let mut rng_b = ChaCha20Rng::seed_from_u64(9001);
+
+        let out_a = disperse_spacecraft(&nominal, Some(&disp), &mut rng_a)
+            .expect("run A must succeed");
+        let out_b = disperse_spacecraft(&nominal, Some(&disp), &mut rng_b)
+            .expect("run B must succeed");
+
+        assert_eq!(out_a.coeff_drag.to_bits(), out_b.coeff_drag.to_bits());
+        assert_eq!(out_a.drag_area_m2.to_bits(), out_b.drag_area_m2.to_bits());
+        assert_eq!(out_a.dry_mass_kg.to_bits(), out_b.dry_mass_kg.to_bits());
+    }
+}
