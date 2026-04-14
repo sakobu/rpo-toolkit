@@ -11,7 +11,7 @@
 //!
 //! Entry points (`execute_mission_from_transfer`, `replan_from_transfer`)
 //! accept a pre-computed `TransferResult`. Server-only wrappers
-//! (`execute_mission`, `replan_mission`, `plan_mission`) that require
+//! (`execute_mission`, `plan_mission`) that require
 //! nyx-space live in `rpo-nyx`.
 
 // Core domain types

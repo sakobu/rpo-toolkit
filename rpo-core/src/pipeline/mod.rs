@@ -3,7 +3,7 @@
 //! Owns the canonical input/output types and the mission planning entry
 //! points. Entry points ([`execute_mission_from_transfer`],
 //! [`replan_from_transfer`]) accept a pre-computed [`TransferResult`].
-//! Server-only wrappers (`compute_transfer`, `execute_mission`, `replan_mission`)
+//! Server-only wrappers (`compute_transfer`, `execute_mission`)
 //! that require nyx-space live in `rpo-nyx`.
 //!
 //! ## DAG position

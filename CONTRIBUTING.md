@@ -68,7 +68,7 @@ Astrodynamics code must cite source equations (Koenig, D'Amico). Cross-check aga
 
 The dependency graph is `rpo-core` <- `rpo-cli` and `rpo-core` <- `rpo-api`. The two binaries never depend on each other.
 
-Shared orchestration lives in `rpo-core/src/pipeline/`. Both the CLI and API call `execute_mission()`, `compute_transfer()`, and `replan_mission()` from this module.
+Shared orchestration primitives (`execute_mission_from_transfer`, `replan_from_transfer`) live in `rpo-core/src/pipeline/`. The server-side Lambert-inclusive wrappers (`execute_mission`, `compute_transfer`) live in `rpo-nyx/src/pipeline/`; the CLI and API call them.
 
 ## How to Add a New CLI Command
 
