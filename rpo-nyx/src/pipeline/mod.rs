@@ -2,8 +2,8 @@
 //!
 //! Contains the 3 server-only pipeline functions that require nyx-space
 //! (via the Lambert solver). The WASM-eligible pipeline functions
-//! ([`execute_mission_from_transfer`],
-//! [`replan_from_transfer`]) remain in `rpo-core`.
+//! ([`rpo_core::pipeline::execute_mission_from_transfer`],
+//! [`rpo_core::pipeline::replan_from_transfer`]) remain in `rpo-core`.
 //!
 //! ## Functions
 //!
