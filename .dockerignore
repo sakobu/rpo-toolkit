@@ -1,0 +1,17 @@
+target/
+**/target/
+node_modules/
+**/node_modules/
+rpo-wasm/pkg/
+rpo-app/dist/
+.git/
+.github/
+.vscode/
+.claude/
+.worktrees/
+reports/
+docs/
+examples/
+UX/
+*.md
+.DS_Store

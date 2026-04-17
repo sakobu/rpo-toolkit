@@ -11,7 +11,7 @@ use axum::extract::State;
 use axum::response::IntoResponse;
 use axum::routing::get;
 use axum::Router;
-use tower_http::cors::CorsLayer;
+use tower_http::services::{ServeDir, ServeFile};
 
 /// Shared application state.
 #[derive(Clone)]
@@ -50,11 +50,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let state = AppState { almanac };
 
-    // Build router
+    // Build router.
+    //
+    // SPA fallback: any request that doesn't match /ws or /health falls
+    // through to ServeDir. Unknown paths (client-side React Router routes)
+    // resolve to index.html, letting React Router pick up from there.
+    let spa = ServeDir::new("static").fallback(ServeFile::new("static/index.html"));
+
     let app = Router::new()
         .route("/ws", get(ws_handler))
         .route("/health", get(health))
-        .layer(CorsLayer::permissive())
+        .fallback_service(spa)
         .with_state(state);
 
     // Bind and serve

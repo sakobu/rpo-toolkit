@@ -1,0 +1,13 @@
+services:
+  rpo:
+    build: .
+    ports:
+      - "3001:3001"
+    volumes:
+      - anise-cache:/data
+    environment:
+      - RPO_BIND=0.0.0.0
+      - RPO_PORT=3001
+
+volumes:
+  anise-cache:

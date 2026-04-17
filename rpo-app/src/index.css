@@ -1,0 +1,91 @@
+@import url("https://fonts.googleapis.com/css2?family=Inter+Tight:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap");
+@import "tailwindcss";
+
+@theme {
+  --color-bg: #0a0d12;
+  --color-surface-1: #0f1218;
+  --color-surface-2: #141823;
+  --color-surface-3: #1b2030;
+  --color-overlay: #0a0d12e6;
+
+  --color-border: #232838;
+  --color-border-strong: #323a50;
+  --color-border-focus: #4fd1c5;
+
+  --color-text: #e6e9ef;
+  --color-text-muted: #9099ad;
+  --color-text-dim: #5c657a;
+  --color-text-inverse: #0a0d12;
+
+  --color-signal-go: #4ade80;
+  --color-signal-go-dim: #1a3a26;
+  --color-signal-hold: #f5a524;
+  --color-signal-hold-dim: #3a2a0e;
+  --color-signal-abort: #f43f5e;
+  --color-signal-abort-dim: #3a1420;
+  --color-signal-info: #60a5fa;
+  --color-signal-info-dim: #142440;
+
+  --color-accent: #4fd1c5;
+  --color-accent-dim: #0f2a2a;
+
+  --color-viz-analytical: #60a5fa;
+  --color-viz-numerical: #fb923c;
+  --color-viz-free-drift: #f43f5e;
+  --color-viz-nominal: #4ade80;
+  --color-viz-sigma: #60a5fa40;
+
+  --font-sans: "Inter Tight", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, monospace;
+  --font-display: "Inter Tight", ui-sans-serif, sans-serif;
+
+  --text-xs: 0.6875rem;
+  --text-sm: 0.8125rem;
+  --text-base: 0.9375rem;
+  --text-lg: 1.125rem;
+  --text-xl: 1.5rem;
+  --text-2xl: 2rem;
+
+  --leading-tight: 1.2;
+  --leading-normal: 1.45;
+
+  --radius-xs: 2px;
+  --radius-sm: 4px;
+  --radius-md: 6px;
+  --radius-lg: 8px;
+
+  --shadow-panel: 0 1px 0 0 #ffffff08 inset;
+  --shadow-raised: 0 1px 0 0 #ffffff0d inset, 0 8px 24px #00000066;
+  --shadow-focus: 0 0 0 2px #4fd1c540;
+
+  --ease-out: cubic-bezier(0.2, 0.8, 0.2, 1);
+  --ease-in: cubic-bezier(0.4, 0, 1, 1);
+  --duration-fast: 120ms;
+  --duration-base: 180ms;
+  --duration-slow: 320ms;
+}
+
+@layer base {
+  html,
+  body {
+    background: var(--color-bg);
+    color: var(--color-text);
+    font-family: var(--font-sans);
+    font-size: var(--text-sm);
+    line-height: var(--leading-normal);
+    font-feature-settings: "ss01", "cv11";
+  }
+
+  code,
+  pre,
+  .font-mono,
+  [class*="font-mono"] {
+    font-variant-numeric: tabular-nums;
+    font-feature-settings: "zero", "ss02";
+  }
+
+  :focus-visible {
+    outline: 2px solid var(--color-border-focus);
+    outline-offset: 2px;
+  }
+}
