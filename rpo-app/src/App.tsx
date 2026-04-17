@@ -1,9 +1,9 @@
-import { useEffect, useState } from 'react';
-import init, {
+import { fromTry, match } from '@railway-ts/pipelines/result';
+import {
   classify_separation,
-  type StateVector,
-  type ProximityConfig,
   type MissionPhase,
+  type ProximityConfig,
+  type StateVector,
 } from 'rpo-wasm';
 
 const chief: StateVector = {
@@ -20,26 +20,20 @@ const deputy: StateVector = {
 
 const config: ProximityConfig = { roe_threshold: 0.005 };
 
-type Status =
-  | { kind: 'loading' }
-  | { kind: 'ok'; phase: MissionPhase }
-  | { kind: 'err'; message: string };
+type PhaseState = { kind: 'ok'; phase: MissionPhase } | { kind: 'err'; message: string };
+
+function computePhase(): PhaseState {
+  return match(
+    fromTry(() => classify_separation(chief, deputy, config)),
+    {
+      ok: (phase) => ({ kind: 'ok', phase }),
+      err: (message) => ({ kind: 'err', message }),
+    },
+  );
+}
 
 export default function App() {
-  const [status, setStatus] = useState<Status>({ kind: 'loading' });
-
-  useEffect(() => {
-    init()
-      .then(() => {
-        try {
-          const phase = classify_separation(chief, deputy, config);
-          setStatus({ kind: 'ok', phase });
-        } catch (e) {
-          setStatus({ kind: 'err', message: String(e) });
-        }
-      })
-      .catch((e) => setStatus({ kind: 'err', message: String(e) }));
-  }, []);
+  const phase = computePhase();
 
   return (
     <main className="mx-auto min-h-screen max-w-4xl p-8">
@@ -55,22 +49,15 @@ export default function App() {
         for a chief/deputy pair.
       </p>
 
-      {status.kind === 'loading' && (
-        <div className="flex items-center gap-2 text-sm text-text-muted">
-          <span className="inline-block size-1.5 animate-pulse rounded-full bg-signal-info" />
-          loading wasm…
-        </div>
-      )}
-
-      {status.kind === 'err' && (
+      {phase.kind === 'err' && (
         <pre className="overflow-auto rounded-md border border-signal-abort/30 bg-signal-abort-dim p-4 font-mono text-xs text-signal-abort">
-          error: {status.message}
+          error: {phase.message}
         </pre>
       )}
 
-      {status.kind === 'ok' && (
+      {phase.kind === 'ok' && (
         <pre className="overflow-auto rounded-md border border-border bg-surface-1 p-4 font-mono text-xs leading-tight text-text">
-          {JSON.stringify(status.phase, null, 2)}
+          {JSON.stringify(phase.phase, null, 2)}
         </pre>
       )}
     </main>
