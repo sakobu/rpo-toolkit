@@ -1,5 +1,5 @@
-@import url("https://fonts.googleapis.com/css2?family=Inter+Tight:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap");
-@import "tailwindcss";
+@import url('https://fonts.googleapis.com/css2?family=Inter+Tight:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap');
+@import 'tailwindcss';
 
 @theme {
   --color-bg: #0a0d12;
@@ -35,9 +35,9 @@
   --color-viz-nominal: #4ade80;
   --color-viz-sigma: #60a5fa40;
 
-  --font-sans: "Inter Tight", ui-sans-serif, system-ui, sans-serif;
-  --font-mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, monospace;
-  --font-display: "Inter Tight", ui-sans-serif, sans-serif;
+  --font-sans: 'Inter Tight', ui-sans-serif, system-ui, sans-serif;
+  --font-mono: 'JetBrains Mono', ui-monospace, 'SF Mono', Menlo, monospace;
+  --font-display: 'Inter Tight', ui-sans-serif, sans-serif;
 
   --text-xs: 0.6875rem;
   --text-sm: 0.8125rem;
@@ -73,15 +73,15 @@
     font-family: var(--font-sans);
     font-size: var(--text-sm);
     line-height: var(--leading-normal);
-    font-feature-settings: "ss01", "cv11";
+    font-feature-settings: 'ss01', 'cv11';
   }
 
   code,
   pre,
   .font-mono,
-  [class*="font-mono"] {
+  [class*='font-mono'] {
     font-variant-numeric: tabular-nums;
-    font-feature-settings: "zero", "ss02";
+    font-feature-settings: 'zero', 'ss02';
   }
 
   :focus-visible {
