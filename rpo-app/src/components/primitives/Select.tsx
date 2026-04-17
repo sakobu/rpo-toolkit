@@ -1,10 +1,11 @@
 import { type SelectHTMLAttributes } from 'react';
 
-type SelectProps = SelectHTMLAttributes<HTMLSelectElement> & {
-  invalid?: boolean;
-};
+import { useFieldError } from './FieldErrorContext';
 
-export function Select({ invalid, className, children, ...rest }: SelectProps) {
+type SelectProps = SelectHTMLAttributes<HTMLSelectElement>;
+
+export function Select({ className, children, ...rest }: SelectProps) {
+  const invalid = Boolean(useFieldError());
   const border = invalid ? 'border-signal-abort' : 'border-border';
 
   return (

@@ -3,11 +3,16 @@ import { devtools } from 'zustand/middleware';
 
 import type { SpacecraftConfig } from '../schemas/spacecraft';
 
+export type VehicleState = {
+  values: SpacecraftConfig;
+  isValid: boolean;
+};
+
 type ScenarioState = {
-  chief: SpacecraftConfig | null;
-  deputy: SpacecraftConfig | null;
-  setChief: (c: SpacecraftConfig | null) => void;
-  setDeputy: (d: SpacecraftConfig | null) => void;
+  chief: VehicleState | null;
+  deputy: VehicleState | null;
+  setChief: (c: VehicleState | null) => void;
+  setDeputy: (d: VehicleState | null) => void;
 };
 
 export const useScenario = create<ScenarioState>()(

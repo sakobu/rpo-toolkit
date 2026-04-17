@@ -1,10 +1,8 @@
 import { useEffect, type ChangeEvent } from 'react';
 import { useForm } from '@railway-ts/use-form';
-import { validate } from '@railway-ts/pipelines/schema';
-import { isOk } from '@railway-ts/pipelines/result';
 
 import { Panel } from '../../components/primitives/Panel';
-import { Field } from '../../components/primitives/Field';
+import { FormField } from '../../components/primitives/FormField';
 import { Input } from '../../components/primitives/Input';
 import { Select } from '../../components/primitives/Select';
 import { SpacecraftThumbnail } from '../../components/spacecraft/SpacecraftThumbnail';
@@ -37,60 +35,60 @@ const initialValues: SpacecraftConfig = {
   ...PRESETS[DEFAULT_PRESET],
 };
 
+type NumericField = (typeof NUMERIC_FIELDS)[number];
+
+function isNumericField(field: string): field is NumericField {
+  return (NUMERIC_FIELDS as readonly string[]).includes(field);
+}
+
+function isPresetName(value: string): value is PresetName {
+  return (PRESET_NAMES as readonly string[]).includes(value);
+}
+
 export function SpacecraftPanel({ vehicle }: SpacecraftPanelProps) {
   const form = useForm<SpacecraftConfig>(spacecraftSchema, {
     initialValues,
     validationMode: 'live',
+    onFieldChange: (field, _value, values) => {
+      if (field === 'preset') return;
+      if (!isNumericField(field)) return;
+      if (values.preset === 'Custom') return;
+      const stored = PRESETS[values.preset][field];
+      const current = values[field];
+      const currentNum = typeof current === 'string' ? Number(current) : current;
+      if (currentNum !== stored) {
+        form.setFieldValue('preset', 'Custom');
+      }
+    },
   });
 
   const setChief = useScenario((s) => s.setChief);
   const setDeputy = useScenario((s) => s.setDeputy);
   const setter = vehicle === 'chief' ? setChief : setDeputy;
 
-  const preset = form.values.preset;
-
   useEffect(() => {
-    if (preset === 'Custom') return;
-    const presetValues = PRESETS[preset];
-    for (const key of NUMERIC_FIELDS) {
-      const current = form.values[key];
-      const stored = presetValues[key];
-      if (typeof current === 'string' ? Number(current) !== stored : current !== stored) {
-        form.setFieldValue('preset', 'Custom');
-        return;
-      }
-    }
-  }, [form, preset]);
-
-  useEffect(() => {
-    const result = validate(form.values, spacecraftSchema);
-    setter(isOk(result) ? result.value : null);
-  }, [form.values, setter]);
+    setter({ values: form.values, isValid: form.isValid });
+  }, [form.values, form.isValid, setter]);
 
   const handlePresetChange = (e: ChangeEvent<HTMLSelectElement>) => {
-    const name = e.target.value as PresetName;
+    const name = e.target.value;
+    if (!isPresetName(name)) return;
     form.setFieldValue('preset', name);
     if (name !== 'Custom') {
-      form.setValues(PRESETS[name]);
+      form.setValues({ preset: name, ...PRESETS[name] });
     }
   };
-
-  const scopedId = (field: string) => `${vehicle}-${field}`;
-
-  const presetInvalid = Boolean(form.getFieldError('preset'));
-  const presetId = scopedId('preset');
 
   return (
     <Panel title={VEHICLE_LABELS[vehicle]} subtitle="spacecraft">
       <div className="grid gap-3">
-        <Field label="Preset" htmlFor={presetId} error={form.getFieldError('preset')}>
+        <FormField label="Preset" name="preset" form={form}>
           <Select
-            id={presetId}
-            name={presetId}
+            id={form.getFieldId('preset')}
+            name={form.getFieldId('preset')}
             value={form.values.preset}
             onBlur={() => form.setFieldTouched('preset')}
             onChange={handlePresetChange}
-            invalid={presetInvalid}
           >
             {PRESET_NAMES.map((name) => (
               <option key={name} value={name}>
@@ -98,25 +96,14 @@ export function SpacecraftPanel({ vehicle }: SpacecraftPanelProps) {
               </option>
             ))}
           </Select>
-        </Field>
+        </FormField>
 
         <div className="grid grid-cols-2 gap-3">
-          {NUMERIC_FIELDS.map((key) => {
-            const id = scopedId(key);
-            const error = form.getFieldError(key);
-            return (
-              <Field key={key} label={FIELD_LABELS[key]} htmlFor={id} error={error}>
-                <Input
-                  type="number"
-                  step="any"
-                  invalid={Boolean(error)}
-                  {...form.getFieldProps(key)}
-                  id={id}
-                  name={id}
-                />
-              </Field>
-            );
-          })}
+          {NUMERIC_FIELDS.map((key) => (
+            <FormField key={key} label={FIELD_LABELS[key]} name={key} form={form}>
+              <Input type="number" step="any" {...form.getFieldProps(key)} />
+            </FormField>
+          ))}
         </div>
 
         <SpacecraftThumbnail vehicle={vehicle} config={form.values} />

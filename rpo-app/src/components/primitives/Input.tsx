@@ -1,11 +1,12 @@
 import { type InputHTMLAttributes } from 'react';
 
-type InputProps = InputHTMLAttributes<HTMLInputElement> & {
-  invalid?: boolean;
-};
+import { useFieldError } from './FieldErrorContext';
 
-export function Input({ invalid, className, type = 'text', ...rest }: InputProps) {
+type InputProps = InputHTMLAttributes<HTMLInputElement>;
+
+export function Input({ className, type = 'text', ...rest }: InputProps) {
   const numeric = type === 'number';
+  const invalid = Boolean(useFieldError());
   const border = invalid ? 'border-signal-abort' : 'border-border';
 
   return (
