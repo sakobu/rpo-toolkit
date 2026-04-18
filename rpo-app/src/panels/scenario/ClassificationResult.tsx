@@ -1,5 +1,5 @@
-import { Callout } from '../../components/primitives/Callout';
-import { useMission } from '../../stores/mission';
+import { Callout } from '@/components/primitives/Callout';
+import { useMission } from '@/stores/mission';
 
 export function ClassificationResult() {
   const classification = useMission((s) => s.classification);

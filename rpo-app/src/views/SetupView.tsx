@@ -1,5 +1,5 @@
-import { ScenarioStep1 } from '../panels/scenario/ScenarioStep1';
-import { ScenarioStep2 } from '../panels/scenario/ScenarioStep2';
+import { ScenarioStep1 } from '@/panels/scenario/ScenarioStep1';
+import { ScenarioStep2 } from '@/panels/scenario/ScenarioStep2';
 
 export function SetupView() {
   return (

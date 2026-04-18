@@ -1,6 +1,6 @@
 import type { ChangeEvent, DragEvent } from 'react';
 
-import type { Vehicle } from '../vehicle';
+import type { Vehicle } from '@/domain/vehicle';
 
 type DropZoneProps = {
   vehicle: Vehicle;

@@ -1,9 +1,10 @@
-import { useState, type ChangeEvent, type DragEvent } from 'react';
+import { type ChangeEvent, type DragEvent, useState } from 'react';
+
 import { match } from '@railway-ts/pipelines/result';
 
-import { Panel } from '../../../components/primitives/Panel';
-import { EMPTY_SLOT, useScenario, type VehicleStateSlot } from '../../../stores/scenario';
-import { VEHICLE_LABELS, type Vehicle } from '../vehicle';
+import { Panel } from '@/components/primitives/Panel';
+import { type Vehicle, VEHICLE_LABELS } from '@/domain/vehicle';
+import { EMPTY_SLOT, useScenario, type VehicleStateSlot } from '@/stores/scenario';
 
 import { DropZone } from './DropZone';
 import { LoadedPreview } from './LoadedPreview';

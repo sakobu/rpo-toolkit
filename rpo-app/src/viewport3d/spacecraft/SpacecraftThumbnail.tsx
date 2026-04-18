@@ -2,9 +2,11 @@ import { useRef } from 'react';
 import { Canvas, useFrame } from '@react-three/fiber';
 import type { Group } from 'three';
 
+import type { Vehicle } from '@/domain/vehicle';
+import type { SpacecraftConfig } from '@/schemas/spacecraft';
+
+import { configToSpacecraftProps } from './configToProps';
 import { Spacecraft, type SpacecraftProps } from './Spacecraft';
-import { configToSpacecraftProps, type Vehicle } from './configToProps';
-import type { SpacecraftConfig } from '../../schemas/spacecraft';
 
 type Props = {
   vehicle: Vehicle;

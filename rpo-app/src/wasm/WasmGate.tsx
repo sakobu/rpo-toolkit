@@ -1,6 +1,6 @@
 import { type ReactNode } from 'react';
 
-import { useWasm } from '../hooks/useWasm';
+import { useWasm } from '@/hooks/useWasm';
 
 export function WasmGate({ children }: { children: ReactNode }) {
   const wasm = useWasm();

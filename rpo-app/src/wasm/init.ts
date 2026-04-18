@@ -1,5 +1,6 @@
-import init from 'rpo-wasm';
 import { fromPromiseWithError, type Result } from '@railway-ts/pipelines/result';
+
+import init from 'rpo-wasm';
 
 export type WasmInitError = { kind: 'wasm-init-failed'; message: string };
 

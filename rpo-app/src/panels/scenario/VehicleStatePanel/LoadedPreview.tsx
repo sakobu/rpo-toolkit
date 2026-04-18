@@ -1,4 +1,4 @@
-import type { VehicleStateSlot } from '../../../stores/scenario';
+import type { VehicleStateSlot } from '@/stores/scenario';
 
 type LoadedSlot = Extract<VehicleStateSlot, { status: 'loaded' }>;
 
@@ -16,7 +16,7 @@ export function LoadedPreview({ slot, onClear }: LoadedPreviewProps) {
         <button
           type="button"
           onClick={onClear}
-          className="shrink-0 font-mono text-xs tracking-wider text-text-dim uppercase hover:text-text-muted"
+          className="shrink-0 cursor-pointer font-mono text-xs tracking-wider text-text-dim uppercase hover:text-text-muted"
         >
           clear
         </button>

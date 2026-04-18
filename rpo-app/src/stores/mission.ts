@@ -1,10 +1,13 @@
 import { create } from 'zustand';
 import { devtools } from 'zustand/middleware';
+
 import { match } from '@railway-ts/pipelines/result';
+
 import type { MissionPhase, ProximityConfig, WasmError } from 'rpo-wasm';
 
-import { ROE_THRESHOLD_DEFAULT } from '../schemas/proximityConfig';
-import { classify } from '../wasm/classify';
+import { ROE_THRESHOLD_DEFAULT } from '@/schemas/proximityConfig';
+import { classify } from '@/wasm/classify';
+
 import { useScenario, type VehicleStateSlot } from './scenario';
 
 export type Classification =

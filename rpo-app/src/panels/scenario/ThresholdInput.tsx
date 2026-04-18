@@ -1,16 +1,17 @@
-import { useState, type ChangeEvent } from 'react';
-import { validate } from '@railway-ts/pipelines/schema';
-import { match } from '@railway-ts/pipelines/result';
+import { type ChangeEvent, useState } from 'react';
 
-import { FieldErrorContext } from '../../components/primitives/FieldErrorContext';
-import { Input } from '../../components/primitives/Input';
+import { match } from '@railway-ts/pipelines/result';
+import { validate } from '@railway-ts/pipelines/schema';
+
+import { FieldErrorContext } from '@/components/primitives/FieldErrorContext';
+import { Input } from '@/components/primitives/Input';
 import {
+  proximityConfigSchema,
   ROE_THRESHOLD_DEFAULT,
   ROE_THRESHOLD_MAX,
   ROE_THRESHOLD_MIN,
-  proximityConfigSchema,
-} from '../../schemas/proximityConfig';
-import { useMission } from '../../stores/mission';
+} from '@/schemas/proximityConfig';
+import { useMission } from '@/stores/mission';
 
 export function ThresholdInput() {
   const setConfig = useMission((s) => s.setProximityConfig);

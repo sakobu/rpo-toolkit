@@ -1,7 +1,8 @@
 import { useEffect, useState } from 'react';
+
 import { match } from '@railway-ts/pipelines/result';
 
-import { wasmReady, type WasmInitError } from '../wasm/init';
+import { type WasmInitError, wasmReady } from '@/wasm/init';
 
 export type WasmState =
   | { kind: 'loading' }

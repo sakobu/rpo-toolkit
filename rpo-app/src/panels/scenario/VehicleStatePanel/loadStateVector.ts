@@ -1,4 +1,4 @@
-import { validate, type ValidationError } from '@railway-ts/pipelines/schema';
+import { pipe, pipeAsync } from '@railway-ts/pipelines/composition';
 import {
   flatMapWith,
   fromPromise,
@@ -6,9 +6,9 @@ import {
   mapErrWith,
   type Result,
 } from '@railway-ts/pipelines/result';
-import { pipe, pipeAsync } from '@railway-ts/pipelines/composition';
+import { validate, type ValidationError } from '@railway-ts/pipelines/schema';
 
-import { stateVectorSchema, type StateVectorInput } from '../../../schemas/stateVector';
+import { type StateVectorInput, stateVectorSchema } from '@/schemas/stateVector';
 
 export function loadStateVectorFromFile(file: File): Promise<Result<StateVectorInput, string>> {
   return pipeAsync(

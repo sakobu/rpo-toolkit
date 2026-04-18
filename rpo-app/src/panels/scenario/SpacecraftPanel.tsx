@@ -1,22 +1,23 @@
-import { useEffect, type ChangeEvent } from 'react';
+import { type ChangeEvent, useEffect } from 'react';
+
 import { useForm } from '@railway-ts/use-form';
 
-import { Panel } from '../../components/primitives/Panel';
-import { FormField } from '../../components/primitives/FormField';
-import { Input } from '../../components/primitives/Input';
-import { Select } from '../../components/primitives/Select';
-import { SpacecraftThumbnail } from '../../components/spacecraft/SpacecraftThumbnail';
+import { FormField } from '@/components/primitives/FormField';
+import { Input } from '@/components/primitives/Input';
+import { Panel } from '@/components/primitives/Panel';
+import { Select } from '@/components/primitives/Select';
+import { type Vehicle, VEHICLE_LABELS } from '@/domain/vehicle';
 import {
-  spacecraftSchema,
-  PRESETS,
-  PRESET_NAMES,
-  NUMERIC_FIELDS,
   FIELD_LABELS,
+  NUMERIC_FIELDS,
+  PRESET_NAMES,
   type PresetName,
+  PRESETS,
   type SpacecraftConfig,
-} from '../../schemas/spacecraft';
-import { useScenario } from '../../stores/scenario';
-import { VEHICLE_LABELS, type Vehicle } from './vehicle';
+  spacecraftSchema,
+} from '@/schemas/spacecraft';
+import { useScenario } from '@/stores/scenario';
+import { SpacecraftThumbnail } from '@/viewport3d/spacecraft/SpacecraftThumbnail';
 
 type SpacecraftPanelProps = {
   vehicle: Vehicle;

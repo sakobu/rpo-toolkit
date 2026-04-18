@@ -1,7 +1,7 @@
 import { useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router';
 
-import { useMission } from '../../stores/mission';
+import { useMission } from '@/stores/mission';
 
 type ProceedTarget =
   | { enabled: true; label: string; to: string }
@@ -25,7 +25,7 @@ export function ProceedButton() {
   const base =
     'duration-fast rounded-sm border px-4 py-2 font-mono text-xs tracking-wider uppercase transition-colors';
   const variant = target.enabled
-    ? 'border-accent bg-accent/10 text-accent hover:bg-accent/20'
+    ? 'cursor-pointer border-accent bg-accent/10 text-accent hover:bg-accent/20'
     : 'cursor-not-allowed border-border bg-surface-2 text-text-dim';
 
   return (

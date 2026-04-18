@@ -1,12 +1,13 @@
 import { useShallow } from 'zustand/react/shallow';
 
+import { Callout } from '@/components/primitives/Callout';
+import { useScenario } from '@/stores/scenario';
+
+import { ClassificationResult } from './ClassificationResult';
 import { ProceedButton } from './ProceedButton';
 import { ThresholdAdvisories } from './ThresholdAdvisories';
 import { ThresholdInput } from './ThresholdInput';
 import { VehicleStatePanel } from './VehicleStatePanel';
-import { ClassificationResult } from '../mission/ClassificationResult';
-import { Callout } from '../../components/primitives/Callout';
-import { useScenario } from '../../stores/scenario';
 
 export function ScenarioStep2() {
   const { chiefState, deputyState } = useScenario(

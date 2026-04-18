@@ -1,8 +1,8 @@
 import { create } from 'zustand';
 import { devtools } from 'zustand/middleware';
 
-import type { SpacecraftConfig } from '../schemas/spacecraft';
-import type { StateVectorInput } from '../schemas/stateVector';
+import type { SpacecraftConfig } from '@/schemas/spacecraft';
+import type { StateVectorInput } from '@/schemas/stateVector';
 
 export type VehicleState = {
   values: SpacecraftConfig;

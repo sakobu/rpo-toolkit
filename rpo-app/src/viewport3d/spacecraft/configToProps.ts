@@ -1,11 +1,11 @@
+import type { Vehicle } from '@/domain/vehicle';
+import type { SpacecraftConfig } from '@/schemas/spacecraft';
+
 import type { MainBodyProps } from './MainBody';
 import type { NavigationLightProps } from './NavigationLight';
 import type { SolarPanelProps } from './SolarPanel';
 import type { ArmProps, SpacecraftProps } from './Spacecraft';
 import type { Vec3 } from './types';
-import type { SpacecraftConfig } from '../../schemas/spacecraft';
-
-export type Vehicle = 'chief' | 'deputy';
 
 // Red team / blue team convention: chief = red, deputy = blue.
 // Red pulls from --color-viz-free-drift (#f43f5e); blue from --color-viz-analytical (#60a5fa).

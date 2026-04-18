@@ -1,8 +1,8 @@
 import { Link } from 'react-router';
 
-import { Callout } from '../components/primitives/Callout';
-import { Panel } from '../components/primitives/Panel';
-import { useMission } from '../stores/mission';
+import { Callout } from '@/components/primitives/Callout';
+import { Panel } from '@/components/primitives/Panel';
+import { useMission } from '@/stores/mission';
 
 export function MissionStub() {
   const classification = useMission((s) => s.classification);
