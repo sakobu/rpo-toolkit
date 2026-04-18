@@ -11,18 +11,16 @@ const baseSchema = S.object({
 
 type StateVectorShape = S.InferSchemaType<typeof baseSchema>;
 
-const isNonZero = (v: readonly [number, number, number]) => v[0] !== 0 || v[1] !== 0 || v[2] !== 0;
-
 export const stateVectorSchema = S.chain(
   baseSchema,
   S.refineAt<StateVectorShape>(
     'position_eci_km',
-    (d) => isNonZero(d.position_eci_km),
+    (d) => d.position_eci_km.some((x) => x !== 0),
     'Position vector cannot be zero',
   ),
   S.refineAt<StateVectorShape>(
     'velocity_eci_km_s',
-    (d) => isNonZero(d.velocity_eci_km_s),
+    (d) => d.velocity_eci_km_s.some((x) => x !== 0),
     'Velocity vector cannot be zero',
   ),
 );

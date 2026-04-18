@@ -22,7 +22,7 @@ type SpacecraftPanelProps = {
   vehicle: Vehicle;
 };
 
-const DEFAULT_PRESET: PresetName = '6U CubeSat';
+const DEFAULT_PRESET: PresetName = 'Servicer 500kg';
 
 const initialValues: SpacecraftConfig = {
   preset: DEFAULT_PRESET,

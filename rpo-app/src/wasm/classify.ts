@@ -3,11 +3,13 @@ import type { MissionPhase, ProximityConfig, StateVector, WasmError } from 'rpo-
 import { fromTryWithError, mapErrWith, type Result } from '@railway-ts/pipelines/result';
 import { pipe } from '@railway-ts/pipelines/composition';
 
-const DEFAULT_CONFIG: ProximityConfig = { roe_threshold: 0.005 };
-
-export function classify(chief: StateVector, deputy: StateVector): Result<MissionPhase, WasmError> {
+export function classify(
+  chief: StateVector,
+  deputy: StateVector,
+  config: ProximityConfig,
+): Result<MissionPhase, WasmError> {
   return pipe(
-    fromTryWithError(() => classify_separation(chief, deputy, DEFAULT_CONFIG)),
+    fromTryWithError(() => classify_separation(chief, deputy, config)),
     mapErrWith((e: Error) => toWasmError(e)),
   );
 }

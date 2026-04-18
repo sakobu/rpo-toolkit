@@ -1,5 +1,8 @@
 import { useShallow } from 'zustand/react/shallow';
 
+import { ProceedButton } from './ProceedButton';
+import { ThresholdAdvisories } from './ThresholdAdvisories';
+import { ThresholdInput } from './ThresholdInput';
 import { VehicleStatePanel } from './VehicleStatePanel';
 import { ClassificationResult } from '../mission/ClassificationResult';
 import { Callout } from '../../components/primitives/Callout';
@@ -27,6 +30,11 @@ export function ScenarioStep2() {
         </Callout>
       ) : null}
       <ClassificationResult />
+      <ThresholdInput />
+      <ThresholdAdvisories />
+      <div className="flex justify-end">
+        <ProceedButton />
+      </div>
     </section>
   );
 }
