@@ -1,5 +1,8 @@
-import { Link, Navigate, Outlet } from 'react-router';
+import { Navigate, Outlet } from 'react-router';
 
+import HUD from '@/components/overlay/HUD';
+import MissionControlPanel from '@/components/overlay/MissionControlPanel';
+import Sidebar from '@/components/overlay/Sidebar';
 import { useMission } from '@/stores/mission';
 
 export function ViewportShell() {
@@ -12,16 +15,9 @@ export function ViewportShell() {
   return (
     <div className="fixed inset-0 bg-bg">
       <Outlet />
-      <div className="pointer-events-none absolute inset-0">
-        <div className="pointer-events-auto absolute top-4 left-4">
-          <Link
-            to="/"
-            className="rounded-sm border border-border/60 bg-surface-1/70 px-2 py-1 font-mono text-[10px] tracking-wider text-text-dim uppercase backdrop-blur-sm hover:text-text-muted"
-          >
-            ← setup
-          </Link>
-        </div>
-      </div>
+      <Sidebar />
+      <HUD />
+      <MissionControlPanel />
     </div>
   );
 }
