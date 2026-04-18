@@ -1,4 +1,5 @@
-import type { VehicleStateSlot } from '@/stores/scenario';
+import type { VehicleStateSlot } from '@/stores/configuration';
+import { Button } from '@/ui/Button';
 
 type LoadedSlot = Extract<VehicleStateSlot, { status: 'loaded' }>;
 
@@ -13,13 +14,9 @@ export function LoadedPreview({ slot, onClear }: LoadedPreviewProps) {
     <div className="flex flex-col gap-3">
       <div className="flex items-baseline justify-between gap-2">
         <span className="truncate font-mono text-xs text-text-muted">{fileName}</span>
-        <button
-          type="button"
-          onClick={onClear}
-          className="shrink-0 cursor-pointer font-mono text-xs tracking-wider text-text-dim uppercase hover:text-text-muted"
-        >
+        <Button variant="ghost" onClick={onClear} className="shrink-0">
           clear
-        </button>
+        </Button>
       </div>
       <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 font-mono text-xs">
         <dt className="text-text-dim uppercase">epoch</dt>

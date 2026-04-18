@@ -3,6 +3,7 @@ import { GripHorizontal, Minus, Plus } from 'lucide-react';
 
 import { useHotkey } from '@/hooks/useHotkey';
 import { useUI } from '@/stores/ui';
+import { IconButton } from '@/ui/IconButton';
 import { withBlur } from '@/utils/blur';
 
 export default function HUD() {
@@ -21,14 +22,12 @@ export default function HUD() {
           <GripHorizontal size={14} strokeWidth={1.5} />
           <span className="font-mono text-[10px] tracking-wider uppercase">hud</span>
         </div>
-        <button
-          type="button"
+        <IconButton
           onClick={withBlur(() => setMinimized((prev) => !prev))}
-          className="flex h-5 w-5 cursor-pointer items-center justify-center rounded-xs text-text-dim hover:text-text"
           aria-label={minimized ? 'expand hud' : 'minimize hud'}
         >
           {minimized ? <Plus size={12} strokeWidth={1.5} /> : <Minus size={12} strokeWidth={1.5} />}
-        </button>
+        </IconButton>
       </header>
       <div
         className={`duration-base overflow-hidden transition-[max-height] ease-out ${

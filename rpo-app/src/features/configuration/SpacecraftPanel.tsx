@@ -2,10 +2,6 @@ import { type ChangeEvent, useEffect } from 'react';
 
 import { useForm } from '@railway-ts/use-form';
 
-import { FormField } from '@/components/primitives/FormField';
-import { Input } from '@/components/primitives/Input';
-import { Panel } from '@/components/primitives/Panel';
-import { Select } from '@/components/primitives/Select';
 import { type Vehicle, VEHICLE_LABELS } from '@/domain/vehicle';
 import {
   FIELD_LABELS,
@@ -16,7 +12,11 @@ import {
   type SpacecraftConfig,
   spacecraftSchema,
 } from '@/schemas/spacecraft';
-import { useScenario } from '@/stores/scenario';
+import { useConfig } from '@/stores/configuration';
+import { FormField } from '@/ui/FormField';
+import { Input } from '@/ui/Input';
+import { Panel } from '@/ui/Panel';
+import { Select } from '@/ui/Select';
 import { SpacecraftThumbnail } from '@/viewport3d/spacecraft/SpacecraftThumbnail';
 
 type SpacecraftPanelProps = {
@@ -57,8 +57,8 @@ export function SpacecraftPanel({ vehicle }: SpacecraftPanelProps) {
     },
   });
 
-  const setChiefConfig = useScenario((s) => s.setChiefConfig);
-  const setDeputyConfig = useScenario((s) => s.setDeputyConfig);
+  const setChiefConfig = useConfig((s) => s.setChiefConfig);
+  const setDeputyConfig = useConfig((s) => s.setDeputyConfig);
   const setter = vehicle === 'chief' ? setChiefConfig : setDeputyConfig;
 
   useEffect(() => {

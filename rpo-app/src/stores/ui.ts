@@ -4,29 +4,29 @@ import { devtools } from 'zustand/middleware';
 type UIState = {
   sidebarOpen: boolean;
   hudVisible: boolean;
-  missionPanelOpen: boolean;
-  missionPanelHeight: number;
+  missionDockOpen: boolean;
+  missionDockHeight: number;
   toggleSidebar: () => void;
   toggleHUD: () => void;
-  toggleMissionPanel: () => void;
-  setMissionPanelHeight: (height: number) => void;
+  toggleMissionDock: () => void;
+  setMissionDockHeight: (height: number) => void;
 };
 
-const MISSION_PANEL_DEFAULT_HEIGHT = 300;
+const MISSION_DOCK_DEFAULT_HEIGHT = 300;
 
 export const useUI = create<UIState>()(
   devtools(
     (set) => ({
       sidebarOpen: true,
       hudVisible: true,
-      missionPanelOpen: false,
-      missionPanelHeight: MISSION_PANEL_DEFAULT_HEIGHT,
+      missionDockOpen: false,
+      missionDockHeight: MISSION_DOCK_DEFAULT_HEIGHT,
       toggleSidebar: () => set((s) => ({ sidebarOpen: !s.sidebarOpen }), false, 'toggleSidebar'),
       toggleHUD: () => set((s) => ({ hudVisible: !s.hudVisible }), false, 'toggleHUD'),
-      toggleMissionPanel: () =>
-        set((s) => ({ missionPanelOpen: !s.missionPanelOpen }), false, 'toggleMissionPanel'),
-      setMissionPanelHeight: (height) =>
-        set({ missionPanelHeight: height }, false, 'setMissionPanelHeight'),
+      toggleMissionDock: () =>
+        set((s) => ({ missionDockOpen: !s.missionDockOpen }), false, 'toggleMissionDock'),
+      setMissionDockHeight: (height) =>
+        set({ missionDockHeight: height }, false, 'setMissionDockHeight'),
     }),
     { name: 'ui', enabled: import.meta.env.DEV },
   ),

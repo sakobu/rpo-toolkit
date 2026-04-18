@@ -6,7 +6,7 @@ export function Shell() {
       <header className="mb-6 flex items-baseline justify-between border-b border-border pb-3">
         <div>
           <h1 className="text-xl font-semibold tracking-tight text-text">RPO Toolkit</h1>
-          <p className="text-sm text-text-muted">Steps 1-2 — configure + upload states</p>
+          <p className="text-sm text-text-muted">configuration · classification</p>
         </div>
         <span className="font-mono text-xs tracking-wider text-text-dim uppercase">
           analytical · offline

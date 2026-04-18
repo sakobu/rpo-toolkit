@@ -9,22 +9,28 @@ import type { MissionPhase, ProximityConfig, WasmError } from 'rpo-wasm';
 import { ROE_THRESHOLD_DEFAULT } from '@/schemas/proximityConfig';
 import { classify } from '@/wasm/classify';
 
-import { useScenario, type VehicleStateSlot } from './scenario';
+import { useConfig, type VehicleStateSlot } from './configuration';
+
+// ─── Types ─────────────────────────────────────────────────────────────────
 
 export type Classification =
   | { status: 'idle' }
   | { status: 'ok'; phase: MissionPhase }
   | { status: 'err'; error: WasmError };
 
-export const IDLE_CLASSIFICATION: Classification = { status: 'idle' };
-
-const DEFAULT_PROXIMITY_CONFIG: ProximityConfig = { roe_threshold: ROE_THRESHOLD_DEFAULT };
-
 type MissionState = {
   classification: Classification;
   proximityConfig: ProximityConfig;
   setProximityConfig: (config: ProximityConfig) => void;
 };
+
+// ─── Defaults ──────────────────────────────────────────────────────────────
+
+export const IDLE_CLASSIFICATION: Classification = { status: 'idle' };
+
+const DEFAULT_PROXIMITY_CONFIG: ProximityConfig = { roe_threshold: ROE_THRESHOLD_DEFAULT };
+
+// ─── Store ─────────────────────────────────────────────────────────────────
 
 export const useMission = create<MissionState>()(
   subscribeWithSelector(
@@ -40,21 +46,7 @@ export const useMission = create<MissionState>()(
   ),
 );
 
-function recomputeClassification() {
-  const { chiefState, deputyState } = useScenario.getState();
-  const { proximityConfig } = useMission.getState();
-  useMission.setState(
-    { classification: deriveClassification(chiefState, deputyState, proximityConfig) },
-    false,
-    'deriveClassification',
-  );
-}
-
-useScenario.subscribe((s) => [s.chiefState, s.deputyState] as const, recomputeClassification, {
-  equalityFn: shallow,
-});
-
-useMission.subscribe((s) => s.proximityConfig.roe_threshold, recomputeClassification);
+// ─── Derivation ────────────────────────────────────────────────────────────
 
 function deriveClassification(
   chiefSlot: VehicleStateSlot,
@@ -72,3 +64,25 @@ function deriveClassification(
     err: (error): Classification => ({ status: 'err', error }),
   });
 }
+
+// ─── Cross-store reactivity ────────────────────────────────────────────────
+// Classification is derived, not owned. These subscriptions fire at module-import
+// time and keep it in sync when either the config slots or the threshold change.
+// `shallow` is required on the first subscribe because the selector returns a
+// fresh tuple on every emit.
+
+function recomputeClassification() {
+  const { chiefState, deputyState } = useConfig.getState();
+  const { proximityConfig } = useMission.getState();
+  useMission.setState(
+    { classification: deriveClassification(chiefState, deputyState, proximityConfig) },
+    false,
+    'deriveClassification',
+  );
+}
+
+useConfig.subscribe((s) => [s.chiefState, s.deputyState] as const, recomputeClassification, {
+  equalityFn: shallow,
+});
+
+useMission.subscribe((s) => s.proximityConfig.roe_threshold, recomputeClassification);

@@ -3,8 +3,6 @@ import { type ChangeEvent, useState } from 'react';
 import { match } from '@railway-ts/pipelines/result';
 import { validate } from '@railway-ts/pipelines/schema';
 
-import { FieldErrorContext } from '@/components/primitives/FieldErrorContext';
-import { Input } from '@/components/primitives/Input';
 import {
   proximityConfigSchema,
   ROE_THRESHOLD_DEFAULT,
@@ -12,6 +10,8 @@ import {
   ROE_THRESHOLD_MIN,
 } from '@/schemas/proximityConfig';
 import { useMission } from '@/stores/mission';
+import { FieldErrorContext } from '@/ui/FieldErrorContext';
+import { Input } from '@/ui/Input';
 
 export function ThresholdInput() {
   const setConfig = useMission((s) => s.setProximityConfig);

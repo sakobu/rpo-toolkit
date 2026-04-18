@@ -1,8 +1,8 @@
 import type { MissionPhase } from 'rpo-wasm';
 
-import { Callout } from '@/components/primitives/Callout';
 import { ROE_THRESHOLD_SOFT_MAX } from '@/schemas/proximityConfig';
 import { useMission } from '@/stores/mission';
+import { Callout } from '@/ui/Callout';
 
 const BORDERLINE_FRACTION = 0.1;
 

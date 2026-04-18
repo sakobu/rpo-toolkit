@@ -1,8 +1,8 @@
 import { Navigate, Outlet } from 'react-router';
 
-import HUD from '@/components/overlay/HUD';
-import MissionControlPanel from '@/components/overlay/MissionControlPanel';
-import Sidebar from '@/components/overlay/Sidebar';
+import HUD from '@/chrome/HUD';
+import MissionDock from '@/chrome/MissionDock';
+import Sidebar from '@/chrome/Sidebar';
 import { useMission } from '@/stores/mission';
 
 export function ViewportShell() {
@@ -17,7 +17,7 @@ export function ViewportShell() {
       <Outlet />
       <Sidebar />
       <HUD />
-      <MissionControlPanel />
+      <MissionDock />
     </div>
   );
 }

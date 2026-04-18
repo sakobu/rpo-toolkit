@@ -2,9 +2,9 @@ import { type ChangeEvent, type DragEvent, useState } from 'react';
 
 import { match } from '@railway-ts/pipelines/result';
 
-import { Panel } from '@/components/primitives/Panel';
 import { type Vehicle, VEHICLE_LABELS } from '@/domain/vehicle';
-import { EMPTY_SLOT, useScenario, type VehicleStateSlot } from '@/stores/scenario';
+import { EMPTY_SLOT, useConfig, type VehicleStateSlot } from '@/stores/configuration';
+import { Panel } from '@/ui/Panel';
 
 import { DropZone } from './DropZone';
 import { LoadedPreview } from './LoadedPreview';
@@ -15,8 +15,8 @@ type VehicleStatePanelProps = {
 };
 
 export function VehicleStatePanel({ vehicle }: VehicleStatePanelProps) {
-  const slot = useScenario((s) => (vehicle === 'chief' ? s.chiefState : s.deputyState));
-  const setSlot = useScenario((s) => (vehicle === 'chief' ? s.setChiefState : s.setDeputyState));
+  const slot = useConfig((s) => (vehicle === 'chief' ? s.chiefState : s.deputyState));
+  const setSlot = useConfig((s) => (vehicle === 'chief' ? s.setChiefState : s.setDeputyState));
   const [dragActive, setDragActive] = useState(false);
 
   const handleFile = async (file: File) => {

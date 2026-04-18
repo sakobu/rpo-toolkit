@@ -2,6 +2,7 @@ import { useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router';
 
 import { useMission } from '@/stores/mission';
+import { Button } from '@/ui/Button';
 
 type ProceedTarget =
   | { enabled: true; label: string; to: string }
@@ -22,22 +23,10 @@ export function ProceedButton() {
     if (target.enabled) void navigate(target.to);
   };
 
-  const base =
-    'duration-fast rounded-sm border px-4 py-2 font-mono text-xs tracking-wider uppercase transition-colors';
-  const variant = target.enabled
-    ? 'cursor-pointer border-accent bg-accent/10 text-accent hover:bg-accent/20'
-    : 'cursor-not-allowed border-border bg-surface-2 text-text-dim';
-
   return (
-    <button
-      ref={ref}
-      type="button"
-      onClick={handleClick}
-      disabled={!target.enabled}
-      className={`${base} ${variant}`}
-    >
+    <Button ref={ref} onClick={handleClick} disabled={!target.enabled}>
       {target.label}
-    </button>
+    </Button>
   );
 }
 

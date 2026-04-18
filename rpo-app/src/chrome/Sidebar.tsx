@@ -25,7 +25,7 @@ export default function Sidebar() {
           </p>
         </header>
         <div className="flex-1 overflow-y-auto px-4 py-4 font-mono text-xs text-text-dim">
-          scenario · classification · transfer — coming soon
+          configuration · classification · transfer — coming soon
         </div>
         <footer className="border-t border-border px-4 py-3">
           <Link

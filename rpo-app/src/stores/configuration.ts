@@ -16,7 +16,7 @@ export type VehicleStateSlot =
 
 export const EMPTY_SLOT: VehicleStateSlot = { status: 'empty' };
 
-type ScenarioState = {
+type ConfigState = {
   chiefConfig: VehicleState | null;
   deputyConfig: VehicleState | null;
   chiefState: VehicleStateSlot;
@@ -27,7 +27,7 @@ type ScenarioState = {
   setDeputyState: (s: VehicleStateSlot) => void;
 };
 
-export const useScenario = create<ScenarioState>()(
+export const useConfig = create<ConfigState>()(
   subscribeWithSelector(
     devtools(
       (set) => ({
@@ -40,7 +40,7 @@ export const useScenario = create<ScenarioState>()(
         setChiefState: (s) => set({ chiefState: s }, false, 'setChiefState'),
         setDeputyState: (s) => set({ deputyState: s }, false, 'setDeputyState'),
       }),
-      { name: 'scenario', enabled: import.meta.env.DEV },
+      { name: 'configuration', enabled: import.meta.env.DEV },
     ),
   ),
 );
