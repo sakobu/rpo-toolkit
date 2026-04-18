@@ -52,6 +52,6 @@ function resolveTarget(
   }
   const isProximity = 'proximity' in classification.phase;
   return isProximity
-    ? { enabled: true, label: 'Proceed to RIC view →', to: '/mission' }
-    : { enabled: true, label: 'Proceed to ECI globe →', to: '/transfer' };
+    ? { enabled: true, label: 'Proceed to proximity view →', to: '/proximity' }
+    : { enabled: true, label: 'Proceed to far-field view →', to: '/far-field' };
 }

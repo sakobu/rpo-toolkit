@@ -7,7 +7,7 @@ export const EARTH_MATERIAL = {
   specular: 0x2d4ea0,
 } as const;
 
-export const ECI_ATMOSPHERE = {
+export const ATMOSPHERE = {
   color: '#88a6ff',
   opacity: 0.2,
   scaleFactor: 1 + 100 / 6378.1,

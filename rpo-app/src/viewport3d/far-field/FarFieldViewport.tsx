@@ -3,7 +3,7 @@ import { Canvas } from '@react-three/fiber';
 
 import Earth from './Earth';
 
-export default function GlobeViewport() {
+export default function FarFieldViewport() {
   return (
     <div className="h-full w-full">
       <Canvas camera={{ position: [0, 0, 6], fov: 50, near: 0.1, far: 100 }} dpr={[1, 2]}>
