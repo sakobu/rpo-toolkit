@@ -16,16 +16,10 @@ import {
   type SpacecraftConfig,
 } from '../../schemas/spacecraft';
 import { useScenario } from '../../stores/scenario';
-
-type Vehicle = 'chief' | 'deputy';
+import { VEHICLE_LABELS, type Vehicle } from './vehicle';
 
 type SpacecraftPanelProps = {
   vehicle: Vehicle;
-};
-
-const VEHICLE_LABELS: Record<Vehicle, string> = {
-  chief: 'Chief',
-  deputy: 'Deputy',
 };
 
 const DEFAULT_PRESET: PresetName = '6U CubeSat';
@@ -106,7 +100,9 @@ export function SpacecraftPanel({ vehicle }: SpacecraftPanelProps) {
           ))}
         </div>
 
-        <SpacecraftThumbnail vehicle={vehicle} config={form.values} />
+        <div className="mt-2">
+          <SpacecraftThumbnail vehicle={vehicle} config={form.values} />
+        </div>
       </div>
     </Panel>
   );

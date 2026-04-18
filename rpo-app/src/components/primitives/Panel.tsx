@@ -10,7 +10,7 @@ type PanelProps = {
 export function Panel({ title, subtitle, children, className }: PanelProps) {
   return (
     <section
-      className={`rounded-md border border-border bg-surface-1 p-4 shadow-panel ${className ?? ''}`}
+      className={`rounded-md border border-border bg-surface-1 p-5 shadow-panel ${className ?? ''}`}
     >
       {(title || subtitle) && (
         <header className="mb-3 flex items-baseline justify-between border-b border-border/60 pb-2">
