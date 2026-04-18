@@ -1,5 +1,6 @@
 import { create } from 'zustand';
-import { devtools } from 'zustand/middleware';
+import { devtools, subscribeWithSelector } from 'zustand/middleware';
+import { shallow } from 'zustand/shallow';
 
 import { match } from '@railway-ts/pipelines/result';
 
@@ -26,13 +27,16 @@ type MissionState = {
 };
 
 export const useMission = create<MissionState>()(
-  devtools(
-    (set) => ({
-      classification: IDLE_CLASSIFICATION,
-      proximityConfig: DEFAULT_PROXIMITY_CONFIG,
-      setProximityConfig: (config) => set({ proximityConfig: config }, false, 'setProximityConfig'),
-    }),
-    { name: 'mission', enabled: import.meta.env.DEV },
+  subscribeWithSelector(
+    devtools(
+      (set) => ({
+        classification: IDLE_CLASSIFICATION,
+        proximityConfig: DEFAULT_PROXIMITY_CONFIG,
+        setProximityConfig: (config) =>
+          set({ proximityConfig: config }, false, 'setProximityConfig'),
+      }),
+      { name: 'mission', enabled: import.meta.env.DEV },
+    ),
   ),
 );
 
@@ -46,15 +50,11 @@ function recomputeClassification() {
   );
 }
 
-useScenario.subscribe((state, prev) => {
-  if (state.chiefState === prev.chiefState && state.deputyState === prev.deputyState) return;
-  recomputeClassification();
+useScenario.subscribe((s) => [s.chiefState, s.deputyState] as const, recomputeClassification, {
+  equalityFn: shallow,
 });
 
-useMission.subscribe((state, prev) => {
-  if (state.proximityConfig === prev.proximityConfig) return;
-  recomputeClassification();
-});
+useMission.subscribe((s) => s.proximityConfig.roe_threshold, recomputeClassification);
 
 function deriveClassification(
   chiefSlot: VehicleStateSlot,

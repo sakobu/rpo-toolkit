@@ -10,7 +10,7 @@ export function Select({ className, children, ...rest }: SelectProps) {
 
   return (
     <select
-      className={`duration-fast appearance-none rounded-sm border bg-surface-2 px-2 py-1 pr-7 text-text transition-colors ${border} ${className ?? ''}`}
+      className={`duration-fast cursor-pointer appearance-none rounded-sm border bg-surface-2 px-2 py-1 pr-7 text-text transition-colors disabled:cursor-not-allowed ${border} ${className ?? ''}`}
       {...rest}
     >
       {children}

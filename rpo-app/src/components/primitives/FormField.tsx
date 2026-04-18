@@ -13,6 +13,10 @@ type BaseProps = {
 type SmartProps<TValues extends Record<string, unknown>> = BaseProps & {
   name: ExtractFieldPaths<TValues>;
   form: UseFormReturn<TValues>;
+  // Namespace the rendered htmlFor when multiple forms of the same shape live on one page
+  // (e.g. Deputy + Chief SpacecraftPanel). `@railway-ts/use-form` returns the field name
+  // verbatim from `getFieldId`, so without a prefix both forms collide on `id`.
+  idPrefix?: string;
   htmlFor?: never;
   error?: never;
 };
@@ -22,13 +26,15 @@ type ManualProps = BaseProps & {
   error?: string;
   name?: never;
   form?: never;
+  idPrefix?: never;
 };
 
 type FormFieldProps<TValues extends Record<string, unknown>> = SmartProps<TValues> | ManualProps;
 
 export function FormField<TValues extends Record<string, unknown>>(props: FormFieldProps<TValues>) {
   const { label, hint, children } = props;
-  const htmlFor = props.form ? props.form.getFieldId(props.name) : props.htmlFor;
+  const rawId = props.form ? props.form.getFieldId(props.name) : props.htmlFor;
+  const htmlFor = props.idPrefix ? `${props.idPrefix}-${rawId}` : rawId;
   const error = props.form ? props.form.getFieldError(props.name) : props.error;
 
   return (

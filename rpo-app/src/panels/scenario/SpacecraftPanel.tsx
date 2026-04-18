@@ -57,9 +57,9 @@ export function SpacecraftPanel({ vehicle }: SpacecraftPanelProps) {
     },
   });
 
-  const setChief = useScenario((s) => s.setChief);
-  const setDeputy = useScenario((s) => s.setDeputy);
-  const setter = vehicle === 'chief' ? setChief : setDeputy;
+  const setChiefConfig = useScenario((s) => s.setChiefConfig);
+  const setDeputyConfig = useScenario((s) => s.setDeputyConfig);
+  const setter = vehicle === 'chief' ? setChiefConfig : setDeputyConfig;
 
   useEffect(() => {
     setter({ values: form.values, isValid: form.isValid });
@@ -74,13 +74,15 @@ export function SpacecraftPanel({ vehicle }: SpacecraftPanelProps) {
     }
   };
 
+  const prefixId = (name: keyof SpacecraftConfig) => `${vehicle}-${name}`;
+
   return (
     <Panel title={VEHICLE_LABELS[vehicle]} subtitle="spacecraft">
       <div className="grid gap-3">
-        <FormField label="Preset" name="preset" form={form}>
+        <FormField label="Preset" name="preset" form={form} idPrefix={vehicle}>
           <Select
-            id={form.getFieldId('preset')}
-            name={form.getFieldId('preset')}
+            id={prefixId('preset')}
+            name={prefixId('preset')}
             value={form.values.preset}
             onBlur={() => form.setFieldTouched('preset')}
             onChange={handlePresetChange}
@@ -95,8 +97,14 @@ export function SpacecraftPanel({ vehicle }: SpacecraftPanelProps) {
 
         <div className="grid grid-cols-2 gap-3">
           {NUMERIC_FIELDS.map((key) => (
-            <FormField key={key} label={FIELD_LABELS[key]} name={key} form={form}>
-              <Input type="number" step="any" {...form.getFieldProps(key)} />
+            <FormField
+              key={key}
+              label={FIELD_LABELS[key]}
+              name={key}
+              form={form}
+              idPrefix={vehicle}
+            >
+              <Input type="number" step="any" {...form.getFieldProps(key)} id={prefixId(key)} />
             </FormField>
           ))}
         </div>
