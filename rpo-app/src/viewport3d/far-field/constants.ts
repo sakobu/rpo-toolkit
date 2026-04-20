@@ -1,6 +1,17 @@
 export const EARTH_RADIUS = 2;
 export const EARTH_SEGMENTS = 64;
 
+// Icon scale for spacecraft rendered in the far-field scene. Physical size is
+// invisible at ~3189 km per scene unit, so this is a UX value. At 0.003 the
+// total spacecraft extent (panels included) is ~0.09 scene units ≈ 290 km —
+// visible but small next to Earth (radius 2 scene units).
+export const FARFIELD_SPACECRAFT_SCALE = 0.003;
+
+// Label text size and offset in scene units — independent of the spacecraft
+// scale so the label stays readable even when the icon shrinks.
+export const FARFIELD_LABEL_FONT_SIZE = 0.05;
+export const FARFIELD_LABEL_OFFSET_Y = -0.04;
+
 export const EARTH_MATERIAL = {
   normalScale: [0.25, 0.25] as const,
   shininess: 15,

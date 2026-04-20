@@ -18,28 +18,36 @@ export function Spacecraft({
   navigationLights = [],
   label,
   labelColor,
+  labelFontSize,
+  labelOffsetY,
 }: SpacecraftProps) {
+  const defaultOffsetY = -(mainBody.height + LABEL_OFFSET_PAD) * scale;
+  const resolvedOffsetY = labelOffsetY ?? defaultOffsetY;
+
   return (
-    <group position={position} rotation={rotation} scale={[scale, scale, scale]} renderOrder={10}>
-      <MainBody {...mainBody} />
+    <group position={position} rotation={rotation}>
+      <group scale={[scale, scale, scale]} renderOrder={10}>
+        <MainBody {...mainBody} />
 
-      {arms.map((arm, index) => (
-        <Arm key={`arm-${index}`} {...arm} />
-      ))}
+        {arms.map((arm, index) => (
+          <Arm key={`arm-${index}`} {...arm} />
+        ))}
 
-      {solarPanels.map((panel, index) => (
-        <SolarPanel key={`panel-${index}`} {...panel} />
-      ))}
+        {solarPanels.map((panel, index) => (
+          <SolarPanel key={`panel-${index}`} {...panel} />
+        ))}
 
-      {navigationLights.map((light, index) => (
-        <NavigationLight key={`light-${index}`} {...light} />
-      ))}
+        {navigationLights.map((light, index) => (
+          <NavigationLight key={`light-${index}`} {...light} />
+        ))}
+      </group>
 
       {label && (
         <SpacecraftLabel
           label={label}
           color={labelColor}
-          offsetY={-mainBody.height - LABEL_OFFSET_PAD}
+          offsetY={resolvedOffsetY}
+          fontSize={labelFontSize}
         />
       )}
     </group>

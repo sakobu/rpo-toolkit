@@ -39,6 +39,7 @@ export interface SpacecraftLabelProps {
   label: string;
   color?: string;
   offsetY: number;
+  fontSize?: number;
 }
 
 export interface SpacecraftProps {
@@ -51,4 +52,10 @@ export interface SpacecraftProps {
   navigationLights?: NavigationLightProps[];
   label?: string;
   labelColor?: string;
+  // Label text size in scene units. Independent of `scale` so far-field icons
+  // can stay tiny while labels remain readable.
+  labelFontSize?: number;
+  // Vertical offset of the label from `position`, in scene units. Defaults to
+  // -(mainBody.height + pad) * scale so label sits just below the scaled body.
+  labelOffsetY?: number;
 }
