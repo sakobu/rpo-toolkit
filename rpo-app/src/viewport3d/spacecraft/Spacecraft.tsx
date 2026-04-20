@@ -1,9 +1,10 @@
 import { Billboard, Text } from '@react-three/drei';
 
+import type { Vec3 } from '@/viewport3d/types';
+
 import { MainBody, type MainBodyProps } from './MainBody';
 import { NavigationLight, type NavigationLightProps } from './NavigationLight';
 import { SolarPanel, type SolarPanelProps } from './SolarPanel';
-import type { Vec3 } from './types';
 
 export interface ArmProps {
   position: Vec3;

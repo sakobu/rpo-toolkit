@@ -13,8 +13,8 @@
     "preview": "vite preview"
   },
   "dependencies": {
-    "@railway-ts/pipelines": "^0.1.28",
-    "@railway-ts/use-form": "^0.1.29",
+    "@railway-ts/pipelines": "^0.1.29",
+    "@railway-ts/use-form": "^0.1.30",
     "@react-three/drei": "^10.7.7",
     "@react-three/fiber": "^9.6.0",
     "lucide-react": "^1.8.0",

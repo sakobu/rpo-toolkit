@@ -1,4 +1,4 @@
-import type { Vec3 } from './types';
+import type { Vec3 } from '@/viewport3d/types';
 
 export interface NavigationLightProps {
   position: Vec3;
