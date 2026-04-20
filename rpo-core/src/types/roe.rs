@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 /// All elements are dimensionless (normalized by chief semi-major axis)
 #[cfg_attr(feature = "wasm", derive(tsify_next::Tsify))]
 #[cfg_attr(feature = "wasm", tsify(into_wasm_abi, from_wasm_abi))]
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 pub struct QuasiNonsingularROE {
     /// Relative semi-major axis: `(a_d - a_c) / a_c`
     pub da: f64,
@@ -105,7 +105,15 @@ mod tests {
 
     #[test]
     fn zeros_returns_all_zero_components() {
-        assert_eq!(QuasiNonsingularROE::zeros(), QuasiNonsingularROE::default());
+        let z = QuasiNonsingularROE::zeros();
+        let d = QuasiNonsingularROE::default();
+        // Compare component-wise via bit pattern (both should be structural +0.0).
+        assert_eq!(z.da.to_bits(), d.da.to_bits());
+        assert_eq!(z.dlambda.to_bits(), d.dlambda.to_bits());
+        assert_eq!(z.dex.to_bits(), d.dex.to_bits());
+        assert_eq!(z.dey.to_bits(), d.dey.to_bits());
+        assert_eq!(z.dix.to_bits(), d.dix.to_bits());
+        assert_eq!(z.diy.to_bits(), d.diy.to_bits());
     }
 
     // ---------------------------------------------------------------------------

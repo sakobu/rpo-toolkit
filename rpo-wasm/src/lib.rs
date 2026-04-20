@@ -13,6 +13,7 @@ pub mod error;
 pub mod analysis;
 pub mod eclipse;
 pub mod enrichment;
+pub mod frames;
 pub mod mission;
 pub mod planning;
 pub mod query;

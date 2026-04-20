@@ -3,7 +3,9 @@
 use serde::Serialize;
 use tsify_next::Tsify;
 
+use rpo_core::elements::eci_ric_dcm::DcmError;
 use rpo_core::elements::eclipse::EclipseGeometryError;
+use rpo_core::elements::geodetic::GeodeticError;
 use rpo_core::mission::{AvoidanceError, FormationDesignError, MissionEclipseError, MissionError};
 use rpo_core::pipeline::PipelineError;
 use rpo_core::propagation::{CovarianceError, PropagationError};
@@ -48,6 +50,23 @@ pub enum WasmErrorCode {
     Formation,
     /// Input deserialization failed (invalid JSON shape or types).
     Deserialization,
+    /// Frame-transform error (geodetic conversion, epoch parse, ECI↔ECEF).
+    Frame,
+}
+
+impl WasmError {
+    /// Construct a frame-transform error with the given message.
+    ///
+    /// Used at the WASM boundary for input validation (epoch parse, vector
+    /// length, etc.) before delegating to a typed `rpo-core` error.
+    #[must_use]
+    pub fn frame(message: impl Into<String>) -> Self {
+        Self {
+            code: WasmErrorCode::Frame,
+            message: message.into(),
+            details: None,
+        }
+    }
 }
 
 impl From<PipelineError> for WasmError {
@@ -131,6 +150,26 @@ impl From<FormationDesignError> for WasmError {
     fn from(e: FormationDesignError) -> Self {
         Self {
             code: WasmErrorCode::Formation,
+            message: e.to_string(),
+            details: std::error::Error::source(&e).map(ToString::to_string),
+        }
+    }
+}
+
+impl From<GeodeticError> for WasmError {
+    fn from(e: GeodeticError) -> Self {
+        Self {
+            code: WasmErrorCode::Frame,
+            message: e.to_string(),
+            details: std::error::Error::source(&e).map(ToString::to_string),
+        }
+    }
+}
+
+impl From<DcmError> for WasmError {
+    fn from(e: DcmError) -> Self {
+        Self {
+            code: WasmErrorCode::Frame,
             message: e.to_string(),
             details: std::error::Error::source(&e).map(ToString::to_string),
         }

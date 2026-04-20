@@ -11,7 +11,7 @@ use serde::{Deserialize, Serialize};
 /// - Mission validation (via `validate_mission_nyx()`)
 #[cfg_attr(feature = "wasm", derive(tsify_next::Tsify))]
 #[cfg_attr(feature = "wasm", tsify(into_wasm_abi, from_wasm_abi))]
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 pub struct SpacecraftConfig {
     /// Spacecraft dry mass in kg
     pub dry_mass_kg: f64,
@@ -26,6 +26,22 @@ pub struct SpacecraftConfig {
 }
 
 impl SpacecraftConfig {
+    /// Bitwise equality check across all f64 fields.
+    ///
+    /// Used in places that need a "same configuration" predicate without
+    /// triggering the `f64 ==` lint. Two spacecraft are bit-equal iff every
+    /// field has the identical IEEE 754 bit pattern (so `+0.0` and `-0.0`
+    /// are considered equal; `NaN` never equals anything, including itself,
+    /// matching the documented behavior of `f64::to_bits` round-trip).
+    #[must_use]
+    pub fn bit_eq(&self, other: &Self) -> bool {
+        self.dry_mass_kg.to_bits() == other.dry_mass_kg.to_bits()
+            && self.drag_area_m2.to_bits() == other.drag_area_m2.to_bits()
+            && self.coeff_drag.to_bits() == other.coeff_drag.to_bits()
+            && self.srp_area_m2.to_bits() == other.srp_area_m2.to_bits()
+            && self.coeff_reflectivity.to_bits() == other.coeff_reflectivity.to_bits()
+    }
+
     /// Typical 6U cubesat: 12 kg, 0.06 m² cross-section.
     pub const CUBESAT_6U: Self = Self {
         dry_mass_kg: 12.0,

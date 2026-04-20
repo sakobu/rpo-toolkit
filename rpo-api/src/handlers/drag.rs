@@ -30,7 +30,7 @@ pub fn handle_extract_drag(
         return Err(ServerError::Cancelled);
     }
 
-    if chief_config == deputy_config {
+    if chief_config.bit_eq(deputy_config) {
         return Ok(DragConfig::zero());
     }
 

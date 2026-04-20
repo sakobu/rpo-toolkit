@@ -16,7 +16,7 @@ use crate::types::{KeplerError, KeplerianElements, QuasiNonsingularROE, RICState
 /// are treated as constant over the propagation interval.
 #[cfg_attr(feature = "wasm", derive(tsify_next::Tsify))]
 #[cfg_attr(feature = "wasm", tsify(into_wasm_abi, from_wasm_abi))]
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 pub struct DragConfig {
     /// Time derivative of relative SMA due to drag: `δȧ_drag` (1/s, normalized by `a_c`)
     pub da_dot: f64,

@@ -57,7 +57,7 @@ pub(crate) const BURN_TIME_CLAMP_FRACTION: f64 = 0.99;
 /// Configuration for collision avoidance maneuver design.
 #[cfg_attr(feature = "wasm", derive(tsify_next::Tsify))]
 #[cfg_attr(feature = "wasm", tsify(into_wasm_abi, from_wasm_abi))]
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 pub struct ColaConfig {
     /// Target POCA distance after avoidance (km).
     pub target_distance_km: f64,

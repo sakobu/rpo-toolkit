@@ -10,6 +10,7 @@
 
 use hifitime::Epoch;
 use nalgebra::Vector3;
+use rpo_core::constants::MU_EARTH;
 use rpo_core::elements::keplerian_to_state;
 use rpo_core::mission::config::MissionConfig;
 use rpo_core::mission::formation::EiAlignment;
@@ -70,6 +71,15 @@ const TEST_PERCH_ALONG_TRACK_KM: f64 = 5.0;
 
 /// Lambert time-of-flight for test scenarios.
 const TEST_LAMBERT_TOF_S: f64 = 3600.0;
+
+/// Tolerance: DCM rows are orthonormal within f64 round-off for two
+/// cross products + three norms. 1e-14 is conservative.
+const DCM_ROW_ORTHONORMALITY_TOL: f64 = 1e-14;
+
+/// Tolerance: rotating an ECI vector through the exposed DCM agrees with
+/// the rpo-core function applied to the same matrix. Both paths do the
+/// exact same arithmetic; agreement should be exact to 1 ULP.
+const DCM_ROUNDTRIP_TOL: f64 = 1e-15;
 
 // ---------------------------------------------------------------------------
 // Shared test fixtures
@@ -154,8 +164,8 @@ fn test_transfer_result() -> TransferResult {
             perch_roe: roe,
             chief_at_arrival: chief_ke,
         },
-        perch_chief: chief.clone(),
-        perch_deputy: deputy.clone(),
+        perch_chief: chief,
+        perch_deputy: deputy,
         arrival_epoch: epoch,
         lambert_dv_km_s: 0.0,
     }
@@ -526,7 +536,7 @@ fn compute_transfer_eclipse_nominal() {
     let arrival_epoch = epoch + hifitime::Duration::from_seconds(TEST_LAMBERT_TOF_S);
     let arrival_state = keplerian_to_state(&deputy_ke, arrival_epoch).expect("arrival state");
     let transfer = LambertTransfer {
-        departure_state: chief_state.clone(),
+        departure_state: chief_state,
         arrival_state,
         departure_dv_eci_km_s: Vector3::new(0.001, 0.0, 0.0),
         arrival_dv_eci_km_s: Vector3::new(-0.001, 0.0, 0.0),
@@ -787,6 +797,116 @@ fn accept_waypoint_enrichment_index_out_of_bounds() {
         "expected Mission error code, got {:?}",
         err.code
     );
+}
+
+// ---------------------------------------------------------------------------
+// Frame exports: ECI → RIC DCM
+// ---------------------------------------------------------------------------
+
+/// 7000 km circular equatorial LEO used for frame tests.
+fn leo_chief_state() -> StateVector {
+    let a_km = 7000.0;
+    // v = sqrt(mu / a) for circular orbit.
+    let v_circular_km_s = (MU_EARTH / a_km).sqrt();
+    StateVector {
+        epoch: test_epoch(),
+        position_eci_km: Vector3::new(a_km, 0.0, 0.0),
+        velocity_eci_km_s: Vector3::new(0.0, v_circular_km_s, 0.0),
+    }
+}
+
+#[test]
+fn eci_to_ric_dcm_rows_are_orthonormal() {
+    let chief = leo_chief_state();
+    let m = rpo_wasm::frames::eci_to_ric_dcm(chief).expect("DCM should succeed for LEO chief");
+    let rows = [
+        Vector3::new(m.0[0][0], m.0[0][1], m.0[0][2]),
+        Vector3::new(m.0[1][0], m.0[1][1], m.0[1][2]),
+        Vector3::new(m.0[2][0], m.0[2][1], m.0[2][2]),
+    ];
+    for (i, row) in rows.iter().enumerate() {
+        let norm_err = (row.norm() - 1.0).abs();
+        assert!(
+            norm_err < DCM_ROW_ORTHONORMALITY_TOL,
+            "row {i} not unit norm: err = {norm_err}"
+        );
+    }
+    // Pairwise orthogonality
+    for i in 0..3 {
+        for j in (i + 1)..3 {
+            let dot = rows[i].dot(&rows[j]).abs();
+            assert!(
+                dot < DCM_ROW_ORTHONORMALITY_TOL,
+                "rows {i} and {j} not orthogonal: |dot| = {dot}"
+            );
+        }
+    }
+}
+
+#[test]
+fn eci_to_ric_dcm_rotates_position_to_radial_axis() {
+    // For the LEO chief (position along +X ECI), applying the DCM to the
+    // chief's own position yields a pure radial vector: [|r|, 0, 0] in RIC.
+    let chief = leo_chief_state();
+    let m = rpo_wasm::frames::eci_to_ric_dcm(chief).expect("DCM should succeed");
+    let r_eci = chief.position_eci_km;
+    let r_ric_x = m.0[0][0] * r_eci.x + m.0[0][1] * r_eci.y + m.0[0][2] * r_eci.z;
+    let r_ric_y = m.0[1][0] * r_eci.x + m.0[1][1] * r_eci.y + m.0[1][2] * r_eci.z;
+    let r_ric_z = m.0[2][0] * r_eci.x + m.0[2][1] * r_eci.y + m.0[2][2] * r_eci.z;
+    assert!((r_ric_x - r_eci.norm()).abs() < DCM_ROUNDTRIP_TOL);
+    assert!(r_ric_y.abs() < DCM_ROUNDTRIP_TOL);
+    assert!(r_ric_z.abs() < DCM_ROUNDTRIP_TOL);
+}
+
+#[test]
+fn eci_to_ric_dcm_matches_core_function() {
+    // The WASM export must return exactly the same matrix rpo-core produces.
+    let chief = leo_chief_state();
+    let wasm_m = rpo_wasm::frames::eci_to_ric_dcm(chief).expect("DCM should succeed");
+    let core_m = rpo_core::elements::eci_ric_dcm::eci_to_ric_dcm(&chief)
+        .expect("core DCM should succeed");
+    for i in 0..3 {
+        for j in 0..3 {
+            let diff = (wasm_m.0[i][j] - core_m[(i, j)]).abs();
+            assert!(
+                diff < DCM_ROUNDTRIP_TOL,
+                "[{i}][{j}] mismatch: wasm = {}, core = {}, diff = {diff}",
+                wasm_m.0[i][j],
+                core_m[(i, j)]
+            );
+        }
+    }
+}
+
+#[test]
+fn eci_to_ric_dcm_rejects_rectilinear_orbit() {
+    // velocity parallel to position → r × v = 0 → ZeroAngularMomentum.
+    let chief = StateVector {
+        epoch: test_epoch(),
+        position_eci_km: Vector3::new(7000.0, 0.0, 0.0),
+        velocity_eci_km_s: Vector3::new(1.0, 0.0, 0.0),
+    };
+    let result = rpo_wasm::frames::eci_to_ric_dcm(chief);
+    assert!(result.is_err(), "rectilinear orbit should error");
+    let err = result.unwrap_err();
+    assert!(
+        matches!(err.code, rpo_wasm::error::WasmErrorCode::Frame),
+        "expected Frame error code, got {:?}",
+        err.code
+    );
+}
+
+#[test]
+fn eci_to_ric_dcm_rejects_zero_position() {
+    let chief = StateVector {
+        epoch: test_epoch(),
+        position_eci_km: Vector3::zeros(),
+        velocity_eci_km_s: Vector3::new(0.0, 7.5, 0.0),
+    };
+    let result = rpo_wasm::frames::eci_to_ric_dcm(chief);
+    assert!(result.is_err(), "zero-position chief should error");
+    let err = result.unwrap_err();
+    assert!(matches!(err.code, rpo_wasm::error::WasmErrorCode::Frame));
 }
 
 // ---------------------------------------------------------------------------

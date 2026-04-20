@@ -44,13 +44,11 @@ pub(super) fn advance_leg_states(
     let chief = chief_results
         .last()
         .ok_or(ValidationError::EmptyTrajectory)?
-        .state
-        .clone();
+        .state;
     let deputy_coast_end = deputy_results
         .last()
         .ok_or(ValidationError::EmptyTrajectory)?
-        .state
-        .clone();
+        .state;
     let deputy = apply_impulse(&deputy_coast_end, &chief, arrival_dv_ric_km_s)?;
     Ok((chief, deputy))
 }
@@ -97,8 +95,8 @@ pub(super) fn build_leg_comparison_points(
         if idx > 0 {
             safety_pairs.push(ChiefDeputySnapshot {
                 elapsed_s: elapsed,
-                chief: chief_sample.state.clone(),
-                deputy: deputy_sample.state.clone(),
+                chief: chief_sample.state,
+                deputy: deputy_sample.state,
             });
         }
         let post_cola = cola_split_index.is_some_and(|split| idx >= split);
@@ -301,13 +299,11 @@ pub(super) fn propagate_leg(
     let chief_at_split = chief_seg1
         .last()
         .ok_or(ValidationError::EmptyTrajectory)?
-        .state
-        .clone();
+        .state;
     let deputy_at_split = deputy_seg1
         .last()
         .ok_or(ValidationError::EmptyTrajectory)?
-        .state
-        .clone();
+        .state;
 
     // Apply the mid-leg impulse to the deputy if one was supplied.
     let deputy_seg2_start = match burn.impulse_dv_ric_km_s {

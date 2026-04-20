@@ -14,6 +14,9 @@ pub use state::*;
 
 use nalgebra::SMatrix;
 
+/// 3×3 matrix type alias for direction cosine matrices and rotations.
+pub type Matrix3 = SMatrix<f64, 3, 3>;
+
 /// 6×6 matrix type alias for STM and covariance operations.
 pub type Matrix6 = SMatrix<f64, 6, 6>;
 

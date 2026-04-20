@@ -97,7 +97,7 @@ pub struct MissionPlan {
 /// A target waypoint in RIC space for maneuver targeting.
 #[cfg_attr(feature = "wasm", derive(tsify_next::Tsify))]
 #[cfg_attr(feature = "wasm", tsify(into_wasm_abi, from_wasm_abi))]
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Waypoint {
     /// Target position in RIC frame (km): [radial, in-track, cross-track]
     #[cfg_attr(feature = "wasm", tsify(type = "[number, number, number]"))]
@@ -124,7 +124,7 @@ pub struct Waypoint {
 /// A single impulsive maneuver (Δv) in the RIC frame.
 #[cfg_attr(feature = "wasm", derive(tsify_next::Tsify))]
 #[cfg_attr(feature = "wasm", tsify(into_wasm_abi, from_wasm_abi))]
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 pub struct Maneuver {
     /// Δv in RIC frame (km/s): [radial, in-track, cross-track]
     #[cfg_attr(feature = "wasm", tsify(type = "[number, number, number]"))]
@@ -208,7 +208,7 @@ pub struct WaypointMission {
 /// at each trajectory point.
 #[cfg_attr(feature = "wasm", derive(tsify_next::Tsify))]
 #[cfg_attr(feature = "wasm", tsify(into_wasm_abi, from_wasm_abi))]
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 pub struct OperationalSafety {
     /// Minimum instantaneous R/C distance (km): min sqrt(R² + C²) along trajectory.
     pub min_rc_separation_km: f64,
@@ -259,7 +259,7 @@ pub struct OperationalSafety {
 /// See [`crate::mission::safety::analyze_safety`] for the full computation.
 #[cfg_attr(feature = "wasm", derive(tsify_next::Tsify))]
 #[cfg_attr(feature = "wasm", tsify(into_wasm_abi, from_wasm_abi))]
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 pub struct PassiveSafety {
     /// Minimum e/i vector separation (km) from D'Amico Eq. 2.22 (analytic orbit-averaged bound).
     pub min_ei_separation_km: f64,
@@ -282,7 +282,7 @@ pub struct PassiveSafety {
 ///   Not a planning constraint in the current targeting solver.
 #[cfg_attr(feature = "wasm", derive(tsify_next::Tsify))]
 #[cfg_attr(feature = "wasm", tsify(into_wasm_abi, from_wasm_abi))]
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 pub struct SafetyMetrics {
     /// Operational safety: instantaneous geometric distance measures.
     pub operational: OperationalSafety,

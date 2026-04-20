@@ -130,6 +130,75 @@ pub const MOON_DIRECTION_VALIDATION_TOL_RAD: f64 = 0.0175;
 /// than sample-interval quantization.
 pub const ECLIPSE_TIMING_VALIDATION_TOL_S: f64 = 120.0;
 
+// --- Earth rotation & reference ellipsoid constants ---
+//
+// Arcsecond-class Earth rotation math for analytical frame transforms.
+// No IERS Earth Orientation Parameters (polar motion, UT1-UTC correction):
+// the ceiling reachable from WASM is ~arcsecond (≤ 65 μrad ≈ 13 arcsec),
+// which is fine for 3D viewport pixels and acceptable for mission-planner-
+// class ground-station predictions. Full-fidelity ITRF with EOP lives in
+// rpo-nyx and is exposed via the WebSocket API.
+
+/// Earth rotation rate in revolutions per UT1 day (IERS Conventions 2010, TN 36 Eq. 5.15).
+///
+/// Coefficient of the linear term in the Earth Rotation Angle formula.
+/// Published value is `1.002_737_811_911_354_48`; truncated to f64 precision.
+pub const EARTH_REV_PER_UT1_DAY: f64 = 1.002_737_811_911_354_6;
+
+/// Earth Rotation Angle constant term, in revolutions (IERS TN 36 Eq. 5.15).
+///
+/// ERA at UT1 = 2000-01-01T12:00:00 TT is 2π × this value.
+pub const ERA_CONSTANT_TURNS: f64 = 0.779_057_273_264_0;
+
+/// Mean Earth angular velocity (rad/s).
+///
+/// Derived as `2π · EARTH_REV_PER_UT1_DAY / SECONDS_PER_DAY`. Used for the
+/// ω × r correction when transforming ECI velocity to ECEF velocity.
+/// LOD (length-of-day) variations are ignored — they contribute <10⁻¹⁰ rad/s.
+pub const EARTH_ROTATION_RATE_RAD_S: f64 = 7.292_115_146_706_979e-5;
+
+/// WGS-84 flattening of the reference ellipsoid.
+///
+/// `f = (a − b) / a`, exact per the WGS-84 defining parameter.
+pub const EARTH_FLATTENING_WGS84: f64 = 1.0 / 298.257_223_563;
+
+/// WGS-84 first eccentricity squared.
+///
+/// Defined as `e² = 2f − f²` (equivalently `1 − (b/a)²`). Expressed here as
+/// the const derivation from `EARTH_FLATTENING_WGS84` so transcription errors
+/// are impossible; the canonical published value is `6.694_379_990_141_316e-3`.
+pub const EARTH_ECCENTRICITY_SQUARED_WGS84: f64 =
+    2.0 * EARTH_FLATTENING_WGS84 - EARTH_FLATTENING_WGS84 * EARTH_FLATTENING_WGS84;
+
+/// WGS-84 semi-minor (polar) radius in km.
+///
+/// Defined as `b = a · (1 − f)` with `a = R_EARTH = 6378.137 km`. Expressed
+/// as the const derivation; published value is `6_356.752_314_245_179 km`.
+pub const EARTH_POLAR_RADIUS_KM: f64 = R_EARTH * (1.0 - EARTH_FLATTENING_WGS84);
+
+/// Maximum iterations for Bowring's geodetic-latitude iteration.
+///
+/// Bowring converges quadratically; 2–3 iterations suffice in practice.
+/// 10 provides ample margin without ever being reached by well-posed inputs.
+pub const GEODETIC_MAX_ITER: u32 = 10;
+
+/// Convergence tolerance on geodetic latitude (rad).
+///
+/// `1e-12 rad` corresponds to ~6 μm on Earth's surface — orders of magnitude
+/// below any rendering or station-placement precision budget.
+pub const GEODETIC_LAT_TOL_RAD: f64 = 1e-12;
+
+/// Singularity threshold (km) for the equatorial radius `p = sqrt(x² + y²)`
+/// in `ecef_to_geodetic`.
+///
+/// Below this `p`, the geodetic latitude is undefined (the position is
+/// essentially on the rotation axis) and the inversion uses the closed-form
+/// polar branch instead of Bowring's iteration. Distinct from
+/// [`MIN_POSITION_NORM_KM`] (zero-vector guard, 0.1 mm): a vehicle ~1 mm off
+/// the polar axis is well above the zero-vector threshold but still
+/// degenerate for latitude computation.
+pub const GEODETIC_POLAR_EQUATORIAL_RADIUS_TOL_KM: f64 = 1e-6;
+
 // --- Test tolerances ---
 //
 // Canonical named tolerances for test assertions across the workspace.
@@ -195,7 +264,25 @@ pub const fn round_half_up_percent(x: u32, pct: u32) -> u32 {
 
 #[cfg(test)]
 mod tests {
-    use super::round_half_up_percent;
+    use super::{
+        round_half_up_percent, EARTH_ECCENTRICITY_SQUARED_WGS84, EARTH_POLAR_RADIUS_KM,
+        EARTH_ROTATION_RATE_RAD_S,
+    };
+
+    /// Test tolerance: derived-vs-published comparison for a single-step
+    /// f64 computation. ~4 ULP at unit scale; published constants are
+    /// truncated to f64 precision so anything tighter is meaningless.
+    const PUBLISHED_VALUE_TOL: f64 = 1e-15;
+
+    /// Canonical WGS-84 first eccentricity squared (NIMA TR8350.2 §3.5.3).
+    const PUBLISHED_WGS84_E2: f64 = 6.694_379_990_141_316e-3;
+
+    /// Canonical WGS-84 semi-minor axis, km (NIMA TR8350.2 §3.5.3).
+    const PUBLISHED_WGS84_B_KM: f64 = 6_356.752_314_245_179;
+
+    /// Canonical Earth angular velocity (rad/s) derived from IERS TN 36
+    /// Eq. 5.15: ω = 2π · `1.002_737_811_911_354_48` / 86400.
+    const PUBLISHED_EARTH_OMEGA_RAD_S: f64 = 7.292_115_146_706_979e-5;
 
     #[test]
     fn round_half_up_percent_matches_manual_idiom() {
@@ -205,4 +292,41 @@ mod tests {
         assert_eq!(round_half_up_percent(0, 100), 0);
         assert_eq!(round_half_up_percent(1, 100), 1);
     }
+
+    /// Regression: derived `EARTH_ECCENTRICITY_SQUARED_WGS84` matches the
+    /// canonical published value (NIMA TR8350.2 §3.5.3).
+    #[test]
+    fn wgs84_eccentricity_squared_matches_published() {
+        let diff = (EARTH_ECCENTRICITY_SQUARED_WGS84 - PUBLISHED_WGS84_E2).abs();
+        assert!(
+            diff / PUBLISHED_WGS84_E2 < PUBLISHED_VALUE_TOL,
+            "WGS-84 e²: derived={EARTH_ECCENTRICITY_SQUARED_WGS84}, published={PUBLISHED_WGS84_E2}, rel diff={}",
+            diff / PUBLISHED_WGS84_E2
+        );
+    }
+
+    /// Regression: derived `EARTH_POLAR_RADIUS_KM` matches the canonical
+    /// published value (NIMA TR8350.2 §3.5.3).
+    #[test]
+    fn wgs84_polar_radius_matches_published() {
+        let diff = (EARTH_POLAR_RADIUS_KM - PUBLISHED_WGS84_B_KM).abs();
+        assert!(
+            diff / PUBLISHED_WGS84_B_KM < PUBLISHED_VALUE_TOL,
+            "WGS-84 b: derived={EARTH_POLAR_RADIUS_KM} km, published={PUBLISHED_WGS84_B_KM} km, rel diff={}",
+            diff / PUBLISHED_WGS84_B_KM
+        );
+    }
+
+    /// Regression: `EARTH_ROTATION_RATE_RAD_S` matches the value derived
+    /// from IERS TN 36 Eq. 5.15.
+    #[test]
+    fn earth_rotation_rate_matches_published() {
+        let diff = (EARTH_ROTATION_RATE_RAD_S - PUBLISHED_EARTH_OMEGA_RAD_S).abs();
+        assert!(
+            diff / PUBLISHED_EARTH_OMEGA_RAD_S < PUBLISHED_VALUE_TOL,
+            "Earth ω: stored={EARTH_ROTATION_RATE_RAD_S} rad/s, published={PUBLISHED_EARTH_OMEGA_RAD_S} rad/s, rel diff={}",
+            diff / PUBLISHED_EARTH_OMEGA_RAD_S
+        );
+    }
+
 }

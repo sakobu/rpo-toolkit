@@ -585,9 +585,33 @@ mod tests {
                 < SERDE_ROUNDTRIP_TOL,
             "max_sigma3 should survive roundtrip"
         );
+        // NavigationAccuracy is f64-bearing — compare per-component bit patterns
+        // (serde roundtrip must be bitwise lossless).
+        let nav_a = report.navigation_accuracy;
+        let nav_b = deserialized.navigation_accuracy;
         assert_eq!(
-            report.navigation_accuracy, deserialized.navigation_accuracy,
-            "NavigationAccuracy should survive roundtrip"
+            nav_a.position_sigma_ric_km.x.to_bits(),
+            nav_b.position_sigma_ric_km.x.to_bits()
+        );
+        assert_eq!(
+            nav_a.position_sigma_ric_km.y.to_bits(),
+            nav_b.position_sigma_ric_km.y.to_bits()
+        );
+        assert_eq!(
+            nav_a.position_sigma_ric_km.z.to_bits(),
+            nav_b.position_sigma_ric_km.z.to_bits()
+        );
+        assert_eq!(
+            nav_a.velocity_sigma_ric_km_s.x.to_bits(),
+            nav_b.velocity_sigma_ric_km_s.x.to_bits()
+        );
+        assert_eq!(
+            nav_a.velocity_sigma_ric_km_s.y.to_bits(),
+            nav_b.velocity_sigma_ric_km_s.y.to_bits()
+        );
+        assert_eq!(
+            nav_a.velocity_sigma_ric_km_s.z.to_bits(),
+            nav_b.velocity_sigma_ric_km_s.z.to_bits()
         );
 
         // Terminal fields should survive serde roundtrip

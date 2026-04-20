@@ -7,7 +7,7 @@
 
 use nyx_space::md::prelude::{OrbitalDynamics, SpacecraftDynamics};
 
-use rpo_core::constants::MU_EARTH;
+use rpo_core::constants::{MU_EARTH, R_EARTH};
 use rpo_core::elements::eci_ric_dcm::eci_to_ric_relative;
 use rpo_core::elements::keplerian_conversions::{keplerian_to_state, state_to_keplerian};
 use rpo_core::elements::roe::compute_roe;
@@ -423,7 +423,7 @@ fn verify_lambert_against_nyx(dep: &StateVector, arr: &StateVector) {
         &transfer.departure_state, tof, 0,
         &SpacecraftConfig::SERVICER_500KG, dynamics, &almanac,
     ).expect("nyx propagation should succeed");
-    let propagated = results.last().unwrap().state.clone();
+    let propagated = results.last().unwrap().state;
 
     let pos_err = (propagated.position_eci_km - arr.position_eci_km).norm();
     assert!(
@@ -457,7 +457,7 @@ fn lambert_non_coplanar_verification() {
     let epoch = test_epoch();
     let dep = keplerian_to_state(&leo_400km_elements(), epoch).unwrap();
     let arr_ke = KeplerianElements {
-        a_km: 6378.137 + 500.0,
+        a_km: R_EARTH + 500.0,
         e: 0.001,
         i_rad: 51.6_f64.to_radians(),
         raan_rad: 10.0_f64.to_radians(),
@@ -714,14 +714,14 @@ fn j2_stm_vs_nyx_two_body() {
         &chief_sv, duration, 0,
         &SpacecraftConfig::SERVICER_500KG, chief_dynamics, &almanac,
     ).expect("chief nyx propagation failed");
-    let chief_nyx = chief_results.last().unwrap().state.clone();
+    let chief_nyx = chief_results.last().unwrap().state;
 
     let deputy_dynamics = SpacecraftDynamics::new(OrbitalDynamics::two_body());
     let deputy_results = nyx_bridge::nyx_propagate_segment(
         &deputy_sv, duration, 0,
         &SpacecraftConfig::SERVICER_500KG, deputy_dynamics, &almanac,
     ).expect("deputy nyx propagation failed");
-    let deputy_nyx = deputy_results.last().unwrap().state.clone();
+    let deputy_nyx = deputy_results.last().unwrap().state;
 
     // Compute ROEs from nyx final states
     let chief_ke_final = state_to_keplerian(&chief_nyx).unwrap();

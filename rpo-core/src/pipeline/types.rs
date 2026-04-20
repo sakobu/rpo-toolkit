@@ -52,7 +52,7 @@ fn default_lambert_tof_s() -> f64 {
 /// Serializes as `"j2"` or `{ "j2_drag": { "drag": { ... } } }`.
 #[cfg_attr(feature = "wasm", derive(tsify_next::Tsify))]
 #[cfg_attr(feature = "wasm", tsify(into_wasm_abi, from_wasm_abi))]
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, Default, PartialEq)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum PropagatorChoice {
     /// J2-perturbed analytical propagation (no drag).
@@ -73,7 +73,7 @@ pub enum PropagatorChoice {
 /// `{ "custom": { "dry_mass_kg": ..., ... } }`.
 #[cfg_attr(feature = "wasm", derive(tsify_next::Tsify))]
 #[cfg_attr(feature = "wasm", tsify(into_wasm_abi, from_wasm_abi))]
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, Default, PartialEq)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, Default)]
 pub enum SpacecraftChoice {
     /// Typical 6U cubesat: 12 kg, 0.06 m² cross-section.
     #[serde(rename = "cubesat_6u")]
@@ -227,8 +227,8 @@ pub struct TransferComputationInput {
 impl From<&PipelineInput> for TransferComputationInput {
     fn from(input: &PipelineInput) -> Self {
         Self {
-            chief: input.base.chief.clone(),
-            deputy: input.base.deputy.clone(),
+            chief: input.base.chief,
+            deputy: input.base.deputy,
             perch: input.base.perch.clone(),
             proximity: input.proximity,
             lambert_tof_s: input.lambert_tof_s,

@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 /// within ROE-valid proximity vs. requiring a far-field transfer.
 #[cfg_attr(feature = "wasm", derive(tsify_next::Tsify))]
 #[cfg_attr(feature = "wasm", tsify(into_wasm_abi, from_wasm_abi))]
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 pub struct ProximityConfig {
     /// Max dimensionless δr/r for ROE linearization validity (default: 0.005).
     ///
@@ -28,7 +28,7 @@ impl Default for ProximityConfig {
 /// Configuration for the Newton-Raphson targeting solver.
 #[cfg_attr(feature = "wasm", derive(tsify_next::Tsify))]
 #[cfg_attr(feature = "wasm", tsify(into_wasm_abi, from_wasm_abi))]
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 pub struct TargetingConfig {
     /// Maximum Newton-Raphson iterations (default: 100)
     pub max_iterations: u32,
@@ -57,7 +57,7 @@ impl Default for TargetingConfig {
 /// Configuration for time-of-flight optimization.
 #[cfg_attr(feature = "wasm", derive(tsify_next::Tsify))]
 #[cfg_attr(feature = "wasm", tsify(into_wasm_abi, from_wasm_abi))]
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 pub struct TofOptConfig {
     /// Minimum TOF as fraction of orbital period (default: 0.5)
     pub min_periods: f64,
@@ -87,7 +87,7 @@ impl Default for TofOptConfig {
 /// - `min_ei_separation_km`: passive/abort e/i separation (D'Amico Eq. 2.22)
 #[cfg_attr(feature = "wasm", derive(tsify_next::Tsify))]
 #[cfg_attr(feature = "wasm", tsify(into_wasm_abi, from_wasm_abi))]
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 pub struct SafetyConfig {
     /// e/i vector separation threshold (km) — passive/abort safety bound (D'Amico Eq. 2.22).
     /// Violations indicate the formation geometry would be unsafe in free drift,

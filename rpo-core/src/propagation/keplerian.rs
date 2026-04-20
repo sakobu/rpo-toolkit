@@ -43,7 +43,7 @@ pub fn propagate_keplerian(
     n_steps: u32,
 ) -> Result<Vec<StateVector>, ConversionError> {
     if n_steps == 0 {
-        return Ok(vec![initial.clone()]);
+        return Ok(vec![*initial]);
     }
 
     let ke = state_to_keplerian(initial)?;

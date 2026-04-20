@@ -202,6 +202,7 @@ pub fn solve_lambert_izzo(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rpo_core::constants::R_EARTH;
     use rpo_core::elements::keplerian_conversions::keplerian_to_state;
     use rpo_core::test_helpers::{leo_400km_elements, leo_800km_target_elements, test_epoch};
     use rpo_core::types::KeplerianElements;
@@ -257,7 +258,7 @@ mod tests {
         let dep = keplerian_to_state(&leo_400km_elements(), epoch).unwrap();
 
         let arr_ke = KeplerianElements {
-            a_km: 6378.137 + 500.0,
+            a_km: R_EARTH + 500.0,
             e: 0.001,
             i_rad: 51.6_f64.to_radians(),
             raan_rad: 10.0_f64.to_radians(),
@@ -282,7 +283,7 @@ mod tests {
         let dep = keplerian_to_state(&leo_400km_elements(), epoch).unwrap();
 
         let arr_ke = KeplerianElements {
-            a_km: 6378.137 + 500.0,
+            a_km: R_EARTH + 500.0,
             e: 0.001,
             i_rad: 51.6_f64.to_radians(),
             raan_rad: 0.0,
@@ -310,7 +311,7 @@ mod tests {
         let dep = keplerian_to_state(&leo_400km_elements(), epoch).unwrap();
 
         let arr_ke = KeplerianElements {
-            a_km: 6378.137 + 600.0,
+            a_km: R_EARTH + 600.0,
             e: 0.001,
             i_rad: 51.6_f64.to_radians(),
             raan_rad: 0.0,
@@ -391,8 +392,6 @@ mod tests {
 
     #[test]
     fn densify_arc_orbit_radius_reasonable() {
-        use rpo_core::constants::R_EARTH;
-
         let epoch = test_epoch();
         let dep = keplerian_to_state(&leo_400km_elements(), epoch).unwrap();
         let arr = keplerian_to_state(
@@ -460,7 +459,7 @@ mod tests {
         let epoch = test_epoch();
         let dep = keplerian_to_state(&leo_400km_elements(), epoch).unwrap();
         // Arrival state has the same ECI position as departure but a later epoch
-        let mut arr = dep.clone();
+        let mut arr = dep;
         arr.epoch = epoch + Duration::from_seconds(60.0);
 
         let result = solve_lambert(&dep, &arr);
@@ -489,7 +488,7 @@ mod tests {
         // Arrival orbit offset by ~179° in mean anomaly on a slightly different altitude,
         // producing a near-180° transfer angle
         let arr_ke = KeplerianElements {
-            a_km: 6378.137 + 450.0,
+            a_km: R_EARTH + 450.0,
             e: 0.001,
             i_rad: 51.6_f64.to_radians(),
             raan_rad: 0.0,

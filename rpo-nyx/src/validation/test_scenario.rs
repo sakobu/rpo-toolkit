@@ -130,7 +130,7 @@ impl ValidationContext {
         let epoch = test_epoch();
         let chief_elements = iss_like_elements();
         let chief_state = keplerian_to_state(&chief_elements, epoch).unwrap();
-        let deputy_state = chief_state.clone();
+        let deputy_state = chief_state;
         let almanac = nyx_bridge::shared_almanac_for_tests();
         Self {
             epoch,

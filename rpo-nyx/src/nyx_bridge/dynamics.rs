@@ -164,7 +164,7 @@ fn propagate_final_state_with_cancel(
     almanac: &Arc<Almanac>,
     cancel: &AtomicBool,
 ) -> Result<StateVector, NyxBridgeError> {
-    let mut current = initial.clone();
+    let mut current = *initial;
     let mut elapsed_s = 0.0_f64;
 
     while elapsed_s < duration_s {
@@ -176,7 +176,7 @@ fn propagate_final_state_with_cancel(
         let step_s = remaining_s.min(DMF_CANCEL_CHECK_STEP_S);
         let result = nyx_propagate_segment(&current, step_s, 0, config, dynamics.clone(), almanac)?;
         let final_state = result.last().ok_or(NyxBridgeError::EmptyResult)?;
-        current = final_state.state.clone();
+        current = final_state.state;
         elapsed_s += step_s;
     }
 

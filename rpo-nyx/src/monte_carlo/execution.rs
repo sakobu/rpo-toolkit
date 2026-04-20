@@ -95,7 +95,7 @@ fn disperse_deputy_state<R: Rng>(
             velocity_eci_km_s: initial_deputy.velocity_eci_km_s + dcm_transpose * vel_ric_delta,
         }
     } else {
-        initial_deputy.clone()
+        *initial_deputy
     };
 
     // Validity check: ensure dispersed state is a bound orbit
@@ -177,7 +177,7 @@ fn propagate_dispersed_legs<R: Rng>(
     let maneuver_disp = input.config.dispersions.maneuver.as_ref();
     let traj_steps = input.config.trajectory_steps;
 
-    let mut chief_state = input.initial_chief.clone();
+    let mut chief_state = *input.initial_chief;
     let mut deputy_state = dispersed_deputy;
     let mut total_dv = 0.0_f64;
     let mut waypoint_miss_km = Vec::with_capacity(active_mission.legs.len());
@@ -217,11 +217,11 @@ fn propagate_dispersed_legs<R: Rng>(
         // Extract final states before consuming trajectories into safety pairs.
         chief_state = chief_traj
             .last()
-            .map(|ts| ts.state.clone())
+            .map(|ts| ts.state)
             .ok_or(CoreMonteCarloError::EmptyEnsemble)?;
         deputy_state = deputy_traj
             .last()
-            .map(|ts| ts.state.clone())
+            .map(|ts| ts.state)
             .ok_or(CoreMonteCarloError::EmptyEnsemble)?;
 
         // Skip t=0 sample from each leg's safety analysis: at the maneuver

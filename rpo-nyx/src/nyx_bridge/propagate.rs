@@ -125,8 +125,8 @@ pub fn nyx_propagate_segment(
     } else {
         let dt = duration_s / f64::from(n_samples);
         let mut results = Vec::with_capacity(n_samples as usize + 1); // u32 → usize: always safe (usize ≥ 32 bits)
-        results.push(TimedState { elapsed_s: 0.0, state: sv.clone() });
-        let mut current_sv = sv.clone();
+        results.push(TimedState { elapsed_s: 0.0, state: *sv });
+        let mut current_sv = *sv;
 
         for i in 1..=n_samples {
             let sc = config_to_spacecraft(&current_sv, config);
@@ -135,7 +135,7 @@ pub fn nyx_propagate_segment(
                 .for_duration(Duration::from_seconds(dt))?;
             current_sv = spacecraft_to_state(&final_sc);
             let elapsed = f64::from(i) * dt;
-            results.push(TimedState { elapsed_s: elapsed, state: current_sv.clone() });
+            results.push(TimedState { elapsed_s: elapsed, state: current_sv });
         }
 
         Ok(results)
@@ -231,7 +231,7 @@ mod tests {
         let epoch = test_epoch();
         let chief_ke = iss_like_elements();
         let chief_sv = keplerian_to_state(&chief_ke, epoch).unwrap();
-        let deputy_sv = chief_sv.clone();
+        let deputy_sv = chief_sv;
 
         // Apply known RIC Δv
         let dv_ric = Vector3::new(0.001, -0.002, 0.0005);
@@ -265,7 +265,7 @@ mod tests {
         let epoch = test_epoch();
         let chief_ke = iss_like_elements();
         let chief_sv = keplerian_to_state(&chief_ke, epoch).unwrap();
-        let deputy_sv = chief_sv.clone();
+        let deputy_sv = chief_sv;
 
         let result = apply_impulse(&deputy_sv, &chief_sv, &Vector3::zeros()).unwrap();
         let vel_err = (result.velocity_eci_km_s - deputy_sv.velocity_eci_km_s).norm();

@@ -461,7 +461,10 @@ mod tests {
         let config = test_drag_config();
         let json = serde_json::to_string(&config).expect("serialize");
         let roundtrip: DragConfig = serde_json::from_str(&json).expect("deserialize");
-        assert_eq!(config, roundtrip);
+        // Compare by bit pattern: serde-roundtripped f64s must match exactly.
+        assert_eq!(config.da_dot.to_bits(), roundtrip.da_dot.to_bits());
+        assert_eq!(config.dex_dot.to_bits(), roundtrip.dex_dot.to_bits());
+        assert_eq!(config.dey_dot.to_bits(), roundtrip.dey_dot.to_bits());
     }
 
     // --- Paper-traced regression tests (Koenig Appendix D) ---

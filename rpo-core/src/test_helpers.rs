@@ -22,6 +22,14 @@ pub fn test_epoch() -> Epoch {
     Epoch::from_gregorian_utc_hms(2024, 1, 1, 0, 0, 0)
 }
 
+/// J2000 UTC epoch: 2000-01-01 12:00:00 UTC.
+///
+/// At this epoch the Earth Rotation Angle is exactly `2π × ERA_CONSTANT_TURNS`
+/// per IERS TN 36 Eq. 5.15 (with UT1 ≈ UTC).
+pub fn j2000_epoch() -> Epoch {
+    Epoch::from_gregorian_utc_hms(2000, 1, 1, 12, 0, 0)
+}
+
 /// ISS-like orbit: 408 km altitude, 51.6 deg inclination.
 pub fn iss_like_elements() -> KeplerianElements {
     KeplerianElements {
@@ -49,7 +57,7 @@ pub fn eccentric_elements() -> KeplerianElements {
 /// LEO 400 km altitude orbit for Lambert tests: ISS-like inclination, near-circular.
 pub fn leo_400km_elements() -> KeplerianElements {
     KeplerianElements {
-        a_km: 6378.137 + 400.0,
+        a_km: R_EARTH + 400.0,
         e: 0.001,
         i_rad: 51.6_f64.to_radians(),
         raan_rad: 0.0,
@@ -62,7 +70,7 @@ pub fn leo_400km_elements() -> KeplerianElements {
 /// 120° mean anomaly offset.
 pub fn leo_800km_target_elements() -> KeplerianElements {
     KeplerianElements {
-        a_km: 6378.137 + 800.0,
+        a_km: R_EARTH + 800.0,
         e: 0.001,
         i_rad: 51.6_f64.to_radians(),
         raan_rad: 0.0,

@@ -4,13 +4,10 @@
 //! frame and the Radial-In-track-Cross-track (RIC) rotating frame, operating
 //! directly on state vectors without going through orbital elements.
 
-use nalgebra::{SMatrix, Vector3};
+use nalgebra::Vector3;
 
 use crate::constants::{MIN_ANGULAR_MOMENTUM_NORM_KM2_S, MIN_POSITION_NORM_KM};
-use crate::types::{RICState, StateVector};
-
-/// 3×3 matrix type alias (Direction Cosine Matrix).
-type Matrix3 = SMatrix<f64, 3, 3>;
+use crate::types::{Matrix3, RICState, StateVector};
 
 /// Errors from ECI ↔ RIC frame transformations.
 #[derive(Debug, Clone, thiserror::Error)]

@@ -282,6 +282,7 @@ pub fn moon_position_eci_km(epoch: Epoch) -> Vector3<f64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::constants::SECONDS_PER_DAY;
 
     /// Direction tolerance: 0.05 deg = 8.73e-4 rad.
     /// Meeus Ch. 25 states ~0.01 deg ecliptic longitude accuracy, but the total
@@ -593,7 +594,7 @@ mod tests {
 
         for day_offset in (0..365).step_by(3) {
             let epoch = Epoch::from_gregorian_utc_hms(2024, 1, 1, 0, 0, 0)
-                + hifitime::Duration::from_seconds(f64::from(day_offset) * 86400.0);
+                + hifitime::Duration::from_seconds(f64::from(day_offset) * SECONDS_PER_DAY);
             let pos = moon_position_eci_km(epoch);
 
             // Rotate ECI back to ecliptic to extract ecliptic latitude

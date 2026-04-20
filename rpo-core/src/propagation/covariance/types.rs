@@ -22,7 +22,7 @@ use crate::types::Matrix6;
 /// 100 m position, 0.1 m/s velocity per axis.
 #[cfg_attr(feature = "wasm", derive(tsify_next::Tsify))]
 #[cfg_attr(feature = "wasm", tsify(into_wasm_abi, from_wasm_abi))]
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 pub struct NavigationAccuracy {
     /// 1-sigma position accuracy per RIC axis (km): [radial, in-track, cross-track]
     #[cfg_attr(feature = "wasm", tsify(type = "[number, number, number]"))]
@@ -60,7 +60,7 @@ impl Default for NavigationAccuracy {
 /// representation for sampling.
 #[cfg_attr(feature = "wasm", derive(tsify_next::Tsify))]
 #[cfg_attr(feature = "wasm", tsify(into_wasm_abi, from_wasm_abi))]
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 pub struct ManeuverUncertainty {
     /// Proportional 1-sigma magnitude error (dimensionless, e.g. 0.01 = 1%)
     pub magnitude_sigma: f64,

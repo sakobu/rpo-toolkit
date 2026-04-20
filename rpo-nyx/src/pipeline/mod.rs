@@ -58,10 +58,9 @@ pub fn compute_transfer(input: &TransferComputationInput) -> Result<TransferResu
         let arrival_epoch =
             input.chief.epoch + hifitime::Duration::from_seconds(input.lambert_tof_s);
         let chief_traj = propagate_keplerian(&input.chief, input.lambert_tof_s, 1)?;
-        let chief_at_arrival = chief_traj
+        let chief_at_arrival = *chief_traj
             .last()
-            .ok_or(rpo_core::pipeline::PipelineError::EmptyTrajectory)?
-            .clone();
+            .ok_or(rpo_core::pipeline::PipelineError::EmptyTrajectory)?;
 
         let deputy_at_perch = StateVector {
             epoch: arrival_epoch,
@@ -72,7 +71,7 @@ pub fn compute_transfer(input: &TransferComputationInput) -> Result<TransferResu
 
         (chief_at_arrival, deputy_at_perch, arrival_epoch)
     } else {
-        (input.chief.clone(), input.deputy.clone(), input.chief.epoch)
+        (input.chief, input.deputy, input.chief.epoch)
     };
 
     Ok(TransferResult {

@@ -111,8 +111,8 @@ fn compute_pre_cola_safety(
 ) -> Result<rpo_core::mission::types::SafetyMetrics, ValidationError> {
     let estimated_samples = ctx.samples_per_leg as usize // u32 → usize: always safe (usize ≥ 32 bits)
         * mission.legs.len();
-    let mut chief = chief_initial.clone();
-    let mut deputy = deputy_initial.clone();
+    let mut chief = *chief_initial;
+    let mut deputy = *deputy_initial;
     let mut cumulative = 0.0_f64;
     let mut safety_pairs: Vec<ChiefDeputySnapshot> =
         Vec::with_capacity(estimated_samples);
@@ -138,8 +138,8 @@ fn compute_pre_cola_safety(
             if idx > 0 {
                 safety_pairs.push(ChiefDeputySnapshot {
                     elapsed_s: cumulative + c.elapsed_s,
-                    chief: c.state.clone(),
-                    deputy: d.state.clone(),
+                    chief: c.state,
+                    deputy: d.state,
                 });
             }
         }
@@ -232,8 +232,8 @@ pub fn validate_mission_nyx(
         return Err(ValidationError::EmptyTrajectory);
     }
 
-    let mut chief_state = (*chief_initial).clone();
-    let mut deputy_state = (*deputy_initial).clone();
+    let mut chief_state = **chief_initial;
+    let mut deputy_state = **deputy_initial;
     let mut cumulative_time = 0.0_f64;
     let mut leg_points = Vec::with_capacity(mission.legs.len());
     let mut cola_effectiveness: Vec<ColaEffectivenessEntry> =

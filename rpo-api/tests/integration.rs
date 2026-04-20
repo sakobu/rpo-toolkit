@@ -347,8 +347,8 @@ async fn extract_drag_different_configs() {
     let deputy_config = input.deputy_config.unwrap_or_default().resolve();
 
     // Verify this test exercises the real nyx path (configs must differ).
-    assert_ne!(
-        chief_config, deputy_config,
+    assert!(
+        !chief_config.bit_eq(&deputy_config),
         "test needs different configs to bypass the short-circuit"
     );
 
@@ -358,8 +358,8 @@ async fn extract_drag_different_configs() {
     let msg = json!({
         "type": "extract_drag",
         "request_id": 40,
-        "chief": serde_json::to_value(&input.base.chief).unwrap(),
-        "deputy": serde_json::to_value(&input.base.deputy).unwrap(),
+        "chief": serde_json::to_value(input.base.chief).unwrap(),
+        "deputy": serde_json::to_value(input.base.deputy).unwrap(),
         "chief_config": serde_json::to_value(chief_config).unwrap(),
         "deputy_config": serde_json::to_value(deputy_config).unwrap()
     });
@@ -414,8 +414,8 @@ async fn validate_mission_roundtrip() {
         "type": "validate",
         "request_id": 20,
         "mission": serde_json::to_value(&output.mission).unwrap(),
-        "chief": serde_json::to_value(&input.base.chief).unwrap(),
-        "deputy": serde_json::to_value(&input.base.deputy).unwrap(),
+        "chief": serde_json::to_value(input.base.chief).unwrap(),
+        "deputy": serde_json::to_value(input.base.deputy).unwrap(),
         "chief_config": serde_json::to_value(chief_config).unwrap(),
         "deputy_config": serde_json::to_value(deputy_config).unwrap(),
         "samples_per_leg": 2
@@ -474,8 +474,8 @@ async fn mc_ensemble_roundtrip() {
         "type": "run_mc",
         "request_id": 30,
         "mission": serde_json::to_value(&output.mission).unwrap(),
-        "chief": serde_json::to_value(&input.base.chief).unwrap(),
-        "deputy": serde_json::to_value(&input.base.deputy).unwrap(),
+        "chief": serde_json::to_value(input.base.chief).unwrap(),
+        "deputy": serde_json::to_value(input.base.deputy).unwrap(),
         "chief_config": serde_json::to_value(chief_config).unwrap(),
         "deputy_config": serde_json::to_value(deputy_config).unwrap(),
         "mission_config": serde_json::to_value(&input.base.config).unwrap(),
@@ -577,8 +577,8 @@ async fn cancel_active_validation() {
         "type": "validate",
         "request_id": 50,
         "mission": serde_json::to_value(&output.mission).unwrap(),
-        "chief": serde_json::to_value(&input.base.chief).unwrap(),
-        "deputy": serde_json::to_value(&input.base.deputy).unwrap(),
+        "chief": serde_json::to_value(input.base.chief).unwrap(),
+        "deputy": serde_json::to_value(input.base.deputy).unwrap(),
         "chief_config": serde_json::to_value(chief_config).unwrap(),
         "deputy_config": serde_json::to_value(deputy_config).unwrap(),
         "samples_per_leg": 2
@@ -640,7 +640,10 @@ async fn cancel_active_drag_no_late_result() {
     .expect("parse validate.json as PipelineInput");
     let chief_config = input.chief_config.unwrap_or_default().resolve();
     let deputy_config = input.deputy_config.unwrap_or_default().resolve();
-    assert_ne!(chief_config, deputy_config, "test requires non-identical configs");
+    assert!(
+        !chief_config.bit_eq(&deputy_config),
+        "test requires non-identical configs"
+    );
 
     let url = start_test_server_full().await;
     let (mut ws, _) = connect_async(&url).await.unwrap();
@@ -648,8 +651,8 @@ async fn cancel_active_drag_no_late_result() {
     let drag_msg = json!({
         "type": "extract_drag",
         "request_id": 77,
-        "chief": serde_json::to_value(&input.base.chief).unwrap(),
-        "deputy": serde_json::to_value(&input.base.deputy).unwrap(),
+        "chief": serde_json::to_value(input.base.chief).unwrap(),
+        "deputy": serde_json::to_value(input.base.deputy).unwrap(),
         "chief_config": serde_json::to_value(chief_config).unwrap(),
         "deputy_config": serde_json::to_value(deputy_config).unwrap()
     });

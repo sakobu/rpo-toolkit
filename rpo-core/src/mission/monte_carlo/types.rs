@@ -65,7 +65,7 @@ impl Distribution {
 /// Uses descriptive RIC axis names to avoid ambiguity.
 #[cfg_attr(feature = "wasm", derive(tsify_next::Tsify))]
 #[cfg_attr(feature = "wasm", tsify(into_wasm_abi, from_wasm_abi))]
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 pub struct StateDispersion {
     /// 1-sigma radial position dispersion (km).
     pub position_radial_km: Distribution,
@@ -128,7 +128,7 @@ impl StateDispersion {
 /// is provided for convenience.
 #[cfg_attr(feature = "wasm", derive(tsify_next::Tsify))]
 #[cfg_attr(feature = "wasm", tsify(into_wasm_abi, from_wasm_abi))]
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 pub struct ManeuverDispersion {
     /// Proportional 1-sigma magnitude error (dimensionless, e.g. 0.01 = 1%).
     pub magnitude_sigma: f64,
@@ -205,7 +205,7 @@ impl From<NavigationAccuracy> for StateDispersion {
 /// because there are no universal defaults for Cd/area/mass uncertainty.
 #[cfg_attr(feature = "wasm", derive(tsify_next::Tsify))]
 #[cfg_attr(feature = "wasm", tsify(into_wasm_abi, from_wasm_abi))]
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 pub struct SpacecraftDispersion {
     /// Drag coefficient (Cd) dispersion (dimensionless).
     pub coeff_drag: Distribution,
@@ -230,7 +230,7 @@ impl SpacecraftDispersion {
 /// Composite dispersion configuration.
 #[cfg_attr(feature = "wasm", derive(tsify_next::Tsify))]
 #[cfg_attr(feature = "wasm", tsify(into_wasm_abi, from_wasm_abi))]
-#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize)]
 pub struct DispersionConfig {
     /// Initial state uncertainty (RIC frame).
     pub state: Option<StateDispersion>,
@@ -316,7 +316,7 @@ impl std::fmt::Display for MonteCarloMode {
 /// - `trajectory_steps > 0`
 #[cfg_attr(feature = "wasm", derive(tsify_next::Tsify))]
 #[cfg_attr(feature = "wasm", tsify(into_wasm_abi, from_wasm_abi))]
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 pub struct MonteCarloConfig {
     /// Number of Monte Carlo samples to run.
     pub num_samples: u32,
@@ -374,7 +374,7 @@ impl MonteCarloConfig {
 /// the full-physics Monte Carlo runner (nyx integration layer).
 #[cfg_attr(feature = "wasm", derive(tsify_next::Tsify))]
 #[cfg_attr(feature = "wasm", tsify(into_wasm_abi, from_wasm_abi))]
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SampleResult {
     /// Zero-based sample index.
     pub index: u32,
@@ -395,7 +395,7 @@ pub struct SampleResult {
 /// computation.
 #[cfg_attr(feature = "wasm", derive(tsify_next::Tsify))]
 #[cfg_attr(feature = "wasm", tsify(into_wasm_abi, from_wasm_abi))]
-#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize)]
 pub struct PercentileStats {
     /// Minimum value.
     pub min: f64,

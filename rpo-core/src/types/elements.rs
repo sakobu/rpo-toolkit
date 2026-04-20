@@ -35,7 +35,7 @@ pub enum KeplerError {
 /// Classical Keplerian orbital elements
 #[cfg_attr(feature = "wasm", derive(tsify_next::Tsify))]
 #[cfg_attr(feature = "wasm", tsify(into_wasm_abi, from_wasm_abi))]
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 pub struct KeplerianElements {
     /// Semi-major axis (km)
     pub a_km: f64,

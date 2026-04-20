@@ -211,7 +211,7 @@ mod tests {
         let epoch = test_epoch();
         let chief_ke = iss_like_elements();
         let chief_sv = keplerian_to_state(&chief_ke, epoch).unwrap();
-        let deputy_sv = chief_sv.clone();
+        let deputy_sv = chief_sv;
 
         let period = chief_ke.period().unwrap();
         let waypoint = Waypoint {
@@ -566,7 +566,7 @@ mod tests {
         let epoch = test_epoch();
         let chief_ke = iss_like_elements();
         let chief_sv = keplerian_to_state(&chief_ke, epoch).unwrap();
-        let deputy_sv = chief_sv.clone();
+        let deputy_sv = chief_sv;
 
         let period = chief_ke.period().unwrap();
         let waypoint = Waypoint {

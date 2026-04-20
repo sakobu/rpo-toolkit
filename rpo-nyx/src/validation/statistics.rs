@@ -37,7 +37,7 @@ pub(super) fn find_closest_analytical_ric(trajectory: &[PropagatedState], elapse
             after
         }
     };
-    best.ric.clone()
+    best.ric
 }
 
 /// Aggregate error statistics from analytical vs numerical trajectory comparison.
