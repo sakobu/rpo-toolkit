@@ -1,13 +1,4 @@
-export interface MainBodyProps {
-  width: number;
-  height: number;
-  depth: number;
-  color: string;
-  emissive?: string;
-  emissiveIntensity?: number;
-  metalness?: number;
-  roughness?: number;
-}
+import type { MainBodyProps } from '../types';
 
 export function MainBody({
   width,

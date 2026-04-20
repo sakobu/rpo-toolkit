@@ -1,15 +1,4 @@
-import type { Vec3 } from '@/viewport3d/types';
-
-export interface SolarPanelProps {
-  width: number;
-  height: number;
-  depth: number;
-  position: Vec3;
-  rotation?: Vec3;
-  color?: string;
-  emissive?: string;
-  emissiveIntensity?: number;
-}
+import type { SolarPanelProps } from '../types';
 
 export function SolarPanel({
   width,

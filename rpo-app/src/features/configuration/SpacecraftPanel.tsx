@@ -17,7 +17,7 @@ import { FormField } from '@/ui/FormField';
 import { Input } from '@/ui/Input';
 import { Panel } from '@/ui/Panel';
 import { Select } from '@/ui/Select';
-import { SpacecraftThumbnail } from '@/viewport3d/spacecraft/SpacecraftThumbnail';
+import { SpacecraftThumbnail } from '@/viewport3d/spacecraft';
 
 type SpacecraftPanelProps = {
   vehicle: Vehicle;

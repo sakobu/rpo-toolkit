@@ -1,28 +1,15 @@
-import { useRef } from 'react';
-import { Canvas, useFrame } from '@react-three/fiber';
-import type { Group } from 'three';
+import { Canvas } from '@react-three/fiber';
 
 import type { Vehicle } from '@/domain/vehicle';
 import type { SpacecraftConfig } from '@/schemas/spacecraft';
 
-import { configToSpacecraftProps } from './configToProps';
-import { Spacecraft, type SpacecraftProps } from './Spacecraft';
+import { configToSpacecraftProps } from '../config/configToProps';
 
-type Props = {
+import { Orbiter } from './Orbiter';
+
+interface Props {
   vehicle: Vehicle;
   config: SpacecraftConfig;
-};
-
-function Orbiter({ props }: { props: SpacecraftProps }) {
-  const group = useRef<Group>(null);
-  useFrame((_, dt) => {
-    if (group.current) group.current.rotation.y += dt * 0.3;
-  });
-  return (
-    <group ref={group}>
-      <Spacecraft {...props} />
-    </group>
-  );
 }
 
 export function SpacecraftThumbnail({ vehicle, config }: Props) {

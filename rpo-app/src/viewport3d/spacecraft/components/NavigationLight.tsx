@@ -1,11 +1,4 @@
-import type { Vec3 } from '@/viewport3d/types';
-
-export interface NavigationLightProps {
-  position: Vec3;
-  color: string;
-  intensity?: number;
-  distance?: number;
-}
+import type { NavigationLightProps } from '../types';
 
 export function NavigationLight({
   position,

@@ -1,9 +1,9 @@
 import { OrbitControls } from '@react-three/drei';
 import { Canvas } from '@react-three/fiber';
 
+import { VEHICLE_LABELS } from '@/domain/vehicle';
 import { PRESETS } from '@/schemas/spacecraft';
-import { configToSpacecraftProps } from '@/viewport3d/spacecraft/configToProps';
-import { Spacecraft } from '@/viewport3d/spacecraft/Spacecraft';
+import { configToSpacecraftProps, Spacecraft, TINTS } from '@/viewport3d/spacecraft';
 
 import { CAMERA, DEMO_DEPUTY_OFFSET_RIC_M, ORBIT_CONTROLS } from './constants';
 import { ricToPosition } from './coordinates';
@@ -34,8 +34,17 @@ export default function ProximityViewport() {
         <directionalLight position={[10, 5, 10]} intensity={1.0} />
         <Grid />
         <RICAxes />
-        <Spacecraft {...chiefProps} />
-        <Spacecraft {...deputyProps} position={deputyPosition} />
+        <Spacecraft
+          {...chiefProps}
+          label={VEHICLE_LABELS.chief}
+          labelColor={TINTS.chief.emissive}
+        />
+        <Spacecraft
+          {...deputyProps}
+          position={deputyPosition}
+          label={VEHICLE_LABELS.deputy}
+          labelColor={TINTS.deputy.emissive}
+        />
         <OrbitControls
           enablePan
           enableDamping={ORBIT_CONTROLS.enableDamping}
