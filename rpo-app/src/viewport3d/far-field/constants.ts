@@ -29,3 +29,7 @@ export const TEXTURE_PATHS = {
   normal: '/textures/earth/earth_normal.jpg',
   specular: '/textures/earth/earth_specular.jpg',
 } as const;
+
+// Offset to absorb Three.js SphereGeometry UV seam shift if a future texture
+// swap introduces one; keep at 0 otherwise.
+export const EARTH_TEXTURE_LON_OFFSET_RAD = 0;
