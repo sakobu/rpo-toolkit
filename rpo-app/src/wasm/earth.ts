@@ -8,22 +8,12 @@ import {
   eci_to_ecef_position_km,
   eci_to_ecef_state,
   geodetic_to_ecef_km,
-  moon_position_eci_km,
-  sun_position_eci_km,
 } from 'rpo-wasm';
 
 import { callWasm } from './error';
 
 export function earthRotationAngleRad(epoch: string): Result<number, WasmError> {
   return callWasm(() => earth_rotation_angle_rad(epoch));
-}
-
-export function sunPositionEciKm(epoch: string): Result<Vec3, WasmError> {
-  return callWasm(() => sun_position_eci_km(epoch));
-}
-
-export function moonPositionEciKm(epoch: string): Result<Vec3, WasmError> {
-  return callWasm(() => moon_position_eci_km(epoch));
 }
 
 export function eciToEcefPositionKm(rEciKm: Vec3, epoch: string): Result<Vec3, WasmError> {

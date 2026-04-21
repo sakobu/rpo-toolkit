@@ -1,10 +1,4 @@
-import type { Vec3 } from '@/viewport3d/types';
-
 // Scene units are meters.
-
-export const GRID_SIZE_M = 400;
-export const GRID_CELL_SIZE_M = 10;
-export const GRID_SECTION_SIZE_M = 50;
 
 export const GRID_COLORS = {
   cell: '#1a3d5c',
@@ -12,8 +6,6 @@ export const GRID_COLORS = {
 } as const;
 
 export const GRID_LABEL_COLOR = '#4a6a8a';
-export const GRID_LABEL_FONT_SIZE_M = 4;
-export const GRID_LABEL_OFFSET_M = 6;
 
 export const AXES = {
   R: { color: '#20df80', label: 'R' },
@@ -34,19 +26,31 @@ export const AXES_GIZMO = {
   margin: [80, 80],
 } as const;
 
-// Camera sits on pure +C (+Z), looking at origin, Three's default +Y up.
-// Result: R points up, I points right, C points out of the screen toward viewer.
-export const CAMERA = {
-  fov: 50,
-  position: [0, 0, 500],
-  near: 1,
-  far: 10000,
+export const ORBIT_CONTROLS = {
+  enableDamping: true,
 } as const;
 
-export const ORBIT_CONTROLS = {
-  minDistance: 20,
-  maxDistance: 2000,
-  enableDamping: true,
-};
+// Celestial leader-line tints. Hex mirrors @theme tokens in src/index.css:
+//   EARTH → --color-viz-nominal
+//   SUN   → --color-viz-numerical
+//   MOON  → --color-text-muted
+export const CELESTIAL_TINTS = {
+  earth: '#4ade80',
+  sun: '#fb923c',
+  moon: '#9099ad',
+} as const;
 
-export const DEMO_DEPUTY_OFFSET_RIC_M: Vec3 = [0, -200, 0];
+// Fraction of grid extent at which celestial indicators sit (unit direction
+// scaled to this radius). Keeps tips inside the camera frame.
+export const CELESTIAL_EDGE_RATIO = 0.45;
+
+// Celestial leader-line styling. Thin + translucent so the line reads as a
+// hint, not a primary visual element. Icon sits just past the line tip;
+// with drei <Html center>, the icon's center is anchored at the offset point.
+export const CELESTIAL_INDICATOR = {
+  lineWidth: 0.5,
+  lineOpacity: 0.6,
+  iconSizePx: 20,
+  iconStrokeWidth: 1.5,
+  labelOffsetRatio: 0.02,
+} as const;

@@ -22,14 +22,16 @@ use wasm_bindgen::prelude::*;
 
 use rpo_core::elements::earth_rotation::earth_rotation_angle_rad as core_era;
 use rpo_core::elements::eci_ecef::EciEcefTransform;
-use rpo_core::elements::eci_ric_dcm::eci_to_ric_dcm as core_eci_to_ric_dcm;
+use rpo_core::elements::eci_ric_dcm::{
+    eci_to_ric_dcm as core_eci_to_ric_dcm, eci_to_ric_relative as core_eci_to_ric_relative,
+};
 use rpo_core::elements::eclipse::{
     moon_position_eci_km as core_moon_eci, sun_position_eci_km as core_sun_eci,
 };
 use rpo_core::elements::geodetic::{
     ecef_to_geodetic as core_ecef_to_geodetic, geodetic_to_ecef_km as core_geodetic_to_ecef,
 };
-use rpo_core::types::{EcefState, GeodeticCoord, Matrix3, StateVector};
+use rpo_core::types::{EcefState, GeodeticCoord, Matrix3, RICState, StateVector};
 
 use crate::error::WasmError;
 
@@ -309,4 +311,31 @@ pub fn ecef_to_geodetic(r_ecef_km: Vec3) -> Result<GeodeticCoord, WasmError> {
 pub fn eci_to_ric_dcm(chief: StateVector) -> Result<Matrix3Rows, WasmError> {
     let m = core_eci_to_ric_dcm(&chief).map_err(WasmError::from)?;
     Ok(m.into())
+}
+
+/// Deputy's relative state in the chief-centered RIC frame (km, km/s).
+///
+/// Wraps [`rpo_core::elements::eci_ric_dcm::eci_to_ric_relative`], which
+/// returns the rotating-frame relative state including the `ω × ρ`
+/// velocity correction (Vallado Ch. 3). Intended for the proximity
+/// viewport: chief sits at RIC origin, deputy renders at
+/// `position_ric_km × 1000` meters.
+///
+/// # Inputs
+/// - `chief` — chief ECI state (position km, velocity km/s, epoch).
+/// - `deputy` — deputy ECI state (position km, velocity km/s, epoch).
+///
+/// # Returns
+/// - [`RICState`] — deputy position and velocity expressed in the
+///   chief-centered RIC frame. Position in km, velocity in km/s.
+///
+/// # Errors
+/// Returns [`WasmError`] with code `Frame` if the chief state cannot
+/// define a valid RIC frame (zero position or rectilinear orbit).
+#[wasm_bindgen]
+pub fn eci_to_ric_relative_state(
+    chief: StateVector,
+    deputy: StateVector,
+) -> Result<RICState, WasmError> {
+    core_eci_to_ric_relative(&chief, &deputy).map_err(WasmError::from)
 }

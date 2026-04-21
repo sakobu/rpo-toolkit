@@ -1,10 +1,10 @@
+import { useMemo } from 'react';
 import { OrbitControls } from '@react-three/drei';
 import { Canvas } from '@react-three/fiber';
 import { useShallow } from 'zustand/react/shallow';
 
 import { PRESETS, type SpacecraftConfig } from '@/schemas/spacecraft';
-import type { StateVectorInput } from '@/schemas/stateVector';
-import { useConfig, type VehicleStateSlot } from '@/stores/configuration';
+import { loadedVector, useConfig } from '@/stores/configuration';
 
 import Earth from './Earth';
 import { computeCameraPos, computeEraRad, computeSunScenePos, FALLBACK_LIGHT_POS } from './scene';
@@ -14,10 +14,6 @@ const FALLBACK_CONFIG: SpacecraftConfig = {
   preset: 'Servicer 500kg',
   ...PRESETS['Servicer 500kg'],
 };
-
-function loadedVector(slot: VehicleStateSlot): StateVectorInput | null {
-  return slot.status === 'loaded' ? slot.vector : null;
-}
 
 export default function FarFieldViewport() {
   const { chiefConfig, deputyConfig, chiefState, deputyState } = useConfig(
@@ -33,10 +29,16 @@ export default function FarFieldViewport() {
   const deputyVector = loadedVector(deputyState);
 
   const epoch = chiefVector?.epoch ?? deputyVector?.epoch ?? null;
-  const eraRad = epoch === null ? 0 : computeEraRad(epoch);
-  const sunScenePos = epoch === null ? FALLBACK_LIGHT_POS : computeSunScenePos(epoch);
+  const eraRad = useMemo(() => (epoch === null ? 0 : computeEraRad(epoch)), [epoch]);
+  const sunScenePos = useMemo(
+    () => (epoch === null ? FALLBACK_LIGHT_POS : computeSunScenePos(epoch)),
+    [epoch],
+  );
   // OrbitControls owns the camera after first render; remount to re-apply.
-  const cameraPos = computeCameraPos(chiefVector, deputyVector);
+  const cameraPos = useMemo(
+    () => computeCameraPos(chiefVector, deputyVector),
+    [chiefVector, deputyVector],
+  );
 
   return (
     <div className="h-full w-full">

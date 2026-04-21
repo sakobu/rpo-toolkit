@@ -2,7 +2,8 @@ import { match } from '@railway-ts/pipelines/result';
 
 import type { StateVectorInput } from '@/schemas/stateVector';
 import type { Vec3 } from '@/viewport3d/types';
-import { earthRotationAngleRad, sunPositionEciKm } from '@/wasm/earth';
+import { earthRotationAngleRad } from '@/wasm/earth';
+import { sunPositionEciKm } from '@/wasm/ephemeris';
 
 import { EARTH_TEXTURE_LON_OFFSET_RAD } from './constants';
 import { eciKmToScenePosition, scaleToSceneFar } from './coordinates';

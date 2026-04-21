@@ -16,6 +16,10 @@ export type VehicleStateSlot =
 
 export const EMPTY_SLOT: VehicleStateSlot = { status: 'empty' };
 
+export function loadedVector(slot: VehicleStateSlot): StateVectorInput | null {
+  return slot.status === 'loaded' ? slot.vector : null;
+}
+
 type ConfigState = {
   chiefConfig: VehicleState | null;
   deputyConfig: VehicleState | null;
