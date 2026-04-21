@@ -1,3 +1,4 @@
+import { useMemo } from 'react';
 import { OrbitControls } from '@react-three/drei';
 import { Canvas } from '@react-three/fiber';
 
@@ -14,9 +15,9 @@ const DEFAULT_CHIEF = { preset: 'Servicer 500kg' as const, ...PRESETS['Servicer 
 const DEFAULT_DEPUTY = { preset: 'Servicer 500kg' as const, ...PRESETS['Servicer 500kg'] };
 
 export default function ProximityViewport() {
-  const chiefProps = configToSpacecraftProps(DEFAULT_CHIEF, 'chief');
-  const deputyProps = configToSpacecraftProps(DEFAULT_DEPUTY, 'deputy');
-  const deputyPosition = ricToPosition(DEMO_DEPUTY_OFFSET_RIC_M);
+  const chiefProps = useMemo(() => configToSpacecraftProps(DEFAULT_CHIEF, 'chief'), []);
+  const deputyProps = useMemo(() => configToSpacecraftProps(DEFAULT_DEPUTY, 'deputy'), []);
+  const deputyPosition = useMemo(() => ricToPosition(DEMO_DEPUTY_OFFSET_RIC_M), []);
 
   return (
     <div className="h-full w-full">
@@ -34,16 +35,12 @@ export default function ProximityViewport() {
         <directionalLight position={[10, 5, 10]} intensity={1.0} />
         <Grid />
         <RICAxes />
-        <Spacecraft
-          {...chiefProps}
-          label={VEHICLE_LABELS.chief}
-          labelColor={TINTS.chief.emissive}
-        />
+        <Spacecraft {...chiefProps} label={VEHICLE_LABELS.chief} labelColor={TINTS.chief.accent} />
         <Spacecraft
           {...deputyProps}
           position={deputyPosition}
           label={VEHICLE_LABELS.deputy}
-          labelColor={TINTS.deputy.emissive}
+          labelColor={TINTS.deputy.accent}
         />
         <OrbitControls
           enablePan

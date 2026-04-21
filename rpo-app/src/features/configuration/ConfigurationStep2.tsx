@@ -22,8 +22,8 @@ export function ConfigurationStep2() {
   return (
     <section className="flex flex-col gap-4">
       <div className="grid gap-6 md:grid-cols-2">
-        <VehicleStatePanel vehicle="deputy" />
         <VehicleStatePanel vehicle="chief" />
+        <VehicleStatePanel vehicle="deputy" />
       </div>
       {epochMismatch && chiefVector && deputyVector ? (
         <Callout tone="abort">

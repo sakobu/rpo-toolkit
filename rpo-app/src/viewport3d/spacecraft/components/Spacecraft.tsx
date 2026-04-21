@@ -2,9 +2,9 @@ import type { SpacecraftProps } from '../types';
 
 import { Arm } from './Arm';
 import { MainBody } from './MainBody';
-import { NavigationLight } from './NavigationLight';
 import { SolarPanel } from './SolarPanel';
 import { SpacecraftLabel } from './SpacecraftLabel';
+import { TrackingMarker } from './TrackingMarker';
 
 const LABEL_OFFSET_PAD = 8;
 
@@ -15,7 +15,7 @@ export function Spacecraft({
   mainBody,
   solarPanels,
   arms = [],
-  navigationLights = [],
+  trackingMarkers = [],
   label,
   labelColor,
   labelFontSize,
@@ -37,8 +37,8 @@ export function Spacecraft({
           <SolarPanel key={`panel-${index}`} {...panel} />
         ))}
 
-        {navigationLights.map((light, index) => (
-          <NavigationLight key={`light-${index}`} {...light} />
+        {trackingMarkers.map((marker, index) => (
+          <TrackingMarker key={`marker-${index}`} {...marker} />
         ))}
       </group>
 

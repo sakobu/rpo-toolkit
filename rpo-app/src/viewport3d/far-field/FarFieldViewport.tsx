@@ -1,3 +1,4 @@
+import { useMemo } from 'react';
 import { OrbitControls } from '@react-three/drei';
 import { Canvas } from '@react-three/fiber';
 import { useShallow } from 'zustand/react/shallow';
@@ -34,15 +35,18 @@ function VehicleMesh({
   config: SpacecraftConfig;
   vector: StateVectorInput;
 }) {
-  const props = configToSpacecraftProps(config, vehicle);
-  const position = eciKmToScenePosition(vector.position_eci_km);
+  const props = useMemo(() => configToSpacecraftProps(config, vehicle), [config, vehicle]);
+  const position = useMemo(
+    () => eciKmToScenePosition(vector.position_eci_km),
+    [vector.position_eci_km],
+  );
   return (
     <Spacecraft
       {...props}
       position={position}
       scale={FARFIELD_SPACECRAFT_SCALE}
       label={VEHICLE_LABELS[vehicle]}
-      labelColor={TINTS[vehicle].emissive}
+      labelColor={TINTS[vehicle].accent}
       labelFontSize={FARFIELD_LABEL_FONT_SIZE}
       labelOffsetY={FARFIELD_LABEL_OFFSET_Y}
     />

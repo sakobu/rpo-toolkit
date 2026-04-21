@@ -4,11 +4,7 @@ export interface MainBodyProps {
   width: number;
   height: number;
   depth: number;
-  color: string;
-  emissive?: string;
-  emissiveIntensity?: number;
-  metalness?: number;
-  roughness?: number;
+  accent: string;
 }
 
 export interface SolarPanelProps {
@@ -17,16 +13,12 @@ export interface SolarPanelProps {
   depth: number;
   position: Vec3;
   rotation?: Vec3;
-  color?: string;
-  emissive?: string;
-  emissiveIntensity?: number;
 }
 
-export interface NavigationLightProps {
+export interface TrackingMarkerProps {
   position: Vec3;
   color: string;
-  intensity?: number;
-  distance?: number;
+  pixelSize?: number;
 }
 
 export interface ArmProps {
@@ -49,13 +41,9 @@ export interface SpacecraftProps {
   mainBody: MainBodyProps;
   solarPanels: SolarPanelProps[];
   arms?: ArmProps[];
-  navigationLights?: NavigationLightProps[];
+  trackingMarkers?: TrackingMarkerProps[];
   label?: string;
   labelColor?: string;
-  // Label text size in scene units. Independent of `scale` so far-field icons
-  // can stay tiny while labels remain readable.
   labelFontSize?: number;
-  // Vertical offset of the label from `position`, in scene units. Defaults to
-  // -(mainBody.height + pad) * scale so label sits just below the scaled body.
   labelOffsetY?: number;
 }

@@ -1,16 +1,12 @@
-import type { ArmProps, MainBodyProps, NavigationLightProps, SolarPanelProps } from '../types';
+import type { ArmProps, MainBodyProps, SolarPanelProps, TrackingMarkerProps } from '../types';
 
 import {
+  ARM_END_X,
   ARM_LENGTH,
   ARM_OFFSET,
   BASE_BODY,
   BASE_PANEL,
-  BODY_EMISSIVE_INTENSITY,
-  NAV_BOTTOM,
-  NAV_DISTANCE,
-  NAV_INTENSITY,
-  NAV_TOP,
-  PANEL_OFFSET,
+  MARKER_OFFSET,
   STOWED_PANEL_HEIGHT,
   STOWED_PANEL_SCALE,
   type Tint,
@@ -18,9 +14,7 @@ import {
 
 export const buildMainBody = (tint: Tint): MainBodyProps => ({
   ...BASE_BODY,
-  color: tint.body,
-  emissive: tint.emissive,
-  emissiveIntensity: BODY_EMISSIVE_INTENSITY,
+  accent: tint.accent,
 });
 
 export const buildDeployedArms = (): ArmProps[] => [
@@ -28,25 +22,27 @@ export const buildDeployedArms = (): ArmProps[] => [
   { position: [ARM_OFFSET, 0, 0], length: ARM_LENGTH, direction: 'x' },
 ];
 
-export const buildDeployedPanels = (panelScale: number, tint: Tint): SolarPanelProps[] => {
-  const height = BASE_PANEL.height * panelScale;
+// Inner edge stays anchored to the arm tip regardless of scale so the panel
+// doesn't clip into the arm.
+export const buildDeployedPanels = (panelScale: number): SolarPanelProps[] => {
+  const length = BASE_PANEL.width * panelScale;
+  const span = BASE_PANEL.depth * panelScale;
+  const centerX = ARM_END_X + length / 2;
   return [
-    { ...BASE_PANEL, height, position: [-PANEL_OFFSET, 0, 0], color: tint.panel },
-    { ...BASE_PANEL, height, position: [PANEL_OFFSET, 0, 0], color: tint.panel },
+    { width: length, height: BASE_PANEL.height, depth: span, position: [-centerX, 0, 0] },
+    { width: length, height: BASE_PANEL.height, depth: span, position: [centerX, 0, 0] },
   ];
 };
 
-export const buildStowedPanels = (tint: Tint): SolarPanelProps[] => [
+export const buildStowedPanels = (): SolarPanelProps[] => [
   {
     width: BASE_BODY.width * STOWED_PANEL_SCALE,
     height: STOWED_PANEL_HEIGHT,
     depth: BASE_BODY.depth * STOWED_PANEL_SCALE,
     position: [0, BASE_BODY.height / 2 + 0.2, 0],
-    color: tint.panel,
   },
 ];
 
-export const buildNavLights = (tint: Tint): NavigationLightProps[] => [
-  { position: NAV_TOP, color: tint.nav, intensity: NAV_INTENSITY, distance: NAV_DISTANCE },
-  { position: NAV_BOTTOM, color: tint.nav, intensity: NAV_INTENSITY, distance: NAV_DISTANCE },
+export const buildTrackingMarkers = (tint: Tint): TrackingMarkerProps[] => [
+  { position: MARKER_OFFSET, color: tint.marker },
 ];

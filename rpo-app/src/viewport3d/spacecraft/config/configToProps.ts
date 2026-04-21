@@ -9,8 +9,8 @@ import {
   buildDeployedArms,
   buildDeployedPanels,
   buildMainBody,
-  buildNavLights,
   buildStowedPanels,
+  buildTrackingMarkers,
 } from './builders';
 import { DEPLOYED_PANEL_THRESHOLD_M2, type Tint, TINTS } from './constants';
 import { bodyScaleFromDrag, panelScaleFromSrp } from './scaling';
@@ -34,9 +34,9 @@ const assembleProps = (ctx: BuildContext): SpacecraftProps => ({
   mainBody: buildMainBody(ctx.tint),
   arms: ctx.deployed ? buildDeployedArms() : [],
   solarPanels: ctx.deployed
-    ? buildDeployedPanels(panelScaleFromSrp(ctx.config.srp_area_m2), ctx.tint)
-    : buildStowedPanels(ctx.tint),
-  navigationLights: buildNavLights(ctx.tint),
+    ? buildDeployedPanels(panelScaleFromSrp(ctx.config.srp_area_m2))
+    : buildStowedPanels(),
+  trackingMarkers: buildTrackingMarkers(ctx.tint),
 });
 
 export const configToSpacecraftProps = (

@@ -1,28 +1,17 @@
 import type { SolarPanelProps } from '../types';
 
-export function SolarPanel({
-  width,
-  height,
-  depth,
-  position,
-  rotation = [0, 0, 0],
-  color = '#d0d0d0',
-  emissive = '#444444',
-  emissiveIntensity = 0.2,
-}: SolarPanelProps) {
+import { SolarCellMaterial } from './SolarCellMaterial';
+
+// The shader handles both plane faces via gl_FrontFacing: +Y = cell grid,
+// -Y = honeycomb substrate.
+
+export function SolarPanel({ width, depth, position, rotation = [0, 0, 0] }: SolarPanelProps) {
   return (
-    <mesh position={position} rotation={rotation}>
-      <boxGeometry args={[width, height, depth]} />
-      <meshStandardMaterial
-        color={color}
-        metalness={0.8}
-        roughness={0.2}
-        emissive={emissive}
-        emissiveIntensity={emissiveIntensity}
-        transparent
-        opacity={1}
-        depthWrite={true}
-      />
-    </mesh>
+    <group position={position} rotation={rotation}>
+      <mesh rotation={[-Math.PI / 2, 0, 0]}>
+        <planeGeometry args={[width, depth]} />
+        <SolarCellMaterial />
+      </mesh>
+    </group>
   );
 }
