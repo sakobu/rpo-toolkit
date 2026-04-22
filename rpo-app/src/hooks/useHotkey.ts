@@ -10,9 +10,9 @@ export function useHotkey(key: string, callback: () => void): void {
       ) {
         return;
       }
-      if (e.key.toLowerCase() === key.toLowerCase()) {
-        callback();
-      }
+      if (e.key.toLowerCase() !== key.toLowerCase()) return;
+      if (e.shiftKey) return;
+      callback();
     };
 
     window.addEventListener('keydown', handleKeyDown);

@@ -89,3 +89,28 @@
     outline-offset: 2px;
   }
 }
+
+/* Phase list cascade: pure CSS, no JS hover handlers. Keys off data-* attributes
+   owned by PhaseCard so nothing here depends on a stable class name. */
+@layer utilities {
+  [data-phase='xfr'][data-editable='true']:hover ~ [data-dimmed-by~='xfr'],
+  [data-phase='px'][data-editable='true']:hover ~ [data-dimmed-by~='px'] {
+    opacity: 0.28;
+  }
+
+  [data-reveal='edit'] {
+    opacity: 0;
+    transition: opacity var(--duration-fast) var(--ease-out);
+  }
+  [data-phase][data-editable='true']:hover [data-reveal='edit'],
+  [data-reveal='edit']:focus-visible {
+    opacity: 1;
+  }
+
+  [data-reveal='cascade'] {
+    display: none;
+  }
+  [data-phase][data-editable='true']:hover [data-reveal='cascade'] {
+    display: block;
+  }
+}

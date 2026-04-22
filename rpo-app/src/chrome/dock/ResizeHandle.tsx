@@ -9,7 +9,7 @@ type Props = {
   onResize: (height: number) => void;
 };
 
-export default function ResizeHandle({ initialHeight, minHeight, maxHeight, onResize }: Props) {
+export function ResizeHandle({ initialHeight, minHeight, maxHeight, onResize }: Props) {
   const { isDragging, handlePointerDown } = useResizeDrag({
     initialHeight,
     minHeight,

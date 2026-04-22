@@ -4,6 +4,7 @@ import { useForm } from '@railway-ts/use-form';
 
 import { type Vehicle, VEHICLE_LABELS } from '@/domain/vehicle';
 import {
+  FIELD_BOUNDS,
   FIELD_LABELS,
   NUMERIC_FIELDS,
   PRESET_NAMES,
@@ -104,7 +105,14 @@ export function SpacecraftPanel({ vehicle }: SpacecraftPanelProps) {
               form={form}
               idPrefix={vehicle}
             >
-              <Input type="number" step="any" {...form.getFieldProps(key)} id={prefixId(key)} />
+              <Input
+                type="number"
+                step="any"
+                min={FIELD_BOUNDS[key].min}
+                max={FIELD_BOUNDS[key].max}
+                {...form.getFieldProps(key)}
+                id={prefixId(key)}
+              />
             </FormField>
           ))}
         </div>

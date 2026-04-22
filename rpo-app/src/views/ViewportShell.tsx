@@ -1,8 +1,9 @@
 import { Navigate, Outlet } from 'react-router';
 
-import HUD from '@/chrome/HUD';
-import MissionDock from '@/chrome/MissionDock';
-import Sidebar from '@/chrome/Sidebar';
+import { MissionDock } from '@/chrome/dock/MissionDock';
+import { HotkeyLegend } from '@/chrome/HotkeyLegend';
+import { HUD } from '@/chrome/hud/HUD';
+import { Sidebar } from '@/chrome/sidebar/Sidebar';
 import { useMission } from '@/stores/mission';
 
 export function ViewportShell() {
@@ -18,6 +19,7 @@ export function ViewportShell() {
       <Sidebar />
       <HUD />
       <MissionDock />
+      <HotkeyLegend />
     </div>
   );
 }

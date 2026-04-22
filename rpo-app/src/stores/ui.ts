@@ -1,32 +1,55 @@
 import { create } from 'zustand';
 import { devtools } from 'zustand/middleware';
 
+import { DOCK_DEFAULT_HEIGHT_PX } from '@/chrome/constants';
+
+export type ChromeState = 'expanded' | 'collapsed' | 'hidden';
+export type ChromeRegion = 'sidebar' | 'hud' | 'dock';
+export type HudReadoutFrame = 'ric' | 'roe';
+
 type UIState = {
-  sidebarOpen: boolean;
-  hudVisible: boolean;
-  missionDockOpen: boolean;
-  missionDockHeight: number;
-  toggleSidebar: () => void;
-  toggleHUD: () => void;
-  toggleMissionDock: () => void;
-  setMissionDockHeight: (height: number) => void;
+  sidebar: ChromeState;
+  hud: ChromeState;
+  dock: ChromeState;
+  dockHeight: number;
+  hudReadoutFrame: HudReadoutFrame;
+  cycleSidebar: () => void;
+  cycleHud: () => void;
+  cycleDock: () => void;
+  expand: (region: ChromeRegion) => void;
+  hide: (region: ChromeRegion) => void;
+  setDockHeight: (height: number) => void;
+  setHudReadoutFrame: (frame: HudReadoutFrame) => void;
 };
 
-const MISSION_DOCK_DEFAULT_HEIGHT = 300;
+const NEXT_STATE: Record<ChromeState, ChromeState> = {
+  expanded: 'collapsed',
+  collapsed: 'hidden',
+  hidden: 'expanded',
+};
 
 export const useUI = create<UIState>()(
   devtools(
     (set) => ({
-      sidebarOpen: true,
-      hudVisible: true,
-      missionDockOpen: false,
-      missionDockHeight: MISSION_DOCK_DEFAULT_HEIGHT,
-      toggleSidebar: () => set((s) => ({ sidebarOpen: !s.sidebarOpen }), false, 'toggleSidebar'),
-      toggleHUD: () => set((s) => ({ hudVisible: !s.hudVisible }), false, 'toggleHUD'),
-      toggleMissionDock: () =>
-        set((s) => ({ missionDockOpen: !s.missionDockOpen }), false, 'toggleMissionDock'),
-      setMissionDockHeight: (height) =>
-        set({ missionDockHeight: height }, false, 'setMissionDockHeight'),
+      sidebar: 'expanded',
+      hud: 'expanded',
+      dock: 'hidden',
+      dockHeight: DOCK_DEFAULT_HEIGHT_PX,
+      hudReadoutFrame: 'ric',
+      cycleSidebar: () => set((s) => ({ sidebar: NEXT_STATE[s.sidebar] }), false, 'cycleSidebar'),
+      cycleHud: () => set((s) => ({ hud: NEXT_STATE[s.hud] }), false, 'cycleHud'),
+      cycleDock: () => set((s) => ({ dock: NEXT_STATE[s.dock] }), false, 'cycleDock'),
+      expand: (region) =>
+        set(
+          (s) => (s[region] === 'expanded' ? s : { [region]: 'expanded' }),
+          false,
+          `expand/${region}`,
+        ),
+      hide: (region) =>
+        set((s) => (s[region] === 'hidden' ? s : { [region]: 'hidden' }), false, `hide/${region}`),
+      setDockHeight: (height) =>
+        set((s) => (s.dockHeight === height ? s : { dockHeight: height }), false, 'setDockHeight'),
+      setHudReadoutFrame: (frame) => set({ hudReadoutFrame: frame }, false, 'setHudReadoutFrame'),
     }),
     { name: 'ui', enabled: import.meta.env.DEV },
   ),

@@ -4,7 +4,7 @@ import { shallow } from 'zustand/shallow';
 
 import { match } from '@railway-ts/pipelines/result';
 
-import type { MissionPhase, ProximityConfig, WasmError } from 'rpo-wasm';
+import type { MissionPhase, ProximityConfig, SafetyRequirements, WasmError } from 'rpo-wasm';
 
 import { ROE_THRESHOLD_DEFAULT } from '@/schemas/proximityConfig';
 import { classify } from '@/wasm/classify';
@@ -21,7 +21,9 @@ export type Classification =
 type MissionState = {
   classification: Classification;
   proximityConfig: ProximityConfig;
+  safetyRequirements: SafetyRequirements | null;
   setProximityConfig: (config: ProximityConfig) => void;
+  setSafetyRequirements: (r: SafetyRequirements | null) => void;
 };
 
 // ─── Defaults ──────────────────────────────────────────────────────────────
@@ -38,8 +40,11 @@ export const useMission = create<MissionState>()(
       (set) => ({
         classification: IDLE_CLASSIFICATION,
         proximityConfig: DEFAULT_PROXIMITY_CONFIG,
+        safetyRequirements: null,
         setProximityConfig: (config) =>
           set({ proximityConfig: config }, false, 'setProximityConfig'),
+        setSafetyRequirements: (r) =>
+          set({ safetyRequirements: r }, false, 'setSafetyRequirements'),
       }),
       { name: 'mission', enabled: import.meta.env.DEV },
     ),
