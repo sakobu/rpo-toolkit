@@ -1,5 +1,7 @@
+import { useMemo } from 'react';
 import { Billboard, GizmoHelper, Line, Sphere, Text } from '@react-three/drei';
 
+import { selectDockOffsetPx, useUI } from '@/stores/ui';
 import type { Vec3 } from '@/viewport3d/types';
 
 import { AXES, AXES_GIZMO } from './constants';
@@ -44,8 +46,17 @@ function Axis({ direction, color, label }: AxisProps) {
 
 // R = +Y (up), I = +X (right), C = +Z (depth) — matches ricToPosition mapping.
 export default function RICAxes() {
+  const dockOffsetPx = useUI(selectDockOffsetPx);
+  // Lift by the dock's contribution to the chrome stack; the static base already
+  // accounts for the legend's clearance in the dock-hidden ("fine") baseline.
+  // Memoized so GizmoHelper doesn't see a fresh tuple reference per render.
+  const margin = useMemo<[number, number]>(() => {
+    const [mx, my] = AXES_GIZMO.margin;
+    return [mx, my + dockOffsetPx];
+  }, [dockOffsetPx]);
+
   return (
-    <GizmoHelper alignment="bottom-right" margin={[...AXES_GIZMO.margin]}>
+    <GizmoHelper alignment="bottom-right" margin={margin}>
       <group scale={AXES_GIZMO.scale}>
         <Axis direction={[0, 1, 0]} color={AXES.R.color} label={AXES.R.label} />
         <Axis direction={[1, 0, 0]} color={AXES.I.color} label={AXES.I.label} />

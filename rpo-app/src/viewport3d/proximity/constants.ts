@@ -40,17 +40,25 @@ export const CELESTIAL_TINTS = {
   moon: '#9099ad',
 } as const;
 
-// Fraction of grid extent at which celestial indicators sit (unit direction
-// scaled to this radius). Keeps tips inside the camera frame.
-export const CELESTIAL_EDGE_RATIO = 0.45;
-
-// Celestial leader-line styling. Thin + translucent so the line reads as a
-// hint, not a primary visual element. Icon sits just past the line tip;
-// with drei <Html center>, the icon's center is anchored at the offset point.
+// Celestial leader-line styling. Length and opacity both fall off with
+// log10(distance_km), so a chief in LEO renders Earth as a short bright line
+// and the Sun as a long faint line — the order encodes proximity at a glance.
+// Range bracketed to comfortably cover LEO chief altitude (~7e3 km) through
+// the Sun (~1.5e8 km) with margin on both ends. Length ratios are fractions
+// of the full grid side (extentM), so lengthRatioFar must stay ≲ 0.5 to keep
+// the farthest tip inside the visible ±extentM/2 viewport.
 export const CELESTIAL_INDICATOR = {
   lineWidth: 0.5,
-  lineOpacity: 0.6,
   iconSizePx: 20,
   iconStrokeWidth: 1.5,
-  labelOffsetRatio: 0.02,
+  labelOffsetRatio: 0,
+  logKmMin: 3.5,
+  logKmMax: 8.5,
+  lengthRatioNear: 0.15,
+  lengthRatioFar: 0.5,
+  opacityNear: 0.85,
+  opacityFar: 0.35,
+  // Icon sits one notch brighter than its leader line so far bodies (Sun) don't
+  // fade to invisible at the line's opacityFar.
+  iconOpacityBias: 0.2,
 } as const;

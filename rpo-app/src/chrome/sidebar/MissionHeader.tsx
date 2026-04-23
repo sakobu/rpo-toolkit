@@ -3,7 +3,7 @@ import { Pencil, Plus, X } from 'lucide-react';
 import { useShallow } from 'zustand/react/shallow';
 
 import { EditConfigButton } from '@/chrome/EditConfigButton';
-import { SafetyRequirementsForm } from '@/features/safety-requirements/SafetyRequirementsForm';
+import { SafetyRequirementsForm } from '@/chrome/sidebar/SafetyRequirementsForm';
 import {
   ALIGNMENT_LABELS,
   type AlignmentValue,

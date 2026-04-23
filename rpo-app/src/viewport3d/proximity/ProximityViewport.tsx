@@ -8,7 +8,7 @@ import { loadedVector, useConfig } from '@/stores/configuration';
 import type { Vec3 } from '@/viewport3d/types';
 
 import CelestialIndicator from './CelestialIndicator';
-import { CELESTIAL_EDGE_RATIO, CELESTIAL_TINTS, ORBIT_CONTROLS } from './constants';
+import { CELESTIAL_TINTS, ORBIT_CONTROLS } from './constants';
 import Grid from './Grid';
 import RICAxes from './RICAxes';
 import { computeCelestialDirsRic, computeDeputyPositionRicM, computeScale } from './scene';
@@ -40,7 +40,6 @@ export default function ProximityViewport() {
   );
   const scale = useMemo(() => computeScale(deputyRicM), [deputyRicM]);
   const celestials = useMemo(() => computeCelestialDirsRic(chiefVector), [chiefVector]);
-  const celestialEdgeM = scale.extentM * CELESTIAL_EDGE_RATIO;
 
   return (
     <div className="h-full w-full">
@@ -84,24 +83,24 @@ export default function ProximityViewport() {
 
         {celestials.earth && (
           <CelestialIndicator
-            unitRic={celestials.earth}
-            edgeM={celestialEdgeM}
+            dir={celestials.earth}
+            gridExtentM={scale.extentM}
             body="earth"
             color={CELESTIAL_TINTS.earth}
           />
         )}
         {celestials.sun && (
           <CelestialIndicator
-            unitRic={celestials.sun}
-            edgeM={celestialEdgeM}
+            dir={celestials.sun}
+            gridExtentM={scale.extentM}
             body="sun"
             color={CELESTIAL_TINTS.sun}
           />
         )}
         {celestials.moon && (
           <CelestialIndicator
-            unitRic={celestials.moon}
-            edgeM={celestialEdgeM}
+            dir={celestials.moon}
+            gridExtentM={scale.extentM}
             body="moon"
             color={CELESTIAL_TINTS.moon}
           />

@@ -2,10 +2,12 @@ import { useMemo } from 'react';
 import { Html, Line } from '@react-three/drei';
 import { Earth, Moon, Sun } from 'lucide-react';
 
+import { clamp } from '@/utils/math';
 import type { Vec3 } from '@/viewport3d/types';
 
 import { CELESTIAL_INDICATOR } from './constants';
 import { ricToPosition } from './coordinates';
+import type { CelestialBodyDir } from './scene';
 
 type CelestialBody = 'earth' | 'sun' | 'moon';
 
@@ -16,23 +18,43 @@ const ICON_BY_BODY = {
 } as const;
 
 type Props = {
-  unitRic: Vec3;
-  edgeM: number;
+  dir: CelestialBodyDir;
+  gridExtentM: number;
   body: CelestialBody;
   color: string;
 };
 
-export default function CelestialIndicator({ unitRic, edgeM, body, color }: Props) {
-  const { tip, iconPos } = useMemo(() => {
-    const tipRic: Vec3 = [unitRic[0] * edgeM, unitRic[1] * edgeM, unitRic[2] * edgeM];
-    const offset = edgeM * CELESTIAL_INDICATOR.labelOffsetRatio;
+export default function CelestialIndicator({ dir, gridExtentM, body, color }: Props) {
+  const { tip, iconPos, opacity, iconOpacity } = useMemo(() => {
+    const { unitRic, distanceKm } = dir;
+    const log = Math.log10(Math.max(distanceKm, 1));
+    const span = CELESTIAL_INDICATOR.logKmMax - CELESTIAL_INDICATOR.logKmMin;
+    const t = clamp((log - CELESTIAL_INDICATOR.logKmMin) / span, 0, 1);
+
+    const lengthRatio =
+      CELESTIAL_INDICATOR.lengthRatioNear +
+      t * (CELESTIAL_INDICATOR.lengthRatioFar - CELESTIAL_INDICATOR.lengthRatioNear);
+    const lengthM = gridExtentM * lengthRatio;
+
+    const opacity =
+      CELESTIAL_INDICATOR.opacityNear +
+      t * (CELESTIAL_INDICATOR.opacityFar - CELESTIAL_INDICATOR.opacityNear);
+    const iconOpacity = Math.min(1, opacity + CELESTIAL_INDICATOR.iconOpacityBias);
+
+    const tipRic: Vec3 = [unitRic[0] * lengthM, unitRic[1] * lengthM, unitRic[2] * lengthM];
+    const offset = lengthM * CELESTIAL_INDICATOR.labelOffsetRatio;
     const iconRic: Vec3 = [
-      unitRic[0] * (edgeM + offset),
-      unitRic[1] * (edgeM + offset),
-      unitRic[2] * (edgeM + offset),
+      unitRic[0] * (lengthM + offset),
+      unitRic[1] * (lengthM + offset),
+      unitRic[2] * (lengthM + offset),
     ];
-    return { tip: ricToPosition(tipRic), iconPos: ricToPosition(iconRic) };
-  }, [unitRic, edgeM]);
+    return {
+      tip: ricToPosition(tipRic),
+      iconPos: ricToPosition(iconRic),
+      opacity,
+      iconOpacity,
+    };
+  }, [dir, gridExtentM]);
 
   const Icon = ICON_BY_BODY[body];
 
@@ -42,7 +64,7 @@ export default function CelestialIndicator({ unitRic, edgeM, body, color }: Prop
         points={[[0, 0, 0], tip]}
         color={color}
         lineWidth={CELESTIAL_INDICATOR.lineWidth}
-        opacity={CELESTIAL_INDICATOR.lineOpacity}
+        opacity={opacity}
         transparent
         depthWrite={false}
       />
@@ -50,7 +72,7 @@ export default function CelestialIndicator({ unitRic, edgeM, body, color }: Prop
         position={iconPos}
         center
         zIndexRange={[20, 0]}
-        style={{ pointerEvents: 'none', color }}
+        style={{ pointerEvents: 'none', color, opacity: iconOpacity }}
       >
         <Icon
           size={CELESTIAL_INDICATOR.iconSizePx}

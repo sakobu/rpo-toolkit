@@ -1,8 +1,10 @@
 import { useShallow } from 'zustand/react/shallow';
 
-import { type ChromeRegion, type ChromeState, useUI } from '@/stores/ui';
+import { type ChromeRegion, type ChromeState, selectDockOffsetPx, useUI } from '@/stores/ui';
 import { Caps } from '@/ui/Caps';
 import { withBlur } from '@/utils/blur';
+
+const LEGEND_GAP_PX = 16;
 
 type Region = {
   key: 'S' | 'H' | 'D';
@@ -34,6 +36,7 @@ export function HotkeyLegend() {
       cycleDock: s.cycleDock,
     })),
   );
+  const dockOffsetPx = useUI(selectDockOffsetPx);
 
   const regions: readonly Region[] = [
     { key: 'S', label: 'sidebar', state: sidebar, onCycle: cycleSidebar },
@@ -41,8 +44,13 @@ export function HotkeyLegend() {
     { key: 'D', label: 'dock', state: dock, onCycle: cycleDock },
   ];
 
+  const bottomPx = dockOffsetPx + LEGEND_GAP_PX;
+
   return (
-    <div className="pointer-events-auto fixed right-4 bottom-4 z-40 flex items-center gap-3 rounded-xs border border-border bg-surface-1/85 px-2.5 py-1.5 backdrop-blur-sm">
+    <div
+      style={{ bottom: bottomPx }}
+      className="pointer-events-auto fixed right-4 z-40 flex items-center gap-3 rounded-xs border border-border bg-surface-1/85 px-2.5 py-1.5 backdrop-blur-sm"
+    >
       {regions.map((r) => (
         <button
           key={r.key}

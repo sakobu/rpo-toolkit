@@ -1,10 +1,8 @@
+import { clamp } from '@/utils/math';
+
 import { MAX_BODY_SCALE, MIN_BODY_SCALE, REF_DRAG_AREA_M2, REF_SRP_AREA_M2 } from './constants';
 
 const MIN_AREA_M2 = 1e-4;
-
-export function clamp(v: number, lo: number, hi: number): number {
-  return Math.min(Math.max(v, lo), hi);
-}
 
 // Body scale follows a cube-root relationship with drag area so a 10x drag area
 // produces a ~2.15x linear dimension change (matches physical surface scaling).
