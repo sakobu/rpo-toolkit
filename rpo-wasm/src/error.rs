@@ -6,6 +6,7 @@ use tsify_next::Tsify;
 use rpo_core::elements::eci_ric_dcm::DcmError;
 use rpo_core::elements::eclipse::EclipseGeometryError;
 use rpo_core::elements::geodetic::GeodeticError;
+use rpo_core::elements::ConversionError;
 use rpo_core::mission::{AvoidanceError, FormationDesignError, MissionEclipseError, MissionError};
 use rpo_core::pipeline::PipelineError;
 use rpo_core::propagation::{CovarianceError, PropagationError};
@@ -176,6 +177,16 @@ impl From<DcmError> for WasmError {
     }
 }
 
+impl From<ConversionError> for WasmError {
+    fn from(e: ConversionError) -> Self {
+        Self {
+            code: WasmErrorCode::Frame,
+            message: e.to_string(),
+            details: std::error::Error::source(&e).map(ToString::to_string),
+        }
+    }
+}
+
 /// Deserialize a [`wasm_bindgen::JsValue`] into a typed Rust value.
 ///
 /// Centralizes the `serde_wasm_bindgen` conversion and error mapping so that
@@ -194,6 +205,25 @@ pub fn deserialize_js<T: serde::de::DeserializeOwned>(
         code: WasmErrorCode::Deserialization,
         message: format!("failed to deserialize {field}: {e}"),
         details: None,
+    })
+}
+
+/// Parse a hifitime-compatible epoch string into an [`hifitime::Epoch`].
+///
+/// Accepts the same formats as the canonical `StateVector` deserializer
+/// (`epoch_serde::deserialize` in `rpo-core::types::state`), which uses
+/// `Epoch::from_gregorian_str`: ISO 8601 with optional timescale suffix
+/// (`UTC | TAI | TDB | TT | ET | GPS`) or `Z` / `±HH:MM` offset.
+///
+/// # Errors
+///
+/// Returns [`WasmError`] with [`WasmErrorCode::Frame`] if the epoch string
+/// cannot be parsed.
+pub fn parse_epoch(s: &str) -> Result<hifitime::Epoch, WasmError> {
+    hifitime::Epoch::from_gregorian_str(s).map_err(|e| WasmError {
+        code: WasmErrorCode::Frame,
+        message: format!("invalid epoch string {s:?}: {e}"),
+        details: std::error::Error::source(&e).map(ToString::to_string),
     })
 }
 

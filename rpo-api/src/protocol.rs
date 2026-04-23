@@ -1,9 +1,10 @@
 //! WebSocket protocol types — 5 client message variants, 8 server message variants.
 
 use rpo_core::mission::config::{MissionConfig, ProximityConfig};
+use rpo_core::mission::formation::SafetyRequirements;
 use rpo_core::mission::monte_carlo::types::{MonteCarloConfig, MonteCarloReport};
 use rpo_core::mission::types::{PerchGeometry, ValidationReport, WaypointMission};
-use rpo_core::pipeline::types::{PropagatorChoice, TransferResult};
+use rpo_core::pipeline::types::{EnrichmentSuggestion, PropagatorChoice, TransferResult};
 use rpo_core::propagation::covariance::types::MissionCovarianceReport;
 use rpo_core::propagation::lambert::LambertConfig;
 use rpo_core::propagation::propagator::DragConfig;
@@ -66,10 +67,10 @@ pub enum ClientMessage {
     ComputeTransfer {
         /// Client-assigned correlation ID.
         request_id: u64,
-        /// Chief ECI state vector.
-        chief: StateVector,
-        /// Deputy ECI state vector (same epoch as chief).
-        deputy: StateVector,
+        /// Chief state vector in ECI.
+        chief_eci: StateVector,
+        /// Deputy state vector in ECI (same epoch as chief).
+        deputy_eci: StateVector,
         /// Perch geometry for Lambert arrival.
         perch: PerchGeometry,
         /// Far-field vs. proximity classification thresholds.
@@ -78,6 +79,10 @@ pub enum ClientMessage {
         lambert_tof_s: f64,
         /// Lambert solver configuration (direction, revolutions).
         lambert_config: LambertConfig,
+        /// Optional passive-safety constraints. When present, the server
+        /// runs perch enrichment on the Lambert result before returning.
+        #[serde(default)]
+        safety_requirements: Option<SafetyRequirements>,
     },
 
     /// Extract differential drag rates via nyx full-physics propagation (~3s).
@@ -86,10 +91,10 @@ pub enum ClientMessage {
     ExtractDrag {
         /// Client-assigned correlation ID.
         request_id: u64,
-        /// Chief ECI state vector.
-        chief: StateVector,
-        /// Deputy ECI state vector.
-        deputy: StateVector,
+        /// Chief state vector in ECI.
+        chief_eci: StateVector,
+        /// Deputy state vector in ECI.
+        deputy_eci: StateVector,
         /// Chief spacecraft physical properties.
         chief_config: SpacecraftConfig,
         /// Deputy spacecraft physical properties.
@@ -105,10 +110,10 @@ pub enum ClientMessage {
         request_id: u64,
         /// Analytical mission to validate.
         mission: WaypointMission,
-        /// Chief ECI state at mission start.
-        chief: StateVector,
-        /// Deputy ECI state at mission start.
-        deputy: StateVector,
+        /// Chief state vector in ECI at mission start.
+        chief_eci: StateVector,
+        /// Deputy state vector in ECI at mission start.
+        deputy_eci: StateVector,
         /// Chief spacecraft physical properties.
         chief_config: SpacecraftConfig,
         /// Deputy spacecraft physical properties.
@@ -137,10 +142,10 @@ pub enum ClientMessage {
         request_id: u64,
         /// Nominal mission plan (reference for dispersions).
         mission: WaypointMission,
-        /// Chief ECI state at mission start.
-        chief: StateVector,
-        /// Deputy ECI state at mission start.
-        deputy: StateVector,
+        /// Chief state vector in ECI at mission start.
+        chief_eci: StateVector,
+        /// Deputy state vector in ECI at mission start.
+        deputy_eci: StateVector,
         /// Chief spacecraft physical properties.
         chief_config: SpacecraftConfig,
         /// Deputy spacecraft physical properties.
@@ -181,6 +186,13 @@ pub enum ServerMessage {
         request_id: u64,
         /// Transfer solution (boxed — largest payload, reduces enum size).
         result: Box<TransferResult>,
+        /// Enrichment outcome. `None` when the request had no safety
+        /// requirements. `Some(Enriched)` means `result.plan.perch_roe`
+        /// carries the enriched ROE; `Some(Fallback)` means enrichment
+        /// couldn't satisfy the requirements and `perch_roe` is the
+        /// geometric baseline.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        enrichment: Option<EnrichmentSuggestion>,
     },
 
     /// Extracted differential drag configuration.

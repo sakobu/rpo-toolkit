@@ -14,7 +14,6 @@
 //! [`Vec3`] newtype so the JS-side type is `[number, number, number]`
 //! rather than a heap-allocated `number[]`.
 
-use hifitime::Epoch;
 use nalgebra::Vector3;
 use serde::{Deserialize, Serialize};
 use tsify_next::Tsify;
@@ -33,7 +32,7 @@ use rpo_core::elements::geodetic::{
 };
 use rpo_core::types::{EcefState, GeodeticCoord, Matrix3, RICState, StateVector};
 
-use crate::error::WasmError;
+use crate::error::{parse_epoch, WasmError};
 
 /// 3-element vector exposed at the WASM boundary as
 /// `[number, number, number]`.
@@ -81,20 +80,6 @@ impl From<Matrix3> for Matrix3Rows {
             [m[(2, 0)], m[(2, 1)], m[(2, 2)]],
         ])
     }
-}
-
-/// Parse a hifitime-compatible epoch string into an `Epoch`.
-///
-/// Accepts the same formats as the canonical `StateVector` deserializer
-/// (`epoch_serde::deserialize` in `rpo-core::types::state`), which uses
-/// `Epoch::from_gregorian_str`: ISO 8601 with optional timescale suffix
-/// (`UTC | TAI | TDB | TT | ET | GPS`) or `Z` / `±HH:MM` offset.
-fn parse_epoch(s: &str) -> Result<Epoch, WasmError> {
-    Epoch::from_gregorian_str(s).map_err(|e| WasmError {
-        code: crate::error::WasmErrorCode::Frame,
-        message: format!("invalid epoch string {s:?}: {e}"),
-        details: std::error::Error::source(&e).map(ToString::to_string),
-    })
 }
 
 /// Earth Rotation Angle at the given epoch, in radians `[0, 2π)`.

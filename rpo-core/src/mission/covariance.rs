@@ -91,7 +91,7 @@ pub fn propagate_mission_covariance(
 
         // 3. Sample loop — compute STM once per sample, reuse for both
         //    covariance propagation and nominal ROE evolution.
-        let mut states = Vec::with_capacity(n as usize + 1);
+        let mut states = Vec::with_capacity(n as usize + 1); // u32 → usize: always safe (usize ≥ 32 bits)
         let mut leg_max_sigma3 = 0.0_f64;
         let mut leg_min_mahal = f64::INFINITY;
         let mut p_last = p_post_dep;

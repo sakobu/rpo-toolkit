@@ -27,9 +27,9 @@ pub(crate) struct McJobInput<'a> {
     /// Nominal mission plan (reference for dispersions).
     pub mission: &'a WaypointMission,
     /// Chief ECI state at mission start.
-    pub chief: &'a StateVector,
+    pub chief_eci: &'a StateVector,
     /// Deputy ECI state at mission start.
-    pub deputy: &'a StateVector,
+    pub deputy_eci: &'a StateVector,
     /// Chief spacecraft physical properties.
     pub chief_config: &'a SpacecraftConfig,
     /// Deputy spacecraft physical properties.
@@ -92,8 +92,8 @@ pub(crate) fn handle_mc(
 
     let mc_input = MonteCarloInput {
         nominal_mission: input.mission,
-        initial_chief: input.chief,
-        initial_deputy: input.deputy,
+        initial_chief: input.chief_eci,
+        initial_deputy: input.deputy_eci,
         config: input.mc_config,
         mission_config: input.mission_config,
         chief_config: input.chief_config,

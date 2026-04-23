@@ -32,19 +32,9 @@ use crate::mission::safety::{compute_ei_separation, ROE_MAG_EPSILON};
 use crate::types::{KeplerianElements, QuasiNonsingularROE};
 
 use super::{
-    EiAlignment, EnrichedWaypoint, EnrichmentMode, FormationDesignError, SafetyRequirements,
+    EiAlignment, EnrichedWaypoint, EnrichmentMode, FormationDesignError,
+    LINEARIZATION_PERTURBATION_BOUND, SafetyRequirements,
 };
-
-// ---------------------------------------------------------------------------
-// Named constants
-// ---------------------------------------------------------------------------
-
-/// Maximum perturbation norm (dimensionless) before linearization is unreliable.
-/// At norm = 0.01, the ROE separation is ~1% of SMA (~70 km for a 7000 km orbit).
-/// Beyond this, second-order terms in the `T_pos` linearization produce position
-/// errors exceeding the sub-km accuracy target. Consistent with the existing
-/// `dimensionless_norm()` threshold used for proximity classification.
-const LINEARIZATION_PERTURBATION_BOUND: f64 = 0.01;
 
 // E/I magnitude threshold imported from safety.rs as ROE_MAG_EPSILON.
 // Below this, atan2 is numerically meaningless and the phase angle is undefined.

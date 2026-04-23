@@ -717,8 +717,8 @@ fn compute_avoidance_bad_epoch() {
     assert!(result.is_err(), "should fail with invalid epoch");
     let err = result.unwrap_err();
     assert!(
-        matches!(err.code, rpo_wasm::error::WasmErrorCode::Deserialization),
-        "expected Deserialization error code, got {:?}",
+        matches!(err.code, rpo_wasm::error::WasmErrorCode::Frame),
+        "expected Frame error code (epoch parse falls under the frame category per WasmErrorCode docs), got {:?}",
         err.code
     );
 }
@@ -905,6 +905,84 @@ fn eci_to_ric_dcm_rejects_zero_position() {
     };
     let result = rpo_wasm::frames::eci_to_ric_dcm(chief);
     assert!(result.is_err(), "zero-position chief should error");
+    let err = result.unwrap_err();
+    assert!(matches!(err.code, rpo_wasm::error::WasmErrorCode::Frame));
+}
+
+// ---------------------------------------------------------------------------
+// constants.rs boundary tests
+// ---------------------------------------------------------------------------
+
+#[test]
+fn engine_constants_round_trip_canonical_values() {
+    let c = rpo_wasm::constants::engine_constants();
+    assert!(
+        (c.linearization_perturbation_bound
+            - rpo_core::mission::formation::LINEARIZATION_PERTURBATION_BOUND)
+            .abs()
+            < f64::EPSILON,
+        "linearization_perturbation_bound drift",
+    );
+    assert!(
+        (c.earth_radius_km - rpo_core::constants::R_EARTH).abs() < f64::EPSILON,
+        "earth_radius_km drift",
+    );
+    assert!(
+        (c.roe_threshold_default - rpo_core::mission::config::ROE_THRESHOLD_DEFAULT).abs()
+            < f64::EPSILON,
+        "roe_threshold_default drift",
+    );
+}
+
+// ---------------------------------------------------------------------------
+// elements.rs boundary tests
+// ---------------------------------------------------------------------------
+
+/// Roundtrip tolerance for SMA recovered through state_to_keplerian after
+/// keplerian_to_state. Matches the keplerian_conversions native test
+/// `SMA_ROUNDTRIP_TOL_KM` (1e-8 km for ~8000 km orbits).
+const STATE_TO_KEPLERIAN_SMA_ROUNDTRIP_TOL_KM: f64 = 1e-8;
+
+#[test]
+fn state_to_keplerian_recovers_sma() {
+    let epoch = test_epoch();
+    let ke = iss_like_elements();
+    let sv = keplerian_to_state(&ke, epoch).expect("keplerian_to_state");
+
+    let recovered = rpo_wasm::elements::state_to_keplerian(sv).expect("state_to_keplerian");
+    assert!(
+        (recovered.a_km - ke.a_km).abs() < STATE_TO_KEPLERIAN_SMA_ROUNDTRIP_TOL_KM,
+        "SMA roundtrip error: {} km",
+        (recovered.a_km - ke.a_km).abs()
+    );
+}
+
+#[test]
+fn state_to_keplerian_rejects_zero_position() {
+    let state = StateVector {
+        epoch: test_epoch(),
+        position_eci_km: Vector3::zeros(),
+        velocity_eci_km_s: Vector3::new(0.0, 7.5, 0.0),
+    };
+    let result = rpo_wasm::elements::state_to_keplerian(state);
+    assert!(result.is_err(), "zero position should error");
+    let err = result.unwrap_err();
+    assert!(
+        matches!(err.code, rpo_wasm::error::WasmErrorCode::Frame),
+        "expected Frame error code, got {:?}",
+        err.code
+    );
+}
+
+#[test]
+fn state_to_keplerian_rejects_unbound_orbit() {
+    let state = StateVector {
+        epoch: test_epoch(),
+        position_eci_km: Vector3::new(7000.0, 0.0, 0.0),
+        velocity_eci_km_s: Vector3::new(0.0, 15.0, 0.0), // well above escape velocity
+    };
+    let result = rpo_wasm::elements::state_to_keplerian(state);
+    assert!(result.is_err(), "unbound orbit should error");
     let err = result.unwrap_err();
     assert!(matches!(err.code, rpo_wasm::error::WasmErrorCode::Frame));
 }

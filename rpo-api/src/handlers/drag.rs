@@ -19,8 +19,8 @@ use std::sync::Arc;
 /// Returns [`ServerError::NyxBridge`] if nyx propagation fails (almanac load,
 /// dynamics setup, or propagation error).
 pub fn handle_extract_drag(
-    chief: &StateVector,
-    deputy: &StateVector,
+    chief_eci: &StateVector,
+    deputy_eci: &StateVector,
     chief_config: &SpacecraftConfig,
     deputy_config: &SpacecraftConfig,
     almanac: &Arc<Almanac>,
@@ -34,7 +34,7 @@ pub fn handle_extract_drag(
         return Ok(DragConfig::zero());
     }
 
-    extract_dmf_rates_with_cancel(chief, deputy, chief_config, deputy_config, almanac, cancel)
+    extract_dmf_rates_with_cancel(chief_eci, deputy_eci, chief_config, deputy_config, almanac, cancel)
         .map_err(|e| match e {
             NyxBridgeError::Cancelled => ServerError::Cancelled,
             other => ServerError::from(other),

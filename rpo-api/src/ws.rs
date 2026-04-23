@@ -212,19 +212,27 @@ async fn handle_text_message(
         // ---- Synchronous: ComputeTransfer (~100ms) ----
         ClientMessage::ComputeTransfer {
             request_id,
-            chief,
-            deputy,
+            chief_eci,
+            deputy_eci,
             perch,
             proximity,
             lambert_tof_s,
             lambert_config,
+            safety_requirements,
         } => {
             let response = match handlers::handle_compute_transfer(
-                chief, deputy, perch, proximity, lambert_tof_s, lambert_config,
+                chief_eci,
+                deputy_eci,
+                perch,
+                proximity,
+                lambert_tof_s,
+                lambert_config,
+                safety_requirements,
             ) {
-                Ok(result) => ServerMessage::TransferResult {
+                Ok((result, enrichment)) => ServerMessage::TransferResult {
                     request_id,
                     result: Box::new(result),
+                    enrichment,
                 },
                 Err(e) => e.to_server_message(Some(request_id)),
             };
@@ -236,8 +244,8 @@ async fn handle_text_message(
         // propagation chunks and before result emission.
         ClientMessage::ExtractDrag {
             request_id,
-            chief,
-            deputy,
+            chief_eci,
+            deputy_eci,
             chief_config,
             deputy_config,
         } => {
@@ -248,7 +256,7 @@ async fn handle_text_message(
             let cancel_clone = Arc::clone(&cancel);
             let handle = tokio::task::spawn_blocking(move || {
                 let result =
-                    handlers::handle_extract_drag(&chief, &deputy, &chief_config, &deputy_config, &almanac, &cancel);
+                    handlers::handle_extract_drag(&chief_eci, &deputy_eci, &chief_config, &deputy_config, &almanac, &cancel);
                 let _ = tx.blocking_send(JobResult::Drag { request_id, result });
             });
             *active_job = Some(ActiveJob {
@@ -262,8 +270,8 @@ async fn handle_text_message(
         ClientMessage::Validate {
             request_id,
             mission,
-            chief,
-            deputy,
+            chief_eci,
+            deputy_eci,
             chief_config,
             deputy_config,
             samples_per_leg,
@@ -280,8 +288,8 @@ async fn handle_text_message(
 
             let job_input = ValidateJobInput {
                 mission,
-                chief,
-                deputy,
+                chief_eci,
+                deputy_eci,
                 chief_config,
                 deputy_config,
                 samples_per_leg,
@@ -306,8 +314,8 @@ async fn handle_text_message(
         ClientMessage::RunMc {
             request_id,
             mission,
-            chief,
-            deputy,
+            chief_eci,
+            deputy_eci,
             chief_config,
             deputy_config,
             mission_config,
@@ -325,8 +333,8 @@ async fn handle_text_message(
             let handle = tokio::task::spawn_blocking(move || {
                 let input = McJobInput {
                     mission: &mission,
-                    chief: &chief,
-                    deputy: &deputy,
+                    chief_eci: &chief_eci,
+                    deputy_eci: &deputy_eci,
                     chief_config: &chief_config,
                     deputy_config: &deputy_config,
                     mission_config: &mission_config,

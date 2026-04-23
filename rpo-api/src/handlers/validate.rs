@@ -24,9 +24,9 @@ pub(crate) struct ValidateJobInput {
     /// Analytical mission to validate against nyx full-physics propagation.
     pub mission: WaypointMission,
     /// Chief ECI state at mission start.
-    pub chief: StateVector,
+    pub chief_eci: StateVector,
     /// Deputy ECI state at mission start.
-    pub deputy: StateVector,
+    pub deputy_eci: StateVector,
     /// Chief spacecraft physical properties.
     pub chief_config: SpacecraftConfig,
     /// Deputy spacecraft physical properties.
@@ -80,8 +80,8 @@ pub(crate) fn handle_validate(
     let dynamics = build_full_physics_dynamics(almanac)?;
     let pipeline = ValidationPipelineCtx {
         mission: &input.mission,
-        chief_initial: &input.chief,
-        deputy_initial: &input.deputy,
+        chief_initial: &input.chief_eci,
+        deputy_initial: &input.deputy_eci,
         config: &config,
         cola: &cola_input,
         almanac,

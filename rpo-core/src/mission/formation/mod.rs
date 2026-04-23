@@ -31,3 +31,20 @@ pub use types::{
     EnrichedWaypoint, EnrichmentMode, FormationDesignReport, PerchEnrichmentResult, SafePerch,
     SafetyRequirements, TransitSafetyReport,
 };
+
+/// Maximum ROE perturbation norm (dimensionless) before the `T_pos` linearization
+/// is unreliable.
+///
+/// At norm = 0.01, the ROE separation is ~1% of SMA (~70 km at a 7000 km orbit).
+/// Beyond this, second-order terms in the `T_pos` linearization (D'Amico Eq. 2.17)
+/// produce position errors exceeding the sub-km accuracy target. Consistent with
+/// the `dimensionless_norm()` threshold used for proximity classification.
+///
+/// Shared by every enrichment path in this module so that the two perch
+/// branches (`enrich_simple_perch` and `enrich_custom_perch` via
+/// `compute_safety_projection`) agree on the validity envelope.
+///
+/// # References
+///
+/// - D'Amico §2.3.4 (ROE linearization validity)
+pub const LINEARIZATION_PERTURBATION_BOUND: f64 = 0.01;

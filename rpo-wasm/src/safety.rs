@@ -11,7 +11,7 @@ use rpo_core::pipeline::types::{PropagatorChoice, SafetyAnalysis};
 use rpo_core::pipeline::to_propagation_model;
 use rpo_core::types::{KeplerianElements, QuasiNonsingularROE};
 
-use crate::error::WasmError;
+use crate::error::{parse_epoch, WasmError};
 
 /// Compute the full safety analysis for a planned mission.
 ///
@@ -96,13 +96,7 @@ pub fn compute_avoidance(
     propagator: PropagatorChoice,
     config: ColaConfig,
 ) -> Result<AvoidanceManeuver, WasmError> {
-    // hifitime's Epoch parse error does not implement std::error::Error,
-    // so we construct WasmError directly (same pattern as rpo-cli/commands/propagate.rs).
-    let epoch: hifitime::Epoch = departure_epoch.parse().map_err(|e| WasmError {
-        code: crate::error::WasmErrorCode::Deserialization,
-        message: format!("departure_epoch is not valid ISO 8601: {e}"),
-        details: None,
-    })?;
+    let epoch = parse_epoch(&departure_epoch)?;
     let model = to_propagation_model(&propagator);
     rpo_core::mission::avoidance::compute_avoidance(
         &poca,

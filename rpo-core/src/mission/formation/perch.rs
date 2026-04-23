@@ -20,7 +20,10 @@ use crate::mission::types::PerchGeometry;
 use crate::types::{KeplerianElements, QuasiNonsingularROE};
 
 use super::safety_envelope::compute_safety_projection;
-use super::{EiAlignment, FormationDesignError, SafePerch, SafetyRequirements};
+use super::{
+    EiAlignment, FormationDesignError, LINEARIZATION_PERTURBATION_BOUND, SafePerch,
+    SafetyRequirements,
+};
 
 // ---------------------------------------------------------------------------
 // Public API
@@ -49,18 +52,25 @@ use super::{EiAlignment, FormationDesignError, SafePerch, SafetyRequirements};
 ///
 /// - `SingularGeometry` — V-bar/R-bar perch with zero offset
 /// - `InvalidChiefElements` — invalid chief orbital elements
-/// - `SeparationUnachievable` — requested separation exceeds linearization bound (Custom only)
+/// - `SeparationUnachievable` — requested separation would produce a
+///   perturbation norm exceeding the shared `LINEARIZATION_PERTURBATION_BOUND`
+///   (formation module constant, 0.01 dimensionless); reachable from both
+///   the V-bar/R-bar branch and the Custom branch (the latter via
+///   `compute_safety_projection`).
 ///
 /// # Validity regime
 ///
-/// Near-circular chief (e < ~0.1). V-bar/R-bar enrichment is a direct
-/// assignment (no linearization involved). Custom perch enrichment has
-/// the same linearization regime as `enrich_waypoint()`.
+/// Near-circular chief (e < ~0.1). Both branches enforce the same
+/// linearization envelope (`LINEARIZATION_PERTURBATION_BOUND`, D'Amico §2.3.4):
+/// V-bar/R-bar checks `sqrt(2) · de_nom` directly (since only `dey`/`diy`
+/// are modified); Custom delegates to `compute_safety_projection` which
+/// checks the full 6-vector perturbation norm.
 ///
 /// # References
 ///
 /// - D'Amico Eq. 2.23 (`d_min = a · min(|δe|, |δi|)` for parallel e/i)
 /// - D'Amico Eq. 2.32 (nominal safe configuration)
+/// - D'Amico §2.3.4 (ROE linearization validity)
 #[must_use = "enrichment result should be inspected"]
 pub fn enrich_perch(
     perch: &PerchGeometry,
@@ -86,6 +96,16 @@ pub fn enrich_perch(
 /// V-bar/R-bar baselines have zero e/i vectors, so enrichment directly
 /// assigns `dey` and `diy` to reach the target separation. The geometric
 /// offset (`dlambda` for V-bar, `da` for R-bar) is preserved.
+///
+/// # Errors
+///
+/// - [`FormationDesignError::SeparationUnachievable`] when `sqrt(2) · de_nom`
+///   would exceed [`LINEARIZATION_PERTURBATION_BOUND`]. Since only `dey` and
+///   `diy` are modified, the 6-vector perturbation norm reduces to
+///   `sqrt(dey² + diy²) = sqrt(2) · de_nom`; this gate matches the envelope
+///   `compute_safety_projection` enforces for the Custom branch, keeping the
+///   two paths behaviorally indistinguishable at the boundary. See D'Amico
+///   §2.3.4.
 fn enrich_simple_perch(
     perch: &PerchGeometry,
     chief_mean: &KeplerianElements,
@@ -98,6 +118,20 @@ fn enrich_simple_perch(
 
     // 2. Dimensionless target magnitude
     let de_nom = requirements.min_separation_km / chief_mean.a_km;
+
+    // Validity gate — identical envelope to `compute_safety_projection`.
+    // The enrichment only modifies `dey` and `diy`, so the 6-vector perturbation
+    // norm is `sqrt(dey² + diy²) = sqrt(2) · de_nom`. Reject when that norm would
+    // exceed the shared linearization bound. D'Amico §2.3.4.
+    let perturbation_norm = std::f64::consts::SQRT_2 * de_nom;
+    if perturbation_norm > LINEARIZATION_PERTURBATION_BOUND {
+        let achievable_km =
+            chief_mean.a_km * LINEARIZATION_PERTURBATION_BOUND / std::f64::consts::SQRT_2;
+        return Err(FormationDesignError::SeparationUnachievable {
+            requested_km: requirements.min_separation_km,
+            achievable_km,
+        });
+    }
 
     // 3. Resolve alignment and set dey, diy (D'Amico Eq. 2.32)
     //    Auto → Parallel for zero-baseline e/i (simple perch has no prior e/i to compare).
@@ -484,4 +518,183 @@ mod tests {
         );
     }
 
+    // -----------------------------------------------------------------------
+    // Validity-gate tests (Phase 2c)
+    //
+    // `enrich_simple_perch` now rejects requests whose perturbation norm
+    // would exceed `LINEARIZATION_PERTURBATION_BOUND`, matching the envelope
+    // `compute_safety_projection` has always enforced for the Custom branch.
+    // The four tests below pin the inequality direction, confirm the two
+    // branches agree at the boundary, and prevent the V-bar/R-bar path from
+    // silently drifting past validity in the future.
+    // -----------------------------------------------------------------------
+
+    /// V-bar perch at D'Amico Table 2.1 orbit (a ≈ 7078.135 km) with
+    /// `min_separation_km = 100.0` has `sqrt(2) · de_nom ≈ 2.0e-2`, well past
+    /// `LINEARIZATION_PERTURBATION_BOUND = 0.01`. The engine must reject with
+    /// `SeparationUnachievable` reporting the exact symbolic boundary
+    /// `a · bound / sqrt(2)`.
+    ///
+    /// Regression target: achievable ≈ 7078.135 · 0.01 / sqrt(2) ≈ 50.05 km.
+    #[test]
+    fn vbar_perch_rejects_separation_past_validity() {
+        let chief = damico_table21_chief();
+        let perch = PerchGeometry::VBar { along_track_km: 1.0 };
+        let reqs = SafetyRequirements {
+            min_separation_km: 100.0,
+            alignment: EiAlignment::Parallel,
+        };
+
+        let result = enrich_perch(&perch, &chief, &reqs);
+        let expected_achievable =
+            chief.a_km * LINEARIZATION_PERTURBATION_BOUND / std::f64::consts::SQRT_2;
+
+        match result {
+            Err(FormationDesignError::SeparationUnachievable {
+                requested_km,
+                achievable_km,
+            }) => {
+                assert!(
+                    (requested_km - 100.0).abs() < ENRICHMENT_SEPARATION_TOL,
+                    "requested_km = {requested_km}, expected 100.0"
+                );
+                assert!(
+                    (achievable_km - expected_achievable).abs() < ENRICHMENT_SEPARATION_TOL,
+                    "achievable_km = {achievable_km}, expected {expected_achievable}"
+                );
+            }
+            other => panic!("expected SeparationUnachievable, got {other:?}"),
+        }
+    }
+
+    /// R-bar variant of `vbar_perch_rejects_separation_past_validity`.
+    /// Same algebra (only `dey`/`diy` are modified for R-bar too), so the
+    /// same symbolic achievable bound applies.
+    #[test]
+    fn rbar_perch_rejects_separation_past_validity() {
+        let chief = damico_table21_chief();
+        let perch = PerchGeometry::RBar { radial_km: 0.5 };
+        let reqs = SafetyRequirements {
+            min_separation_km: 100.0,
+            alignment: EiAlignment::Parallel,
+        };
+
+        let result = enrich_perch(&perch, &chief, &reqs);
+        let expected_achievable =
+            chief.a_km * LINEARIZATION_PERTURBATION_BOUND / std::f64::consts::SQRT_2;
+
+        match result {
+            Err(FormationDesignError::SeparationUnachievable {
+                achievable_km, ..
+            }) => {
+                assert!(
+                    (achievable_km - expected_achievable).abs() < ENRICHMENT_SEPARATION_TOL,
+                    "achievable_km = {achievable_km}, expected {expected_achievable}"
+                );
+            }
+            other => panic!("expected SeparationUnachievable, got {other:?}"),
+        }
+    }
+
+    /// At `min_separation_km = a · bound / sqrt(2)` (the strict symbolic
+    /// boundary), the gate must accept — pins the inequality as strict `>`
+    /// and guards against future regressions flipping to `>=`.
+    ///
+    /// Tolerance: `ENRICHMENT_SEPARATION_TOL` = 1e-10 km on the enriched
+    /// magnitude, matching existing V-bar/R-bar tests.
+    #[test]
+    fn vbar_perch_accepts_separation_at_validity_edge() {
+        let chief = damico_table21_chief();
+        let edge_km = chief.a_km * LINEARIZATION_PERTURBATION_BOUND / std::f64::consts::SQRT_2;
+        let perch = PerchGeometry::VBar { along_track_km: 1.0 };
+        let reqs = SafetyRequirements {
+            min_separation_km: edge_km,
+            alignment: EiAlignment::Parallel,
+        };
+
+        let result = enrich_perch(&perch, &chief, &reqs).expect(
+            "request at the symbolic validity edge must be accepted (strict `>` boundary)",
+        );
+
+        // Regression target: min_rc_separation_km = a · (edge_km / a) = edge_km.
+        assert!(
+            (result.min_rc_separation_km - edge_km).abs() < ENRICHMENT_SEPARATION_TOL,
+            "min_rc_separation_km = {}, expected {edge_km}",
+            result.min_rc_separation_km
+        );
+    }
+
+    /// Architectural invariant: both enrichment branches gate on the same
+    /// `LINEARIZATION_PERTURBATION_BOUND` constant. V-bar uses a tight
+    /// shape-aware bound (`a · BOUND / sqrt(2)`) because its perturbation has
+    /// a known two-component shape; Custom uses the loose norm bound
+    /// (`a · BOUND`) because `compute_safety_projection` reports against the
+    /// 6-norm directly without assuming a fixed shape. Both are derived from
+    /// the same constant — if future work harmonizes the reporting, update
+    /// this test to match and note the decision in the PR.
+    ///
+    /// This test is the sentinel that catches **drift in the gating
+    /// constant itself**: if someone introduces a second threshold for the
+    /// V-bar path (e.g. `0.005`), the V-bar assertion fails against the
+    /// symbolic `BOUND / sqrt(2)` expected value. If someone relaxes
+    /// `compute_safety_projection`'s clamp, the Custom assertion fails.
+    #[test]
+    fn simple_and_custom_reject_at_same_threshold() {
+        let chief = damico_table21_chief();
+        let reqs = SafetyRequirements {
+            min_separation_km: 100.0,
+            alignment: EiAlignment::Parallel,
+        };
+
+        // V-bar baseline: geometric perch has zero e/i (same shape as the
+        // zero-e/i Custom baseline built below).
+        let vbar = PerchGeometry::VBar { along_track_km: 1.0 };
+        let vbar_err = enrich_perch(&vbar, &chief, &reqs).expect_err(
+            "V-bar at 100 km must reject at the validity boundary",
+        );
+
+        // Custom baseline: matches `perch_to_roe(vbar)` — zero e/i, nonzero dlambda.
+        let custom_baseline = perch_to_roe(&vbar, &chief).expect("geometric V-bar is valid");
+        let custom = PerchGeometry::Custom(custom_baseline);
+        let custom_err = enrich_perch(&custom, &chief, &reqs).expect_err(
+            "Custom zero-e/i at 100 km must reject at the validity boundary",
+        );
+
+        let vbar_expected = chief.a_km * LINEARIZATION_PERTURBATION_BOUND / std::f64::consts::SQRT_2;
+        let custom_expected = chief.a_km * LINEARIZATION_PERTURBATION_BOUND;
+
+        match (vbar_err, custom_err) {
+            (
+                FormationDesignError::SeparationUnachievable {
+                    achievable_km: vbar_cap,
+                    ..
+                },
+                FormationDesignError::SeparationUnachievable {
+                    achievable_km: custom_cap,
+                    ..
+                },
+            ) => {
+                // V-bar reports tight shape-aware bound.
+                assert!(
+                    (vbar_cap - vbar_expected).abs() < ENRICHMENT_SEPARATION_TOL,
+                    "V-bar achievable = {vbar_cap} km; expected a · BOUND / sqrt(2) = {vbar_expected}"
+                );
+                // Custom reports loose 6-norm bound (compute_safety_projection convention).
+                assert!(
+                    (custom_cap - custom_expected).abs() < ENRICHMENT_SEPARATION_TOL,
+                    "Custom achievable = {custom_cap} km; expected a · BOUND = {custom_expected}"
+                );
+                // And the loose bound must always exceed the tight one —
+                // i.e. nothing the V-bar path rejects would have passed the
+                // Custom path's clamp on the same baseline.
+                assert!(
+                    custom_cap > vbar_cap,
+                    "loose Custom bound ({custom_cap}) should exceed tight V-bar bound ({vbar_cap})"
+                );
+            }
+            (vbar_other, custom_other) => panic!(
+                "expected SeparationUnachievable from both; got vbar={vbar_other:?}, custom={custom_other:?}"
+            ),
+        }
+    }
 }

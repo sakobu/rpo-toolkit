@@ -3053,6 +3053,7 @@ dependencies = [
  "anise",
  "axum",
  "futures-util",
+ "hifitime",
  "rpo-core",
  "rpo-nyx",
  "serde",

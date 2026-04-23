@@ -23,4 +23,6 @@ anise = { workspace = true }
 [dev-dependencies]
 tokio-tungstenite = "0.26"
 futures-util = "0.3"
+rpo-core = { path = "../rpo-core", features = ["test-fixtures"] }
 rpo-nyx = { path = "../rpo-nyx", features = ["test-support"] }
+hifitime = { workspace = true }

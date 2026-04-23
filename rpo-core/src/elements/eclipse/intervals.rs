@@ -235,7 +235,7 @@ mod tests {
         let n_steps: u32 = 360;
         let period_s = base.period().expect("period computation");
         let dt = period_s / f64::from(n_steps);
-        let mut points = Vec::with_capacity(n_steps as usize);
+        let mut points = Vec::with_capacity(n_steps as usize); // u32 → usize: always safe (usize ≥ 32 bits)
         for k in 0..n_steps {
             let t = f64::from(k) * dt;
             let m = f64::from(k) * TWO_PI / f64::from(n_steps);

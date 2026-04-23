@@ -67,7 +67,7 @@ impl ServerError {
 
     fn code_and_detail(&self) -> (ServerErrorCode, Option<serde_json::Value>) {
         match self {
-            Self::Lambert(e) => (ServerErrorCode::LambertFailure, lambert_detail(e)),
+            Self::Lambert(e) => (ServerErrorCode::LambertFailure, Some(lambert_detail(e))),
             Self::NyxBridge(_) => (ServerErrorCode::NyxBridgeError, None),
             Self::Validation(_) => (ServerErrorCode::ValidationError, None),
             Self::MonteCarlo(_) => (ServerErrorCode::MonteCarloError, None),
@@ -85,15 +85,23 @@ impl ServerError {
 }
 
 /// Extract structured diagnostic detail from Lambert errors.
-fn lambert_detail(err: &LambertError) -> Option<serde_json::Value> {
+///
+/// Exhaustive over `LambertError` so new upstream variants surface a compile
+/// error here rather than silently dropping diagnostic fields on the wire.
+fn lambert_detail(err: &LambertError) -> serde_json::Value {
     match err {
         LambertError::IzzoConvergenceFailure { details } => {
-            Some(serde_json::json!({ "reason": "convergence_failure", "details": details }))
+            serde_json::json!({ "reason": "convergence_failure", "details": details })
         }
         LambertError::InvalidInput { details } => {
-            Some(serde_json::json!({ "reason": "invalid_input", "details": details }))
+            serde_json::json!({ "reason": "invalid_input", "details": details })
         }
-        _ => None,
+        LambertError::NonPositiveTimeOfFlight { tof_s } => {
+            serde_json::json!({ "reason": "non_positive_tof", "tof_s": tof_s })
+        }
+        LambertError::IdenticalPositions { separation_km } => {
+            serde_json::json!({ "reason": "identical_positions", "separation_km": separation_km })
+        }
     }
 }
 

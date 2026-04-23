@@ -2,6 +2,18 @@
 
 use serde::{Deserialize, Serialize};
 
+/// Recommended δr/r threshold for proximity classification (dimensionless).
+///
+/// D'Amico §2.3.4: at δr/r ~ 0.005, second-order ROE terms are ~2.5×10⁻⁵
+/// of orbit radius, comparable to J2 modeling residuals. Above this value
+/// the linearization starts to accumulate meaningful error, so this is the
+/// recommended default threshold. Callers may override (e.g., via
+/// `ProximityConfig { roe_threshold: ... }`) but should cite the reason.
+///
+/// Exposed to the frontend via [`crate::engine_constants::EngineConstants`]
+/// as `roe_threshold_default`.
+pub const ROE_THRESHOLD_DEFAULT: f64 = 0.005;
+
 /// Configuration for mission flow decision-making.
 ///
 /// Controls the threshold at which two spacecraft are considered
@@ -10,17 +22,17 @@ use serde::{Deserialize, Serialize};
 #[cfg_attr(feature = "wasm", tsify(into_wasm_abi, from_wasm_abi))]
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 pub struct ProximityConfig {
-    /// Max dimensionless δr/r for ROE linearization validity (default: 0.005).
+    /// Max dimensionless δr/r for ROE linearization validity.
     ///
-    /// Based on D'Amico Sec. 2.3.4: at δr/r ~ 0.005, second-order terms
-    /// are ~2.5×10⁻⁵ of orbit radius, comparable to J2 modeling residuals.
+    /// Default: [`ROE_THRESHOLD_DEFAULT`] (0.005). See that constant's
+    /// docs for D'Amico §2.3.4 justification.
     pub roe_threshold: f64,
 }
 
 impl Default for ProximityConfig {
     fn default() -> Self {
         Self {
-            roe_threshold: 0.005,
+            roe_threshold: ROE_THRESHOLD_DEFAULT,
         }
     }
 }

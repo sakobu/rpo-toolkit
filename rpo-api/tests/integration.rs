@@ -214,15 +214,15 @@ fn proximity_states() -> (Value, Value) {
 async fn transfer_far_field() {
     let url = start_test_server().await;
     let (mut ws, _) = connect_async(&url).await.unwrap();
-    let (chief, deputy) = far_field_states();
+    let (chief_eci, deputy_eci) = far_field_states();
 
     let resp = send_recv(
         &mut ws,
         json!({
             "type": "compute_transfer",
             "request_id": 1,
-            "chief": chief,
-            "deputy": deputy,
+            "chief_eci": chief_eci,
+            "deputy_eci": deputy_eci,
             "perch": { "v_bar": { "along_track_km": 1.0 } },
             "proximity": { "roe_threshold": 0.005 },
             "lambert_tof_s": 3600.0,
@@ -251,15 +251,15 @@ async fn transfer_far_field() {
 async fn transfer_proximity() {
     let url = start_test_server().await;
     let (mut ws, _) = connect_async(&url).await.unwrap();
-    let (chief, deputy) = proximity_states();
+    let (chief_eci, deputy_eci) = proximity_states();
 
     let resp = send_recv(
         &mut ws,
         json!({
             "type": "compute_transfer",
             "request_id": 2,
-            "chief": chief,
-            "deputy": deputy,
+            "chief_eci": chief_eci,
+            "deputy_eci": deputy_eci,
             "perch": { "v_bar": { "along_track_km": 1.0 } },
             "proximity": { "roe_threshold": 0.005 },
             "lambert_tof_s": 3600.0,
@@ -284,6 +284,115 @@ async fn transfer_proximity() {
     );
 }
 
+/// Proximity + `safety_requirements`: wire-contract test for the `enrichment` field.
+///
+/// Asserts that `compute_transfer` with a satisfiable `safety_requirements`
+/// round-trips an `enrichment.perch.status = "enriched"` field on the wire.
+/// Exercises the serde boundary between the handler result and `ServerMessage::TransferResult`.
+#[tokio::test]
+async fn transfer_with_safety_requirements_enriches_on_wire() {
+    let url = start_test_server().await;
+    let (mut ws, _) = connect_async(&url).await.unwrap();
+    let (chief_eci, deputy_eci) = proximity_states();
+
+    let resp = send_recv(
+        &mut ws,
+        json!({
+            "type": "compute_transfer",
+            "request_id": 3,
+            "chief_eci": chief_eci,
+            "deputy_eci": deputy_eci,
+            "perch": { "v_bar": { "along_track_km": 1.0 } },
+            "proximity": { "roe_threshold": 0.005 },
+            "lambert_tof_s": 3600.0,
+            "lambert_config": { "direction": "auto", "revolutions": 0 },
+            "safety_requirements": { "min_separation_km": 0.15, "alignment": "parallel" }
+        }),
+    )
+    .await;
+
+    assert_eq!(resp["type"], "transfer_result", "got: {resp}");
+    assert_eq!(resp["request_id"], 3);
+    assert_eq!(
+        resp["enrichment"]["perch"]["status"], "enriched",
+        "safety_requirements within linearization bound should enrich: {resp}"
+    );
+    assert_eq!(
+        resp["enrichment"]["requirements"]["alignment"], "parallel",
+        "resolved alignment should be present on the wire: {resp}"
+    );
+}
+
+/// Proximity + `safety_requirements` beyond the linearization bound must
+/// produce `enrichment.perch.status = "fallback"` on the wire with the
+/// `separation_unachievable` reason, rather than dropping the enrichment field.
+#[tokio::test]
+async fn transfer_with_safety_requirements_falls_back_on_wire() {
+    let url = start_test_server().await;
+    let (mut ws, _) = connect_async(&url).await.unwrap();
+    let (chief_eci, deputy_eci) = proximity_states();
+
+    let resp = send_recv(
+        &mut ws,
+        json!({
+            "type": "compute_transfer",
+            "request_id": 4,
+            "chief_eci": chief_eci,
+            "deputy_eci": deputy_eci,
+            "perch": { "v_bar": { "along_track_km": 1.0 } },
+            "proximity": { "roe_threshold": 0.005 },
+            "lambert_tof_s": 3600.0,
+            "lambert_config": { "direction": "auto", "revolutions": 0 },
+            // 100 km separation exceeds the ~48 km linearization cap for an
+            // ISS-like chief (a ≈ 6778 km) — forces a fallback.
+            "safety_requirements": { "min_separation_km": 100.0, "alignment": "parallel" }
+        }),
+    )
+    .await;
+
+    assert_eq!(resp["type"], "transfer_result", "got: {resp}");
+    assert_eq!(resp["request_id"], 4);
+    assert_eq!(
+        resp["enrichment"]["perch"]["status"], "fallback",
+        "separation beyond linearization bound should fall back: {resp}"
+    );
+    assert!(
+        resp["enrichment"]["perch"]["unenriched_roe"].is_object(),
+        "fallback must carry the unenriched geometric baseline ROE: {resp}"
+    );
+}
+
+/// Proximity + no `safety_requirements`: wire must omit the `enrichment` field
+/// entirely (serde `skip_serializing_if` on `Option::is_none`).
+#[tokio::test]
+async fn transfer_without_safety_requirements_omits_enrichment_on_wire() {
+    let url = start_test_server().await;
+    let (mut ws, _) = connect_async(&url).await.unwrap();
+    let (chief_eci, deputy_eci) = proximity_states();
+
+    let resp = send_recv(
+        &mut ws,
+        json!({
+            "type": "compute_transfer",
+            "request_id": 5,
+            "chief_eci": chief_eci,
+            "deputy_eci": deputy_eci,
+            "perch": { "v_bar": { "along_track_km": 1.0 } },
+            "proximity": { "roe_threshold": 0.005 },
+            "lambert_tof_s": 3600.0,
+            "lambert_config": { "direction": "auto", "revolutions": 0 }
+        }),
+    )
+    .await;
+
+    assert_eq!(resp["type"], "transfer_result", "got: {resp}");
+    assert_eq!(resp["request_id"], 5);
+    assert!(
+        resp["enrichment"].is_null(),
+        "no safety_requirements → enrichment field must be absent/null: {resp}"
+    );
+}
+
 // ===========================================================================
 // Drag extraction (ExtractDrag)
 // ===========================================================================
@@ -296,7 +405,7 @@ async fn transfer_proximity() {
 async fn extract_drag_identical_configs_returns_zero() {
     let url = start_test_server().await;
     let (mut ws, _) = connect_async(&url).await.unwrap();
-    let (chief, deputy) = proximity_states();
+    let (chief_eci, deputy_eci) = proximity_states();
 
     // Identical configs → DragConfig::zero() short-circuit.
     // Field names match SpacecraftConfig: dry_mass_kg, drag_area_m2, coeff_drag,
@@ -314,8 +423,8 @@ async fn extract_drag_identical_configs_returns_zero() {
         json!({
             "type": "extract_drag",
             "request_id": 10,
-            "chief": chief,
-            "deputy": deputy,
+            "chief_eci": chief_eci,
+            "deputy_eci": deputy_eci,
             "chief_config": config,
             "deputy_config": config
         }),
@@ -358,8 +467,8 @@ async fn extract_drag_different_configs() {
     let msg = json!({
         "type": "extract_drag",
         "request_id": 40,
-        "chief": serde_json::to_value(input.base.chief).unwrap(),
-        "deputy": serde_json::to_value(input.base.deputy).unwrap(),
+        "chief_eci": serde_json::to_value(input.base.chief).unwrap(),
+        "deputy_eci": serde_json::to_value(input.base.deputy).unwrap(),
         "chief_config": serde_json::to_value(chief_config).unwrap(),
         "deputy_config": serde_json::to_value(deputy_config).unwrap()
     });
@@ -414,8 +523,8 @@ async fn validate_mission_roundtrip() {
         "type": "validate",
         "request_id": 20,
         "mission": serde_json::to_value(&output.mission).unwrap(),
-        "chief": serde_json::to_value(input.base.chief).unwrap(),
-        "deputy": serde_json::to_value(input.base.deputy).unwrap(),
+        "chief_eci": serde_json::to_value(input.base.chief).unwrap(),
+        "deputy_eci": serde_json::to_value(input.base.deputy).unwrap(),
         "chief_config": serde_json::to_value(chief_config).unwrap(),
         "deputy_config": serde_json::to_value(deputy_config).unwrap(),
         "samples_per_leg": 2
@@ -474,8 +583,8 @@ async fn mc_ensemble_roundtrip() {
         "type": "run_mc",
         "request_id": 30,
         "mission": serde_json::to_value(&output.mission).unwrap(),
-        "chief": serde_json::to_value(input.base.chief).unwrap(),
-        "deputy": serde_json::to_value(input.base.deputy).unwrap(),
+        "chief_eci": serde_json::to_value(input.base.chief).unwrap(),
+        "deputy_eci": serde_json::to_value(input.base.deputy).unwrap(),
         "chief_config": serde_json::to_value(chief_config).unwrap(),
         "deputy_config": serde_json::to_value(deputy_config).unwrap(),
         "mission_config": serde_json::to_value(&input.base.config).unwrap(),
@@ -533,14 +642,14 @@ async fn cancel_without_active_job() {
     assert_eq!(resp["request_id"], 99);
 
     // Connection should still be alive — send a transfer to verify.
-    let (chief, deputy) = proximity_states();
+    let (chief_eci, deputy_eci) = proximity_states();
     let resp = send_recv(
         &mut ws,
         json!({
             "type": "compute_transfer",
             "request_id": 100,
-            "chief": chief,
-            "deputy": deputy,
+            "chief_eci": chief_eci,
+            "deputy_eci": deputy_eci,
             "perch": { "v_bar": { "along_track_km": 1.0 } },
             "proximity": { "roe_threshold": 0.005 },
             "lambert_tof_s": 3600.0,
@@ -577,8 +686,8 @@ async fn cancel_active_validation() {
         "type": "validate",
         "request_id": 50,
         "mission": serde_json::to_value(&output.mission).unwrap(),
-        "chief": serde_json::to_value(input.base.chief).unwrap(),
-        "deputy": serde_json::to_value(input.base.deputy).unwrap(),
+        "chief_eci": serde_json::to_value(input.base.chief).unwrap(),
+        "deputy_eci": serde_json::to_value(input.base.deputy).unwrap(),
         "chief_config": serde_json::to_value(chief_config).unwrap(),
         "deputy_config": serde_json::to_value(deputy_config).unwrap(),
         "samples_per_leg": 2
@@ -651,8 +760,8 @@ async fn cancel_active_drag_no_late_result() {
     let drag_msg = json!({
         "type": "extract_drag",
         "request_id": 77,
-        "chief": serde_json::to_value(input.base.chief).unwrap(),
-        "deputy": serde_json::to_value(input.base.deputy).unwrap(),
+        "chief_eci": serde_json::to_value(input.base.chief).unwrap(),
+        "deputy_eci": serde_json::to_value(input.base.deputy).unwrap(),
         "chief_config": serde_json::to_value(chief_config).unwrap(),
         "deputy_config": serde_json::to_value(deputy_config).unwrap()
     });
