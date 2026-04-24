@@ -63,7 +63,24 @@ mod tests {
     use rpo_core::elements::keplerian_conversions::keplerian_to_state;
     use rpo_core::mission::formation::{EiAlignment, PerchEnrichmentResult};
     use rpo_core::pipeline::default_perch;
-    use rpo_core::test_helpers::iss_like_elements;
+    use rpo_core::propagation::lambert::TransferDirection;
+    use rpo_core::test_helpers::{far_field_chief, far_field_deputy, iss_like_elements};
+
+    /// Single-rev LEO time of flight (1 hour). Used for default proximity
+    /// and direction-toggle tests where a 1 hr arc is long enough to
+    /// resolve a meaningful Δv but short enough to stay comfortably below
+    /// one orbital period.
+    const SINGLE_REV_TOF_S: f64 = 3600.0;
+
+    /// Multi-rev LEO time of flight (4 hours ≈ 2.6 LEO periods). Long
+    /// enough to accommodate a 1-rev Izzo solution for the canonical
+    /// far-field geometry without running near the minimum-TOF bound.
+    const MULTI_REV_TOF_S: f64 = 4.0 * SINGLE_REV_TOF_S;
+
+    /// Canonical V-bar perch offset (km). Matches the frontend default
+    /// and exercises the perch-to-ROE mapping without touching the
+    /// linearization bound.
+    const PERCH_VBAR_ALONG_TRACK_KM: f64 = 1.0;
 
     // Proximity pair: small δa and phase offsets keep δr/r below the default
     // 5e-3 threshold, exercising the enrichment path without a Lambert solve.
@@ -78,6 +95,24 @@ mod tests {
         (chief_eci, deputy_eci)
     }
 
+    fn call_far_field(direction: TransferDirection) -> TransferResult {
+        call_far_field_config(LambertConfig { direction, revolutions: 0 }, SINGLE_REV_TOF_S)
+    }
+
+    fn call_far_field_config(lambert_config: LambertConfig, tof_s: f64) -> TransferResult {
+        let (transfer, _) = handle_compute_transfer(
+            far_field_chief(),
+            far_field_deputy(),
+            PerchGeometry::VBar { along_track_km: PERCH_VBAR_ALONG_TRACK_KM },
+            ProximityConfig::default(),
+            tof_s,
+            lambert_config,
+            None,
+        )
+        .expect("far-field Lambert should succeed");
+        transfer
+    }
+
     fn call(
         safety: Option<SafetyRequirements>,
     ) -> (TransferResult, Option<EnrichmentSuggestion>) {
@@ -87,7 +122,7 @@ mod tests {
             deputy_eci,
             default_perch(),
             ProximityConfig::default(),
-            3600.0,
+            SINGLE_REV_TOF_S,
             LambertConfig::default(),
             safety,
         )
@@ -207,6 +242,81 @@ mod tests {
             &transfer.plan.perch_roe,
             &baseline.plan.perch_roe,
             "transfer.plan.perch_roe vs. geometric baseline",
+        );
+    }
+
+    /// For the canonical far-field fixture (`far_field_chief` /
+    /// `far_field_deputy` in `rpo_core::test_helpers`) the transfer sweep
+    /// angle is well below π, so a correct `Auto` dispatch should pick
+    /// short-way and produce the same ΔV as an explicit `ShortWay`.
+    /// nyx-space 2.3.1 also happens to return short-way here — but via the
+    /// buggy `r_init[1].atan2(r_final[1])` expression in
+    /// `TransferKind::Auto`, not because the computation is correct. A
+    /// tight tolerance (1 mm/s) is used instead of `to_bits()` equality so
+    /// that once nyx fixes the typo and `Auto` takes a different code
+    /// path, this test still passes as long as the direction pick remains
+    /// correct. If the assertion regresses, re-run with both directions
+    /// and check whether `Auto` now flips to `LongWay` for this geometry
+    /// before widening the tolerance.
+    #[test]
+    fn direction_auto_matches_short_way_for_far_field() {
+        const AUTO_SHORT_TOLERANCE_KM_S: f64 = 1.0e-6;
+
+        let auto = call_far_field(TransferDirection::Auto);
+        let short = call_far_field(TransferDirection::ShortWay);
+        let delta_km_s = (auto.lambert_dv_km_s - short.lambert_dv_km_s).abs();
+        assert!(
+            delta_km_s < AUTO_SHORT_TOLERANCE_KM_S,
+            "Auto ΔV ({:.9} km/s) should match ShortWay ({:.9} km/s) within {:.0e} km/s for this geometry; got Δ = {:.9} km/s",
+            auto.lambert_dv_km_s,
+            short.lambert_dv_km_s,
+            AUTO_SHORT_TOLERANCE_KM_S,
+            delta_km_s,
+        );
+    }
+
+    /// For the canonical far-field fixture, flipping to `LongWay` must
+    /// produce a measurably different ΔV. A 10 m/s floor is conservative
+    /// for a 1-hour single-rev transfer; if this regresses, the Direction
+    /// toggle has silently become a no-op across the wire or in nyx. This
+    /// is the regression guard for the Izzo `|| retrograde`
+    /// geometry-coupling bug that made all three directions collapse.
+    #[test]
+    fn direction_long_way_differs_from_short_way() {
+        const MIN_DV_DIFFERENCE_KM_S: f64 = 0.010;
+
+        let short = call_far_field(TransferDirection::ShortWay);
+        let long = call_far_field(TransferDirection::LongWay);
+        let delta_km_s = (long.lambert_dv_km_s - short.lambert_dv_km_s).abs();
+        assert!(
+            delta_km_s > MIN_DV_DIFFERENCE_KM_S,
+            "LongWay ΔV ({:.6} km/s) should differ from ShortWay ({:.6} km/s) by > 10 m/s; got Δ = {:.6} km/s",
+            long.lambert_dv_km_s,
+            short.lambert_dv_km_s,
+            delta_km_s,
+        );
+    }
+
+    /// Multi-rev (`revolutions > 0`) routes through Izzo with
+    /// `TransferKind::NRevs`, which has no `long_way` variant. Direction is
+    /// dropped silently. This test pins that behavior so the UI team knows to
+    /// grey out the Direction control whenever revolutions > 0.
+    #[test]
+    fn multi_rev_ignores_direction() {
+        let short = call_far_field_config(
+            LambertConfig { direction: TransferDirection::ShortWay, revolutions: 1 },
+            MULTI_REV_TOF_S,
+        );
+        let long = call_far_field_config(
+            LambertConfig { direction: TransferDirection::LongWay, revolutions: 1 },
+            MULTI_REV_TOF_S,
+        );
+        assert_eq!(
+            short.lambert_dv_km_s.to_bits(),
+            long.lambert_dv_km_s.to_bits(),
+            "multi-rev must ignore direction (short={}, long={})",
+            short.lambert_dv_km_s,
+            long.lambert_dv_km_s,
         );
     }
 }

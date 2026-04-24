@@ -136,6 +136,37 @@ export function TransferPanel() {
     return unsub;
   }, []);
 
+  // Discrete toggles (Direction, Perch reference) need explicit submits.
+  // `useFormAutoSubmission` gates on `isDirty`, which compares current values
+  // against `initialValues` — clicking back to an initial value leaves the
+  // form clean and the submit is skipped, freezing Δv on the previous result.
+  // A handleSubmit() call inside the onClick doesn't work either: use-form
+  // reads values from `formStateRef.current`, which only syncs to the new
+  // state in a useEffect. Firing the submit from our own effect guarantees
+  // the ref is current by the time handleSubmit runs.
+  //
+  // A value-based ref (not a did-mount flag) is required: StrictMode
+  // double-invokes effects, so a bare `didMountRef` would fire a submit on
+  // the second invocation — before the WebSocket connects.
+  const lastSubmittedToggleRef = useRef({
+    direction: form.values.direction,
+    perch_mode: form.values.perch_mode,
+  });
+  useEffect(() => {
+    if (
+      lastSubmittedToggleRef.current.direction === form.values.direction &&
+      lastSubmittedToggleRef.current.perch_mode === form.values.perch_mode
+    ) {
+      return;
+    }
+    lastSubmittedToggleRef.current = {
+      direction: form.values.direction,
+      perch_mode: form.values.perch_mode,
+    };
+    const f = formRef.current;
+    if (f.isValid && !f.isSubmitting) void f.handleSubmit();
+  }, [form.values.direction, form.values.perch_mode]);
+
   // Two-beat confirm on fallback enrichment. Keying the pending state to the
   // (enrichment, transfer) pair lets `confirmPending` derive to false when the
   // solver re-runs — no setState-in-effect needed to reset it.
@@ -166,6 +197,12 @@ export function TransferPanel() {
   };
 
   const canAccept = transfer !== null && !form.isSubmitting && lambertError === null;
+
+  // Multi-rev (revolutions > 0) routes through nyx Izzo with
+  // `TransferKind::NRevs`, which has no long-way variant; direction is
+  // dropped server-side. See `rpo-nyx/src/lambert.rs` and the
+  // `multi_rev_ignores_direction` regression test.
+  const directionLocked = form.values.revolutions > 0;
 
   return (
     <form onSubmit={(e) => void form.handleSubmit(e)} className="flex flex-col gap-2.5">
@@ -237,32 +274,40 @@ export function TransferPanel() {
       </FieldErrorContext>
 
       <FormField label="Direction" name="direction" form={form} idPrefix="lambert">
-        <div className="flex gap-0.5 text-[10px]">
-          {DIRECTION_VALUES.map((v) => (
-            <SegControl
-              key={v}
-              active={form.values.direction === v}
-              onClick={() => {
-                form.setFieldValue('direction', v);
-                form.setFieldTouched('direction');
-              }}
-            >
-              {DIRECTION_LABELS[v]}
-            </SegControl>
-          ))}
+        <div className="flex flex-col gap-1">
+          <div className="flex gap-0.5 text-[10px]">
+            {DIRECTION_VALUES.map((v) => (
+              <SegControl
+                key={v}
+                active={form.values.direction === v}
+                disabled={directionLocked}
+                onClick={() => {
+                  form.setFieldValue('direction', v);
+                  form.setFieldTouched('direction');
+                }}
+              >
+                {DIRECTION_LABELS[v]}
+              </SegControl>
+            ))}
+          </div>
+          {directionLocked ? (
+            <span className="font-mono text-[9px] tracking-wide text-text-dim normal-case">
+              multi-rev uses the short-way branch
+            </span>
+          ) : null}
         </div>
       </FormField>
 
-      <FormField label="Revolutions" name="revolutions" form={form} idPrefix="lambert">
-        <Input
-          type="number"
-          step={1}
+      <FieldErrorContext value={form.getFieldError('revolutions')}>
+        <Slider
+          label="revolutions"
+          readout={`${form.values.revolutions} rev`}
           min={REVOLUTIONS_MIN}
           max={REVOLUTIONS_MAX}
-          {...form.getFieldProps('revolutions')}
-          id="lambert-revolutions"
+          step={1}
+          {...form.getSliderProps('revolutions')}
         />
-      </FormField>
+      </FieldErrorContext>
 
       <DeltaVReadout transfer={transfer} enrichment={enrichment} submitting={form.isSubmitting} />
 

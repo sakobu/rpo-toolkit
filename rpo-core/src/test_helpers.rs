@@ -79,6 +79,35 @@ pub fn leo_800km_target_elements() -> KeplerianElements {
     }
 }
 
+/// Canonical user-facing chief state for the `TransferPanel` far-field
+/// geometry. The Rust value is the source of truth; the frontend sample
+/// `rpo-app/public/samples/chief.json` mirrors this state.
+///
+/// Geometry: LEO-class ECI state at `test_epoch()` with `r ≈ 6786 km`
+/// (408 km altitude), corresponding to an ISS-like orbit.
+pub fn far_field_chief() -> StateVector {
+    StateVector {
+        epoch: test_epoch(),
+        position_eci_km: Vector3::new(5_876.261, 3_392.661, 0.0),
+        velocity_eci_km_s: Vector3::new(-2.380_512, 4.123_167, 6.006_917),
+    }
+}
+
+/// Canonical user-facing deputy state for the `TransferPanel` far-field
+/// geometry, paired with [`far_field_chief`]. The frontend sample
+/// `rpo-app/public/samples/deputy-far-field.json` mirrors this state.
+///
+/// Geometry: LEO deputy offset from the chief by several thousand km so
+/// the resulting Lambert arc has a sweep angle well below π and a sign of
+/// `i_h.z` that the nyx 2.3.1 Izzo dispatch bug would otherwise collapse.
+pub fn far_field_deputy() -> StateVector {
+    StateVector {
+        epoch: test_epoch(),
+        position_eci_km: Vector3::new(5_199.839_421, 4_281.648_523, 1_398.070_066),
+        velocity_eci_km_s: Vector3::new(-3.993_103, 2.970_313, 5.764_54),
+    }
+}
+
 /// Test drag configuration with small nonzero rates.
 pub fn test_drag_config() -> DragConfig {
     DragConfig {

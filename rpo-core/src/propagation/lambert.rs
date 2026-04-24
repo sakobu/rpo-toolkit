@@ -1,9 +1,8 @@
 //! Lambert transfer types and error definitions.
 //!
-//! The solver functions (`solve_lambert`, `solve_lambert_with_config`,
-//! `solve_lambert_izzo`) that depend on nyx-space live in `rpo-nyx`.
-//! This module retains the domain types used by both the analytical
-//! engine and the nyx-backed solver.
+//! The solver functions (`solve_lambert`, `solve_lambert_with_config`) that
+//! depend on nyx-space live in `rpo-nyx`. This module retains the domain
+//! types used by both the analytical engine and the nyx-backed solver.
 
 use nalgebra::Vector3;
 use serde::{Deserialize, Serialize};
@@ -17,9 +16,17 @@ use crate::types::StateVector;
 #[serde(rename_all = "snake_case")]
 pub enum TransferDirection {
     /// Automatically determine short or long way based on geometry.
-    #[default]
+    ///
+    /// nyx-space 2.3.1's `TransferKind::Auto` dispatch has a typo in
+    /// `direction_of_motion`: `r_init[1].atan2(r_final[1])` — the second
+    /// argument should reference `r_final[0]`. Until the upstream fix
+    /// lands, the `Default` impl selects `ShortWay` so
+    /// `LambertConfig::default()` does not silently exercise the buggy
+    /// path. See `docs/nyx-lambert-bug-report.md` for the full diagnosis
+    /// and the tracking notes on when this default can be re-flipped.
     Auto,
     /// Short-way (prograde) transfer: transfer angle < 180°.
+    #[default]
     ShortWay,
     /// Long-way (retrograde) transfer: transfer angle > 180°.
     LongWay,
@@ -113,13 +120,19 @@ pub enum LambertError {
         /// Formatted upstream error message.
         details: String,
     },
-    /// Izzo solver failed to converge (opaque upstream error).
+    /// Lambert solver (Gooding or Izzo) failed to converge (opaque upstream error).
     ///
-    /// The nyx-space Izzo implementation does not expose iteration count or residual
-    /// values in its error type, so structured fields cannot be populated. The
-    /// formatted message is the best available diagnostic from the upstream crate.
-    #[error("Izzo convergence failure — {details}")]
-    IzzoConvergenceFailure {
+    /// nyx-space's Lambert solvers do not expose iteration count or residual
+    /// values in their error types, so structured fields cannot be populated.
+    /// The formatted message is the best available diagnostic from the
+    /// upstream crate. This is the only `String`-shaped field in
+    /// [`LambertError`] and must stay until nyx-space publishes a structured
+    /// solver error (or this workspace forks the nyx Lambert tools to own
+    /// the error type). Every other variant carries its diagnostic as a
+    /// typed numeric field, per the error-handling policy in the workspace
+    /// `CLAUDE.md`.
+    #[error("Lambert solver convergence failure — {details}")]
+    SolverConvergenceFailure {
         /// Formatted upstream error message.
         details: String,
     },

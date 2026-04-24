@@ -1,12 +1,21 @@
 //! Lambert transfer solver for far-field orbital transfers.
 //!
-//! Uses nyx-space's implementation of Izzo's method (Izzo, D. "Revisiting
-//! Lambert's Problem." *Celestial Mechanics and Dynamical Astronomy*, 2015)
-//! with multi-revolution transfers, C3 computation, and short/long-way selection.
+//! # Solver selection
 //!
-//! The simple [`solve_lambert`] API calls Izzo by default.
-//! Use [`solve_lambert_with_config`] for direction and multi-rev control,
-//! or call [`solve_lambert_izzo`] directly.
+//! - **Single-rev (`revolutions == 0`)**: nyx-space's Gooding solver. Gooding
+//!   honors `ShortWay`/`LongWay` unambiguously via a direction-of-motion
+//!   multiplier (`+1.0` / `-1.0`), so the Direction toggle maps to two
+//!   distinct Lambert solutions for *every* geometry.
+//! - **Multi-rev (`revolutions > 0`)**: Izzo's method. Gooding does not
+//!   support multi-rev; nyx returns `MultiRevNotSupported`.
+//!
+//! Izzo's short/long-way selection is coupled to the geometry check
+//! `i_h.z < 0.0 || retrograde` in nyx-space 2.3.1, so for any arc with
+//! naturally-retrograde geometry (`r_init × r_final` has negative z)
+//! `TransferKind::ShortWay` and `TransferKind::LongWay` collapse to the same
+//! solution. Gooding is unaffected by this and is the right choice for
+//! single-rev user-facing direction control. Multi-rev users get the
+//! documented Izzo behavior.
 //!
 //! # Crate boundary
 //!
@@ -14,17 +23,31 @@
 //! [`TransferDirection`]) live in `rpo_core::propagation::lambert` so they are
 //! available to WASM consumers. This module provides the nyx-backed solver
 //! functions that depend on nyx-space.
+//!
+//! # References
+//!
+//! - Gooding, R. H. "A procedure for the solution of Lambert's orbital
+//!   boundary-value problem." *Celestial Mechanics and Dynamical Astronomy*
+//!   48.2 (1990): 145–165. Used for single-rev (`revolutions == 0`);
+//!   nyx 2.3.1 `nyx_space::tools::lambert::gooding`.
+//! - Izzo, D. "Revisiting Lambert's Problem." *Celestial Mechanics and
+//!   Dynamical Astronomy* 121.1 (2015): 1–15. Used for multi-rev
+//!   (`revolutions > 0`); nyx 2.3.1 `nyx_space::tools::lambert::izzo`.
+//! - nyx-space 2.3.1 Izzo bug (`izzo.rs`): `TransferKind::Auto` uses
+//!   `r_init[1].atan2(r_final[1])` (typo — the second argument should
+//!   reference `r_final[0]`); `ShortWay`/`LongWay` dispatch is coupled to
+//!   `i_h.z < 0.0 || retrograde`, collapsing both branches for any arc
+//!   whose angular-momentum unit vector points to −z. See
+//!   `docs/nyx-lambert-bug-report.md` for the full diagnosis.
 
 use nalgebra::Vector3;
 use nyx_space::tools::lambert::{self, LambertInput, LambertSolution, TransferKind};
 
+use rpo_core::constants::LAMBERT_MIN_SEPARATION_KM;
 use rpo_core::propagation::lambert::{LambertConfig, LambertError, LambertTransfer, TransferDirection};
 use rpo_core::types::StateVector;
 
 use crate::nyx_bridge::state_to_orbit;
-
-/// Minimum position separation (km) between departure and arrival for a valid Lambert problem.
-const LAMBERT_MIN_SEPARATION_KM: f64 = 1e-6;
 
 /// Validate Lambert inputs.
 ///
@@ -47,8 +70,13 @@ fn validate_inputs(
 }
 
 /// Build a [`LambertTransfer`] from computed transfer velocities.
+///
+/// Pure math kernel — internal to `rpo-nyx` so it can keep the raw scalar
+/// argument list that mirrors the solver solution directly. Public solver
+/// entry points wrap this behind the struct-based API (see
+/// [`solve_lambert_with_config`]).
 #[must_use]
-pub fn build_transfer(
+pub(crate) fn build_transfer(
     departure: &StateVector,
     arrival: &StateVector,
     v1_vec: Vector3<f64>,
@@ -81,7 +109,12 @@ pub fn build_transfer(
     }
 }
 
-/// Convert a [`TransferDirection`] to a nyx [`TransferKind`].
+/// Map a [`TransferDirection`] onto the single-rev nyx [`TransferKind`]
+/// variants.
+///
+/// Caller must ensure single-rev context — multi-rev routes through
+/// `TransferKind::NRevs(u8)` directly in [`solve_lambert_with_config`] and
+/// bypasses this helper.
 fn direction_to_kind(direction: TransferDirection) -> TransferKind {
     match direction {
         TransferDirection::Auto => TransferKind::Auto,
@@ -114,20 +147,28 @@ fn transfer_from_solution(
 
 /// Solve Lambert's problem between two ECI states.
 ///
-/// Uses Izzo's method (nyx-space) with default configuration.
+/// Uses the default [`LambertConfig`] (short-way direction, single-rev) and
+/// routes through Gooding. The default was flipped away from `Auto` until
+/// nyx-space ships the upstream fix for `TransferKind::Auto` — see the
+/// module-level references.
 ///
 /// # Invariants
 /// - `arrival.epoch > departure.epoch` (positive time of flight)
-/// - Departure and arrival positions must be non-degenerate (separation > `LAMBERT_MIN_SEPARATION_KM`)
+/// - Departure and arrival positions must be non-degenerate
+///   (separation > [`LAMBERT_MIN_SEPARATION_KM`])
 /// - Transfer angle must not be exactly 0 or π (degenerate geometry)
 ///
 /// # Near-degenerate behavior
-/// For transfer angles within a few degrees of 0 or π, the Izzo solver
-/// may produce large Δv or return `IzzoConvergenceFailure`. The
-/// `near_180_degree_transfer` test documents this graceful degradation.
+/// For transfer angles within a few degrees of 0 or π, the underlying
+/// solver may produce large Δv or return
+/// [`LambertError::SolverConvergenceFailure`]. Gooding's convergence
+/// envelope is controlled by the upstream `LAMBERT_EPSILON_TIME` tolerance
+/// (nyx 2.3.1: `1e-4 s`), which resolves to sub-meter agreement at LEO
+/// orbital speeds. The `near_180_degree_transfer` test documents this
+/// graceful-degradation envelope.
 ///
 /// # Errors
-/// Returns `LambertError` if the solver fails or inputs are invalid.
+/// Returns [`LambertError`] if the solver fails or inputs are invalid.
 pub fn solve_lambert(
     departure: &StateVector,
     arrival: &StateVector,
@@ -137,38 +178,27 @@ pub fn solve_lambert(
 
 /// Solve Lambert's problem with explicit configuration.
 ///
-/// Uses Izzo's method (nyx-space), which supports all config options
-/// including multi-revolution transfers and transfer direction selection.
+/// Routes single-rev through Gooding (honors direction for every geometry)
+/// and multi-rev through Izzo (the only nyx solver that supports `NRevs`).
+/// See the module-level documentation for the full solver-selection and
+/// upstream-bug rationale.
 ///
 /// # Invariants
 /// - `arrival.epoch > departure.epoch` (positive time of flight)
-/// - Departure and arrival positions must be non-degenerate (separation > `LAMBERT_MIN_SEPARATION_KM`)
+/// - Departure and arrival positions must be non-degenerate
+///   (separation > [`LAMBERT_MIN_SEPARATION_KM`])
 /// - For multi-rev (`config.revolutions > 0`), TOF must be long enough to
-///   accommodate the requested number of revolutions
+///   accommodate the requested number of revolutions. `config.revolutions`
+///   is `u8`-bounded (≤ 255) — no separate physical cap is enforced; the
+///   solver will fail to converge for unreasonably high counts.
+/// - Multi-rev ignores `config.direction` — nyx's `TransferKind` has no
+///   combined `NRevs { long_way }` variant, and Izzo's geometry-coupled
+///   direction handling makes any user override unreliable. Callers that
+///   need direction control must stay single-rev.
 ///
 /// # Errors
-/// Returns `LambertError` if the solver fails or inputs are invalid.
+/// Returns [`LambertError`] if the solver fails or inputs are invalid.
 pub fn solve_lambert_with_config(
-    departure: &StateVector,
-    arrival: &StateVector,
-    config: &LambertConfig,
-) -> Result<LambertTransfer, LambertError> {
-    solve_lambert_izzo(departure, arrival, config)
-}
-
-/// Solve Lambert's problem using Izzo's method (nyx-space).
-///
-/// Supports multi-revolution transfers (`config.revolutions > 0`) and
-/// all transfer directions. Populates C3 from the solution.
-///
-/// # Invariants
-/// - `arrival.epoch > departure.epoch` (positive time of flight)
-/// - Departure and arrival positions must be non-degenerate (separation > `LAMBERT_MIN_SEPARATION_KM`)
-/// - `mu > 0` (uses `EARTH_J2000` gravitational parameter internally)
-///
-/// # Errors
-/// Returns `LambertError` if the solver fails or inputs are invalid.
-pub fn solve_lambert_izzo(
     departure: &StateVector,
     arrival: &StateVector,
     config: &LambertConfig,
@@ -181,14 +211,12 @@ pub fn solve_lambert_izzo(
     let input = LambertInput::from_planetary_states(dep_orbit, arr_orbit)
         .map_err(|e| LambertError::InvalidInput { details: format!("{e}") })?;
 
-    let kind = if config.revolutions > 0 {
-        TransferKind::NRevs(config.revolutions)
+    let solution = if config.revolutions > 0 {
+        lambert::izzo(input, TransferKind::NRevs(config.revolutions))
     } else {
-        direction_to_kind(config.direction)
-    };
-
-    let solution = lambert::izzo(input, kind)
-        .map_err(|e| LambertError::IzzoConvergenceFailure { details: format!("{e}") })?;
+        lambert::gooding(input, direction_to_kind(config.direction))
+    }
+    .map_err(|e| LambertError::SolverConvergenceFailure { details: format!("{e}") })?;
 
     Ok(transfer_from_solution(
         departure,
@@ -209,9 +237,10 @@ mod tests {
     use hifitime::Duration;
 
     /// Keplerian propagation endpoint position agreement with Lambert transfer
-    /// endpoints. 1e-6 km accounts for accumulated Kepler equation convergence
-    /// error over the full arc.
-    const ARC_ENDPOINT_TOL_KM: f64 = 1e-6;
+    /// endpoints. 1e-3 km (1 m) covers Gooding's velocity convergence envelope
+    /// (nyx `LAMBERT_EPSILON_TIME = 1e-4 s` → sub-meter at orbital speeds) plus
+    /// accumulated Kepler equation error over the full arc.
+    const ARC_ENDPOINT_TOL_KM: f64 = 1e-3;
 
     /// Lower bound (km/s) for coplanar LEO transfer Δv.
     /// A 400→800 km Hohmann transfer is ~0.2 km/s; 10 m/s is conservative
@@ -229,11 +258,16 @@ mod tests {
     const NON_COPLANAR_DV_LOWER_KM_S: f64 = 0.1;
 
     /// Upper LEO altitude (km above Earth surface) for orbit radius
-    /// reasonableness checks. Transfer between 400-800 km stays well below.
+    /// reasonableness checks. 2000 km is the canonical LEO upper bound per
+    /// ITU-R S.1003 ("Environmental protection of the geostationary
+    /// satellite orbit"), adopted by most mission-analysis references as
+    /// the LEO/MEO boundary. The 400–800 km transfers exercised here stay
+    /// well below this bound; any densified arc point above it indicates
+    /// the Lambert arc has escaped LEO, which is a bug.
     const LEO_MAX_ALTITUDE_KM: f64 = 2000.0;
 
     #[test]
-    fn izzo_coplanar_transfer() {
+    fn coplanar_transfer() {
         let epoch = test_epoch();
         let dep = keplerian_to_state(&leo_400km_elements(), epoch).unwrap();
         let arr = keplerian_to_state(
@@ -242,17 +276,17 @@ mod tests {
         ).unwrap();
 
         let config = LambertConfig::default();
-        let transfer = solve_lambert_izzo(&dep, &arr, &config).expect("Izzo should succeed");
+        let transfer = solve_lambert_with_config(&dep, &arr, &config).expect("Lambert should succeed");
 
         assert!(
             transfer.total_dv_km_s > LEO_COPLANAR_DV_LOWER_KM_S && transfer.total_dv_km_s < LEO_COPLANAR_DV_UPPER_KM_S,
-            "Izzo Δv = {} km/s seems unreasonable",
+            "Lambert Δv = {} km/s seems unreasonable",
             transfer.total_dv_km_s
         );
     }
 
     #[test]
-    fn izzo_non_coplanar_transfer() {
+    fn non_coplanar_transfer() {
         let epoch = test_epoch();
 
         let dep = keplerian_to_state(&leo_400km_elements(), epoch).unwrap();
@@ -268,7 +302,7 @@ mod tests {
         let arr = keplerian_to_state(&arr_ke, epoch + Duration::from_seconds(3600.0)).unwrap();
 
         let config = LambertConfig::default();
-        let transfer = solve_lambert_izzo(&dep, &arr, &config).expect("Izzo non-coplanar failed");
+        let transfer = solve_lambert_with_config(&dep, &arr, &config).expect("non-coplanar Lambert failed");
 
         assert!(
             transfer.total_dv_km_s > NON_COPLANAR_DV_LOWER_KM_S,
@@ -298,7 +332,7 @@ mod tests {
             revolutions: 1,
         };
 
-        let transfer = solve_lambert_izzo(&dep, &arr, &config).expect("Multi-rev should succeed");
+        let transfer = solve_lambert_with_config(&dep, &arr, &config).expect("Multi-rev should succeed");
         assert!(
             transfer.total_dv_km_s > 0.0,
             "Multi-rev Δv should be positive"
@@ -326,7 +360,7 @@ mod tests {
         };
 
         let transfer =
-            solve_lambert_izzo(&dep, &arr, &config).expect("Long-way transfer should succeed");
+            solve_lambert_with_config(&dep, &arr, &config).expect("Long-way transfer should succeed");
         assert!(transfer.total_dv_km_s > 0.0, "Long-way Δv should be positive");
         assert_eq!(transfer.direction, TransferDirection::LongWay);
     }
@@ -425,11 +459,11 @@ mod tests {
         ).unwrap();
 
         let config = LambertConfig::default();
-        let izzo = solve_lambert_izzo(&dep, &arr, &config).expect("Izzo failed");
+        let transfer = solve_lambert_with_config(&dep, &arr, &config).expect("Lambert failed");
         assert!(
-            izzo.c3_km2_s2 >= 0.0,
+            transfer.c3_km2_s2 >= 0.0,
             "C3 should be non-negative, got {}",
-            izzo.c3_km2_s2
+            transfer.c3_km2_s2
         );
     }
 
@@ -477,7 +511,7 @@ mod tests {
     /// Near-180° transfer (degenerate geometry): transfer angle close to π.
     ///
     /// Constructs a departure and arrival where the transfer angle is ~179°.
-    /// The Izzo solver may either succeed or return an error for near-degenerate cases.
+    /// The Lambert solver may either succeed or return an error for near-degenerate cases.
     /// This test verifies that the solver does not panic.
     #[test]
     fn near_180_degree_transfer() {
@@ -499,7 +533,7 @@ mod tests {
 
         let config = LambertConfig::default();
         // Accept either a valid solution or a solver error — must not panic.
-        match solve_lambert_izzo(&dep, &arr, &config) {
+        match solve_lambert_with_config(&dep, &arr, &config) {
             Ok(transfer) => {
                 // Near-180° geometry may produce large but finite Δv
                 assert!(
@@ -508,10 +542,103 @@ mod tests {
                     transfer.total_dv_km_s
                 );
             }
-            Err(LambertError::InvalidInput { .. } | LambertError::IzzoConvergenceFailure { .. }) => {
+            Err(LambertError::InvalidInput { .. } | LambertError::SolverConvergenceFailure { .. }) => {
                 // Degenerate geometry is an acceptable failure mode for near-180° transfers.
             }
             Err(e) => panic!("Unexpected error type for near-180° transfer: {e}"),
         }
+    }
+
+    /// Regression guard for nyx-space 2.3.1 Izzo bug (`izzo.rs:72`):
+    /// `if i_h.z < 0.0 || retrograde` collapses ShortWay/LongWay/Auto to the
+    /// same solution whenever the geometry's natural angular-momentum unit
+    /// vector points into -z. Routing single-rev through Gooding avoids this;
+    /// this test pins that behavior with an explicit `i_h.z < 0` fixture.
+    ///
+    /// Geometry: `r1 = (7000, 0, 0)`, `r2 = (0, -7000, -500)` km.
+    /// `r1 × r2 = (0, 3.5e6, -4.9e7)`, so `i_h.z < 0`. If this test ever
+    /// starts passing through a solver that uses the buggy Izzo direction
+    /// logic, `ShortWay` and `LongWay` would produce bit-identical
+    /// `v_init_km_s`.
+    #[test]
+    fn short_and_long_way_differ_for_negative_ih_z() {
+        let epoch = test_epoch();
+        let dep = StateVector {
+            epoch,
+            position_eci_km: Vector3::new(7000.0, 0.0, 0.0),
+            velocity_eci_km_s: Vector3::zeros(),
+        };
+        let arr = StateVector {
+            epoch: epoch + Duration::from_seconds(3600.0),
+            position_eci_km: Vector3::new(0.0, -7000.0, -500.0),
+            velocity_eci_km_s: Vector3::zeros(),
+        };
+
+        // Confirm the fixture actually reproduces the `i_h.z < 0` geometry
+        // that the nyx Izzo bug hinges on. If this precondition ever flips
+        // sign, the test is no longer guarding the right thing.
+        let i_h = dep.position_eci_km.cross(&arr.position_eci_km);
+        assert!(
+            i_h.z < 0.0,
+            "test precondition: r_init × r_final must have negative z, got i_h = {i_h:?}",
+        );
+
+        let short = solve_lambert_with_config(
+            &dep,
+            &arr,
+            &LambertConfig { direction: TransferDirection::ShortWay, revolutions: 0 },
+        )
+        .expect("short-way Lambert should succeed for this geometry");
+        let long = solve_lambert_with_config(
+            &dep,
+            &arr,
+            &LambertConfig { direction: TransferDirection::LongWay, revolutions: 0 },
+        )
+        .expect("long-way Lambert should succeed for this geometry");
+
+        // Under the Izzo bug, both calls would produce identical `v_init`.
+        // Gooding returns two distinct solutions; require a difference well
+        // above floating-point noise (10 m/s is conservative — the actual
+        // delta for this geometry is several km/s).
+        let delta_km_s = (short.departure_state.velocity_eci_km_s
+            - long.departure_state.velocity_eci_km_s)
+            .norm();
+        assert!(
+            delta_km_s > 0.01,
+            "ShortWay and LongWay v_init must differ for i_h.z < 0 geometry; got Δ = {delta_km_s} km/s",
+        );
+    }
+
+    /// `Auto` must not silently collapse to the same result as `ShortWay`
+    /// (or `LongWay`) in all cases. It's allowed to equal either one for a
+    /// specific geometry — that's the whole point of auto-dispatch. This
+    /// test just exercises the Auto path with an `i_h.z < 0` geometry to
+    /// make sure it doesn't panic and returns a finite, sensible ΔV.
+    #[test]
+    fn auto_direction_succeeds_for_negative_ih_z() {
+        let epoch = test_epoch();
+        let dep = StateVector {
+            epoch,
+            position_eci_km: Vector3::new(7000.0, 0.0, 0.0),
+            velocity_eci_km_s: Vector3::zeros(),
+        };
+        let arr = StateVector {
+            epoch: epoch + Duration::from_seconds(3600.0),
+            position_eci_km: Vector3::new(0.0, -7000.0, -500.0),
+            velocity_eci_km_s: Vector3::zeros(),
+        };
+
+        let transfer = solve_lambert_with_config(
+            &dep,
+            &arr,
+            &LambertConfig { direction: TransferDirection::Auto, revolutions: 0 },
+        )
+        .expect("auto-direction Lambert should succeed for this geometry");
+
+        assert!(
+            transfer.total_dv_km_s.is_finite() && transfer.total_dv_km_s > 0.0,
+            "Auto ΔV must be finite and positive, got {}",
+            transfer.total_dv_km_s,
+        );
     }
 }

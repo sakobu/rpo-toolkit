@@ -28,7 +28,7 @@
     "lambert_config": {
       "$ref": "#/$defs/LambertConfig",
       "description": "Lambert solver configuration (direction and revolution count).",
-      "default": { "direction": "Auto", "revolutions": 0 }
+      "default": { "direction": "short_way", "revolutions": 0 }
     },
     "waypoints": {
       "type": "array",
@@ -228,17 +228,17 @@
     },
     "LambertConfig": {
       "type": "object",
-      "description": "Configuration for the Lambert transfer solver.",
+      "description": "Configuration for the Lambert transfer solver. Single-rev (revolutions == 0) routes through the Gooding solver; multi-rev (revolutions > 0) routes through Izzo. Multi-rev ignores the direction field — nyx's multi-rev TransferKind has no long-way variant.",
       "properties": {
         "direction": {
           "type": "string",
-          "description": "Transfer direction selection.",
+          "description": "Transfer direction selection. Default is short_way rather than auto: nyx-space 2.3.1's Auto dispatch has a known typo in direction-of-motion (see docs/nyx-lambert-bug-report.md), so the default avoids silently exercising the buggy path. Ignored when revolutions > 0.",
           "enum": ["auto", "short_way", "long_way"],
-          "default": "auto"
+          "default": "short_way"
         },
         "revolutions": {
           "type": "integer",
-          "description": "Number of complete revolutions (0 = direct transfer).",
+          "description": "Number of complete revolutions (0 = direct transfer, Gooding; >0 = multi-rev, Izzo).",
           "minimum": 0,
           "maximum": 255,
           "default": 0

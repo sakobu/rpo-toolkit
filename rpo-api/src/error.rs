@@ -90,8 +90,8 @@ impl ServerError {
 /// error here rather than silently dropping diagnostic fields on the wire.
 fn lambert_detail(err: &LambertError) -> serde_json::Value {
     match err {
-        LambertError::IzzoConvergenceFailure { details } => {
-            serde_json::json!({ "reason": "convergence_failure", "details": details })
+        LambertError::SolverConvergenceFailure { details } => {
+            serde_json::json!({ "reason": "solver_convergence_failure", "details": details })
         }
         LambertError::InvalidInput { details } => {
             serde_json::json!({ "reason": "invalid_input", "details": details })
