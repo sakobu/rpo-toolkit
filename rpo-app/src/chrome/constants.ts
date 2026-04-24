@@ -1,4 +1,4 @@
-export const SIDEBAR_WIDTH_CLASS = 'w-72';
+export const SIDEBAR_WIDTH_CLASS = 'w-80';
 export const SIDEBAR_RAIL_WIDTH_CLASS = 'w-10';
 export const HUD_WIDTH_CLASS = 'w-78';
 export const HUD_COLLAPSED_WIDTH_CLASS = 'w-56';

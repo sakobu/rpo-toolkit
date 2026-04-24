@@ -5,7 +5,7 @@ import { withBlur } from '@/utils/blur';
 type Tone = 'default' | 'abort';
 
 type InlineActionButtonProps = {
-  icon: ReactNode;
+  icon?: ReactNode;
   label: string;
   onClick: () => void;
   tone?: Tone;
@@ -29,7 +29,7 @@ export function InlineActionButton({
       type="button"
       onClick={withBlur(onClick)}
       aria-label={ariaLabel}
-      className={`flex cursor-pointer items-center gap-1 rounded-xs border border-border-strong bg-surface-1 px-1.5 py-px font-mono text-[9px] tracking-wider text-text-muted uppercase ${TONE_HOVER[tone]}`}
+      className={`flex cursor-pointer items-center rounded-xs border border-border-strong bg-surface-1 px-1.5 py-px font-mono text-[9px] tracking-wider text-text-muted uppercase ${icon ? 'gap-1' : ''} ${TONE_HOVER[tone]}`}
     >
       {icon}
       {label}

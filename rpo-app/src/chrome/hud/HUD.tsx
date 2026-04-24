@@ -2,6 +2,7 @@ import { useLocation } from 'react-router';
 import { GripHorizontal } from 'lucide-react';
 
 import { HUD_WIDTH_CLASS } from '@/chrome/constants';
+import { ConnectionIndicator } from '@/chrome/hud/ConnectionIndicator';
 import { HUDCollapsed } from '@/chrome/hud/HUDCollapsed';
 import { PanelHeader } from '@/chrome/PanelHeader';
 import { useHotkey } from '@/hooks/useHotkey';
@@ -9,7 +10,7 @@ import { type HudReadoutFrame, useUI } from '@/stores/ui';
 import { Caps } from '@/ui/Caps';
 import { Chip } from '@/ui/Chip';
 import { KV } from '@/ui/KV';
-import { withBlur } from '@/utils/blur';
+import { SegControl } from '@/ui/SegControl';
 
 export function HUD() {
   const hud = useUI((s) => s.hud);
@@ -32,7 +33,12 @@ export function HUD() {
       <PanelHeader
         leading={<GripHorizontal size={14} strokeWidth={1.5} />}
         label={<Caps>hud</Caps>}
-        meta={<Chip tone="muted">{isFarField ? 'ECI' : 'RIC'}</Chip>}
+        meta={
+          <span className="flex items-center gap-1">
+            <ConnectionIndicator />
+            <Chip tone="muted">{isFarField ? 'ECI' : 'RIC'}</Chip>
+          </span>
+        }
         onCollapse={cycleHud}
         onHide={() => hide('hud')}
         collapseLabel="collapse hud"
@@ -70,42 +76,18 @@ function ProximityReadout({
     <div className="flex flex-col gap-2 font-mono text-[11px] text-text-dim">
       <div className="flex items-center justify-between">
         <Caps>frame</Caps>
-        <div className="flex gap-0.5">
-          <SegButton active={frame === 'ric'} onClick={() => onFrameChange('ric')}>
+        <div className="flex gap-0.5 text-[9px]">
+          <SegControl active={frame === 'ric'} onClick={() => onFrameChange('ric')}>
             RIC
-          </SegButton>
-          <SegButton active={frame === 'roe'} onClick={() => onFrameChange('roe')}>
+          </SegControl>
+          <SegControl active={frame === 'roe'} onClick={() => onFrameChange('roe')}>
             ROE
-          </SegButton>
+          </SegControl>
         </div>
       </div>
       <KV k="range" v="—" />
       <KV k="traveled" v="—" />
       <KV k="min d3d" v="—" />
     </div>
-  );
-}
-
-function SegButton({
-  active,
-  onClick,
-  children,
-}: {
-  active: boolean;
-  onClick: () => void;
-  children: React.ReactNode;
-}) {
-  return (
-    <button
-      type="button"
-      onClick={withBlur(onClick)}
-      className={`duration-fast cursor-pointer rounded-xs border px-2 py-0.5 font-mono text-[9px] tracking-wider uppercase transition-colors ease-out ${
-        active
-          ? 'border-accent bg-accent-dim text-accent'
-          : 'border-border bg-transparent text-text-muted hover:text-text'
-      }`}
-    >
-      {children}
-    </button>
   );
 }

@@ -1,16 +1,17 @@
 import type { MissionPhase } from 'rpo-wasm';
 
-import { ROE_THRESHOLD_SOFT_MAX } from '@/schemas/proximityConfig';
-import { useMission } from '@/stores/mission';
+import { selectProximityConfig, usePlanner } from '@/stores/planner';
 import { Callout } from '@/ui/Callout';
+import { getEngineConstants } from '@/wasm/constants';
 
 const BORDERLINE_FRACTION = 0.1;
 
 export function ThresholdAdvisories() {
-  const threshold = useMission((s) => s.proximityConfig.roe_threshold);
-  const classification = useMission((s) => s.classification);
+  const threshold = usePlanner((s) => selectProximityConfig(s).roe_threshold);
+  const classification = usePlanner((s) => s.classification);
 
-  const softZone = threshold > ROE_THRESHOLD_SOFT_MAX;
+  const softMax = getEngineConstants().roe_threshold_default;
+  const softZone = threshold > softMax;
   const deltaROverR =
     classification.status === 'ok' ? extractDeltaROverR(classification.phase) : null;
   const borderline =
@@ -22,8 +23,8 @@ export function ThresholdAdvisories() {
     <div className="flex flex-col gap-2">
       {softZone ? (
         <Callout tone="hold">
-          threshold above D'Amico recommendation ({ROE_THRESHOLD_SOFT_MAX}) — ROE linearization
-          errors may exceed J2 modeling residuals. Proximity results are advisory in this regime.
+          threshold above D'Amico recommendation ({softMax}) — ROE linearization errors may exceed
+          J2 modeling residuals. Proximity results are advisory in this regime.
         </Callout>
       ) : null}
       {borderline && deltaROverR !== null ? (

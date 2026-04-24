@@ -1,6 +1,6 @@
 import type { ReactNode } from 'react';
 
-import { PHASE_DEFINITIONS, type PhaseKey, type PhaseState } from '@/stores/phases';
+import { PHASE_DEFINITIONS, type PhaseKey, type PhaseState } from '@/stores/planner';
 import { Chip } from '@/ui/Chip';
 
 type PhaseCardProps = {

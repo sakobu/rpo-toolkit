@@ -10,7 +10,7 @@ export const ALIGNMENT_LABELS: Record<AlignmentValue, string> = {
 };
 
 export const MIN_SEPARATION_LOWER_KM = 0.001;
-export const MIN_SEPARATION_UPPER_KM = 50;
+export const MIN_SEPARATION_UPPER_KM = 100;
 
 export const DEFAULT_SAFETY_REQUIREMENTS = {
   min_separation_km: 0.1,

@@ -1,4 +1,5 @@
 import type { ReactNode } from 'react';
+import { useNavigate } from 'react-router';
 import { GripVertical } from 'lucide-react';
 import { useShallow } from 'zustand/react/shallow';
 
@@ -10,7 +11,7 @@ import { SidebarRail } from '@/chrome/sidebar/SidebarRail';
 import { TransferPanel } from '@/features/transfer/TransferPanel';
 import { WaypointsPanel } from '@/features/waypoints/WaypointsPanel';
 import { useHotkey } from '@/hooks/useHotkey';
-import { PHASE_KEYS, type PhaseKey, type PhaseState, usePhases } from '@/stores/phases';
+import { PHASE_KEYS, type PhaseKey, type PhaseState, usePlanner } from '@/stores/planner';
 import { useUI } from '@/stores/ui';
 import { Caps } from '@/ui/Caps';
 
@@ -37,11 +38,21 @@ const PHASE_RENDERERS: Record<PhaseKey, PhaseRenderers> = {
 };
 
 export function Sidebar() {
+  const navigate = useNavigate();
   const sidebar = useUI((s) => s.sidebar);
   const cycleSidebar = useUI((s) => s.cycleSidebar);
   const hide = useUI((s) => s.hide);
-  const phases = usePhases(useShallow((s) => s.phases));
-  const editPhase = usePhases((s) => s.editPhase);
+  const phases = usePlanner(useShallow((s) => s.phases));
+  const editPhase = usePlanner((s) => s.editPhase);
+
+  // Editing a completed phase reverts the viewport to where that phase's
+  // planning happens — xfr → far-field (Lambert is planned in ECI). Pair the
+  // state reset with the route change at the call site, mirroring the
+  // acceptTransfer + navigate('/proximity') pattern in TransferPanel.
+  const handleEdit = (key: PhaseKey) => {
+    editPhase(key);
+    if (key === 'xfr') void navigate('/far-field');
+  };
 
   useHotkey('s', cycleSidebar);
 
@@ -75,7 +86,7 @@ export function Sidebar() {
               state={record.state}
               dimmedBy={record.dimmedBy}
               resets={record.resets}
-              onEdit={() => editPhase(key)}
+              onEdit={() => handleEdit(key)}
               summary={renderers.renderSummary?.(record.state)}
             >
               {record.state === 'active' && renderers.renderPanel?.()}

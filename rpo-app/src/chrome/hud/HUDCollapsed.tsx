@@ -2,6 +2,7 @@ import { useLocation } from 'react-router';
 import { ChevronDown, GripHorizontal } from 'lucide-react';
 
 import { HUD_COLLAPSED_WIDTH_CLASS } from '@/chrome/constants';
+import { ConnectionDot } from '@/chrome/hud/ConnectionIndicator';
 import { useUI } from '@/stores/ui';
 import { Caps } from '@/ui/Caps';
 import { Chip } from '@/ui/Chip';
@@ -22,6 +23,7 @@ export function HUDCollapsed() {
         <div className="flex items-center gap-1.5 text-text-muted">
           <GripHorizontal size={10} strokeWidth={1.5} />
           <Caps>hud</Caps>
+          <ConnectionDot />
           <Chip tone="muted">{frame}</Chip>
         </div>
         <IconButton onClick={withBlur(() => expand('hud'))} aria-label="expand hud">

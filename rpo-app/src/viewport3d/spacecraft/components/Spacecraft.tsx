@@ -36,11 +36,17 @@ export function Spacecraft({
         {solarPanels.map((panel, index) => (
           <SolarPanel key={`panel-${index}`} {...panel} />
         ))}
-
-        {trackingMarkers.map((marker, index) => (
-          <TrackingMarker key={`marker-${index}`} {...marker} />
-        ))}
       </group>
+
+      {/* Tracking markers render OUTSIDE the scale group: they are screen-space
+          sprites whose `useFrame` scales them to a fixed pixel size assuming no
+          ancestor scaling. Inside the scale group they'd inherit the outer
+          scale factor and balloon to `scale × pixelSize` pixels, hiding the 3D
+          spacecraft beneath a flat colored square. Same reason SpacecraftLabel
+          lives out here. */}
+      {trackingMarkers.map((marker, index) => (
+        <TrackingMarker key={`marker-${index}`} {...marker} />
+      ))}
 
       {label && (
         <SpacecraftLabel

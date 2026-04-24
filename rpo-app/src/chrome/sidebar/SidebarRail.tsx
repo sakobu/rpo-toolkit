@@ -2,7 +2,7 @@ import { useShallow } from 'zustand/react/shallow';
 
 import { SIDEBAR_RAIL_WIDTH_CLASS } from '@/chrome/constants';
 import { EditConfigButton } from '@/chrome/EditConfigButton';
-import { PHASE_DEFINITIONS, PHASE_KEYS, type PhaseState, usePhases } from '@/stores/phases';
+import { PHASE_DEFINITIONS, PHASE_KEYS, type PhaseState, usePlanner } from '@/stores/planner';
 import { useUI } from '@/stores/ui';
 import { withBlur } from '@/utils/blur';
 
@@ -15,7 +15,7 @@ const DOT_VARIANT: Record<PhaseState, string> = {
 };
 
 export function SidebarRail() {
-  const phases = usePhases(useShallow((s) => s.phases));
+  const phases = usePlanner(useShallow((s) => s.phases));
   const expand = useUI((s) => s.expand);
 
   return (

@@ -5,6 +5,7 @@ import { useShallow } from 'zustand/react/shallow';
 
 import { PRESETS, type SpacecraftConfig } from '@/schemas/spacecraft';
 import { loadedVector, useConfig } from '@/stores/configuration';
+import { usePlanner } from '@/stores/planner';
 import type { Vec3 } from '@/viewport3d/types';
 
 import CelestialIndicator from './CelestialIndicator';
@@ -30,9 +31,13 @@ export default function ProximityViewport() {
       deputyState: s.deputyState,
     })),
   );
+  const transfer = usePlanner((s) => s.transfer);
 
-  const chiefVector = loadedVector(chiefState);
-  const deputyVector = loadedVector(deputyState);
+  // Post-Lambert, render the perch (arrival) geometry. Before Accept (or in
+  // the direct-to-proximity branch where no Lambert runs), fall back to the
+  // user's configured departure states.
+  const chiefVector = transfer?.perch_chief ?? loadedVector(chiefState);
+  const deputyVector = transfer?.perch_deputy ?? loadedVector(deputyState);
 
   const deputyRicM = useMemo(
     () => computeDeputyPositionRicM(chiefVector, deputyVector),

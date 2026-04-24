@@ -1,7 +1,7 @@
 import { useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router';
 
-import { useMission } from '@/stores/mission';
+import { usePlanner } from '@/stores/planner';
 import { Button } from '@/ui/Button';
 
 type ProceedTarget =
@@ -9,7 +9,7 @@ type ProceedTarget =
   | { enabled: false; label: string };
 
 export function ProceedButton() {
-  const classification = useMission((s) => s.classification);
+  const classification = usePlanner((s) => s.classification);
   const navigate = useNavigate();
   const ref = useRef<HTMLButtonElement>(null);
 
@@ -31,7 +31,7 @@ export function ProceedButton() {
 }
 
 function resolveTarget(
-  classification: ReturnType<typeof useMission.getState>['classification'],
+  classification: ReturnType<typeof usePlanner.getState>['classification'],
 ): ProceedTarget {
   if (classification.status === 'idle') {
     return { enabled: false, label: 'complete setup to proceed' };

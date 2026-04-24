@@ -1,19 +1,21 @@
 import { useState } from 'react';
-import { Pencil, Plus, X } from 'lucide-react';
+import { Plus } from 'lucide-react';
 import { useShallow } from 'zustand/react/shallow';
 
 import { EditConfigButton } from '@/chrome/EditConfigButton';
 import { SafetyRequirementsForm } from '@/chrome/sidebar/SafetyRequirementsForm';
+import { useAchievableCap } from '@/hooks/useAchievableCap';
 import {
   ALIGNMENT_LABELS,
   type AlignmentValue,
   DEFAULT_SAFETY_REQUIREMENTS,
 } from '@/schemas/safetyRequirements';
 import { useConfig } from '@/stores/configuration';
-import { useMission } from '@/stores/mission';
+import { selectProximityConfig, usePlanner } from '@/stores/planner';
 import { Caps } from '@/ui/Caps';
 import { InlineActionButton } from '@/ui/InlineActionButton';
 import { KV } from '@/ui/KV';
+import { RegimePill } from '@/ui/RegimePill';
 
 export function MissionHeader() {
   const { chiefPreset, deputyPreset } = useConfig(
@@ -22,16 +24,29 @@ export function MissionHeader() {
       deputyPreset: s.deputyConfig?.values.preset,
     })),
   );
-  const classification = useMission((s) => s.classification);
-  const threshold = useMission((s) => s.proximityConfig.roe_threshold);
-  const safetyRequirements = useMission((s) => s.safetyRequirements);
-  const setSafetyRequirements = useMission((s) => s.setSafetyRequirements);
+  const { classification, threshold, safetyRequirements, setSafetyRequirements, enrichment } =
+    usePlanner(
+      useShallow((s) => ({
+        classification: s.classification,
+        threshold: selectProximityConfig(s).roe_threshold,
+        safetyRequirements: s.safetyRequirements,
+        setSafetyRequirements: s.setSafetyRequirements,
+        enrichment: s.enrichment,
+      })),
+    );
+  const achievableCap = useAchievableCap();
+  const aboveCap =
+    safetyRequirements !== null &&
+    achievableCap !== null &&
+    safetyRequirements.min_separation_km > achievableCap;
+  const safetyNotApplied = enrichment?.perch.status === 'fallback' || aboveCap;
   const [editingSafety, setEditingSafety] = useState(false);
 
   const phase = classification.status === 'ok' ? classification.phase : null;
   const phaseData = phase && ('proximity' in phase ? phase.proximity : phase.far_field);
   const separationKm = phaseData?.separation_km ?? null;
   const deltaROverR = phaseData?.delta_r_over_r ?? null;
+  const regime = phase === null ? null : 'proximity' in phase ? 'PROXIMITY' : 'FAR-FIELD';
 
   const chiefName = chiefPreset ?? 'Chief vehicle';
   const deputyName = deputyPreset ?? 'Deputy vehicle';
@@ -51,14 +66,17 @@ export function MissionHeader() {
         <KV k="deputy" v={deputyName} />
       </div>
       <div className="mt-1.5 flex flex-col gap-1 rounded-xs border border-border bg-surface-2 px-2 py-1.5">
-        <Caps>classification</Caps>
+        <div className="flex items-center justify-between">
+          <Caps>classification</Caps>
+          {regime !== null && <RegimePill regime={regime} />}
+        </div>
         <KV k="separation" v={separationKm !== null ? `${separationKm.toFixed(1)} km` : '—'} />
         <KV k="δr/r" v={deltaROverR !== null ? deltaROverR.toExponential(2) : '—'} />
         <KV k="δr/r threshold" v={String(threshold)} />
       </div>
       <div className="mt-1.5 flex flex-col gap-1 rounded-xs border border-border bg-surface-2 px-2 py-1.5">
         <div className="flex items-center justify-between">
-          <Caps>safety</Caps>
+          <Caps>formation safety</Caps>
           {safetyRequirements === null ? (
             <InlineActionButton
               icon={<Plus size={9} strokeWidth={1.75} />}
@@ -68,20 +86,18 @@ export function MissionHeader() {
           ) : (
             <div className="flex items-center gap-1">
               <InlineActionButton
-                icon={<Pencil size={9} strokeWidth={1.75} />}
                 label="edit"
                 onClick={() => setEditingSafety(true)}
-                aria-label="edit safety requirements"
+                aria-label="edit formation safety"
               />
               <InlineActionButton
-                icon={<X size={9} strokeWidth={1.75} />}
-                label="clear"
+                label="× clear"
                 tone="abort"
                 onClick={() => {
                   setSafetyRequirements(null);
                   setEditingSafety(false);
                 }}
-                aria-label="clear safety requirements"
+                aria-label="clear formation safety"
               />
             </div>
           )}
@@ -93,7 +109,16 @@ export function MissionHeader() {
         )}
         {!editingSafety && safetyRequirements !== null && (
           <>
-            <KV k="min R/C" v={`${safetyRequirements.min_separation_km} km`} />
+            <KV
+              k="min R/C"
+              v={`${safetyRequirements.min_separation_km} km`}
+              color={safetyNotApplied ? 'text-signal-hold' : 'text-text'}
+            />
+            {safetyNotApplied ? (
+              <span className="text-right font-mono text-[9px] tracking-wide text-signal-hold">
+                not applied · see transfer
+              </span>
+            ) : null}
             <KV k="alignment" v={ALIGNMENT_LABELS[alignmentValue].toLowerCase()} />
           </>
         )}

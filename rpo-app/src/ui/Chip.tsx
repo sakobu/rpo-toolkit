@@ -1,6 +1,6 @@
 import type { ReactNode } from 'react';
 
-type Tone = 'muted' | 'go' | 'hold' | 'info' | 'abort' | 'accent';
+export type Tone = 'muted' | 'go' | 'hold' | 'info' | 'abort' | 'accent';
 
 const TONE_CLASSES: Record<Tone, string> = {
   muted: 'border-border text-text-muted',

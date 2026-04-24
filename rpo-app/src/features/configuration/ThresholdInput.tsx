@@ -1,22 +1,23 @@
-import { type ChangeEvent, useState } from 'react';
+import { type ChangeEvent, useMemo, useState } from 'react';
 
 import { match } from '@railway-ts/pipelines/result';
 import { validate } from '@railway-ts/pipelines/schema';
 
-import {
-  proximityConfigSchema,
-  ROE_THRESHOLD_DEFAULT,
-  ROE_THRESHOLD_MAX,
-  ROE_THRESHOLD_MIN,
-} from '@/schemas/proximityConfig';
-import { useMission } from '@/stores/mission';
+import { proximityConfigSchema, ROE_THRESHOLD_MIN } from '@/schemas/proximityConfig';
+import { selectProximityConfig, usePlanner } from '@/stores/planner';
 import { FieldErrorContext } from '@/ui/FieldErrorContext';
 import { Input } from '@/ui/Input';
+import { getEngineConstants } from '@/wasm/constants';
 
 export function ThresholdInput() {
-  const setConfig = useMission((s) => s.setProximityConfig);
+  const setConfig = usePlanner((s) => s.setProximityConfig);
+  const schema = useMemo(() => proximityConfigSchema(), []);
+  const {
+    roe_threshold_default: defaultThreshold,
+    linearization_perturbation_bound: maxThreshold,
+  } = getEngineConstants();
   const [draft, setDraft] = useState<string>(() =>
-    String(useMission.getState().proximityConfig.roe_threshold),
+    String(selectProximityConfig(usePlanner.getState()).roe_threshold),
   );
   const [error, setError] = useState<string | undefined>(undefined);
 
@@ -30,7 +31,7 @@ export function ThresholdInput() {
     }
 
     const parsed = Number(raw);
-    match(validate({ roe_threshold: parsed }, proximityConfigSchema), {
+    match(validate({ roe_threshold: parsed }, schema), {
       ok: (config) => {
         setConfig(config);
         setError(undefined);
@@ -55,7 +56,7 @@ export function ThresholdInput() {
             id="roe-threshold"
             type="number"
             min={ROE_THRESHOLD_MIN}
-            max={ROE_THRESHOLD_MAX}
+            max={maxThreshold}
             step="0.0001"
             value={draft}
             onChange={handleChange}
@@ -64,7 +65,7 @@ export function ThresholdInput() {
         </FieldErrorContext>
         {!error ? (
           <span className="font-mono text-xs text-text-dim">
-            default {ROE_THRESHOLD_DEFAULT} · D'Amico §2.3.4
+            default {defaultThreshold} · D'Amico §2.3.4
           </span>
         ) : null}
       </div>

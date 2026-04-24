@@ -36,9 +36,6 @@ const NEXT_STATE: Record<ChromeState, ChromeState> = {
   hidden: 'expanded',
 };
 
-// Pixel height the dock currently occupies from the viewport bottom. Used by
-// elements that anchor to the bottom edge (HotkeyLegend, RICAxes gizmo) so
-// they lift above the dock instead of overlapping it.
 export const selectDockOffsetPx = (s: UIState): number => {
   if (s.dock === 'expanded') return s.dockHeight;
   if (s.dock === 'collapsed') return DOCK_COLLAPSED_HEIGHT_PX;
