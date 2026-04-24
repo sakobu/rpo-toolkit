@@ -270,8 +270,8 @@ The `detail` field carries per-error diagnostic data. Examples:
 
 ```json
 {
-  "reason": "convergence_failure",
-  "details": "Izzo solver did not converge after 50 iterations"
+  "reason": "solver_convergence_failure",
+  "details": "Lambert solver did not converge after 50 iterations"
 }
 ```
 
@@ -516,10 +516,10 @@ Lambert failure:
   "type": "error",
   "request_id": 1,
   "code": "lambert_failure",
-  "message": "Lambert solver error: Izzo solver did not converge",
+  "message": "Lambert solver error: Lambert solver did not converge",
   "detail": {
-    "reason": "convergence_failure",
-    "details": "Izzo solver did not converge after 50 iterations"
+    "reason": "solver_convergence_failure",
+    "details": "Lambert solver did not converge after 50 iterations"
   }
 }
 ```
