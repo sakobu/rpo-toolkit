@@ -248,6 +248,19 @@ mod tests {
     /// accumulated Kepler equation error over the full arc.
     const ARC_ENDPOINT_TOL_KM: f64 = 1e-3;
 
+    /// Time of flight (s) for the canonical coplanar Lambert fixture
+    /// (`leo_400km_elements` + `leo_800km_target_elements`).
+    ///
+    /// Paired with the fixture's 150° mean-anomaly offset (see the
+    /// `leo_800km_target_elements` doc), 2400 s places r2 at ~293° in
+    /// the orbital plane, giving a Lambert short-way transfer angle of
+    /// ~67° and a feasible Hohmann-class transfer (Δv ≈ 0.26 km/s,
+    /// periapsis altitude ~+393 km). Empirically chosen alongside the
+    /// fixture's 150° offset; the two are co-tuned and changing either
+    /// in isolation moves the conic into the sub-surface or
+    /// near-parabolic regime.
+    const LEO_COPLANAR_TOF_S: f64 = 2400.0;
+
     /// Lower bound (km/s) for coplanar LEO transfer Δv.
     /// A 400→800 km Hohmann transfer is ~0.2 km/s; 10 m/s is conservative
     /// lower bound well above numerical noise.
@@ -278,7 +291,7 @@ mod tests {
         let dep = keplerian_to_state(&leo_400km_elements(), epoch).unwrap();
         let arr = keplerian_to_state(
             &leo_800km_target_elements(),
-            epoch + Duration::from_seconds(2400.0),
+            epoch + Duration::from_seconds(LEO_COPLANAR_TOF_S),
         ).unwrap();
 
         let config = LambertConfig::default();
@@ -288,6 +301,33 @@ mod tests {
             transfer.total_dv_km_s > LEO_COPLANAR_DV_LOWER_KM_S && transfer.total_dv_km_s < LEO_COPLANAR_DV_UPPER_KM_S,
             "Lambert Δv = {} km/s seems unreasonable",
             transfer.total_dv_km_s
+        );
+    }
+
+    /// Pins the canonical coplanar Lambert geometry (`leo_400km_elements`,
+    /// `leo_800km_target_elements`, `LEO_COPLANAR_TOF_S`) as feasible.
+    /// Without this regression, a future tweak to either the fixture's
+    /// mean-anomaly offset or the TOF could silently re-introduce a
+    /// sub-surface conic. The previous 120°-offset / 2400 s pairing
+    /// produced a periapsis at −1208 km altitude that no test caught
+    /// (only `coplanar_transfer`'s Δv-bound assertion ran on this geometry).
+    #[test]
+    fn coplanar_transfer_is_feasible() {
+        let epoch = test_epoch();
+        let dep = keplerian_to_state(&leo_400km_elements(), epoch).unwrap();
+        let arr = keplerian_to_state(
+            &leo_800km_target_elements(),
+            epoch + Duration::from_seconds(LEO_COPLANAR_TOF_S),
+        )
+        .unwrap();
+
+        let transfer = solve_lambert_with_config(&dep, &arr, &LambertConfig::default())
+            .expect("Lambert should succeed");
+
+        assert!(
+            !transfer.feasibility.is_sub_surface(),
+            "canonical coplanar fixture must remain feasible; got {:?}",
+            transfer.feasibility
         );
     }
 
@@ -377,7 +417,7 @@ mod tests {
         let dep = keplerian_to_state(&leo_400km_elements(), epoch).unwrap();
         let arr = keplerian_to_state(
             &leo_800km_target_elements(),
-            epoch + Duration::from_seconds(2400.0),
+            epoch + Duration::from_seconds(LEO_COPLANAR_TOF_S),
         ).unwrap();
 
         let transfer = solve_lambert(&dep, &arr).expect("Lambert should succeed");
@@ -399,7 +439,7 @@ mod tests {
         let dep = keplerian_to_state(&leo_400km_elements(), epoch).unwrap();
         let arr = keplerian_to_state(
             &leo_800km_target_elements(),
-            epoch + Duration::from_seconds(2400.0),
+            epoch + Duration::from_seconds(LEO_COPLANAR_TOF_S),
         ).unwrap();
 
         let transfer = solve_lambert(&dep, &arr).expect("Lambert should succeed");
@@ -414,7 +454,7 @@ mod tests {
         let dep = keplerian_to_state(&leo_400km_elements(), epoch).unwrap();
         let arr = keplerian_to_state(
             &leo_800km_target_elements(),
-            epoch + Duration::from_seconds(2400.0),
+            epoch + Duration::from_seconds(LEO_COPLANAR_TOF_S),
         ).unwrap();
 
         let transfer = solve_lambert(&dep, &arr).expect("Lambert should succeed");
@@ -436,7 +476,7 @@ mod tests {
         let dep = keplerian_to_state(&leo_400km_elements(), epoch).unwrap();
         let arr = keplerian_to_state(
             &leo_800km_target_elements(),
-            epoch + Duration::from_seconds(2400.0),
+            epoch + Duration::from_seconds(LEO_COPLANAR_TOF_S),
         ).unwrap();
 
         let transfer = solve_lambert(&dep, &arr).expect("Lambert should succeed");
@@ -461,7 +501,7 @@ mod tests {
         let dep = keplerian_to_state(&leo_400km_elements(), epoch).unwrap();
         let arr = keplerian_to_state(
             &leo_800km_target_elements(),
-            epoch + Duration::from_seconds(2400.0),
+            epoch + Duration::from_seconds(LEO_COPLANAR_TOF_S),
         ).unwrap();
 
         let config = LambertConfig::default();

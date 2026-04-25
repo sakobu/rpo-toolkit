@@ -81,8 +81,22 @@ pub fn leo_400km_elements() -> KeplerianElements {
     }
 }
 
-/// LEO 800 km altitude target orbit for Lambert tests: coplanar with `leo_400km_elements`,
-/// 120° mean anomaly offset.
+/// LEO 800 km altitude target orbit for Lambert tests: coplanar with
+/// `leo_400km_elements`, with a 150° initial mean-anomaly offset.
+///
+/// The 150° offset is empirically chosen so that, paired with a 2400 s
+/// TOF (the consumer-test convention), the arrival drifts ~143° before
+/// the Lambert problem is solved — placing r2 at ~293° in the orbital
+/// plane and giving a Lambert short-way transfer angle of ~67°. With
+/// `LambertConfig::default()` (ShortWay, single-rev → Gooding under the
+/// hood, avoiding nyx 2.3.1's Izzo direction-collapse bug; see
+/// `docs/nyx-lambert-bug-report.md`), this produces a Hohmann-class
+/// transfer with Δv ≈ 0.26 km/s and a feasible periapsis altitude
+/// ~+393 km — well above [`crate::constants::MIN_PERIAPSIS_ALTITUDE_KM`].
+///
+/// The previous 120° offset produced a sub-surface conic (periapsis at
+/// −1208 km altitude). 150° keeps the pair coplanar and Hohmann-friendly
+/// while staying clear of the Lambert 180°-transfer-angle degeneracy.
 pub fn leo_800km_target_elements() -> KeplerianElements {
     KeplerianElements {
         a_km: R_EARTH + 800.0,
@@ -90,7 +104,7 @@ pub fn leo_800km_target_elements() -> KeplerianElements {
         i_rad: 51.6_f64.to_radians(),
         raan_rad: 0.0,
         aop_rad: 0.0,
-        mean_anomaly_rad: 120.0_f64.to_radians(),
+        mean_anomaly_rad: 150.0_f64.to_radians(),
     }
 }
 

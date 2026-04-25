@@ -193,6 +193,13 @@ const ORBIT_VELOCITY_UPPER_KM_S: f64 = 8.5;
 const LAMBERT_DV_LOWER_KM_S: f64 = 0.1;
 const LAMBERT_DV_UPPER_KM_S: f64 = 10.0;
 
+/// Time of flight (s) for the canonical coplanar Lambert verification
+/// (`leo_400km_elements` + `leo_800km_target_elements`). Mirrors
+/// `LEO_COPLANAR_TOF_S` in `rpo-nyx/src/lambert.rs`'s test module — the
+/// two are co-tuned with the fixture's 150° mean-anomaly offset to land
+/// on a feasible Hohmann-class transfer.
+const LEO_COPLANAR_TOF_S: f64 = 2400.0;
+
 // =========================================================================
 // RK4 J2 Integrator Self-Validation
 // =========================================================================
@@ -445,7 +452,7 @@ fn lambert_two_body_verification() {
     let dep = keplerian_to_state(&leo_400km_elements(), epoch).unwrap();
     let arr = keplerian_to_state(
         &leo_800km_target_elements(),
-        epoch + hifitime::Duration::from_seconds(2400.0),
+        epoch + hifitime::Duration::from_seconds(LEO_COPLANAR_TOF_S),
     ).unwrap();
 
     verify_lambert_against_nyx(&dep, &arr);
