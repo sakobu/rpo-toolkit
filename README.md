@@ -242,7 +242,7 @@ The CLI provides batch execution and shell-composable plumbing for scripting. Th
 
 ## Testing
 
-657 tests across 5 crates (390 rpo-core, 136 rpo-nyx, 77 rpo-cli, 41 rpo-wasm, 13 rpo-api). 32 full-physics tests are `#[ignore]` by default — running `validate`, `mc`, or `cargo test -- --ignored` downloads ~50 MB of ANISE kernels (DE440s, PCK) on first use and caches them. Analytical-only operations (`mission` without `--auto-drag`, all WASM functions) have no external dependencies.
+693 tests across 5 crates (403 rpo-core, 142 rpo-nyx, 77 rpo-cli, 48 rpo-wasm, 23 rpo-api). 32 full-physics tests are `#[ignore]` by default — running `validate`, `mc`, or `cargo test -- --ignored` downloads ~50 MB of ANISE kernels (DE440s, PCK) on first use and caches them. Analytical-only operations (`mission` without `--auto-drag`, all WASM functions) have no external dependencies.
 
 ```bash
 cargo test                      # full suite (5 crates)

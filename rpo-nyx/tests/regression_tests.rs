@@ -188,10 +188,16 @@ const ORBIT_VELOCITY_LOWER_KM_S: f64 = 6.5;
 const ORBIT_VELOCITY_UPPER_KM_S: f64 = 8.5;
 
 /// Lambert transfer total Δv reasonableness bounds (km/s).
-/// A 200 km + inclination offset transfer should require a physically
-/// meaningful Δv (> 0.1 km/s) but not an escape-class impulse (< 10 km/s).
-const LAMBERT_DV_LOWER_KM_S: f64 = 0.1;
-const LAMBERT_DV_UPPER_KM_S: f64 = 10.0;
+/// The `full_mission_scenario` fixture (200 km coplanar altitude offset,
+/// 2845 s TOF = Hohmann half-period for the transfer ellipse) is sized to
+/// land at the textbook two-impulse Hohmann Δv (~0.11 km/s). The lower
+/// bound catches degenerate near-zero solutions that would mask a broken
+/// Lambert dispatch; the upper bound is ~9× the expected Δv to catch any
+/// regression that pushes Lambert into a high-energy non-Hohmann branch
+/// (e.g., 180° plane-change degeneracy if Δi accidentally becomes nonzero,
+/// or a chord-crossing solution from a phasing bug).
+const LAMBERT_DV_LOWER_KM_S: f64 = 0.05;
+const LAMBERT_DV_UPPER_KM_S: f64 = 1.0;
 
 /// Time of flight (s) for the canonical coplanar Lambert verification
 /// (`leo_400km_elements` + `leo_800km_target_elements`). Mirrors
@@ -250,13 +256,36 @@ fn rk4_j2_integrator_self_validation() {
 fn full_mission_scenario() {
     let epoch = test_epoch();
     let chief_ke = iss_like_elements();
+    // Hohmann-class deputy: at t=0 sits 180° (inertial argument of latitude)
+    // from where the chief lands at t=TOF, so a single-rev Lambert at TOF =
+    // Hohmann period descends from a+200 km to the chief's t=TOF position
+    // with textbook two-impulse Hohmann Δv (~0.11 km/s).
+    //
+    // Geometry derivation:
+    //   u_chief_TOF = u_chief_t0 + n_chief·TOF = (45° + 60°) + 3.213 rad
+    //               = 5.045 rad
+    //   u_dep_t0    = u_chief_TOF + π          = 1.903 rad
+    //   M_dep       = u_dep_t0 − aop_dep       = 1.903 − π/4 ≈ 1.12 rad
+    //
+    // Coplanar (Δi = 0) is intentional: a 180° Lambert with non-coplanar
+    // endpoints is the worst-case degenerate regime CLAUDE.md warns about
+    // (the transfer plane is poorly defined and the solver picks a high-
+    // energy out-of-plane swing). FarField classification still satisfied
+    // via Δa/a ≈ 0.029 ≫ roe_threshold (0.005). The +200 km altitude
+    // choice is also load-bearing: at +500 km the geometry is too cleanly
+    // 180° (chord matches |r1|+|r2| to <0.005 km), and Gooding picks a
+    // degenerate transfer; +200 km provides ~5 km of natural geometric
+    // slop that keeps the solver in a well-defined regime.
+    //
+    // Earlier (M=2.0, Δi=0.05, TOF 3600 s) forced a 29.87 km/s solution
+    // — see docs/nyx-lambert-bug-report.md and the parent diagnostic plan.
     let deputy_ke = KeplerianElements {
         a_km: chief_ke.a_km + 200.0,
-        e: 0.005,
-        i_rad: chief_ke.i_rad + 0.05,
+        e: 0.0005,
+        i_rad: chief_ke.i_rad,
         raan_rad: chief_ke.raan_rad,
-        aop_rad: 0.0,
-        mean_anomaly_rad: 2.0,
+        aop_rad: chief_ke.aop_rad,
+        mean_anomaly_rad: 1.12,
     };
 
     let chief = keplerian_to_state(&chief_ke, epoch).unwrap();
@@ -267,7 +296,7 @@ fn full_mission_scenario() {
     let phase = classify_separation(&chief, &deputy, &config).unwrap();
     assert!(
         matches!(phase, MissionPhase::FarField { .. }),
-        "200 km + inclination offset should be FarField, got {phase:?}"
+        "200 km altitude offset should be FarField, got {phase:?}"
     );
 
     // Full mission plan
@@ -275,7 +304,12 @@ fn full_mission_scenario() {
         along_track_km: 5.0,
     };
 
-    let plan = plan_mission(&chief, &deputy, &perch, config, 3600.0, &LambertConfig::default())
+    // TOF = Hohmann half-period for a transfer ellipse with semi-major
+    // axis (a_chief + a_dep) / 2 = 6886 km: π·√(a_t³/μ) ≈ 2845 s. Pinned
+    // as a literal so the test failure modes don't include a unit-
+    // conversion bug in a helper, mirroring the LEO_COPLANAR_HOHMANN_TOF_S
+    // pattern in rpo-nyx/src/lambert.rs.
+    let plan = plan_mission(&chief, &deputy, &perch, config, 2845.0, &LambertConfig::default())
         .expect("mission plan should succeed");
 
     // Lambert transfer assertions
