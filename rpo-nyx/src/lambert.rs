@@ -44,7 +44,9 @@ use nalgebra::Vector3;
 use nyx_space::tools::lambert::{self, LambertInput, LambertSolution, TransferKind};
 
 use rpo_core::constants::LAMBERT_MIN_SEPARATION_KM;
-use rpo_core::propagation::lambert::{LambertConfig, LambertError, LambertTransfer, TransferDirection};
+use rpo_core::propagation::lambert::{
+    LambertConfig, LambertError, LambertTransfer, TransferDirection, TransferFeasibility,
+};
 use rpo_core::types::StateVector;
 
 use crate::nyx_bridge::state_to_orbit;
@@ -88,6 +90,7 @@ pub(crate) fn build_transfer(
     let departure_dv = v1_vec - departure.velocity_eci_km_s;
     let arrival_dv = arrival.velocity_eci_km_s - v2_vec;
     let total_dv = departure_dv.norm() + arrival_dv.norm();
+    let feasibility = TransferFeasibility::from_state(departure.position_eci_km, v1_vec);
 
     LambertTransfer {
         departure_state: StateVector {
@@ -106,6 +109,7 @@ pub(crate) fn build_transfer(
         tof_s,
         c3_km2_s2,
         direction,
+        feasibility,
     }
 }
 
@@ -232,7 +236,9 @@ mod tests {
     use super::*;
     use rpo_core::constants::R_EARTH;
     use rpo_core::elements::keplerian_conversions::keplerian_to_state;
-    use rpo_core::test_helpers::{leo_400km_elements, leo_800km_target_elements, test_epoch};
+    use rpo_core::test_helpers::{
+        ellipse_state_at_apogee, leo_400km_elements, leo_800km_target_elements, test_epoch,
+    };
     use rpo_core::types::KeplerianElements;
     use hifitime::Duration;
 
@@ -606,6 +612,118 @@ mod tests {
         assert!(
             delta_km_s > 0.01,
             "ShortWay and LongWay v_init must differ for i_h.z < 0 geometry; got Δ = {delta_km_s} km/s",
+        );
+    }
+
+    /// Tolerance on derived periapsis altitude (km) for the wiring tests
+    /// below. Looser than the rpo-core kernel test (1 µm) because these
+    /// tests construct an ellipse from `(r_p, r_apo)` then re-extract `r_p`
+    /// via `from_state`, adding one round-trip of f64 arithmetic on top of
+    /// the kernel computation. 1 m is conservative.
+    const PERIAPSIS_ALT_TEST_TOL_KM: f64 = 1.0e-3;
+
+    /// `build_transfer` must mark a circular LEO state as `Feasible` —
+    /// circular orbit at 700 km altitude has periapsis = apoapsis = 700 km,
+    /// well above the 200 km feasibility threshold
+    /// (`MIN_PERIAPSIS_ALTITUDE_KM`). Mirrors the sub-surface test: same
+    /// kernel, same constructor, opposite expected outcome.
+    ///
+    /// (The previous version of this test exercised `solve_lambert` over the
+    /// existing 400→800 km fixture, but that fixture's TOF/geometry pairing
+    /// puts the conic's perigee deep inside the Earth — see
+    /// `coplanar_transfer` which only checks Δv magnitude, not feasibility.
+    /// Fixing the upstream fixture is out of scope for the feasibility-
+    /// surfacing change; we use a synthetic feasible state here so the
+    /// wiring test doesn't depend on subtle TOF tuning.)
+    #[test]
+    fn build_transfer_flags_circular_leo_as_feasible() {
+        let epoch = test_epoch();
+        let r_km = R_EARTH + 700.0;
+        let v_circ_km_s = (rpo_core::constants::MU_EARTH / r_km).sqrt();
+
+        let dep = StateVector {
+            epoch,
+            position_eci_km: Vector3::new(r_km, 0.0, 0.0),
+            velocity_eci_km_s: Vector3::new(0.0, v_circ_km_s * 0.5, 0.0),
+        };
+        let arr = StateVector {
+            epoch: epoch + Duration::from_seconds(600.0),
+            position_eci_km: Vector3::new(0.0, r_km, 0.0),
+            velocity_eci_km_s: Vector3::zeros(),
+        };
+
+        let v1 = Vector3::new(0.0, v_circ_km_s, 0.0);
+        let v2 = Vector3::new(-v_circ_km_s, 0.0, 0.0);
+        let transfer = build_transfer(
+            &dep,
+            &arr,
+            v1,
+            v2,
+            600.0,
+            0.0,
+            TransferDirection::Auto,
+        );
+
+        assert!(
+            !transfer.feasibility.is_sub_surface(),
+            "circular 700 km LEO must classify as feasible; got {:?}",
+            transfer.feasibility,
+        );
+        let alt = transfer.feasibility.periapsis_altitude_km();
+        assert!(
+            (alt - 700.0).abs() < PERIAPSIS_ALT_TEST_TOL_KM,
+            "circular orbit periapsis altitude should be ~700 km, got {alt}",
+        );
+    }
+
+    /// `build_transfer` must mark a synthesized v1 with sub-surface periapsis
+    /// as `SubSurface`, independent of solver behavior. This is the wiring
+    /// check between the (well-tested) `TransferFeasibility::from_state`
+    /// kernel in rpo-core and the public `LambertTransfer` constructor here.
+    ///
+    /// Geometry: place departure at 1500 km altitude (apogee of a target
+    /// ellipse) with the apogee speed of an ellipse whose perigee is at
+    /// 50 km altitude. The resulting conic has periapsis below the 200 km
+    /// feasibility threshold (`MIN_PERIAPSIS_ALTITUDE_KM`).
+    #[test]
+    fn build_transfer_flags_sub_surface_geometry() {
+        let epoch = test_epoch();
+        let (r_apo_eci_km, v_apo_eci_km_s) =
+            ellipse_state_at_apogee(R_EARTH + 50.0, R_EARTH + 1500.0);
+        let v_apogee_km_s = v_apo_eci_km_s.y;
+
+        let dep = StateVector {
+            epoch,
+            position_eci_km: r_apo_eci_km,
+            velocity_eci_km_s: Vector3::new(0.0, v_apogee_km_s * 0.5, 0.0),
+        };
+        // Arrival doesn't matter for the feasibility check — feasibility is
+        // derived from the post-burn departure velocity (v1).
+        let arr = StateVector {
+            epoch: epoch + Duration::from_seconds(600.0),
+            position_eci_km: Vector3::new(0.0, r_apo_eci_km.x, 0.0),
+            velocity_eci_km_s: Vector3::zeros(),
+        };
+
+        let transfer = build_transfer(
+            &dep,
+            &arr,
+            v_apo_eci_km_s,
+            Vector3::new(-v_apogee_km_s, 0.0, 0.0),
+            600.0,
+            0.0,
+            TransferDirection::Auto,
+        );
+
+        assert!(
+            transfer.feasibility.is_sub_surface(),
+            "synthesized 50 km perigee conic must classify as sub-surface; got {:?}",
+            transfer.feasibility,
+        );
+        let alt = transfer.feasibility.periapsis_altitude_km();
+        assert!(
+            (alt - 50.0).abs() < PERIAPSIS_ALT_TEST_TOL_KM,
+            "periapsis altitude should be ~50 km, got {alt}",
         );
     }
 

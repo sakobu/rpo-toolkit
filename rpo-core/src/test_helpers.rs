@@ -335,6 +335,26 @@ pub fn propagate_test_trajectory_at(
         .expect("propagation should succeed")
 }
 
+/// Build an ECI position+velocity placed at apogee of an ellipse whose
+/// perigee is at `r_p_km` and apogee at `r_apo_km`. Velocity is purely
+/// tangential at apogee (vis-viva).
+///
+/// Used by [`crate::propagation::lambert::TransferFeasibility`] round-trip
+/// tests — and any other site that needs an analytically-known periapsis
+/// from `(r, v)` — to avoid duplicating the
+/// `a = (r_p + r_apo) / 2; v = sqrt(μ · (2/r_apo − 1/a))` recipe.
+///
+/// Returns the position+velocity pair only (not a full `StateVector`) so
+/// callers compose their own epoch.
+pub fn ellipse_state_at_apogee(
+    r_p_km: f64,
+    r_apo_km: f64,
+) -> (Vector3<f64>, Vector3<f64>) {
+    let a = 0.5 * (r_p_km + r_apo_km);
+    let v_apo_km_s = (MU_EARTH * (2.0 / r_apo_km - 1.0 / a)).sqrt();
+    (Vector3::new(r_apo_km, 0.0, 0.0), Vector3::new(0.0, v_apo_km_s, 0.0))
+}
+
 // =========================================================================
 // RK4 J2 Numerical Integrator (independent truth source for regression tests)
 // =========================================================================

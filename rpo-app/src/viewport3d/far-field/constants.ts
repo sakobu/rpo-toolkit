@@ -32,6 +32,17 @@ export const ATMOSPHERE = {
 export const CHIEF_ORBIT_COLOR = resolveColor('--color-viz-free-drift', '#f43f5e');
 export const DEPUTY_ORBIT_COLOR = resolveColor('--color-viz-analytical', '#60a5fa');
 export const TRANSFER_ARC_COLOR = resolveColor('--color-viz-numerical', '#fb923c');
+// Sub-surface (non-physical) Lambert arc: signal-abort red, but rendered
+// dashed so it doesn't visually collide with the chief orbit (which uses
+// the same hex via --color-viz-free-drift). The dashed pattern is the
+// disambiguator.
+export const TRANSFER_ARC_INFEASIBLE_COLOR = resolveColor('--color-signal-abort', '#f43f5e');
+// Drei Line dashed-line tuning: dash and gap both in scene units. With
+// Earth radius = 2 scene units, a 0.04 dash + 0.04 gap reads as a clear
+// dotted-dashed pattern at typical camera distances without the segments
+// becoming too short to perceive.
+export const TRANSFER_ARC_INFEASIBLE_DASH_SIZE = 0.04;
+export const TRANSFER_ARC_INFEASIBLE_GAP_SIZE = 0.04;
 
 export const TEXTURE_PATHS = {
   color: '/textures/earth/earth_atmos.jpg',

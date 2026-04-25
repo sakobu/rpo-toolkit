@@ -1,5 +1,6 @@
 import type { EnrichmentSuggestion, PerchFallbackReason, TransferResult } from 'rpo-wasm';
 
+import { selectTransferSubSurface, usePlanner } from '@/stores/planner';
 import { Callout } from '@/ui/Callout';
 import { Chip } from '@/ui/Chip';
 import { KV } from '@/ui/KV';
@@ -44,6 +45,11 @@ export function DeltaVReadout({
   enrichment: EnrichmentSuggestion | null;
   submitting: boolean;
 }) {
+  // Sub-surface (non-physical) conics still render their Δv numbers (so the
+  // user can see what their inputs produced) plus a periapsis callout; the
+  // parent gates the ACCEPT TRANSFER button on the same selector. Hooks must
+  // run unconditionally — keep this above the early returns.
+  const subSurface = usePlanner(selectTransferSubSurface);
   if (submitting && transfer === null) {
     return (
       <div className="flex flex-col gap-1 rounded-xs border border-border bg-surface-2 px-2 py-1.5 font-mono text-[10px] text-text-dim">
@@ -82,6 +88,17 @@ export function DeltaVReadout({
         roe={transfer.plan.perch_roe}
         enriched={enrichment?.perch.status === 'enriched'}
       />
+      {subSurface ? (
+        <Callout tone="abort">
+          <div className="flex flex-col gap-1">
+            <span className="tracking-wider uppercase">transfer passes through earth</span>
+            <span className="text-[10px] normal-case">
+              periapsis {subSurface.periapsis_altitude_km.toFixed(0)} km — adjust tof, revolutions,
+              or direction to lift the transfer ellipse above the surface.
+            </span>
+          </div>
+        </Callout>
+      ) : null}
       {fallback ? (
         <Callout tone="hold">
           <div className="flex flex-col gap-1">

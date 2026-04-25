@@ -331,6 +331,10 @@ fn bench_compute_transfer_eclipse(c: &mut Criterion) {
         tof_s: period,
         c3_km2_s2: 0.0,
         direction: TransferDirection::ShortWay,
+        feasibility: rpo_core::propagation::lambert::TransferFeasibility::from_state(
+            departure_sv.position_eci_km,
+            departure_sv.velocity_eci_km_s,
+        ),
     };
 
     c.bench_function("compute_transfer_eclipse", |b| {

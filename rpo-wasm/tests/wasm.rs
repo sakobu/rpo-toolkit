@@ -546,6 +546,10 @@ fn compute_transfer_eclipse_nominal() {
         tof_s: TEST_LAMBERT_TOF_S,
         c3_km2_s2: -30.0,
         direction: TransferDirection::Auto,
+        feasibility: rpo_core::propagation::lambert::TransferFeasibility::from_state(
+            chief_state.position_eci_km,
+            chief_state.velocity_eci_km_s,
+        ),
     };
 
     let result = rpo_wasm::eclipse::compute_transfer_eclipse(transfer, chief_state, TEST_ARC_STEPS);

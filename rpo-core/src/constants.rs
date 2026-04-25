@@ -26,6 +26,32 @@ pub const SECONDS_PER_DAY: f64 = 86_400.0;
 /// callers via the invariants on `solve_lambert` / `solve_lambert_with_config`.
 pub const LAMBERT_MIN_SEPARATION_KM: f64 = 1e-6;
 
+// --- Lambert feasibility ---
+//
+// Threshold for classifying a Lambert transfer's conic as physically
+// realizable vs. sub-surface (intersecting Earth's atmosphere/surface).
+// Consumed by `TransferFeasibility::from_state`.
+
+/// Minimum periapsis altitude (km above Earth's mean equatorial radius)
+/// for a Lambert transfer orbit to be considered physically feasible.
+///
+/// Lambert's problem produces a conic that satisfies the boundary condition
+/// (positions at t=0 and t=tof) regardless of whether the conic's perigee
+/// dips below the surface. The solver itself does not enforce a minimum
+/// periapsis. This constant is the threshold used by `build_transfer` to
+/// flag a transfer as `TransferFeasibility::SubSurface`.
+///
+/// 200 km is the atmospheric-drag floor: below this altitude, drag is
+/// strong enough that a two-body Kepler arc is no longer a faithful
+/// representation of what the spacecraft would actually fly — the arc
+/// drawn for the user would not match reality. The 100 km Kármán line
+/// (conventional "edge of space") is too permissive: it allows the arc
+/// to graze altitudes where decay timescales are measured in minutes.
+/// 200 km also keeps the check above the operational lower bound for
+/// short-duration LEO transfers without ruling out aggressive low-LEO
+/// proximity ops at typical mission altitudes (~400+ km).
+pub const MIN_PERIAPSIS_ALTITUDE_KM: f64 = 200.0;
+
 /// Number of sampled points attached to `TransferResult.arc_samples_eci_km`
 /// for visualization of the Lambert transfer ellipse.
 ///

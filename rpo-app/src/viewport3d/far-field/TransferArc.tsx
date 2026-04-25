@@ -2,7 +2,7 @@ import { useMemo } from 'react';
 import { Line } from '@react-three/drei';
 import { Quaternion, Vector3 } from 'three';
 
-import { usePlanner } from '@/stores/planner';
+import { selectTransferSubSurface, usePlanner } from '@/stores/planner';
 import type { Vec3 } from '@/viewport3d/types';
 
 import {
@@ -13,12 +13,11 @@ import {
   DV_CHEVRON_RADIAL_SEGMENTS,
   DV_CHEVRON_RADIUS,
   TRANSFER_ARC_COLOR,
+  TRANSFER_ARC_INFEASIBLE_COLOR,
+  TRANSFER_ARC_INFEASIBLE_DASH_SIZE,
+  TRANSFER_ARC_INFEASIBLE_GAP_SIZE,
 } from './constants';
 import { eciDirToScene, eciKmToScenePosition } from './coordinates';
-
-type Props = {
-  color?: string;
-};
 
 // Three's coneGeometry points along +Y by default; build a quaternion that
 // rotates that axis to the supplied unit vector.
@@ -51,13 +50,18 @@ type Scene = {
  *
  * Server returns the transfer orbit sampled once around its underlying ellipse
  * regardless of revolution count (single-rev → partial arc, multi-rev → closed
- * loop). Color (the "numerical" orange token) is the only signal distinguishing
- * the transfer from chief/deputy. `depthWrite={false}` prevents the line from
- * fighting overlapping overlays; standard depth testing still lets Earth
- * occlude the back half. Returns `null` when no transfer is active.
+ * loop). Color is the numerical orange token for feasible conics; switches to
+ * signal-abort red + dashed when the transfer's perigee dips below
+ * `MIN_PERIAPSIS_ALTITUDE_KM` (the underlying ellipse passes through Earth —
+ * drawn for visibility so the user can see why their inputs are bad, but
+ * disambiguated from the chief orbit's free-drift red by the dashed pattern).
+ * `depthWrite={false}` prevents the line from fighting overlapping overlays;
+ * standard depth testing still lets Earth occlude the back half. Returns
+ * `null` when no transfer is active.
  */
-export default function TransferArc({ color = TRANSFER_ARC_COLOR }: Props) {
+export default function TransferArc() {
   const transfer = usePlanner((s) => s.transfer);
+  const subSurface = usePlanner(selectTransferSubSurface);
 
   const scene = useMemo<Scene | null>(() => {
     if (transfer === null) return null;
@@ -92,31 +96,42 @@ export default function TransferArc({ color = TRANSFER_ARC_COLOR }: Props) {
 
   if (scene === null) return null;
 
+  const isInfeasible = subSurface !== null;
+  const lineColor = isInfeasible ? TRANSFER_ARC_INFEASIBLE_COLOR : TRANSFER_ARC_COLOR;
+
   return (
     <group>
-      <Line points={scene.points} color={color} lineWidth={ARC_LINE_WIDTH_PX} depthWrite={false} />
+      <Line
+        points={scene.points}
+        color={lineColor}
+        lineWidth={ARC_LINE_WIDTH_PX}
+        depthWrite={false}
+        dashed={isInfeasible}
+        dashSize={TRANSFER_ARC_INFEASIBLE_DASH_SIZE}
+        gapSize={TRANSFER_ARC_INFEASIBLE_GAP_SIZE}
+      />
       <mesh position={scene.departurePos}>
         <sphereGeometry
           args={[ARC_ENDPOINT_DOT_RADIUS, ARC_ENDPOINT_DOT_SEGMENTS, ARC_ENDPOINT_DOT_SEGMENTS]}
         />
-        <meshBasicMaterial color={color} />
+        <meshBasicMaterial color={lineColor} />
       </mesh>
       <mesh position={scene.arrivalPos}>
         <sphereGeometry
           args={[ARC_ENDPOINT_DOT_RADIUS, ARC_ENDPOINT_DOT_SEGMENTS, ARC_ENDPOINT_DOT_SEGMENTS]}
         />
-        <meshBasicMaterial color={color} />
+        <meshBasicMaterial color={lineColor} />
       </mesh>
       {scene.departureChevronPos !== null && scene.departureQuat !== null && (
         <mesh position={scene.departureChevronPos} quaternion={scene.departureQuat}>
           <coneGeometry args={[DV_CHEVRON_RADIUS, DV_CHEVRON_LENGTH, DV_CHEVRON_RADIAL_SEGMENTS]} />
-          <meshBasicMaterial color={color} />
+          <meshBasicMaterial color={lineColor} />
         </mesh>
       )}
       {scene.arrivalChevronPos !== null && scene.arrivalQuat !== null && (
         <mesh position={scene.arrivalChevronPos} quaternion={scene.arrivalQuat}>
           <coneGeometry args={[DV_CHEVRON_RADIUS, DV_CHEVRON_LENGTH, DV_CHEVRON_RADIAL_SEGMENTS]} />
-          <meshBasicMaterial color={color} />
+          <meshBasicMaterial color={lineColor} />
         </mesh>
       )}
     </group>

@@ -25,7 +25,7 @@ import {
   REVOLUTIONS_MIN,
 } from '@/schemas/lambertRequest';
 import { useConfig } from '@/stores/configuration';
-import { selectProximityConfig, usePlanner } from '@/stores/planner';
+import { selectProximityConfig, selectTransferSubSurface, usePlanner } from '@/stores/planner';
 import { Caps } from '@/ui/Caps';
 import { FieldErrorContext } from '@/ui/FieldErrorContext';
 import { FormField } from '@/ui/FormField';
@@ -196,7 +196,18 @@ export function TransferPanel() {
     void navigate('/proximity');
   };
 
-  const canAccept = transfer !== null && !form.isSubmitting && lambertError === null;
+  // Sub-surface conics are non-physical — block ACCEPT TRANSFER until the
+  // user adjusts their inputs (TOF, revolutions, direction) enough to lift
+  // the transfer ellipse's perigee above `MIN_PERIAPSIS_ALTITUDE_KM`. The
+  // arc and Δv readouts still render so the user can see why their inputs
+  // are bad.
+  const subSurface = usePlanner(selectTransferSubSurface);
+  const canAccept =
+    transfer !== null && !form.isSubmitting && lambertError === null && subSurface === null;
+  const acceptDisabledReason =
+    subSurface !== null
+      ? 'transfer passes through earth — adjust tof, revolutions, or direction'
+      : undefined;
 
   // Multi-rev (revolutions > 0) routes through nyx Izzo with
   // `TransferKind::NRevs`, which has no long-way variant; direction is
@@ -315,6 +326,8 @@ export function TransferPanel() {
         type="button"
         onClick={withBlur(handleAccept)}
         disabled={!canAccept}
+        aria-label={acceptDisabledReason}
+        title={acceptDisabledReason}
         className={`mt-1 flex cursor-pointer items-center justify-center gap-1.5 rounded-xs border px-2 py-1.5 font-mono text-[10px] tracking-wider uppercase transition-colors disabled:cursor-not-allowed disabled:border-border disabled:bg-surface-2 disabled:text-text-dim disabled:hover:bg-surface-2 ${
           confirmPending
             ? 'border-signal-hold bg-signal-hold-dim text-signal-hold hover:bg-signal-hold/10'

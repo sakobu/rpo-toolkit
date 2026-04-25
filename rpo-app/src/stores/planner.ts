@@ -9,6 +9,7 @@ import type {
   MissionPhase,
   ProximityConfig,
   SafetyRequirements,
+  TransferFeasibility,
   TransferResult,
   WasmError,
 } from 'rpo-wasm';
@@ -96,6 +97,18 @@ const INITIAL_PROXIMITY: Record<PhaseKey, PhaseRecord> = {
 /// reaches into WASM via `getEngineConstants`.
 export function selectProximityConfig(s: PlannerState): ProximityConfig {
   return s.proximityConfig ?? { roe_threshold: getEngineConstants().roe_threshold_default };
+}
+
+/// Returns the `SubSurface` feasibility variant when the active transfer's
+/// conic dips below `MIN_PERIAPSIS_ALTITUDE_KM` (so consumers can both gate
+/// on the predicate and read the periapsis altitude); otherwise `null`.
+///
+/// Returns `s.transfer.plan.transfer.feasibility` directly — a stable
+/// reference into the store under zustand's `Object.is` selector equality.
+/// Do not spread/clone, that would defeat memoization.
+export function selectTransferSubSurface(s: PlannerState): TransferFeasibility | null {
+  const feasibility = s.transfer?.plan.transfer?.feasibility;
+  return feasibility?.kind === 'sub_surface' ? feasibility : null;
 }
 
 // ─── Slices ────────────────────────────────────────────────────────────────
