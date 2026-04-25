@@ -26,6 +26,19 @@ pub const SECONDS_PER_DAY: f64 = 86_400.0;
 /// callers via the invariants on `solve_lambert` / `solve_lambert_with_config`.
 pub const LAMBERT_MIN_SEPARATION_KM: f64 = 1e-6;
 
+/// Number of sampled points attached to `TransferResult.arc_samples_eci_km`
+/// for visualization of the Lambert transfer ellipse.
+///
+/// The server samples the transfer arc and returns exactly this many points
+/// for any far-field plan (proximity plans return an empty vector). The
+/// single-rev case returns a partial arc from r1 to r2 (open polyline,
+/// head ≠ tail); the multi-rev case returns one full ellipse sampled
+/// uniformly in mean anomaly over one period (closed by physics — wrapping
+/// `M` by `2π` reproduces the starting position bit-for-bit). 256 points
+/// yields ~1.4° per segment (visually smooth at any scene scale) and a
+/// ~6 KB payload.
+pub const LAMBERT_ARC_SAMPLES: u32 = 256;
+
 /// Tolerance for near-circular orbit detection
 pub const ECC_TOL: f64 = 1e-10;
 

@@ -17,6 +17,10 @@ mod planning;
 pub use errors::PipelineError;
 pub use planning::plan_mission;
 
+use nalgebra::Vector3;
+
+use rpo_core::constants::LAMBERT_ARC_SAMPLES;
+use rpo_core::elements::state_to_keplerian;
 use rpo_core::mission::config::SafetyConfig;
 use rpo_core::mission::avoidance::ColaConfig;
 use rpo_core::pipeline::{
@@ -25,6 +29,7 @@ use rpo_core::pipeline::{
     compute_safety_analysis,
 };
 use rpo_core::propagation::keplerian::propagate_keplerian;
+use rpo_core::propagation::lambert::LambertTransfer;
 use rpo_core::types::StateVector;
 
 use crate::validation::convert_cola_to_burns;
@@ -54,25 +59,31 @@ pub fn compute_transfer(input: &TransferComputationInput) -> Result<TransferResu
 
     let lambert_dv_km_s = plan.transfer.as_ref().map_or(0.0, |t| t.total_dv_km_s);
 
-    let (perch_chief, perch_deputy, arrival_epoch) = if let Some(ref transfer) = plan.transfer {
-        let arrival_epoch =
-            input.chief.epoch + hifitime::Duration::from_seconds(input.lambert_tof_s);
-        let chief_traj = propagate_keplerian(&input.chief, input.lambert_tof_s, 1)?;
-        let chief_at_arrival = *chief_traj
-            .last()
-            .ok_or(rpo_core::pipeline::PipelineError::EmptyTrajectory)?;
+    let (perch_chief, perch_deputy, arrival_epoch, arc_samples_eci_km, arc_sampling_error) =
+        if let Some(ref transfer) = plan.transfer {
+            let arrival_epoch =
+                input.chief.epoch + hifitime::Duration::from_seconds(input.lambert_tof_s);
+            let chief_traj = propagate_keplerian(&input.chief, input.lambert_tof_s, 1)?;
+            let chief_at_arrival = *chief_traj
+                .last()
+                .ok_or(rpo_core::pipeline::PipelineError::EmptyTrajectory)?;
 
-        let deputy_at_perch = StateVector {
-            epoch: arrival_epoch,
-            position_eci_km: transfer.arrival_state.position_eci_km,
-            velocity_eci_km_s: transfer.arrival_state.velocity_eci_km_s
-                + transfer.arrival_dv_eci_km_s,
+            let deputy_at_perch = StateVector {
+                epoch: arrival_epoch,
+                position_eci_km: transfer.arrival_state.position_eci_km,
+                velocity_eci_km_s: transfer.arrival_state.velocity_eci_km_s
+                    + transfer.arrival_dv_eci_km_s,
+            };
+
+            let (arc, err) = match densify_visualization_arc(transfer, input.lambert_config.revolutions) {
+                Ok(arc) => (arc, None),
+                Err(e) => (Vec::new(), Some(e)),
+            };
+
+            (chief_at_arrival, deputy_at_perch, arrival_epoch, arc, err)
+        } else {
+            (input.chief, input.deputy, input.chief.epoch, Vec::new(), None)
         };
-
-        (chief_at_arrival, deputy_at_perch, arrival_epoch)
-    } else {
-        (input.chief, input.deputy, input.chief.epoch)
-    };
 
     Ok(TransferResult {
         plan,
@@ -80,7 +91,36 @@ pub fn compute_transfer(input: &TransferComputationInput) -> Result<TransferResu
         perch_deputy,
         arrival_epoch,
         lambert_dv_km_s,
+        arc_samples_eci_km,
+        arc_sampling_error,
     })
+}
+
+/// Densify the Lambert transfer ellipse for visualization.
+///
+/// Returns exactly [`LAMBERT_ARC_SAMPLES`] ECI positions: a partial arc r1→r2
+/// over the time of flight for single-rev (`revolutions == 0`, open polyline),
+/// or one full ellipse over a single orbital period for multi-rev (closed by
+/// physics — wrapping `M` by `2π` reproduces the starting state). Errors are
+/// returned as their `Display` strings for surfacing through
+/// [`TransferResult::arc_sampling_error`]; densification can fail for
+/// contrived geometries that drive Lambert toward a hyperbolic transfer
+/// orbit (e.g. very large separation with very short TOF).
+fn densify_visualization_arc(
+    transfer: &LambertTransfer,
+    revolutions: u8,
+) -> Result<Vec<Vector3<f64>>, String> {
+    let traj = if revolutions == 0 {
+        transfer
+            .densify_arc(LAMBERT_ARC_SAMPLES - 1)
+            .map_err(|e| e.to_string())?
+    } else {
+        let ke = state_to_keplerian(&transfer.departure_state).map_err(|e| e.to_string())?;
+        let period_s = ke.period().map_err(|e| e.to_string())?;
+        propagate_keplerian(&transfer.departure_state, period_s, LAMBERT_ARC_SAMPLES - 1)
+            .map_err(|e| e.to_string())?
+    };
+    Ok(traj.into_iter().map(|s| s.position_eci_km).collect())
 }
 
 /// Compute safety analysis and derive COLA burns for validation injection.
@@ -178,6 +218,12 @@ mod tests {
     /// periods for ISS-like orbits (T ~ 5 570 s), giving meaningful J2
     /// drift without multi-revolution ambiguity.
     const TEST_WAYPOINT_TOF_S: f64 = 4200.0;
+
+    /// Arc endpoint agreement with Lambert departure/arrival positions.
+    /// Inherited from `rpo-nyx/src/lambert.rs::ARC_ENDPOINT_TOL_KM`: Gooding's
+    /// velocity convergence envelope (1e-4 s) plus Kepler equation error over
+    /// the full arc gives sub-meter agreement. Use 1 m to match.
+    const ARC_ENDPOINT_AGREEMENT_TOL_KM: f64 = 1e-3;
 
     // ---- Proximity-regime test geometry ----
 
@@ -297,6 +343,68 @@ mod tests {
         // Far-field scenario should produce a Lambert transfer
         assert!(result.plan.transfer.is_some());
         assert!(result.lambert_dv_km_s > 0.0);
+        assert!(
+            result.arc_sampling_error.is_none(),
+            "well-posed single-rev should not record a sampling error"
+        );
+
+        // Single-rev (default config): the arc is the traversed partial arc
+        // from r1 to r2, time-uniform samples. Length = LAMBERT_ARC_SAMPLES
+        // (no closure sample), and the polyline endpoints match the Lambert
+        // departure/arrival positions exactly.
+        assert_eq!(
+            result.arc_samples_eci_km.len(),
+            LAMBERT_ARC_SAMPLES as usize,
+            "single-rev arc should have LAMBERT_ARC_SAMPLES points"
+        );
+        let transfer = result.plan.transfer.as_ref().unwrap();
+        let head = result.arc_samples_eci_km.first().unwrap();
+        let tail = result.arc_samples_eci_km.last().unwrap();
+        assert!(
+            (head - transfer.departure_state.position_eci_km).norm()
+                < ARC_ENDPOINT_AGREEMENT_TOL_KM,
+            "arc head must match Lambert departure position"
+        );
+        assert!(
+            (tail - transfer.arrival_state.position_eci_km).norm()
+                < ARC_ENDPOINT_AGREEMENT_TOL_KM,
+            "arc tail must match Lambert arrival position"
+        );
+    }
+
+    #[test]
+    fn test_compute_transfer_multi_rev_renders_closed_ellipse() {
+        // Multi-rev Lambert transfers trace the same underlying ellipse N+
+        // times, so the rendered polyline is the full closed ellipse over
+        // one period regardless of revolution count. Length matches single-rev
+        // (LAMBERT_ARC_SAMPLES); closure is by physics — wrapping mean anomaly
+        // by 2π reproduces the starting Kepler input bit-for-bit.
+        use rpo_core::propagation::lambert::{LambertConfig, TransferDirection};
+        let mut input = far_field_input();
+        // Give the solver enough TOF to satisfy the 1-rev requirement.
+        input.lambert_tof_s = 12_000.0;
+        input.lambert_config = LambertConfig {
+            direction: TransferDirection::Auto,
+            revolutions: 1,
+        };
+
+        let result = compute_transfer_from_pipeline(&input).expect("multi-rev compute_transfer");
+        assert!(result.plan.transfer.is_some(), "multi-rev should solve");
+        assert!(
+            result.arc_sampling_error.is_none(),
+            "well-posed multi-rev should not record a sampling error"
+        );
+        assert_eq!(
+            result.arc_samples_eci_km.len(),
+            LAMBERT_ARC_SAMPLES as usize,
+            "multi-rev arc should have LAMBERT_ARC_SAMPLES points"
+        );
+        let head = result.arc_samples_eci_km.first().unwrap();
+        let tail = result.arc_samples_eci_km.last().unwrap();
+        assert!(
+            (head - tail).norm() < ARC_ENDPOINT_AGREEMENT_TOL_KM,
+            "multi-rev arc must close (first == last within tol)"
+        );
     }
 
     #[test]
@@ -361,6 +469,16 @@ mod tests {
         assert_eq!(
             result.arrival_epoch, input.base.chief.epoch,
             "proximity arrival_epoch should equal chief epoch, not chief + lambert_tof_s"
+        );
+
+        // No Lambert transfer → no arc to render, no diagnostic.
+        assert!(
+            result.arc_samples_eci_km.is_empty(),
+            "proximity scenario should have empty arc_samples_eci_km"
+        );
+        assert!(
+            result.arc_sampling_error.is_none(),
+            "proximity scenario should not produce an arc sampling error"
         );
     }
 

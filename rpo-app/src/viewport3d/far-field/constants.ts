@@ -1,3 +1,5 @@
+import { resolveColor } from '@/utils/cssVars';
+
 export const EARTH_RADIUS = 2;
 export const EARTH_SEGMENTS = 64;
 
@@ -24,6 +26,13 @@ export const ATMOSPHERE = {
   scaleFactor: 1 + 100 / 6378.1,
 } as const;
 
+// Trajectory palette: chief/deputy reuse the spacecraft accent tokens so the
+// 3D viz matches the HTML readouts; the Lambert arc uses the numerical token
+// because it is produced by the nyx (numerical) engine, not WASM (analytical).
+export const CHIEF_ORBIT_COLOR = resolveColor('--color-viz-free-drift', '#f43f5e');
+export const DEPUTY_ORBIT_COLOR = resolveColor('--color-viz-analytical', '#60a5fa');
+export const TRANSFER_ARC_COLOR = resolveColor('--color-viz-numerical', '#fb923c');
+
 export const TEXTURE_PATHS = {
   color: '/textures/earth/earth_atmos.jpg',
   normal: '/textures/earth/earth_normal.jpg',
@@ -33,3 +42,26 @@ export const TEXTURE_PATHS = {
 // Offset to absorb Three.js SphereGeometry UV seam shift if a future texture
 // swap introduces one; keep at 0 otherwise.
 export const EARTH_TEXTURE_LON_OFFSET_RAD = 0;
+
+// Sample count for chief/deputy orbit polylines (~2.8°/segment, visually
+// smooth). The server-side Lambert arc uses LAMBERT_ARC_SAMPLES (256) and is
+// pre-densified — these client-side polylines need fewer points because the
+// orbits are simple ellipses, not partial-arc transfers.
+export const ORBIT_POLYLINE_SAMPLES = 128;
+
+// Trajectory line widths (drei Line, pixels). Thin lines avoid masking
+// spacecraft meshes at LEO altitudes where the orbit hugs Earth's limb.
+export const ORBIT_LINE_WIDTH_PX = 1.0;
+export const ARC_LINE_WIDTH_PX = 1.0;
+
+// Endpoint dot: scene units. Earth radius = 2 scene units, so 0.025 ≈ 80 km
+// physical — readable without overpowering the arc.
+export const ARC_ENDPOINT_DOT_RADIUS = 0.025;
+export const ARC_ENDPOINT_DOT_SEGMENTS = 32;
+
+// Δv chevron: a fixed-length cone glyph at each burn point, pointing along
+// Δv. Magnitude is reserved for the side-panel readout — the chevron only
+// communicates direction.
+export const DV_CHEVRON_LENGTH = 0.09;
+export const DV_CHEVRON_RADIUS = 0.025;
+export const DV_CHEVRON_RADIAL_SEGMENTS = 16;

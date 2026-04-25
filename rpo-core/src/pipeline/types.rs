@@ -4,6 +4,7 @@
 //! [`PipelineInput`] extends it with nyx-specific fields (Lambert,
 //! classification, spacecraft, Monte Carlo) for CLI and API use.
 
+use nalgebra::Vector3;
 use serde::{Deserialize, Serialize};
 
 use crate::mission::cola_assessment::{SecondaryViolation, SkippedLeg};
@@ -301,6 +302,21 @@ pub struct TransferResult {
     pub arrival_epoch: hifitime::Epoch,
     /// Lambert Δv magnitude (0.0 if proximity).
     pub lambert_dv_km_s: f64,
+    /// Densified two-body ECI positions along the Lambert arc (km).
+    ///
+    /// Populated by `rpo_nyx::pipeline::compute_transfer`. Length is exactly
+    /// [`crate::constants::LAMBERT_ARC_SAMPLES`] for far-field plans (open
+    /// partial arc for single-rev, full closed ellipse for multi-rev) and
+    /// empty for proximity plans or when arc densification fails — see
+    /// [`Self::arc_sampling_error`] to distinguish the two empty cases.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[cfg_attr(feature = "wasm", tsify(type = "[number, number, number][]"))]
+    pub arc_samples_eci_km: Vec<Vector3<f64>>,
+    /// Diagnostic message populated when arc densification failed (e.g. a
+    /// hyperbolic transfer ellipse from a contrived geometry). `None` for
+    /// successful densification or proximity plans.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub arc_sampling_error: Option<String>,
 }
 
 // ---- PipelineOutput ----

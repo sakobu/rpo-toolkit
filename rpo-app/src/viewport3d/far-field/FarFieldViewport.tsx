@@ -6,8 +6,11 @@ import { useShallow } from 'zustand/react/shallow';
 import { PRESETS, type SpacecraftConfig } from '@/schemas/spacecraft';
 import { loadedVector, useConfig } from '@/stores/configuration';
 
+import { CHIEF_ORBIT_COLOR, DEPUTY_ORBIT_COLOR } from './constants';
 import Earth from './Earth';
+import OrbitLine from './OrbitLine';
 import { computeCameraPos, computeEraRad, computeSunScenePos, FALLBACK_LIGHT_POS } from './scene';
+import TransferArc from './TransferArc';
 import VehicleMesh from './VehicleMesh';
 
 const FALLBACK_CONFIG: SpacecraftConfig = {
@@ -47,6 +50,9 @@ export default function FarFieldViewport() {
         <hemisphereLight args={['#8aa0c0', '#1a1f2c', 0.4]} />
         <directionalLight position={sunScenePos} intensity={1.0} />
         <Earth rotationY={eraRad} />
+        {chiefVector && <OrbitLine state={chiefVector} color={CHIEF_ORBIT_COLOR} />}
+        {deputyVector && <OrbitLine state={deputyVector} color={DEPUTY_ORBIT_COLOR} />}
+        <TransferArc />
         {chiefVector && <VehicleMesh vehicle="chief" config={chiefConfig} vector={chiefVector} />}
         {deputyVector && (
           <VehicleMesh vehicle="deputy" config={deputyConfig} vector={deputyVector} />

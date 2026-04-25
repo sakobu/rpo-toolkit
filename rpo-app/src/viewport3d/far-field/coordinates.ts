@@ -16,9 +16,14 @@ function sceneUnitsPerKm(): number {
 // ECI (right-handed, Z toward north pole) → Three (Y-up, right-handed).
 // Map: x→X, z→Y, y→-Z. Preserves chirality and orients Earth's rotation axis
 // along scene Y, matching how aerospace viz tools (STK, Cesium) present ECI.
-export function eciKmToScenePosition([x_km, y_km, z_km]: Vec3): Vec3 {
+export function eciDirToScene([x, y, z]: Vec3): Vec3 {
+  return [x, z, -y];
+}
+
+export function eciKmToScenePosition(r_eci_km: Vec3): Vec3 {
+  const [x, y, z] = eciDirToScene(r_eci_km);
   const s = sceneUnitsPerKm();
-  return [x_km * s, z_km * s, -y_km * s];
+  return [x * s, y * s, z * s];
 }
 
 // Same axis swap as eciKmToScenePosition; caller wraps in ERA-rotated group.
@@ -28,9 +33,10 @@ export function ecefKmToScenePosition(r_ecef_km: Vec3): Vec3 {
 
 // Normalize, apply scene axis swap, and place on a sphere of `distance` scene
 // units — used as a parallel-light source point.
-export function scaleToSceneFar([x, y, z]: Vec3, distance = 20): Vec3 {
-  const norm = Math.hypot(x, y, z);
+export function scaleToSceneFar(r_eci: Vec3, distance = 20): Vec3 {
+  const norm = Math.hypot(r_eci[0], r_eci[1], r_eci[2]);
   if (norm === 0) return [distance, 0, 0];
+  const [x, y, z] = eciDirToScene(r_eci);
   const s = distance / norm;
-  return [x * s, z * s, -y * s];
+  return [x * s, y * s, z * s];
 }

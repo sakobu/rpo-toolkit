@@ -4,11 +4,12 @@
 //! then convert back to ECI via the perifocal rotation. See Vallado Sec. 2.2–2.3 for the
 //! underlying Kepler equation and vis-viva derivation.
 
-use hifitime::Duration;
+use hifitime::{Duration, Epoch};
+use nalgebra::Vector3;
 
 use crate::constants::TWO_PI;
 use crate::elements::keplerian_conversions::{keplerian_to_state, state_to_keplerian, ConversionError};
-use crate::types::StateVector;
+use crate::types::{KeplerianElements, StateVector};
 
 /// Propagate a state vector under two-body Keplerian dynamics, producing
 /// a dense ECI trajectory of `n_steps + 1` states (including endpoints).
@@ -64,12 +65,57 @@ pub fn propagate_keplerian(
         .collect()
 }
 
+/// Sample `n_points` ECI positions uniformly in mean anomaly around one
+/// orbital period of a bound Keplerian orbit.
+///
+/// Composes [`keplerian_to_state`] with [`propagate_keplerian`] over
+/// `ke.period()`, returning only the position component. The first sample
+/// corresponds to the supplied `mean_anomaly_rad`; the last sample lands one
+/// step before completing the period, so the polyline closes by physics when
+/// consumers connect the last point back to the first. (Equivalently, calling
+/// the underlying [`propagate_keplerian`] with `n_steps = n_points` would
+/// return `n_points + 1` states with the last bit-identical to the first;
+/// this helper drops that redundant trailing state.)
+///
+/// `n_points = 0` returns an empty vector.
+///
+/// # Invariants
+/// - `ke.a_km > 0` and `0 <= ke.e < 1` (bound elliptical orbit)
+///
+/// # Errors
+/// Returns [`ConversionError`] if the elements are invalid (non-positive
+/// semi-major axis or eccentricity outside `[0, 1)`).
+pub fn sample_orbit_eci(
+    ke: &KeplerianElements,
+    n_points: u32,
+) -> Result<Vec<Vector3<f64>>, ConversionError> {
+    if n_points == 0 {
+        return Ok(Vec::new());
+    }
+
+    // Epoch is irrelevant for shape sampling — the ECI geometry of a Keplerian
+    // orbit is fixed by `(a, e, i, Ω, ω, M)` alone. Use a fixed TAI reference
+    // so the call signature stays free of an unused epoch parameter.
+    let dummy_epoch = Epoch::from_tai_seconds(0.0);
+    let initial = keplerian_to_state(ke, dummy_epoch)?;
+    let period_s = ke.period()?;
+
+    let trajectory = propagate_keplerian(&initial, period_s, n_points)?;
+    Ok(trajectory
+        .into_iter()
+        .take(n_points as usize) // u32 → usize: always safe (usize ≥ 32 bits)
+        .map(|s| s.position_eci_km)
+        .collect())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::constants::MU_EARTH;
     use crate::elements::keplerian_conversions::keplerian_to_state;
-    use crate::test_helpers::{eccentric_elements, iss_like_elements, test_epoch};
+    use crate::test_helpers::{
+        circular_equatorial_elements, eccentric_elements, iss_like_elements, test_epoch,
+    };
     use crate::types::elements::KeplerianElements;
 
 
@@ -231,5 +277,68 @@ mod tests {
                 "Angular momentum conservation violated at step {k}: error = {h_err} km²/s"
             );
         }
+    }
+
+    // -- sample_orbit_eci ---------------------------------------------------
+
+    #[test]
+    fn sample_orbit_eci_returns_n_points() {
+        let pts = sample_orbit_eci(&iss_like_elements(), 32).unwrap();
+        assert_eq!(pts.len(), 32);
+    }
+
+    #[test]
+    fn sample_orbit_eci_zero_points_returns_empty() {
+        let pts = sample_orbit_eci(&iss_like_elements(), 0).unwrap();
+        assert!(pts.is_empty());
+    }
+
+    #[test]
+    fn sample_orbit_eci_circular_orbit_constant_radius() {
+        let ke = circular_equatorial_elements();
+        let pts = sample_orbit_eci(&ke, 16).unwrap();
+        for (k, p) in pts.iter().enumerate() {
+            let rel_err = (p.norm() - ke.a_km).abs() / ke.a_km;
+            // Same Kepler-solver budget as ORBIT_CLOSURE_TOL_KM, normalized.
+            assert!(
+                rel_err < ORBIT_CLOSURE_TOL_KM / ke.a_km,
+                "sample {k}: r = {} km, a = {} km, rel err = {rel_err}",
+                p.norm(),
+                ke.a_km,
+            );
+        }
+    }
+
+    #[test]
+    fn sample_orbit_eci_closes_when_wrapped() {
+        // The first sample is at the starting mean anomaly; calling
+        // propagate_keplerian over one period evaluates an identical M on
+        // wrap, so an extra sample at "the next k" reproduces sample 0.
+        let ke = eccentric_elements();
+        let pts = sample_orbit_eci(&ke, 64).unwrap();
+        let dummy = Epoch::from_tai_seconds(0.0);
+        let sample_at_two_pi = keplerian_to_state(
+            &KeplerianElements {
+                mean_anomaly_rad: ke.mean_anomaly_rad,
+                ..ke
+            },
+            dummy,
+        )
+        .unwrap()
+        .position_eci_km;
+        let diff = (pts[0] - sample_at_two_pi).norm();
+        assert!(
+            diff < ORBIT_CLOSURE_TOL_KM,
+            "first sample and M-wrap differ by {diff} km"
+        );
+    }
+
+    #[test]
+    fn sample_orbit_eci_rejects_invalid_elements() {
+        let bad = KeplerianElements {
+            a_km: -100.0,
+            ..circular_equatorial_elements()
+        };
+        assert!(sample_orbit_eci(&bad, 8).is_err());
     }
 }

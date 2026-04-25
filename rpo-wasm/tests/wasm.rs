@@ -17,7 +17,7 @@ use rpo_core::mission::formation::EiAlignment;
 use rpo_core::mission::types::{MissionPhase, MissionPlan, PerchGeometry, Waypoint, WaypointMission};
 use rpo_core::pipeline::types::{MissionInput, PropagatorChoice, TransferResult, WaypointInput};
 use rpo_core::propagation::PropagationModel;
-use rpo_core::test_helpers::{iss_like_elements, test_epoch};
+use rpo_core::test_helpers::{circular_equatorial_elements, iss_like_elements, test_epoch};
 use rpo_core::types::{DepartureState, KeplerianElements, QuasiNonsingularROE, StateVector};
 
 // ---------------------------------------------------------------------------
@@ -168,6 +168,8 @@ fn test_transfer_result() -> TransferResult {
         perch_deputy: deputy,
         arrival_epoch: epoch,
         lambert_dv_km_s: 0.0,
+        arc_samples_eci_km: Vec::new(),
+        arc_sampling_error: None,
     }
 }
 
@@ -984,6 +986,42 @@ fn state_to_keplerian_rejects_unbound_orbit() {
     let result = rpo_wasm::elements::state_to_keplerian(state);
     assert!(result.is_err(), "unbound orbit should error");
     let err = result.unwrap_err();
+    assert!(matches!(err.code, rpo_wasm::error::WasmErrorCode::Frame));
+}
+
+/// Tolerance for orbit-sampling relative-radius check. A circular orbit
+/// sampled by `sample_orbit_eci` should produce radii equal to `a` within
+/// Kepler solver noise (~1e-14 × a).
+const ORBIT_SAMPLE_RADIUS_TOL_KM: f64 = 1e-9;
+
+#[test]
+fn sample_orbit_eci_returns_n_points() {
+    let ke = iss_like_elements();
+    let pts = rpo_wasm::elements::sample_orbit_eci(ke, 32).expect("sample_orbit_eci");
+    assert_eq!(pts.len(), 32);
+}
+
+#[test]
+fn sample_orbit_eci_circular_orbit_constant_radius() {
+    let ke = circular_equatorial_elements();
+    let pts = rpo_wasm::elements::sample_orbit_eci(ke, 16).expect("sample_orbit_eci");
+    for (k, p) in pts.iter().enumerate() {
+        let r = (p.0[0].powi(2) + p.0[1].powi(2) + p.0[2].powi(2)).sqrt();
+        assert!(
+            (r - ke.a_km).abs() < ORBIT_SAMPLE_RADIUS_TOL_KM,
+            "sample {k}: r = {r} km, expected a = {}",
+            ke.a_km
+        );
+    }
+}
+
+#[test]
+fn sample_orbit_eci_rejects_invalid_elements() {
+    let ke = KeplerianElements {
+        a_km: -100.0,
+        ..circular_equatorial_elements()
+    };
+    let err = rpo_wasm::elements::sample_orbit_eci(ke, 8).expect_err("negative SMA should error");
     assert!(matches!(err.code, rpo_wasm::error::WasmErrorCode::Frame));
 }
 

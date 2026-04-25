@@ -1,4 +1,5 @@
 import type { Vehicle } from '@/domain/vehicle';
+import { resolveColor } from '@/utils/cssVars';
 import type { Vec3 } from '@/viewport3d/types';
 
 export interface Tint {
@@ -6,15 +7,9 @@ export interface Tint {
   marker: string;
 }
 
-const resolveColor = (cssVar: string, fallback: string): string => {
-  if (typeof window === 'undefined') return fallback;
-  const value = getComputedStyle(document.documentElement).getPropertyValue(cssVar).trim();
-  return value || fallback;
-};
-
-// Chief = red = free-drift token, deputy = blue = analytical token. Accent
-// colors the equator stripe and the screen-space tracking marker; the bus
-// itself is always thermal white.
+// Accent paints the equator stripe and the screen-space tracking marker;
+// the bus itself is always thermal white. Tokens reuse the viz palette so
+// chief/deputy reads consistently across HTML panels and the 3D scene.
 const CHIEF_ACCENT = resolveColor('--color-viz-free-drift', '#f43f5e');
 const DEPUTY_ACCENT = resolveColor('--color-viz-analytical', '#60a5fa');
 

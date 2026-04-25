@@ -15,7 +15,7 @@ pub use covariance::{
 };
 pub use drag_stm::{compute_j2_drag_stm, propagate_roe_j2_drag};
 pub use j2_params::{compute_j2_params, J2Params};
-pub use keplerian::propagate_keplerian;
+pub use keplerian::{propagate_keplerian, sample_orbit_eci};
 pub use lambert::{LambertConfig, LambertError, LambertTransfer, TransferDirection};
 pub use propagator::{DragConfig, PropagatedState, PropagationError, PropagationModel};
 pub use stm::{compute_stm, compute_stm_with_params, propagate_roe_stm};

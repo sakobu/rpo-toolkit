@@ -42,6 +42,21 @@ pub fn iss_like_elements() -> KeplerianElements {
     }
 }
 
+/// Circular equatorial test orbit (a = 7000 km, e = 0).
+///
+/// Useful for invariant checks where the orbit's geometry should reduce to a
+/// pure circle in the ECI x-y plane (constant radius, zero z component).
+pub fn circular_equatorial_elements() -> KeplerianElements {
+    KeplerianElements {
+        a_km: 7000.0,
+        e: 0.0,
+        i_rad: 0.0,
+        raan_rad: 0.0,
+        aop_rad: 0.0,
+        mean_anomaly_rad: 0.0,
+    }
+}
+
 /// Eccentric test orbit (e = 0.3).
 pub fn eccentric_elements() -> KeplerianElements {
     KeplerianElements {
