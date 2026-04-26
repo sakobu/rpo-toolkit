@@ -21,7 +21,7 @@ export function loadStateVectorFromFile(file: File): Promise<Result<StateVectorI
 
 function parseJson(text: string): Result<unknown, string> {
   return pipe(
-    fromTry(() => JSON.parse(text) as unknown),
+    fromTry(() => JSON.parse(text)),
     mapErrWith((msg) => `invalid JSON: ${msg}`),
   );
 }
