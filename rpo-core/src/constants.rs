@@ -15,17 +15,6 @@ pub const TWO_PI: f64 = 2.0 * std::f64::consts::PI;
 /// Seconds per solar day (exact).
 pub const SECONDS_PER_DAY: f64 = 86_400.0;
 
-/// Minimum position separation (km) between departure and arrival for a
-/// valid Lambert problem.
-///
-/// Below this, the transfer angle is numerically undefined and both
-/// Gooding and Izzo return degenerate or NaN solutions. `1e-6 km` (1 mm)
-/// is well above f64 arithmetic noise at LEO-scale positions (≈ 7000 km)
-/// and well below any physically meaningful separation for proximity ops.
-/// Consumed by `rpo_nyx::lambert::validate_inputs` and surfaced to
-/// callers via the invariants on `solve_lambert` / `solve_lambert_with_config`.
-pub const LAMBERT_MIN_SEPARATION_KM: f64 = 1e-6;
-
 // --- Lambert feasibility ---
 //
 // Threshold for classifying a Lambert transfer's conic as physically

@@ -329,12 +329,13 @@ fn bench_compute_transfer_eclipse(c: &mut Criterion) {
         arrival_dv_eci_km_s: Vector3::zeros(),
         total_dv_km_s: 0.0,
         tof_s: period,
-        c3_km2_s2: 0.0,
+        specific_energy_km2_s2: 0.0,
         direction: TransferDirection::ShortWay,
         feasibility: rpo_core::propagation::lambert::TransferFeasibility::from_state(
             departure_sv.position_eci_km,
             departure_sv.velocity_eci_km_s,
-        ),
+        )
+        .expect("bench fixture has valid position vector"),
     };
 
     c.bench_function("compute_transfer_eclipse", |b| {

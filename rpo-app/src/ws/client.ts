@@ -253,7 +253,6 @@ function dispatch(msg: ServerMessage): void {
       updateBusyCount();
       return;
     }
-    case 'transfer_result':
     case 'drag_result':
     case 'validation_result':
     case 'monte_carlo_result':

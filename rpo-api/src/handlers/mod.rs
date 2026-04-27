@@ -1,13 +1,11 @@
-//! Handler modules for the 4 server-side operations.
+//! Handler modules for the 3 server-side operations.
 
 pub mod drag;
 pub mod mc;
-pub mod transfer;
 pub mod validate;
 
 pub(crate) use drag::handle_extract_drag;
 pub(crate) use mc::handle_mc;
-pub(crate) use transfer::handle_compute_transfer;
 pub(crate) use validate::handle_validate;
 
 use crate::protocol::{ProgressPhase, ProgressUpdate};

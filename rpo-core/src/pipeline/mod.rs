@@ -1,21 +1,26 @@
 //! Pipeline module: shared mission orchestration for CLI, API, and WASM.
 //!
 //! Owns the canonical input/output types and the mission planning entry
-//! points. Entry points ([`execute_mission_from_transfer`],
-//! [`replan_from_transfer`]) accept a pre-computed [`TransferResult`].
-//! Server-only wrappers (`compute_transfer`, `execute_mission`)
-//! that require nyx-space live in `rpo-nyx`.
+//! points. Two flavors:
+//!
+//! - **Transfer-driven** ([`compute_transfer`], [`execute_mission`],
+//!   [`plan_mission`]) — start from raw chief/deputy states and run Lambert
+//!   in-tree (Izzo via [`crate::propagation::lambert`]).
+//! - **Pre-computed transfer** ([`execute_mission_from_transfer`],
+//!   [`replan_from_transfer`]) — accept a [`TransferResult`] from a prior
+//!   [`compute_transfer`] call.
+//!
+//! All functions are WASM-eligible; nothing here depends on nyx-space.
 //!
 //! ## DAG position
 //!
 //! `constants → types → elements → propagation → mission → pipeline`
-//!
-//! The pipeline module composes — it does not modify any upstream module.
 
 pub mod convert;
 pub mod errors;
 pub mod execute;
 pub mod projections;
+pub mod transfer;
 pub mod types;
 
 pub use convert::{resolve_propagator, to_propagation_model, to_waypoints};
@@ -31,6 +36,10 @@ pub use execute::{
 pub use projections::{
     LeanPlanResult, LegSummary, LegTrajectory, TrajectoryPoint, TransferSummary,
     propagated_to_point, resample_propagated,
+};
+pub use transfer::{
+    compute_transfer, compute_transfer_with_enrichment, execute_mission, plan_mission,
+    ArcDensificationError,
 };
 pub use types::{
     default_perch, EnrichmentSuggestion, MissionInput, PipelineInput, PipelineOutput,

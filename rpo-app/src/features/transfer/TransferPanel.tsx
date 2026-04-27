@@ -34,7 +34,7 @@ import { SegControl } from '@/ui/SegControl';
 import { Slider } from '@/ui/Slider';
 import { withBlur } from '@/utils/blur';
 import { formatDurationShort } from '@/utils/format';
-import { computeTransfer } from '@/ws/transfer';
+import { computeTransfer } from '@/wasm/transfer';
 
 import { DeltaVReadout } from './DeltaVReadout';
 
@@ -73,7 +73,7 @@ export function TransferPanel() {
   const form = useForm<LambertFormValues>(schema, {
     initialValues: { ...LAMBERT_REQUEST_DEFAULTS },
     validationMode: 'live',
-    onSubmit: async (values) => {
+    onSubmit: (values) => {
       const { chiefState, deputyState } = useConfig.getState();
       const plannerState = usePlanner.getState();
       const proximityConfig = selectProximityConfig(plannerState);
@@ -90,7 +90,7 @@ export function TransferPanel() {
         revolutions: values.revolutions,
       };
 
-      const result = await computeTransfer({
+      const result = computeTransfer({
         chief_eci: chiefState.vector,
         deputy_eci: deputyState.vector,
         perch: buildPerch(values),
@@ -113,7 +113,7 @@ export function TransferPanel() {
     },
   });
 
-  useFormAutoSubmission(form, 500);
+  useFormAutoSubmission(form, 0);
 
   // Safety edits upstream must re-solve — otherwise the rendered Δv would
   // reflect an outdated enrichment (or its absence) after the user edits the
@@ -209,12 +209,6 @@ export function TransferPanel() {
       ? 'transfer passes through earth — adjust tof, revolutions, or direction'
       : undefined;
 
-  // Multi-rev (revolutions > 0) routes through nyx Izzo with
-  // `TransferKind::NRevs`, which has no long-way variant; direction is
-  // dropped server-side. See `rpo-nyx/src/lambert.rs` and the
-  // `multi_rev_ignores_direction` regression test.
-  const directionLocked = form.values.revolutions > 0;
-
   return (
     <form onSubmit={(e) => void form.handleSubmit(e)} className="flex flex-col gap-2.5">
       <Caps>lambert transfer</Caps>
@@ -285,27 +279,19 @@ export function TransferPanel() {
       </FieldErrorContext>
 
       <FormField label="Direction" name="direction" form={form} idPrefix="lambert">
-        <div className="flex flex-col gap-1">
-          <div className="flex gap-0.5 text-[10px]">
-            {DIRECTION_VALUES.map((v) => (
-              <SegControl
-                key={v}
-                active={form.values.direction === v}
-                disabled={directionLocked}
-                onClick={() => {
-                  form.setFieldValue('direction', v);
-                  form.setFieldTouched('direction');
-                }}
-              >
-                {DIRECTION_LABELS[v]}
-              </SegControl>
-            ))}
-          </div>
-          {directionLocked ? (
-            <span className="font-mono text-[9px] tracking-wide text-text-dim normal-case">
-              multi-rev uses the short-way branch
-            </span>
-          ) : null}
+        <div className="flex gap-0.5 text-[10px]">
+          {DIRECTION_VALUES.map((v) => (
+            <SegControl
+              key={v}
+              active={form.values.direction === v}
+              onClick={() => {
+                form.setFieldValue('direction', v);
+                form.setFieldTouched('direction');
+              }}
+            >
+              {DIRECTION_LABELS[v]}
+            </SegControl>
+          ))}
         </div>
       </FormField>
 

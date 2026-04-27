@@ -544,12 +544,13 @@ fn compute_transfer_eclipse_nominal() {
         arrival_dv_eci_km_s: Vector3::new(-0.001, 0.0, 0.0),
         total_dv_km_s: 0.002,
         tof_s: TEST_LAMBERT_TOF_S,
-        c3_km2_s2: -30.0,
+        specific_energy_km2_s2: -30.0,
         direction: TransferDirection::Auto,
         feasibility: rpo_core::propagation::lambert::TransferFeasibility::from_state(
             chief_state.position_eci_km,
             chief_state.velocity_eci_km_s,
-        ),
+        )
+        .expect("test fixture has valid position vector"),
     };
 
     let result = rpo_wasm::eclipse::compute_transfer_eclipse(transfer, chief_state, TEST_ARC_STEPS);

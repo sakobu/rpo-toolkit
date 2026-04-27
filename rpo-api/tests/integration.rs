@@ -1,15 +1,15 @@
 //! Integration tests for the stateless WebSocket API.
 //!
-//! Tests the stateless protocol: 5 `ClientMessage` variants (`compute_transfer`,
-//! `extract_drag`, validate, `run_mc`, cancel) and 8 `ServerMessage` variants
-//! (`transfer_result`, `drag_result`, `validation_result`, `monte_carlo_result`,
-//! progress, error, cancelled, heartbeat).
+//! Tests the stateless protocol: 4 `ClientMessage` variants (`extract_drag`,
+//! `validate`, `run_mc`, `cancel`) and 6 `ServerMessage` variants
+//! (`drag_result`, `validation_result`, `monte_carlo_result`, progress,
+//! error, cancelled, heartbeat).
 //!
 //! Each test creates its own server because `#[tokio::test]` uses a per-test
 //! runtime — a shared server would be killed when the spawning test completes.
 //!
 //! Tests are grouped by endpoint in mission-workflow order:
-//! transfer → drag → validate → MC → cancel → errors.
+//! drag → validate → MC → cancel → errors.
 
 use futures_util::{SinkExt, StreamExt};
 use rpo_core::pipeline::types::PipelineInput;
@@ -169,22 +169,6 @@ async fn recv_until_type(
 // State helpers
 // ---------------------------------------------------------------------------
 
-/// ISS-like far-field test states: chief at LEO (~6778 km), deputy at GEO-like
-/// altitude (~42164 km). Separation >> proximity threshold so Lambert is called.
-fn far_field_states() -> (Value, Value) {
-    let chief = json!({
-        "epoch": "2024-01-15T12:00:00.000000000 UTC",
-        "position_eci_km": [6778.137, 0.0, 0.0],
-        "velocity_eci_km_s": [0.0, 7.6126, 0.0]
-    });
-    let deputy = json!({
-        "epoch": "2024-01-15T12:00:00.000000000 UTC",
-        "position_eci_km": [42164.0, 0.0, 0.0],
-        "velocity_eci_km_s": [0.0, 3.0747, 0.0]
-    });
-    (chief, deputy)
-}
-
 /// Proximity test states: two states ~0.3 km apart at ISS-like altitude.
 /// δr/r ≈ 0.3 / 6778 ≈ 4.4e-5 << `roe_threshold` = 0.005 → proximity.
 fn proximity_states() -> (Value, Value) {
@@ -199,198 +183,6 @@ fn proximity_states() -> (Value, Value) {
         "velocity_eci_km_s": [0.0, 7.6123, 0.0]
     });
     (chief, deputy)
-}
-
-// ===========================================================================
-// Transfer (ComputeTransfer)
-// ===========================================================================
-
-/// Far-field: expect `transfer_result` with a Lambert solution.
-///
-/// Uses GEO-like deputy (42164 km) vs ISS-like chief (6778 km).
-/// Lambert is required; `plan.transfer` must be an object and
-/// `lambert_dv_km_s` must be positive.
-#[tokio::test]
-async fn transfer_far_field() {
-    let url = start_test_server().await;
-    let (mut ws, _) = connect_async(&url).await.unwrap();
-    let (chief_eci, deputy_eci) = far_field_states();
-
-    let resp = send_recv(
-        &mut ws,
-        json!({
-            "type": "compute_transfer",
-            "request_id": 1,
-            "chief_eci": chief_eci,
-            "deputy_eci": deputy_eci,
-            "perch": { "v_bar": { "along_track_km": 1.0 } },
-            "proximity": { "roe_threshold": 0.005 },
-            "lambert_tof_s": 3600.0,
-            "lambert_config": { "direction": "auto", "revolutions": 0 }
-        }),
-    )
-    .await;
-
-    assert_eq!(resp["type"], "transfer_result", "got: {resp}");
-    assert_eq!(resp["request_id"], 1);
-    assert!(
-        resp["result"]["plan"]["transfer"].is_object(),
-        "far-field should have Lambert transfer, got: {}",
-        resp["result"]["plan"]["transfer"]
-    );
-    assert!(
-        resp["result"]["lambert_dv_km_s"].as_f64().unwrap() > 0.0,
-        "lambert_dv_km_s should be positive"
-    );
-}
-
-/// Proximity: expect `transfer_result` with no Lambert (transfer is null).
-///
-/// States are ~0.3 km apart; δr/r << roe_threshold so no Lambert is run.
-#[tokio::test]
-async fn transfer_proximity() {
-    let url = start_test_server().await;
-    let (mut ws, _) = connect_async(&url).await.unwrap();
-    let (chief_eci, deputy_eci) = proximity_states();
-
-    let resp = send_recv(
-        &mut ws,
-        json!({
-            "type": "compute_transfer",
-            "request_id": 2,
-            "chief_eci": chief_eci,
-            "deputy_eci": deputy_eci,
-            "perch": { "v_bar": { "along_track_km": 1.0 } },
-            "proximity": { "roe_threshold": 0.005 },
-            "lambert_tof_s": 3600.0,
-            "lambert_config": { "direction": "auto", "revolutions": 0 }
-        }),
-    )
-    .await;
-
-    assert_eq!(resp["type"], "transfer_result", "got: {resp}");
-    assert_eq!(resp["request_id"], 2);
-    assert!(
-        resp["result"]["plan"]["transfer"].is_null(),
-        "proximity should have no Lambert transfer, got: {}",
-        resp["result"]["plan"]["transfer"]
-    );
-    // Proximity regime skips the Lambert solve entirely, so the reported Δv
-    // is the default-initialized 0.0 — bitwise equality captures that intent.
-    assert_eq!(
-        resp["result"]["lambert_dv_km_s"].as_f64().unwrap().to_bits(),
-        0_u64,
-        "lambert_dv_km_s should be zero for proximity"
-    );
-}
-
-/// Proximity + `safety_requirements`: wire-contract test for the `enrichment` field.
-///
-/// Asserts that `compute_transfer` with a satisfiable `safety_requirements`
-/// round-trips an `enrichment.perch.status = "enriched"` field on the wire.
-/// Exercises the serde boundary between the handler result and `ServerMessage::TransferResult`.
-#[tokio::test]
-async fn transfer_with_safety_requirements_enriches_on_wire() {
-    let url = start_test_server().await;
-    let (mut ws, _) = connect_async(&url).await.unwrap();
-    let (chief_eci, deputy_eci) = proximity_states();
-
-    let resp = send_recv(
-        &mut ws,
-        json!({
-            "type": "compute_transfer",
-            "request_id": 3,
-            "chief_eci": chief_eci,
-            "deputy_eci": deputy_eci,
-            "perch": { "v_bar": { "along_track_km": 1.0 } },
-            "proximity": { "roe_threshold": 0.005 },
-            "lambert_tof_s": 3600.0,
-            "lambert_config": { "direction": "auto", "revolutions": 0 },
-            "safety_requirements": { "min_separation_km": 0.15, "alignment": "parallel" }
-        }),
-    )
-    .await;
-
-    assert_eq!(resp["type"], "transfer_result", "got: {resp}");
-    assert_eq!(resp["request_id"], 3);
-    assert_eq!(
-        resp["enrichment"]["perch"]["status"], "enriched",
-        "safety_requirements within linearization bound should enrich: {resp}"
-    );
-    assert_eq!(
-        resp["enrichment"]["requirements"]["alignment"], "parallel",
-        "resolved alignment should be present on the wire: {resp}"
-    );
-}
-
-/// Proximity + `safety_requirements` beyond the linearization bound must
-/// produce `enrichment.perch.status = "fallback"` on the wire with the
-/// `separation_unachievable` reason, rather than dropping the enrichment field.
-#[tokio::test]
-async fn transfer_with_safety_requirements_falls_back_on_wire() {
-    let url = start_test_server().await;
-    let (mut ws, _) = connect_async(&url).await.unwrap();
-    let (chief_eci, deputy_eci) = proximity_states();
-
-    let resp = send_recv(
-        &mut ws,
-        json!({
-            "type": "compute_transfer",
-            "request_id": 4,
-            "chief_eci": chief_eci,
-            "deputy_eci": deputy_eci,
-            "perch": { "v_bar": { "along_track_km": 1.0 } },
-            "proximity": { "roe_threshold": 0.005 },
-            "lambert_tof_s": 3600.0,
-            "lambert_config": { "direction": "auto", "revolutions": 0 },
-            // 100 km separation exceeds the ~48 km linearization cap for an
-            // ISS-like chief (a ≈ 6778 km) — forces a fallback.
-            "safety_requirements": { "min_separation_km": 100.0, "alignment": "parallel" }
-        }),
-    )
-    .await;
-
-    assert_eq!(resp["type"], "transfer_result", "got: {resp}");
-    assert_eq!(resp["request_id"], 4);
-    assert_eq!(
-        resp["enrichment"]["perch"]["status"], "fallback",
-        "separation beyond linearization bound should fall back: {resp}"
-    );
-    assert!(
-        resp["enrichment"]["perch"]["unenriched_roe"].is_object(),
-        "fallback must carry the unenriched geometric baseline ROE: {resp}"
-    );
-}
-
-/// Proximity + no `safety_requirements`: wire must omit the `enrichment` field
-/// entirely (serde `skip_serializing_if` on `Option::is_none`).
-#[tokio::test]
-async fn transfer_without_safety_requirements_omits_enrichment_on_wire() {
-    let url = start_test_server().await;
-    let (mut ws, _) = connect_async(&url).await.unwrap();
-    let (chief_eci, deputy_eci) = proximity_states();
-
-    let resp = send_recv(
-        &mut ws,
-        json!({
-            "type": "compute_transfer",
-            "request_id": 5,
-            "chief_eci": chief_eci,
-            "deputy_eci": deputy_eci,
-            "perch": { "v_bar": { "along_track_km": 1.0 } },
-            "proximity": { "roe_threshold": 0.005 },
-            "lambert_tof_s": 3600.0,
-            "lambert_config": { "direction": "auto", "revolutions": 0 }
-        }),
-    )
-    .await;
-
-    assert_eq!(resp["type"], "transfer_result", "got: {resp}");
-    assert_eq!(resp["request_id"], 5);
-    assert!(
-        resp["enrichment"].is_null(),
-        "no safety_requirements → enrichment field must be absent/null: {resp}"
-    );
 }
 
 // ===========================================================================
@@ -641,24 +433,17 @@ async fn cancel_without_active_job() {
     assert_eq!(resp["type"], "cancelled", "got: {resp}");
     assert_eq!(resp["request_id"], 99);
 
-    // Connection should still be alive — send a transfer to verify.
-    let (chief_eci, deputy_eci) = proximity_states();
+    // Connection should still be alive — verify by sending another cancel.
     let resp = send_recv(
         &mut ws,
         json!({
-            "type": "compute_transfer",
-            "request_id": 100,
-            "chief_eci": chief_eci,
-            "deputy_eci": deputy_eci,
-            "perch": { "v_bar": { "along_track_km": 1.0 } },
-            "proximity": { "roe_threshold": 0.005 },
-            "lambert_tof_s": 3600.0,
-            "lambert_config": { "direction": "auto", "revolutions": 0 }
+            "type": "cancel",
+            "request_id": 100
         }),
     )
     .await;
 
-    assert_eq!(resp["type"], "transfer_result", "got: {resp}");
+    assert_eq!(resp["type"], "cancelled", "got: {resp}");
     assert_eq!(resp["request_id"], 100);
 }
 
@@ -851,7 +636,7 @@ async fn binary_frame_error() {
     assert_eq!(resp["code"], "invalid_input");
 }
 
-/// Sending a `compute_transfer` message with missing required fields must
+/// Sending an `extract_drag` message with missing required fields must
 /// produce a structured `error` response rather than a server crash or hang.
 ///
 /// serde fails to deserialize the full `ClientMessage` (including `request_id`),
@@ -864,16 +649,15 @@ async fn missing_required_fields() {
     let resp = send_recv(
         &mut ws,
         json!({
-            "type": "compute_transfer",
+            "type": "extract_drag",
             "request_id": 60
-            // missing: chief, deputy, perch, proximity, lambert_tof_s, lambert_config
+            // missing: chief_eci, deputy_eci, chief_config, deputy_config
         }),
     )
     .await;
 
     assert_eq!(resp["type"], "error", "got: {resp}");
     assert_eq!(resp["code"], "invalid_input");
-    // serde failed to parse the full message, so no request_id could be extracted.
     assert!(
         resp["request_id"].is_null(),
         "request_id should be null when serde fails to parse: got {}",
@@ -887,7 +671,6 @@ fn error_codes_serialize_to_snake_case() {
     use rpo_api::protocol::ServerErrorCode;
 
     let cases = [
-        (ServerErrorCode::LambertFailure, "lambert_failure"),
         (ServerErrorCode::NyxBridgeError, "nyx_bridge_error"),
         (ServerErrorCode::ValidationError, "validation_error"),
         (ServerErrorCode::MonteCarloError, "monte_carlo_error"),

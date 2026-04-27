@@ -304,7 +304,7 @@ pub struct TransferResult {
     pub lambert_dv_km_s: f64,
     /// Densified two-body ECI positions along the Lambert arc (km).
     ///
-    /// Populated by `rpo_nyx::pipeline::compute_transfer`. Length is exactly
+    /// Populated by [`crate::pipeline::compute_transfer`]. Length is exactly
     /// [`crate::constants::LAMBERT_ARC_SAMPLES`] for far-field plans (open
     /// partial arc for single-rev, full closed ellipse for multi-rev) and
     /// empty for proximity plans or when arc densification fails — see
@@ -312,11 +312,50 @@ pub struct TransferResult {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     #[cfg_attr(feature = "wasm", tsify(type = "[number, number, number][]"))]
     pub arc_samples_eci_km: Vec<Vector3<f64>>,
-    /// Diagnostic message populated when arc densification failed (e.g. a
-    /// hyperbolic transfer ellipse from a contrived geometry). `None` for
-    /// successful densification or proximity plans.
+    /// Typed diagnostic populated when arc densification failed (e.g. a
+    /// hyperbolic transfer arc from a contrived geometry). `None` for
+    /// successful densification or proximity plans. Serialized as the
+    /// `Display` string at the WASM boundary so the frontend can render it
+    /// without knowing the variant tags.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub arc_sampling_error: Option<String>,
+    #[serde(with = "arc_error_serde")]
+    #[cfg_attr(feature = "wasm", tsify(type = "string | null"))]
+    pub arc_sampling_error: Option<crate::pipeline::transfer::ArcDensificationError>,
+}
+
+/// `serde` adapter for [`crate::pipeline::transfer::ArcDensificationError`].
+///
+/// The error type carries structured fields (typed `From` impls in
+/// [`crate::pipeline::transfer::ArcDensificationError`]) but the wire shape
+/// is just the `Display` string — keeps the frontend's `transferResultSchema`
+/// trivial (`z.string().nullable()`) while the Rust API surfaces the typed
+/// variant.
+mod arc_error_serde {
+    use crate::pipeline::transfer::ArcDensificationError;
+    use serde::{Deserialize, Deserializer, Serialize, Serializer};
+
+    // serde's `serialize_with` ABI demands `&Option<T>`; the canonical
+    // `Option<&T>` signature isn't accepted.
+    #[allow(clippy::ref_option)]
+    pub fn serialize<S: Serializer>(
+        value: &Option<ArcDensificationError>,
+        s: S,
+    ) -> Result<S::Ok, S::Error> {
+        value.as_ref().map(ToString::to_string).serialize(s)
+    }
+
+    pub fn deserialize<'de, D: Deserializer<'de>>(
+        d: D,
+    ) -> Result<Option<ArcDensificationError>, D::Error> {
+        // `arc_sampling_error` is best-effort diagnostic; on the deserialize
+        // side we discard the typed structure (the original variant is not
+        // recoverable from a string) and store `None`. The frontend never
+        // round-trips this field through the serializer, and Rust callers
+        // that need the typed variant should consume the value before
+        // serialization.
+        let _: Option<String> = Option::deserialize(d)?;
+        Ok(None)
+    }
 }
 
 // ---- PipelineOutput ----

@@ -1,4 +1,4 @@
-//! Stateless WebSocket handler — dispatches 4 nyx operations + cancel.
+//! Stateless WebSocket handler — dispatches 3 nyx-bound operations + cancel.
 
 use crate::error::ServerError;
 use crate::handlers;
@@ -209,36 +209,6 @@ async fn handle_text_message(
     };
 
     match msg {
-        // ---- Synchronous: ComputeTransfer (~100ms) ----
-        ClientMessage::ComputeTransfer {
-            request_id,
-            chief_eci,
-            deputy_eci,
-            perch,
-            proximity,
-            lambert_tof_s,
-            lambert_config,
-            safety_requirements,
-        } => {
-            let response = match handlers::handle_compute_transfer(
-                chief_eci,
-                deputy_eci,
-                perch,
-                proximity,
-                lambert_tof_s,
-                lambert_config,
-                safety_requirements,
-            ) {
-                Ok((result, enrichment)) => ServerMessage::TransferResult {
-                    request_id,
-                    result: Box::new(result),
-                    enrichment,
-                },
-                Err(e) => e.to_server_message(Some(request_id)),
-            };
-            send_message(ws, response).await;
-        }
-
         // ---- Background: ExtractDrag (~3s) ----
         // Drag extraction checks the cancellation flag cooperatively between
         // propagation chunks and before result emission.

@@ -4,9 +4,8 @@ use std::path::Path;
 
 use serde::Deserialize;
 
-use rpo_core::propagation::LambertConfig;
+use rpo_core::propagation::lambert::{solve_lambert_with_config, LambertConfig};
 use rpo_core::types::StateVector;
-use rpo_nyx::lambert::solve_lambert_with_config;
 
 use crate::error::CliError;
 use crate::input::load_json;

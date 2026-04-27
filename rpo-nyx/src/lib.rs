@@ -20,7 +20,6 @@
 
 // Primitives -- direct nyx-space wrappers, no internal dependencies.
 pub mod nyx_bridge;
-pub mod lambert;
 
 // Utilities -- internal support, used by orchestration layers.
 pub(crate) mod statistics;

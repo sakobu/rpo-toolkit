@@ -29,7 +29,7 @@ use rpo_core::test_helpers::{
 };
 use rpo_core::types::{KeplerianElements, QuasiNonsingularROE, SpacecraftConfig, StateVector};
 
-use rpo_nyx::lambert::solve_lambert;
+use rpo_core::propagation::lambert::solve_lambert;
 use rpo_nyx::nyx_bridge;
 use rpo_nyx::pipeline::plan_mission;
 

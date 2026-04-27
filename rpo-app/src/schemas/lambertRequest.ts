@@ -51,7 +51,7 @@ export const LAMBERT_REQUEST_DEFAULTS = {
   perch_mode: 'v_bar',
   perch_offset_km: 1,
   lambert_tof_s: LAMBERT_TOF_DEFAULT_S,
-  direction: 'short_way',
+  direction: 'auto',
   revolutions: 0,
   perch_da: 0,
   perch_dlambda: 0,

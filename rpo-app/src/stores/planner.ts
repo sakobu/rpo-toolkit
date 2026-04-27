@@ -149,17 +149,32 @@ const createPhaseSlice: StateCreator<
   },
   acceptTransfer: () =>
     set(
-      (s) => ({
-        phases: {
-          ...s.phases,
-          xfr: {
-            state: 'done',
-            dimmedBy: [],
-            resets: 'all waypoints, propagation',
+      (s) => {
+        // Mirror rpo-core::pipeline::apply_perch_enrichment: when an
+        // enriched suggestion is available, commit it into the transfer's
+        // perch_roe so downstream (proximity view, waypoint planning) sees
+        // the enriched values. Baseline / fallback statuses leave perch_roe
+        // unchanged — same semantics as the Rust helper.
+        const enrichedTransfer =
+          s.transfer && s.enrichment?.perch.status === 'enriched'
+            ? {
+                ...s.transfer,
+                plan: { ...s.transfer.plan, perch_roe: s.enrichment.perch.roe },
+              }
+            : s.transfer;
+        return {
+          transfer: enrichedTransfer,
+          phases: {
+            ...s.phases,
+            xfr: {
+              state: 'done',
+              dimmedBy: [],
+              resets: 'all waypoints, propagation',
+            },
+            px: { state: 'active', dimmedBy: ['xfr'] },
           },
-          px: { state: 'active', dimmedBy: ['xfr'] },
-        },
-      }),
+        };
+      },
       false,
       'acceptTransfer',
     ),

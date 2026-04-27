@@ -9,6 +9,7 @@ use rpo_core::elements::geodetic::GeodeticError;
 use rpo_core::elements::ConversionError;
 use rpo_core::mission::{AvoidanceError, FormationDesignError, MissionEclipseError, MissionError};
 use rpo_core::pipeline::PipelineError;
+use rpo_core::propagation::lambert::LambertError;
 use rpo_core::propagation::{CovarianceError, PropagationError};
 
 /// Structured WASM error returned to JavaScript.
@@ -35,6 +36,8 @@ pub struct WasmError {
 pub enum WasmErrorCode {
     /// Mission planning error (classification, targeting, waypoints).
     Mission,
+    /// Lambert solver error (convergence, degenerate geometry).
+    Lambert,
     /// Propagation error (STM, Keplerian).
     Propagation,
     /// Covariance propagation error.
@@ -73,16 +76,59 @@ impl WasmError {
 impl From<PipelineError> for WasmError {
     fn from(e: PipelineError) -> Self {
         let code = match &e {
+            PipelineError::Mission(MissionError::Lambert(_)) => WasmErrorCode::Lambert,
             PipelineError::Mission(_) => WasmErrorCode::Mission,
-            PipelineError::Propagation(_) => WasmErrorCode::Propagation,
+            PipelineError::Propagation(_) | PipelineError::ArcDensification(_) => {
+                WasmErrorCode::Propagation
+            }
             PipelineError::Covariance(_) => WasmErrorCode::Covariance,
             PipelineError::MissingField { .. } => WasmErrorCode::MissingField,
             PipelineError::EmptyTrajectory => WasmErrorCode::EmptyTrajectory,
         };
+        let details = match &e {
+            PipelineError::Mission(MissionError::Lambert(lambert)) => Some(lambert_detail(lambert)),
+            _ => std::error::Error::source(&e).map(ToString::to_string),
+        };
         Self {
             code,
             message: e.to_string(),
-            details: std::error::Error::source(&e).map(ToString::to_string),
+            details,
+        }
+    }
+}
+
+impl From<LambertError> for WasmError {
+    fn from(e: LambertError) -> Self {
+        Self {
+            code: WasmErrorCode::Lambert,
+            message: e.to_string(),
+            details: Some(lambert_detail(&e)),
+        }
+    }
+}
+
+/// Render a [`LambertError`] as a structured key=value detail string for
+/// frontend dispatch.
+///
+/// `LambertError`'s thiserror Display string already includes the structured
+/// fields, but `WasmError::details` is a flat `String` and the source-chain
+/// fallback (`std::error::Error::source`) returns `None` for every variant
+/// (no `#[source]` fields). Without this helper the frontend would lose the
+/// numeric diagnostics (iteration count, last `|Δx|`, `n_revs`, etc.).
+fn lambert_detail(e: &LambertError) -> String {
+    match e {
+        LambertError::NonPositiveTimeOfFlight { tof_s } => format!("tof_s={tof_s}"),
+        LambertError::NonPositiveMu { mu_km3_s2 } => format!("mu_km3_s2={mu_km3_s2}"),
+        LambertError::DegeneratePositionVector { which, norm_km } => {
+            format!("which={which} norm_km={norm_km}")
+        }
+        LambertError::CollinearGeometry { sin_angle } => format!("sin_angle={sin_angle}"),
+        LambertError::NoConvergence { iterations, last_step, n_revs } => {
+            format!("iterations={iterations} last_step={last_step} n_revs={n_revs}")
+        }
+        LambertError::SingularDenominator { n_revs } => format!("n_revs={n_revs}"),
+        LambertError::NoSolutionForRevolutions { requested, max_feasible } => {
+            format!("requested={requested} max_feasible={max_feasible}")
         }
     }
 }

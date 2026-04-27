@@ -1,12 +1,15 @@
-//! WebSocket protocol types — 5 client message variants, 8 server message variants.
+//! WebSocket protocol types — 4 client message variants, 6 server message variants.
+//!
+//! The `ComputeTransfer` route (Lambert) was removed when the in-tree Izzo
+//! solver moved to `rpo-core` and became WASM-callable; the browser now
+//! computes transfers locally via `rpo-wasm` instead of round-tripping JSON
+//! through this server.
 
-use rpo_core::mission::config::{MissionConfig, ProximityConfig};
-use rpo_core::mission::formation::SafetyRequirements;
+use rpo_core::mission::config::MissionConfig;
 use rpo_core::mission::monte_carlo::types::{MonteCarloConfig, MonteCarloReport};
-use rpo_core::mission::types::{PerchGeometry, ValidationReport, WaypointMission};
-use rpo_core::pipeline::types::{EnrichmentSuggestion, PropagatorChoice, TransferResult};
+use rpo_core::mission::types::{ValidationReport, WaypointMission};
+use rpo_core::pipeline::types::PropagatorChoice;
 use rpo_core::propagation::covariance::types::MissionCovarianceReport;
-use rpo_core::propagation::lambert::LambertConfig;
 use rpo_core::propagation::propagator::DragConfig;
 use rpo_core::types::spacecraft::SpacecraftConfig;
 use rpo_core::types::state::StateVector;
@@ -59,32 +62,6 @@ pub(crate) const PROGRESS_COMPLETE: f64 = 1.0;
 #[derive(Debug, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ClientMessage {
-    /// Classify separation + solve Lambert transfer (far-field) or compute
-    /// perch states (proximity).
-    ///
-    /// Wraps `rpo_nyx::pipeline::compute_transfer()`.
-    /// ~100ms for far-field (Lambert), microseconds for proximity.
-    ComputeTransfer {
-        /// Client-assigned correlation ID.
-        request_id: u64,
-        /// Chief state vector in ECI.
-        chief_eci: StateVector,
-        /// Deputy state vector in ECI (same epoch as chief).
-        deputy_eci: StateVector,
-        /// Perch geometry for Lambert arrival.
-        perch: PerchGeometry,
-        /// Far-field vs. proximity classification thresholds.
-        proximity: ProximityConfig,
-        /// Lambert time-of-flight (seconds).
-        lambert_tof_s: f64,
-        /// Lambert solver configuration (direction, revolutions).
-        lambert_config: LambertConfig,
-        /// Optional passive-safety constraints. When present, the server
-        /// runs perch enrichment on the Lambert result before returning.
-        #[serde(default)]
-        safety_requirements: Option<SafetyRequirements>,
-    },
-
     /// Extract differential drag rates via nyx full-physics propagation (~3s).
     ///
     /// Wraps `rpo_nyx::nyx_bridge::extract_dmf_rates()`.
@@ -177,24 +154,6 @@ pub enum ClientMessage {
 #[derive(Debug, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ServerMessage {
-    /// Lambert transfer result (classification + perch states).
-    ///
-    /// The variant name deliberately matches the inner `TransferResult` type;
-    /// the serde tag `"transfer_result"` is the wire discriminant.
-    TransferResult {
-        /// Echoed correlation ID.
-        request_id: u64,
-        /// Transfer solution (boxed — largest payload, reduces enum size).
-        result: Box<TransferResult>,
-        /// Enrichment outcome. `None` when the request had no safety
-        /// requirements. `Some(Enriched)` means `result.plan.perch_roe`
-        /// carries the enriched ROE; `Some(Fallback)` means enrichment
-        /// couldn't satisfy the requirements and `perch_roe` is the
-        /// geometric baseline.
-        #[serde(skip_serializing_if = "Option::is_none")]
-        enrichment: Option<EnrichmentSuggestion>,
-    },
-
     /// Extracted differential drag configuration.
     DragResult {
         /// Echoed correlation ID.
@@ -266,8 +225,6 @@ pub enum ServerMessage {
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ServerErrorCode {
-    /// Lambert solver failed (convergence, degenerate geometry, etc.).
-    LambertFailure,
     /// Nyx bridge error (almanac, dynamics, propagation).
     NyxBridgeError,
     /// Full-physics validation error.

@@ -2,18 +2,12 @@ import * as S from '@railway-ts/pipelines/schema';
 
 import type {
   DragConfig,
-  EnrichmentSuggestion,
-  LambertConfig,
   MissionConfig,
   MissionCovarianceReport,
   MonteCarloConfig,
   MonteCarloReport,
-  PerchGeometry,
-  ProximityConfig,
-  SafetyRequirements,
   SpacecraftConfig,
   StateVector,
-  TransferResult,
   ValidationReport,
   WaypointMission,
 } from 'rpo-wasm';
@@ -21,7 +15,6 @@ import type {
 // ─── Wire tags ─────────────────────────────────────────────────────────────
 
 export const CLIENT_MESSAGE_TYPES = [
-  'compute_transfer',
   'extract_drag',
   'validate',
   'run_mc',
@@ -29,7 +22,6 @@ export const CLIENT_MESSAGE_TYPES = [
 ] as const;
 
 export const SERVER_MESSAGE_TYPES = [
-  'transfer_result',
   'drag_result',
   'validation_result',
   'monte_carlo_result',
@@ -48,7 +40,6 @@ export type ServerMessageType = (typeof SERVER_MESSAGE_TYPES)[number];
 // `connection_lost` is a client-only synthetic code for promises drained on
 // socket close — it never appears on the wire.
 export const SERVER_ERROR_CODES = [
-  'lambert_failure',
   'nyx_bridge_error',
   'validation_error',
   'monte_carlo_error',
@@ -71,18 +62,6 @@ export const PROGRESS_PHASES = ['validate', 'mc'] as const;
 export type ProgressPhase = (typeof PROGRESS_PHASES)[number];
 
 // ─── Client → server message shapes ────────────────────────────────────────
-
-export type ComputeTransferMsg = {
-  type: 'compute_transfer';
-  request_id: number;
-  chief_eci: StateVector;
-  deputy_eci: StateVector;
-  perch: PerchGeometry;
-  proximity: ProximityConfig;
-  lambert_tof_s: number;
-  lambert_config: LambertConfig;
-  safety_requirements?: SafetyRequirements;
-};
 
 export type ExtractDragMsg = {
   type: 'extract_drag';
@@ -127,21 +106,9 @@ export type RunMcMsg = {
 
 export type CancelMsg = { type: 'cancel'; request_id: number };
 
-export type ClientMessage =
-  | ComputeTransferMsg
-  | ExtractDragMsg
-  | ValidateMsg
-  | RunMcMsg
-  | CancelMsg;
+export type ClientMessage = ExtractDragMsg | ValidateMsg | RunMcMsg | CancelMsg;
 
 // ─── Server → client message shapes ────────────────────────────────────────
-
-export type TransferResultMsg = {
-  type: 'transfer_result';
-  request_id: number;
-  result: TransferResult;
-  enrichment?: EnrichmentSuggestion;
-};
 
 export type DragResultMsg = {
   type: 'drag_result';
@@ -182,7 +149,6 @@ export type CancelledMsg = { type: 'cancelled'; request_id: number };
 export type HeartbeatMsg = { type: 'heartbeat'; seq: number };
 
 export type ServerMessage =
-  | TransferResultMsg
   | DragResultMsg
   | ValidationResultMsg
   | MonteCarloResultMsg
@@ -193,17 +159,15 @@ export type ServerMessage =
 
 // Maps a request-emitting client message to the success-response variant it
 // waits for. Used by the client singleton to register resolvers.
-export type ResponseForRequest<T extends ClientMessage> = T extends ComputeTransferMsg
-  ? TransferResultMsg
-  : T extends ExtractDragMsg
-    ? DragResultMsg
-    : T extends ValidateMsg
-      ? ValidationResultMsg
-      : T extends RunMcMsg
-        ? MonteCarloResultMsg
-        : T extends CancelMsg
-          ? CancelledMsg
-          : never;
+export type ResponseForRequest<T extends ClientMessage> = T extends ExtractDragMsg
+  ? DragResultMsg
+  : T extends ValidateMsg
+    ? ValidationResultMsg
+    : T extends RunMcMsg
+      ? MonteCarloResultMsg
+      : T extends CancelMsg
+        ? CancelledMsg
+        : never;
 
 // ─── Validation schemas (parse-at-boundary) ────────────────────────────────
 
@@ -211,13 +175,6 @@ export type ResponseForRequest<T extends ClientMessage> = T extends ComputeTrans
 // to their tsify-generated TS types. rpo-wasm is the authoritative source —
 // duplicating its ~400-line surface as railway-ts schemas would only rot.
 const unknownValue: S.Validator<unknown, unknown> = S.transform<unknown, unknown>((v) => v);
-
-const transferResultSchema = S.object({
-  type: S.required(S.literal('transfer_result')),
-  request_id: S.required(S.number()),
-  result: S.required(unknownValue),
-  enrichment: S.optional(unknownValue),
-});
 
 const dragResultSchema = S.object({
   type: S.required(S.literal('drag_result')),
@@ -269,7 +226,6 @@ const heartbeatSchema = S.object({
 });
 
 export const serverMessageSchema = S.discriminatedUnion('type', {
-  transfer_result: transferResultSchema,
   drag_result: dragResultSchema,
   validation_result: validationResultSchema,
   monte_carlo_result: monteCarloResultSchema,

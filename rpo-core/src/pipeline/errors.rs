@@ -5,13 +5,18 @@
 
 use crate::elements::keplerian_conversions::ConversionError;
 use crate::mission::errors::MissionError;
+use crate::pipeline::transfer::ArcDensificationError;
 use crate::propagation::covariance::CovarianceError;
 use crate::propagation::propagator::PropagationError;
 
 /// Unified error type for pipeline operations.
+///
+/// Lambert solver errors flow through [`MissionError::Lambert`] (auto-`#[from]`)
+/// rather than appearing here directly — every pipeline call site routes Lambert
+/// failures through the mission planner.
 #[derive(Debug, thiserror::Error)]
 pub enum PipelineError {
-    /// Mission planning error (classification, targeting, waypoints).
+    /// Mission planning error (classification, targeting, waypoints, Lambert).
     #[error(transparent)]
     Mission(#[from] MissionError),
     /// Propagation error (STM, Keplerian).
@@ -20,6 +25,9 @@ pub enum PipelineError {
     /// Covariance propagation error.
     #[error(transparent)]
     Covariance(#[from] CovarianceError),
+    /// Lambert visualization-arc densification error.
+    #[error(transparent)]
+    ArcDensification(#[from] ArcDensificationError),
     /// A required field is missing for the requested operation.
     #[error("{field} required for {context}")]
     MissingField {

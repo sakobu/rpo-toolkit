@@ -5,9 +5,9 @@
 //! underlying Kepler equation and vis-viva derivation.
 
 use hifitime::{Duration, Epoch};
-use nalgebra::Vector3;
+use nalgebra::{Matrix3, Vector3};
 
-use crate::constants::TWO_PI;
+use crate::constants::{MU_EARTH, TWO_PI};
 use crate::elements::keplerian_conversions::{keplerian_to_state, state_to_keplerian, ConversionError};
 use crate::types::{KeplerianElements, StateVector};
 
@@ -46,23 +46,110 @@ pub fn propagate_keplerian(
     if n_steps == 0 {
         return Ok(vec![*initial]);
     }
-
     let ke = state_to_keplerian(initial)?;
-    let n = ke.mean_motion()?;
+    propagate_keplerian_from_elements(&ke, initial.epoch, duration_s, n_steps)
+}
+
+/// Propagate from pre-converted Keplerian elements with the perifocal→ECI
+/// rotation hoisted out of the per-step loop.
+///
+/// Saves the per-step `state_to_keplerian` reconversion (avoids one Kepler
+/// solve per step) and the per-step rotation-matrix rebuild (six trig calls
+/// per step) versus calling [`propagate_keplerian`] when the caller already
+/// has Keplerian elements in hand. Used by Lambert arc densification, where
+/// `LAMBERT_ARC_SAMPLES` is large enough (256) for the savings to dominate.
+///
+/// # Invariants
+///
+/// - `ke.a_km > 0`, `0 ≤ ke.e < 1` (validated)
+/// - `duration_s` finite
+/// - `n_steps` ≥ 1; `n_steps = 0` returns a single sample at the input
+///   mean anomaly.
+///
+/// # Errors
+///
+/// Returns [`ConversionError`] if the elements fail validation or any
+/// per-step Kepler solve fails to converge.
+pub fn propagate_keplerian_from_elements(
+    ke: &KeplerianElements,
+    initial_epoch: Epoch,
+    duration_s: f64,
+    n_steps: u32,
+) -> Result<Vec<StateVector>, ConversionError> {
+    ke.validate()?;
+    let n_mean_motion = ke.mean_motion()?;
+
+    let p = ke.a_km * (1.0 - ke.e * ke.e);
+    let sqrt_mu_over_p = (MU_EARTH / p).sqrt();
+
+    // Perifocal → ECI rotation depends only on (i, Ω, ω); constant across
+    // all steps. Same matrix construction as `keplerian_to_state` (Vallado
+    // Algorithm 10).
+    let cos_o = ke.raan_rad.cos();
+    let sin_o = ke.raan_rad.sin();
+    let cos_i = ke.i_rad.cos();
+    let sin_i = ke.i_rad.sin();
+    let cos_w = ke.aop_rad.cos();
+    let sin_w = ke.aop_rad.sin();
+    let rot = Matrix3::new(
+        cos_o * cos_w - sin_o * sin_w * cos_i,
+        -cos_o * sin_w - sin_o * cos_w * cos_i,
+        0.0,
+        sin_o * cos_w + cos_o * sin_w * cos_i,
+        -sin_o * sin_w + cos_o * cos_w * cos_i,
+        0.0,
+        sin_w * sin_i,
+        cos_w * sin_i,
+        0.0,
+    );
+
+    if n_steps == 0 {
+        let nu = ke.true_anomaly()?;
+        return Ok(vec![pqw_to_state(p, ke.e, sqrt_mu_over_p, nu, &rot, initial_epoch)]);
+    }
 
     let step = duration_s / f64::from(n_steps);
     (0..=n_steps)
         .map(|k| {
             let dt = f64::from(k) * step;
-            let epoch_k = initial.epoch + Duration::from_seconds(dt);
-            let m_k = (ke.mean_anomaly_rad + n * dt).rem_euclid(TWO_PI);
-            let ke_k = crate::types::KeplerianElements {
+            let epoch_k = initial_epoch + Duration::from_seconds(dt);
+            let m_k = (ke.mean_anomaly_rad + n_mean_motion * dt).rem_euclid(TWO_PI);
+            // Construct a temp KE only to reuse the validated `true_anomaly`
+            // Kepler solve; the rotation/`p` work above is already hoisted,
+            // so the temp struct is essentially a `(M, e)` argument bundle.
+            let ke_k = KeplerianElements {
                 mean_anomaly_rad: m_k,
-                ..ke
+                ..*ke
             };
-            keplerian_to_state(&ke_k, epoch_k)
+            let nu = ke_k.true_anomaly()?;
+            Ok(pqw_to_state(p, ke.e, sqrt_mu_over_p, nu, &rot, epoch_k))
         })
         .collect()
+}
+
+/// Build an ECI [`StateVector`] from `(p, e, sqrt(μ/p), ν)` and a precomputed
+/// PQW→ECI rotation. Internal helper for [`propagate_keplerian_from_elements`].
+fn pqw_to_state(
+    p_km: f64,
+    e: f64,
+    sqrt_mu_over_p: f64,
+    nu_rad: f64,
+    rot: &Matrix3<f64>,
+    epoch: Epoch,
+) -> StateVector {
+    let (sin_nu, cos_nu) = nu_rad.sin_cos();
+    let r = p_km / (1.0 + e * cos_nu);
+    let r_pqw = Vector3::new(r * cos_nu, r * sin_nu, 0.0);
+    let v_pqw = Vector3::new(
+        -sqrt_mu_over_p * sin_nu,
+        sqrt_mu_over_p * (e + cos_nu),
+        0.0,
+    );
+    StateVector {
+        epoch,
+        position_eci_km: rot * r_pqw,
+        velocity_eci_km_s: rot * v_pqw,
+    }
 }
 
 /// Sample `n_points` ECI positions uniformly in mean anomaly around one

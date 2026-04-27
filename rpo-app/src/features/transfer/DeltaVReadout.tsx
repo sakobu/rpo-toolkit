@@ -85,7 +85,11 @@ export function DeltaVReadout({
         ) : null}
       </div>
       <PerchRoeDetails
-        roe={transfer.plan.perch_roe}
+        roe={
+          enrichment?.perch.status === 'enriched'
+            ? enrichment.perch.roe
+            : transfer.plan.perch_roe
+        }
         enriched={enrichment?.perch.status === 'enriched'}
       />
       {subSurface ? (
