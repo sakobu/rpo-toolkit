@@ -27,8 +27,11 @@ export const ATMOSPHERE = {
 } as const;
 
 // Trajectory palette: chief/deputy reuse the spacecraft accent tokens so the
-// 3D viz matches the HTML readouts; the Lambert arc uses the numerical token
-// because it is produced by the nyx (numerical) engine, not WASM (analytical).
+// 3D viz matches the HTML readouts; the Lambert arc gets the numerical accent
+// so it reads as a third, distinct trajectory next to chief (red) and deputy
+// (blue). The `--color-viz-numerical` token name is a holdover from when
+// Lambert ran on the nyx engine — renaming the design token is a separate
+// decision, so the token name stays.
 export const CHIEF_ORBIT_COLOR = resolveColor('--color-viz-free-drift', '#f43f5e');
 export const DEPUTY_ORBIT_COLOR = resolveColor('--color-viz-analytical', '#60a5fa');
 export const TRANSFER_ARC_COLOR = resolveColor('--color-viz-numerical', '#fb923c');
@@ -55,9 +58,9 @@ export const TEXTURE_PATHS = {
 export const EARTH_TEXTURE_LON_OFFSET_RAD = 0;
 
 // Sample count for chief/deputy orbit polylines (~2.8°/segment, visually
-// smooth). The server-side Lambert arc uses LAMBERT_ARC_SAMPLES (256) and is
-// pre-densified — these client-side polylines need fewer points because the
-// orbits are simple ellipses, not partial-arc transfers.
+// smooth). Higher than the Lambert arc's LAMBERT_ARC_SAMPLES because
+// chief/deputy trace full closed ellipses where every segment is visible,
+// vs the transfer arc which is often a partial sweep.
 export const ORBIT_POLYLINE_SAMPLES = 128;
 
 // Trajectory line widths (drei Line, pixels). Thin lines avoid masking
@@ -65,14 +68,14 @@ export const ORBIT_POLYLINE_SAMPLES = 128;
 export const ORBIT_LINE_WIDTH_PX = 1.0;
 export const ARC_LINE_WIDTH_PX = 1.0;
 
-// Endpoint dot: scene units. Earth radius = 2 scene units, so 0.025 ≈ 80 km
-// physical — readable without overpowering the arc.
-export const ARC_ENDPOINT_DOT_RADIUS = 0.025;
-export const ARC_ENDPOINT_DOT_SEGMENTS = 32;
-
-// Δv chevron: a fixed-length cone glyph at each burn point, pointing along
-// Δv. Magnitude is reserved for the side-panel readout — the chevron only
-// communicates direction.
-export const DV_CHEVRON_LENGTH = 0.09;
-export const DV_CHEVRON_RADIUS = 0.025;
-export const DV_CHEVRON_RADIAL_SEGMENTS = 16;
+// Δv burn-vector arrow: shaft (cylinder) + arrowhead (cone), aligned with
+// the Δv direction at each burn point. Magnitude lives in the side-panel
+// readout — the arrow length is fixed regardless of |Δv|. No anchor sphere:
+// the spacecraft icon already marks the burn position, and an extra sphere
+// occluded it. Total extent ~0.105 scene units ≈ 335 km — visible without
+// overrunning the spacecraft icon (~290 km extent).
+export const DV_ARROW_SHAFT_LENGTH = 0.075;
+export const DV_ARROW_SHAFT_RADIUS = 0.003;
+export const DV_ARROW_HEAD_LENGTH = 0.03;
+export const DV_ARROW_HEAD_RADIUS = 0.009;
+export const DV_ARROW_RADIAL_SEGMENTS = 16;

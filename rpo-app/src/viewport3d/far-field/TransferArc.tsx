@@ -6,12 +6,12 @@ import { selectTransferSubSurface, usePlanner } from '@/stores/planner';
 import type { Vec3 } from '@/viewport3d/types';
 
 import {
-  ARC_ENDPOINT_DOT_RADIUS,
-  ARC_ENDPOINT_DOT_SEGMENTS,
   ARC_LINE_WIDTH_PX,
-  DV_CHEVRON_LENGTH,
-  DV_CHEVRON_RADIAL_SEGMENTS,
-  DV_CHEVRON_RADIUS,
+  DV_ARROW_HEAD_LENGTH,
+  DV_ARROW_HEAD_RADIUS,
+  DV_ARROW_RADIAL_SEGMENTS,
+  DV_ARROW_SHAFT_LENGTH,
+  DV_ARROW_SHAFT_RADIUS,
   TRANSFER_ARC_COLOR,
   TRANSFER_ARC_INFEASIBLE_COLOR,
   TRANSFER_ARC_INFEASIBLE_DASH_SIZE,
@@ -19,45 +19,57 @@ import {
 } from './constants';
 import { eciDirToScene, eciKmToScenePosition } from './coordinates';
 
-// Three's coneGeometry points along +Y by default; build a quaternion that
-// rotates that axis to the supplied unit vector.
-const CONE_AXIS = new Vector3(0, 1, 0);
+// Cylinder + cone geometries both point along +Y by default; one quaternion
+// rotates that axis to the Δv unit vector and orients shaft and head together.
+const ARROW_AXIS = new Vector3(0, 1, 0);
 function quaternionFromYTo(dir: Vector3): Quaternion {
-  return new Quaternion().setFromUnitVectors(CONE_AXIS, dir);
+  return new Quaternion().setFromUnitVectors(ARROW_AXIS, dir);
 }
 
-// Chevron's coneGeometry origin is the centroid; offset by half the cone
-// length along `dir` so the base sits on the burn point and the apex points
-// outward along Δv.
-function chevronPos(base: Vec3, dir: Vector3, halfLength: number): Vec3 {
-  return [base[0] + dir.x * halfLength, base[1] + dir.y * halfLength, base[2] + dir.z * halfLength];
+// Both primitives are positioned by their centroid, so the centroidOffset
+// from the burn point is half-shaft for the shaft and shaft+half-head for
+// the head. That places the shaft base at the burn point and the head tip
+// at burn point + total arrow length along Δv.
+function offsetAlong(base: Vec3, dir: Vector3, centroidOffset: number): Vec3 {
+  return [
+    base[0] + dir.x * centroidOffset,
+    base[1] + dir.y * centroidOffset,
+    base[2] + dir.z * centroidOffset,
+  ];
+}
+
+type Arrow = {
+  shaftPos: Vec3;
+  headPos: Vec3;
+  quat: Quaternion;
+};
+
+function buildArrow(burnPos: Vec3, dvDir: Vector3): Arrow {
+  return {
+    shaftPos: offsetAlong(burnPos, dvDir, DV_ARROW_SHAFT_LENGTH * 0.5),
+    headPos: offsetAlong(burnPos, dvDir, DV_ARROW_SHAFT_LENGTH + DV_ARROW_HEAD_LENGTH * 0.5),
+    quat: quaternionFromYTo(dvDir),
+  };
 }
 
 type Scene = {
   points: Vec3[];
-  departurePos: Vec3;
-  arrivalPos: Vec3;
-  departureDir: Vector3 | null;
-  arrivalDir: Vector3 | null;
-  departureChevronPos: Vec3 | null;
-  arrivalChevronPos: Vec3 | null;
-  departureQuat: Quaternion | null;
-  arrivalQuat: Quaternion | null;
+  departureArrow: Arrow | null;
+  arrivalArrow: Arrow | null;
 };
 
 /**
- * Lambert transfer ellipse + endpoint dots + Δv chevrons.
+ * Lambert transfer ellipse + Δv burn-vector arrows.
  *
- * Server returns the transfer orbit sampled once around its underlying ellipse
- * regardless of revolution count (single-rev → partial arc, multi-rev → closed
- * loop). Color is the numerical orange token for feasible conics; switches to
- * signal-abort red + dashed when the transfer's perigee dips below
- * `MIN_PERIAPSIS_ALTITUDE_KM` (the underlying ellipse passes through Earth —
- * drawn for visibility so the user can see why their inputs are bad, but
- * disambiguated from the chief orbit's free-drift red by the dashed pattern).
- * `depthWrite={false}` prevents the line from fighting overlapping overlays;
- * standard depth testing still lets Earth occlude the back half. Returns
- * `null` when no transfer is active.
+ * Each burn gets a shaft + arrowhead pointing along its Δv direction,
+ * starting at the burn point itself (no anchor sphere — the spacecraft icon
+ * already marks the position). Arrow length is fixed; magnitude lives in
+ * the side-panel readout. Color is the numerical-token orange for feasible
+ * conics; switches to signal-abort red + dashed when the perigee dips
+ * below `MIN_PERIAPSIS_ALTITUDE_KM`, so the user can see *why* the inputs
+ * are bad without confusing it for the chief's free-drift red. Standard
+ * depth testing lets Earth occlude the back half. Returns `null` when no
+ * transfer is active.
  */
 export default function TransferArc() {
   const transfer = usePlanner((s) => s.transfer);
@@ -80,17 +92,10 @@ export default function TransferArc() {
     const departureDir = departureMag > 0 ? departureDv.divideScalar(departureMag) : null;
     const arrivalDir = arrivalMag > 0 ? arrivalDv.divideScalar(arrivalMag) : null;
 
-    const halfLength = DV_CHEVRON_LENGTH * 0.5;
     return {
       points,
-      departurePos,
-      arrivalPos,
-      departureDir,
-      arrivalDir,
-      departureChevronPos: departureDir ? chevronPos(departurePos, departureDir, halfLength) : null,
-      arrivalChevronPos: arrivalDir ? chevronPos(arrivalPos, arrivalDir, halfLength) : null,
-      departureQuat: departureDir ? quaternionFromYTo(departureDir) : null,
-      arrivalQuat: arrivalDir ? quaternionFromYTo(arrivalDir) : null,
+      departureArrow: departureDir ? buildArrow(departurePos, departureDir) : null,
+      arrivalArrow: arrivalDir ? buildArrow(arrivalPos, arrivalDir) : null,
     };
   }, [transfer]);
 
@@ -105,35 +110,36 @@ export default function TransferArc() {
         points={scene.points}
         color={lineColor}
         lineWidth={ARC_LINE_WIDTH_PX}
-        depthWrite={false}
         dashed={isInfeasible}
         dashSize={TRANSFER_ARC_INFEASIBLE_DASH_SIZE}
         gapSize={TRANSFER_ARC_INFEASIBLE_GAP_SIZE}
       />
-      <mesh position={scene.departurePos}>
-        <sphereGeometry
-          args={[ARC_ENDPOINT_DOT_RADIUS, ARC_ENDPOINT_DOT_SEGMENTS, ARC_ENDPOINT_DOT_SEGMENTS]}
+      {scene.departureArrow !== null && <DvArrow arrow={scene.departureArrow} color={lineColor} />}
+      {scene.arrivalArrow !== null && <DvArrow arrow={scene.arrivalArrow} color={lineColor} />}
+    </group>
+  );
+}
+
+function DvArrow({ arrow, color }: { arrow: Arrow; color: string }) {
+  return (
+    <group>
+      <mesh position={arrow.shaftPos} quaternion={arrow.quat}>
+        <cylinderGeometry
+          args={[
+            DV_ARROW_SHAFT_RADIUS,
+            DV_ARROW_SHAFT_RADIUS,
+            DV_ARROW_SHAFT_LENGTH,
+            DV_ARROW_RADIAL_SEGMENTS,
+          ]}
         />
-        <meshBasicMaterial color={lineColor} />
+        <meshBasicMaterial color={color} />
       </mesh>
-      <mesh position={scene.arrivalPos}>
-        <sphereGeometry
-          args={[ARC_ENDPOINT_DOT_RADIUS, ARC_ENDPOINT_DOT_SEGMENTS, ARC_ENDPOINT_DOT_SEGMENTS]}
+      <mesh position={arrow.headPos} quaternion={arrow.quat}>
+        <coneGeometry
+          args={[DV_ARROW_HEAD_RADIUS, DV_ARROW_HEAD_LENGTH, DV_ARROW_RADIAL_SEGMENTS]}
         />
-        <meshBasicMaterial color={lineColor} />
+        <meshBasicMaterial color={color} />
       </mesh>
-      {scene.departureChevronPos !== null && scene.departureQuat !== null && (
-        <mesh position={scene.departureChevronPos} quaternion={scene.departureQuat}>
-          <coneGeometry args={[DV_CHEVRON_RADIUS, DV_CHEVRON_LENGTH, DV_CHEVRON_RADIAL_SEGMENTS]} />
-          <meshBasicMaterial color={lineColor} />
-        </mesh>
-      )}
-      {scene.arrivalChevronPos !== null && scene.arrivalQuat !== null && (
-        <mesh position={scene.arrivalChevronPos} quaternion={scene.arrivalQuat}>
-          <coneGeometry args={[DV_CHEVRON_RADIUS, DV_CHEVRON_LENGTH, DV_CHEVRON_RADIAL_SEGMENTS]} />
-          <meshBasicMaterial color={lineColor} />
-        </mesh>
-      )}
     </group>
   );
 }

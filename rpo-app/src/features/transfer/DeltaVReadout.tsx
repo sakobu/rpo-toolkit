@@ -39,24 +39,15 @@ function EnrichmentBadge({ enrichment }: { enrichment: EnrichmentSuggestion | nu
 export function DeltaVReadout({
   transfer,
   enrichment,
-  submitting,
 }: {
   transfer: TransferResult | null;
   enrichment: EnrichmentSuggestion | null;
-  submitting: boolean;
 }) {
   // Sub-surface (non-physical) conics still render their Δv numbers (so the
   // user can see what their inputs produced) plus a periapsis callout; the
   // parent gates the ACCEPT TRANSFER button on the same selector. Hooks must
   // run unconditionally — keep this above the early returns.
   const subSurface = usePlanner(selectTransferSubSurface);
-  if (submitting && transfer === null) {
-    return (
-      <div className="flex flex-col gap-1 rounded-xs border border-border bg-surface-2 px-2 py-1.5 font-mono text-[10px] text-text-dim">
-        solving…
-      </div>
-    );
-  }
   if (transfer === null) {
     return (
       <div className="flex flex-col gap-1 rounded-xs border border-border bg-surface-2 px-2 py-1.5">
@@ -86,19 +77,18 @@ export function DeltaVReadout({
       </div>
       <PerchRoeDetails
         roe={
-          enrichment?.perch.status === 'enriched'
-            ? enrichment.perch.roe
-            : transfer.plan.perch_roe
+          enrichment?.perch.status === 'enriched' ? enrichment.perch.roe : transfer.plan.perch_roe
         }
         enriched={enrichment?.perch.status === 'enriched'}
       />
       {subSurface ? (
         <Callout tone="abort">
           <div className="flex flex-col gap-1">
-            <span className="tracking-wider uppercase">transfer passes through earth</span>
-            <span className="text-[10px] normal-case">
-              periapsis {subSurface.periapsis_altitude_km.toFixed(0)} km — adjust tof, revolutions,
-              or direction to lift the transfer ellipse above the surface.
+            <span className="tracking-wider uppercase">transfer below 200 km altitude floor</span>
+            <span className="text-[10px] lowercase">
+              periapsis {subSurface.periapsis_altitude_km.toFixed(0)} km — atmospheric drag
+              invalidates the two-body arc below this floor. adjust tof, revolutions, or direction
+              to lift the transfer ellipse above 200 km.
             </span>
           </div>
         </Callout>
@@ -107,10 +97,10 @@ export function DeltaVReadout({
         <Callout tone="hold">
           <div className="flex flex-col gap-1">
             <span className="tracking-wider uppercase">formation safety not applied</span>
-            <span className="text-[10px] normal-case">{formatFallbackReason(fallback.reason)}</span>
+            <span className="text-[10px] lowercase">{formatFallbackReason(fallback.reason)}</span>
             {fallback.reason.type === 'separation_unachievable' ? (
               <>
-                <span className="text-[10px] text-text-muted normal-case">
+                <span className="text-[10px] text-text-muted lowercase">
                   requested separation exceeds the ROE linearization bound for this orbit. reduce to
                   ≤ {fallback.reason.achievable_km.toFixed(1)} km to apply formation safety, or
                   continue with the unenriched baseline.

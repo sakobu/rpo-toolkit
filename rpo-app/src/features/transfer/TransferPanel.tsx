@@ -1,9 +1,9 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router';
-import { ArrowRight, TriangleAlert } from 'lucide-react';
+import { ArrowRight } from 'lucide-react';
 
 import { match } from '@railway-ts/pipelines/result';
-import { useForm, useFormAutoSubmission } from '@railway-ts/use-form';
+import { useForm } from '@railway-ts/use-form';
 
 import type { EnrichmentSuggestion, LambertConfig, PerchGeometry, TransferResult } from 'rpo-wasm';
 
@@ -26,6 +26,7 @@ import {
 } from '@/schemas/lambertRequest';
 import { useConfig } from '@/stores/configuration';
 import { selectProximityConfig, selectTransferSubSurface, usePlanner } from '@/stores/planner';
+import { Callout } from '@/ui/Callout';
 import { Caps } from '@/ui/Caps';
 import { FieldErrorContext } from '@/ui/FieldErrorContext';
 import { FormField } from '@/ui/FormField';
@@ -58,114 +59,101 @@ function buildPerch(values: LambertFormValues): PerchGeometry {
   }
 }
 
+type ComputedTransfer =
+  | { kind: 'idle' }
+  | { kind: 'error'; message: string }
+  | { kind: 'ok'; transfer: TransferResult; enrichment: EnrichmentSuggestion | null };
+
 export function TransferPanel() {
   const navigate = useNavigate();
   const transfer = usePlanner((s) => s.transfer);
   const enrichment = usePlanner((s) => s.enrichment);
-  // Lambert failures live in local state, not on the form: using
-  // `form.setServerErrors` would drop `form.isValid` to false and freeze
-  // `useFormAutoSubmission` (it only fires on valid+dirty), so the user would
-  // never be able to edit their way out of a bad TOF/revs combo.
-  const [lambertError, setLambertError] = useState<string | null>(null);
+  const safetyRequirements = usePlanner((s) => s.safetyRequirements);
+  const proximityConfigRaw = usePlanner((s) => s.proximityConfig);
+  const chiefState = useConfig((s) => s.chiefState);
+  const deputyState = useConfig((s) => s.deputyState);
 
   const schema = useMemo(() => lambertRequestSchema(), []);
 
   const form = useForm<LambertFormValues>(schema, {
     initialValues: { ...LAMBERT_REQUEST_DEFAULTS },
     validationMode: 'live',
-    onSubmit: (values) => {
-      const { chiefState, deputyState } = useConfig.getState();
-      const plannerState = usePlanner.getState();
-      const proximityConfig = selectProximityConfig(plannerState);
-      const { safetyRequirements } = plannerState;
-
-      if (chiefState.status !== 'loaded' || deputyState.status !== 'loaded') {
-        setLambertError('chief and deputy must be loaded');
-        usePlanner.getState().clearTransfer();
-        return;
-      }
-
-      const lambertConfig: LambertConfig = {
-        direction: values.direction,
-        revolutions: values.revolutions,
-      };
-
-      const result = computeTransfer({
-        chief_eci: chiefState.vector,
-        deputy_eci: deputyState.vector,
-        perch: buildPerch(values),
-        proximity: proximityConfig,
-        lambert_tof_s: values.lambert_tof_s,
-        lambert_config: lambertConfig,
-        ...(safetyRequirements ? { safety_requirements: safetyRequirements } : {}),
-      });
-
-      match(result, {
-        ok: ({ transfer: tr, enrichment: enr }) => {
-          usePlanner.getState().setTransfer(tr, enr);
-          setLambertError(null);
-        },
-        err: (e) => {
-          setLambertError(e.message);
-          usePlanner.getState().clearTransfer();
-        },
-      });
-    },
   });
 
-  useFormAutoSubmission(form, 0);
+  const {
+    lambert_tof_s,
+    direction,
+    revolutions,
+    perch_mode,
+    perch_offset_km,
+    perch_da,
+    perch_dlambda,
+    perch_dex,
+    perch_dey,
+    perch_dix,
+    perch_diy,
+  } = form.values;
+  const formIsValid = form.isValid;
 
-  // Safety edits upstream must re-solve — otherwise the rendered Δv would
-  // reflect an outdated enrichment (or its absence) after the user edits the
-  // mission header. Submitting only on valid+not-submitting keeps this cheap
-  // and avoids clobbering an in-flight request. `form` has unstable identity
-  // across renders, so thread it through a ref to subscribe exactly once.
-  const formRef = useRef(form);
-  useEffect(() => {
-    formRef.current = form;
-  });
-
-  useEffect(() => {
-    const unsub = usePlanner.subscribe(
-      (s) => s.safetyRequirements,
-      () => {
-        const f = formRef.current;
-        if (f.isValid && !f.isSubmitting) void f.handleSubmit();
-      },
-    );
-    return unsub;
-  }, []);
-
-  // Discrete toggles (Direction, Perch reference) need explicit submits.
-  // `useFormAutoSubmission` gates on `isDirty`, which compares current values
-  // against `initialValues` — clicking back to an initial value leaves the
-  // form clean and the submit is skipped, freezing Δv on the previous result.
-  // A handleSubmit() call inside the onClick doesn't work either: use-form
-  // reads values from `formStateRef.current`, which only syncs to the new
-  // state in a useEffect. Firing the submit from our own effect guarantees
-  // the ref is current by the time handleSubmit runs.
-  //
-  // A value-based ref (not a did-mount flag) is required: StrictMode
-  // double-invokes effects, so a bare `didMountRef` would fire a submit on
-  // the second invocation — before the WebSocket connects.
-  const lastSubmittedToggleRef = useRef({
-    direction: form.values.direction,
-    perch_mode: form.values.perch_mode,
-  });
-  useEffect(() => {
-    if (
-      lastSubmittedToggleRef.current.direction === form.values.direction &&
-      lastSubmittedToggleRef.current.perch_mode === form.values.perch_mode
-    ) {
-      return;
+  // Lambert is sync via WASM (microseconds), so the candidate transfer is a
+  // pure function of form values + upstream config. Derive it via useMemo;
+  // a small effect below mirrors the result into the planner store for the
+  // 3D viewport and other consumers.
+  const computed = useMemo<ComputedTransfer>(() => {
+    if (!formIsValid) return { kind: 'idle' };
+    if (chiefState.status !== 'loaded' || deputyState.status !== 'loaded') {
+      return { kind: 'error', message: 'chief and deputy must be loaded' };
     }
-    lastSubmittedToggleRef.current = {
-      direction: form.values.direction,
-      perch_mode: form.values.perch_mode,
-    };
-    const f = formRef.current;
-    if (f.isValid && !f.isSubmitting) void f.handleSubmit();
-  }, [form.values.direction, form.values.perch_mode]);
+    const lambertConfig: LambertConfig = { direction, revolutions };
+    const result = computeTransfer({
+      chief_eci: chiefState.vector,
+      deputy_eci: deputyState.vector,
+      perch: buildPerch(form.values),
+      proximity: selectProximityConfig(usePlanner.getState()),
+      lambert_tof_s,
+      lambert_config: lambertConfig,
+      ...(safetyRequirements ? { safety_requirements: safetyRequirements } : {}),
+    });
+    return match(result, {
+      ok: ({ transfer: tr, enrichment: enr }): ComputedTransfer => ({
+        kind: 'ok',
+        transfer: tr,
+        enrichment: enr,
+      }),
+      err: (e): ComputedTransfer => ({ kind: 'error', message: e.message }),
+    });
+    // form.values is captured by buildPerch; the listed scalars are the
+    // change-detection surface. proximityConfigRaw drives reactivity on the
+    // selector default-fallback inside the memo.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [
+    formIsValid,
+    chiefState,
+    deputyState,
+    safetyRequirements,
+    proximityConfigRaw,
+    lambert_tof_s,
+    direction,
+    revolutions,
+    perch_mode,
+    perch_offset_km,
+    perch_da,
+    perch_dlambda,
+    perch_dex,
+    perch_dey,
+    perch_dix,
+    perch_diy,
+  ]);
+
+  const lambertError = computed.kind === 'error' ? computed.message : null;
+
+  useEffect(() => {
+    if (computed.kind === 'ok') {
+      usePlanner.getState().setTransfer(computed.transfer, computed.enrichment);
+    } else {
+      usePlanner.getState().clearTransfer();
+    }
+  }, [computed]);
 
   // Two-beat confirm on fallback enrichment. Keying the pending state to the
   // (enrichment, transfer) pair lets `confirmPending` derive to false when the
@@ -202,15 +190,14 @@ export function TransferPanel() {
   // arc and Δv readouts still render so the user can see why their inputs
   // are bad.
   const subSurface = usePlanner(selectTransferSubSurface);
-  const canAccept =
-    transfer !== null && !form.isSubmitting && lambertError === null && subSurface === null;
+  const canAccept = transfer !== null && lambertError === null && subSurface === null;
   const acceptDisabledReason =
     subSurface !== null
-      ? 'transfer passes through earth — adjust tof, revolutions, or direction'
+      ? 'transfer below 200 km altitude floor — adjust tof, revolutions, or direction'
       : undefined;
 
   return (
-    <form onSubmit={(e) => void form.handleSubmit(e)} className="flex flex-col gap-2.5">
+    <div className="flex flex-col gap-2.5">
       <Caps>lambert transfer</Caps>
 
       <FormField label="Perch reference" name="perch_mode" form={form} idPrefix="lambert">
@@ -306,7 +293,7 @@ export function TransferPanel() {
         />
       </FieldErrorContext>
 
-      <DeltaVReadout transfer={transfer} enrichment={enrichment} submitting={form.isSubmitting} />
+      <DeltaVReadout transfer={transfer} enrichment={enrichment} />
 
       <button
         type="button"
@@ -325,16 +312,13 @@ export function TransferPanel() {
       </button>
 
       {lambertError !== null ? (
-        <span
-          role="alert"
-          className="flex min-h-4 items-center gap-1 font-mono text-[10px] text-signal-abort"
-        >
-          <TriangleAlert size={10} strokeWidth={1.75} />
-          {lambertError}
-        </span>
-      ) : (
-        <span aria-hidden className="min-h-4" />
-      )}
-    </form>
+        <Callout tone="abort">
+          <div className="flex flex-col gap-1">
+            <span className="tracking-wider uppercase">transfer unavailable</span>
+            <span className="text-[10px] lowercase">{lambertError}</span>
+          </div>
+        </Callout>
+      ) : null}
+    </div>
   );
 }
