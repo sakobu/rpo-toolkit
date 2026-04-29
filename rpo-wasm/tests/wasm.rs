@@ -746,11 +746,12 @@ fn apply_perch_enrichment_nominal() {
     });
 
     // Get a suggestion first (needs safety_requirements).
-    let suggestion = rpo_wasm::enrichment::suggest_enrichment(
-        transfer.clone(),
-        input,
+    let suggestion = rpo_wasm::enrichment::suggest_enrichment(transfer.clone(), input)
+        .expect("enrichment should succeed");
+    assert!(
+        suggestion.is_some(),
+        "should produce enrichment suggestion with safety_requirements"
     );
-    assert!(suggestion.is_some(), "should produce enrichment suggestion with safety_requirements");
     let suggestion = suggestion.unwrap();
 
     // Apply it — returns modified transfer (no error path).
@@ -1114,7 +1115,8 @@ mod wasm_boundary {
         let transfer = super::test_transfer_result();
         let input = super::test_mission_input();
 
-        let result = rpo_wasm::enrichment::suggest_enrichment(transfer, input);
+        let result = rpo_wasm::enrichment::suggest_enrichment(transfer, input)
+            .expect("no requirements should not error");
         assert!(result.is_none(), "should be None without safety_requirements");
     }
 }

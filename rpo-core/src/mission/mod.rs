@@ -27,8 +27,8 @@ pub use covariance::propagate_mission_covariance;
 pub use errors::MissionError;
 pub use formation::{
     DriftPrediction, EiAlignment, EiSample, EnrichedWaypoint,
-    EnrichmentMode, FormationDesignError, FormationDesignReport, PerchEnrichmentResult,
-    PerchFallbackReason, SafePerch, SafetyRequirements, TransitSafetyReport,
+    EnrichmentMode, EnrichmentSuggestion, FormationDesignError, FormationDesignReport,
+    SafePerch, SafetyRequirements, TransitSafetyReport,
 };
 pub use free_drift::{bounded_motion_residual, compute_free_drift, FreeDriftAnalysis, FreeDriftError};
 pub use monte_carlo::{

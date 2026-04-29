@@ -4,14 +4,13 @@ import { useShallow } from 'zustand/react/shallow';
 
 import { EditConfigButton } from '@/chrome/EditConfigButton';
 import { SafetyRequirementsForm } from '@/chrome/sidebar/SafetyRequirementsForm';
-import { useAchievableCap } from '@/hooks/useAchievableCap';
 import {
   ALIGNMENT_LABELS,
   type AlignmentValue,
   DEFAULT_SAFETY_REQUIREMENTS,
 } from '@/schemas/safetyRequirements';
 import { useConfig } from '@/stores/configuration';
-import { selectProximityConfig, usePlanner } from '@/stores/planner';
+import { selectEnrichment, selectProximityConfig, usePlanner } from '@/stores/planner';
 import { Caps } from '@/ui/Caps';
 import { InlineActionButton } from '@/ui/InlineActionButton';
 import { KV } from '@/ui/KV';
@@ -28,18 +27,16 @@ export function MissionHeader() {
     usePlanner(
       useShallow((s) => ({
         classification: s.classification,
-        threshold: selectProximityConfig(s).roe_threshold,
+        threshold: selectProximityConfig(s.proximityConfig).roe_threshold,
         safetyRequirements: s.safetyRequirements,
         setSafetyRequirements: s.setSafetyRequirements,
-        enrichment: s.enrichment,
+        enrichment: selectEnrichment(s),
       })),
     );
-  const achievableCap = useAchievableCap();
-  const aboveCap =
-    safetyRequirements !== null &&
-    achievableCap !== null &&
-    safetyRequirements.min_separation_km > achievableCap;
-  const safetyNotApplied = enrichment?.perch.status === 'fallback' || aboveCap;
+  // The slider is hard-capped at the per-orbit achievable separation, so the
+  // only "safety not applied" path is the Baseline state — i.e. the user has
+  // not requested enrichment.
+  const safetyNotApplied = enrichment?.status === 'baseline';
   const [editingSafety, setEditingSafety] = useState(false);
 
   const phase = classification.status === 'ok' ? classification.phase : null;

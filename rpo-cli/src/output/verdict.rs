@@ -659,9 +659,9 @@ mod tests {
     use super::*;
     use nalgebra::Vector3;
     use rpo_core::mission::{
-        FormationDesignReport, FreeDriftAnalysis, MonteCarloConfig, MonteCarloMode,
-        MonteCarloReport, OperationalSafety, PassiveSafety, PercentileStats,
-        PerchEnrichmentResult, SafetyConfig, SafetyMetrics, WaypointMission,
+        EnrichmentSuggestion, FormationDesignReport, FreeDriftAnalysis, MonteCarloConfig,
+        MonteCarloMode, MonteCarloReport, OperationalSafety, PassiveSafety, PercentileStats,
+        SafetyConfig, SafetyMetrics, WaypointMission,
     };
     use rpo_core::pipeline::SafetyAnalysis;
     use rpo_core::types::QuasiNonsingularROE;
@@ -959,7 +959,9 @@ mod tests {
         };
 
         let formation_design = FormationDesignReport {
-            perch: PerchEnrichmentResult::Baseline(placeholder_roe),
+            perch: EnrichmentSuggestion::Baseline {
+                perch_roe: placeholder_roe,
+            },
             waypoints: vec![],
             transit_safety: vec![],
             mission_min_ei_separation_km: None,

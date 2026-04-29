@@ -38,14 +38,24 @@ export type PhaseRecord = {
 export const PHASE_KEYS: readonly PhaseKey[] = ['xfr', 'px', 'val', 'mc'] as const;
 
 // TODO(phase2c-ui-followup): when `val` and `mc` views land, audit them for
-// honest fallback labeling — same check applied to ProximityViewport in the
-// 2026-04-23 phase2c UI follow-up. They must not display "safety applied"
-// when `enrichment.perch.status === 'fallback'`.
+// honest baseline labeling — they must not display "safety applied" when
+// `enrichment.status === 'baseline'` (no requirements requested).
 export const PHASE_DEFINITIONS: Record<PhaseKey, { title: string; shortLabel: string }> = {
   xfr: { title: 'Transfer', shortLabel: 'XFR' },
   px: { title: 'Proximity ops', shortLabel: 'PX' },
   val: { title: 'Validate', shortLabel: 'VAL' },
   mc: { title: 'Monte Carlo', shortLabel: 'MC' },
+};
+
+/// Paired transfer + enrichment slot. The two values are produced together
+/// by `compute_transfer_with_enrichment` and used together by every
+/// consumer; storing them as a single slot makes the "no transfer ⇒ no
+/// enrichment" invariant a type-level fact rather than a runtime
+/// convention. Read via `selectTransfer` / `selectEnrichment` for the
+/// previous flat ergonomics.
+export type TransferSlot = {
+  transfer: TransferResult;
+  enrichment: EnrichmentSuggestion;
 };
 
 type MissionSlice = {
@@ -55,11 +65,10 @@ type MissionSlice = {
   // never have to null-check.
   proximityConfig: ProximityConfig | null;
   safetyRequirements: SafetyRequirements | null;
-  transfer: TransferResult | null;
-  enrichment: EnrichmentSuggestion | null;
+  transferSlot: TransferSlot | null;
   setProximityConfig: (config: ProximityConfig) => void;
   setSafetyRequirements: (r: SafetyRequirements | null) => void;
-  setTransfer: (t: TransferResult, enrichment: EnrichmentSuggestion | null) => void;
+  setTransfer: (transfer: TransferResult, enrichment: EnrichmentSuggestion) => void;
   clearTransfer: () => void;
 };
 
@@ -95,19 +104,29 @@ const INITIAL_PROXIMITY: Record<PhaseKey, PhaseRecord> = {
 /// default when the user hasn't set one. Only safe to call post-WasmGate
 /// (i.e. from React render/effects or user-triggered callbacks) because it
 /// reaches into WASM via `getEngineConstants`.
-export function selectProximityConfig(s: PlannerState): ProximityConfig {
-  return s.proximityConfig ?? { roe_threshold: getEngineConstants().roe_threshold_default };
+export function selectProximityConfig(raw: ProximityConfig | null): ProximityConfig {
+  return raw ?? { roe_threshold: getEngineConstants().roe_threshold_default };
 }
+
+/// Read the active transfer (or `null` when no transfer is computed).
+export const selectTransfer = (s: PlannerState): TransferResult | null =>
+  s.transferSlot?.transfer ?? null;
+
+/// Read the active enrichment suggestion (or `null` when no transfer is
+/// computed). When non-null this is paired with `selectTransfer(s)` —
+/// see the [`TransferSlot`] invariant.
+export const selectEnrichment = (s: PlannerState): EnrichmentSuggestion | null =>
+  s.transferSlot?.enrichment ?? null;
 
 /// Returns the `SubSurface` feasibility variant when the active transfer's
 /// conic dips below `MIN_PERIAPSIS_ALTITUDE_KM` (so consumers can both gate
 /// on the predicate and read the periapsis altitude); otherwise `null`.
 ///
-/// Returns `s.transfer.plan.transfer.feasibility` directly — a stable
-/// reference into the store under zustand's `Object.is` selector equality.
-/// Do not spread/clone, that would defeat memoization.
+/// Returns `s.transferSlot.transfer.plan.transfer.feasibility` directly — a
+/// stable reference into the store under zustand's `Object.is` selector
+/// equality. Do not spread/clone, that would defeat memoization.
 export function selectTransferSubSurface(s: PlannerState): TransferFeasibility | null {
-  const feasibility = s.transfer?.plan.transfer?.feasibility;
+  const feasibility = s.transferSlot?.transfer.plan.transfer?.feasibility;
   return feasibility?.kind === 'sub_surface' ? feasibility : null;
 }
 
@@ -122,12 +141,12 @@ const createMissionSlice: StateCreator<
   classification: IDLE_CLASSIFICATION,
   proximityConfig: null,
   safetyRequirements: null,
-  transfer: null,
-  enrichment: null,
+  transferSlot: null,
   setProximityConfig: (config) => set({ proximityConfig: config }, false, 'setProximityConfig'),
   setSafetyRequirements: (r) => set({ safetyRequirements: r }, false, 'setSafetyRequirements'),
-  setTransfer: (t, enrichment) => set({ transfer: t, enrichment }, false, 'setTransfer'),
-  clearTransfer: () => set({ transfer: null, enrichment: null }, false, 'clearTransfer'),
+  setTransfer: (transfer, enrichment) =>
+    set({ transferSlot: { transfer, enrichment } }, false, 'setTransfer'),
+  clearTransfer: () => set({ transferSlot: null }, false, 'clearTransfer'),
 });
 
 const createPhaseSlice: StateCreator<
@@ -150,20 +169,27 @@ const createPhaseSlice: StateCreator<
   acceptTransfer: () =>
     set(
       (s) => {
-        // Mirror rpo-core::pipeline::apply_perch_enrichment: when an
-        // enriched suggestion is available, commit it into the transfer's
-        // perch_roe so downstream (proximity view, waypoint planning) sees
-        // the enriched values. Baseline / fallback statuses leave perch_roe
-        // unchanged — same semantics as the Rust helper.
-        const enrichedTransfer =
-          s.transfer && s.enrichment?.perch.status === 'enriched'
+        // Mirror `rpo_core::pipeline::apply_perch_enrichment`: when the
+        // suggestion is `Enriched`, commit its safe-perch ROE into the
+        // transfer's perch_roe so downstream consumers (proximity view,
+        // waypoint planning) see the enriched values. `Baseline` leaves
+        // perch_roe unchanged.
+        const slot = s.transferSlot;
+        const nextSlot: TransferSlot | null =
+          slot && slot.enrichment.status === 'enriched'
             ? {
-                ...s.transfer,
-                plan: { ...s.transfer.plan, perch_roe: s.enrichment.perch.roe },
+                transfer: {
+                  ...slot.transfer,
+                  plan: {
+                    ...slot.transfer.plan,
+                    perch_roe: slot.enrichment.safe_perch.roe,
+                  },
+                },
+                enrichment: slot.enrichment,
               }
-            : s.transfer;
+            : slot;
         return {
-          transfer: enrichedTransfer,
+          transferSlot: nextSlot,
           phases: {
             ...s.phases,
             xfr: {
@@ -272,7 +298,7 @@ function deriveClassification(
 
 function recomputeClassification() {
   const { chiefState, deputyState } = useConfig.getState();
-  const config = selectProximityConfig(usePlanner.getState());
+  const config = selectProximityConfig(usePlanner.getState().proximityConfig);
   const classification = deriveClassification(chiefState, deputyState, config);
   usePlanner.setState({ classification }, false, 'deriveClassification');
   if (classification.status === 'ok') {

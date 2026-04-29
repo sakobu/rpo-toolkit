@@ -1,36 +1,32 @@
 //! WASM binding for the full transfer-computation pipeline:
 //! classify → Lambert → perch geometry → arc densification (+ optional enrichment).
-//!
-//! Replaces the previous `compute_transfer` WebSocket route now that the
-//! orchestration is fully WASM-eligible (Lambert moved to `rpo-core` in-tree).
 
 use serde::Serialize;
 use tsify_next::Tsify;
 use wasm_bindgen::prelude::*;
 
-use rpo_core::mission::formation::SafetyRequirements;
-use rpo_core::pipeline::types::{EnrichmentSuggestion, TransferComputationInput, TransferResult};
+use rpo_core::mission::formation::{EnrichmentSuggestion, SafetyRequirements};
+use rpo_core::pipeline::types::{TransferComputationInput, TransferResult};
 
 use crate::error::WasmError;
 
-/// Combined transfer + enrichment result, matching the pre-port
-/// `ServerMessage::TransferResult` wire shape.
+/// Combined transfer + enrichment result.
 ///
-/// `enrichment` is `None` when `safety_requirements` is omitted from the
-/// input, mirroring `serde(skip_serializing_if = "Option::is_none")` on the
-/// old WebSocket variant.
+/// `enrichment` is always present: when `safety_requirements` is omitted it
+/// is [`EnrichmentSuggestion::Baseline`] carrying the geometric perch ROE;
+/// when supplied, the engine returns [`EnrichmentSuggestion::Enriched`] on
+/// success or surfaces a [`crate::error::WasmErrorCode::Formation`] error
+/// on failure.
 #[derive(Debug, Serialize, Tsify)]
 #[tsify(into_wasm_abi)]
 pub struct ComputeTransferOutput {
     /// Transfer solution (classification + optional Lambert + perch states).
     pub transfer: TransferResult,
-    /// Enrichment outcome when `safety_requirements` was supplied.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub enrichment: Option<EnrichmentSuggestion>,
+    /// Enrichment outcome (Baseline if no requirements, Enriched on success).
+    pub enrichment: EnrichmentSuggestion,
 }
 
-/// Compute a transfer and, when `safety_requirements` is supplied, the
-/// matching perch enrichment suggestion.
+/// Compute a transfer and its perch enrichment outcome.
 ///
 /// Thin pass-through to [`rpo_core::pipeline::compute_transfer_with_enrichment`];
 /// the orchestration lives in `rpo-core` so CLI and tests can exercise the
@@ -38,8 +34,8 @@ pub struct ComputeTransferOutput {
 ///
 /// # Errors
 ///
-/// Returns [`WasmError`] on classification, Lambert, propagation, or
-/// arc-densification failure.
+/// Returns [`WasmError`] on classification, Lambert, propagation,
+/// arc-densification, or perch-enrichment failure.
 #[wasm_bindgen]
 pub fn compute_transfer_with_enrichment(
     input: TransferComputationInput,

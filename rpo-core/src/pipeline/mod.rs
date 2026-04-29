@@ -41,8 +41,9 @@ pub use transfer::{
     compute_transfer, compute_transfer_with_enrichment, execute_mission, plan_mission,
     ArcDensificationError,
 };
+pub use crate::mission::formation::EnrichmentSuggestion;
 pub use types::{
-    default_perch, EnrichmentSuggestion, MissionInput, PipelineInput, PipelineOutput,
+    default_perch, MissionInput, PipelineInput, PipelineOutput,
     PlanVariant, PropagatorChoice, SafetyAnalysis, SpacecraftChoice,
     TransferComputationInput, TransferResult, WaypointInput, DEFAULT_LAMBERT_TOF_S,
     DEFAULT_PERCH_ALONG_TRACK_KM,

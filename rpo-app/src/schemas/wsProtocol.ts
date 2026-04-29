@@ -14,12 +14,7 @@ import type {
 
 // ─── Wire tags ─────────────────────────────────────────────────────────────
 
-export const CLIENT_MESSAGE_TYPES = [
-  'extract_drag',
-  'validate',
-  'run_mc',
-  'cancel',
-] as const;
+export const CLIENT_MESSAGE_TYPES = ['extract_drag', 'validate', 'run_mc', 'cancel'] as const;
 
 export const SERVER_MESSAGE_TYPES = [
   'drag_result',

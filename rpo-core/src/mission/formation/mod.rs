@@ -25,10 +25,10 @@ pub mod safety_envelope;
 pub mod transit;
 pub mod types;
 
-pub use errors::{FormationDesignError, PerchFallbackReason};
+pub use errors::FormationDesignError;
 pub use types::{
     DriftPrediction, EiAlignment, EiSample,
-    EnrichedWaypoint, EnrichmentMode, FormationDesignReport, PerchEnrichmentResult, SafePerch,
+    EnrichedWaypoint, EnrichmentMode, EnrichmentSuggestion, FormationDesignReport, SafePerch,
     SafetyRequirements, TransitSafetyReport,
 };
 
@@ -48,3 +48,34 @@ pub use types::{
 ///
 /// - D'Amico §2.3.4 (ROE linearization validity)
 pub const LINEARIZATION_PERTURBATION_BOUND: f64 = 0.01;
+
+/// Worst-case ratio of perturbation norm to dimensionless `d_min` for a
+/// V-bar/R-bar parallel zero-baseline perch under the safety projection
+/// in `safety_envelope`.
+///
+/// Closed-form derivation: with baseline ROE = 0 and `EiAlignment::Parallel`,
+/// the projection produces enriched ROE
+/// `(d_min, 0, d_min cos u, d_min sin u, d_min cos u, d_min sin u)` at any
+/// chief argument-of-latitude `u`, giving
+/// `‖Δ‖² = d_min² + d_min² + d_min² = 3·d_min²`, hence
+/// `‖Δ‖ = √3 · d_min`. Combined with the
+/// [`LINEARIZATION_PERTURBATION_BOUND`] clamp this gives the achievable cap
+/// `min_separation_km ≤ a · LINEARIZATION_PERTURBATION_BOUND
+/// / VBAR_RBAR_PERTURBATION_RATIO` for the default V-bar/R-bar perch modes.
+///
+/// Locked in by the
+/// `vbar_rbar_parallel_perturbation_norm_equals_sqrt3_dmin` test in
+/// `safety_envelope.rs`. The frontend `useAchievableCap` hook reads this
+/// constant via the WASM `EngineConstants` bridge — do not duplicate the
+/// `√3` literal in client code.
+///
+/// # Validity regime
+///
+/// Conservative for V-bar/R-bar (parallel, zero baseline). For Custom
+/// perches with non-zero baseline e/i the actual ratio is geometry-
+/// dependent: smaller when the baseline already points toward the target
+/// e/i direction, and potentially larger when it points opposite. Callers
+/// using this as a cap for Custom perches accept that occasional valid
+/// geometries may be rejected; the engine remains the authoritative bound
+/// via [`LINEARIZATION_PERTURBATION_BOUND`].
+pub const VBAR_RBAR_PERTURBATION_RATIO: f64 = 1.732_050_807_568_877_2;

@@ -130,9 +130,9 @@ mod tests {
     /// `write_formation_design_md` stays on its cheapest code path.
     fn synthetic_formation_design_report() -> rpo_core::mission::FormationDesignReport {
         rpo_core::mission::FormationDesignReport {
-            perch: rpo_core::mission::PerchEnrichmentResult::Baseline(
-                rpo_core::types::QuasiNonsingularROE::default(),
-            ),
+            perch: rpo_core::mission::EnrichmentSuggestion::Baseline {
+                perch_roe: rpo_core::types::QuasiNonsingularROE::default(),
+            },
             waypoints: Vec::new(),
             transit_safety: Vec::new(),
             mission_min_ei_separation_km: None,

@@ -12,12 +12,11 @@ use crate::mission::closest_approach::{find_closest_approaches, ClosestApproach}
 use crate::mission::errors::MissionError;
 use crate::elements::roe_to_ric::roe_to_ric;
 use crate::mission::formation::{
-    DriftPrediction, EnrichedWaypoint, FormationDesignReport,
-    PerchEnrichmentResult, SafetyRequirements, TransitSafetyReport,
+    DriftPrediction, EnrichedWaypoint, EnrichmentSuggestion, FormationDesignError,
+    FormationDesignReport, SafetyRequirements, TransitSafetyReport,
 };
 use crate::mission::formation::transit::{ei_separation_after, enrich_with_drift_compensation};
 use crate::mission::formation::types::DriftCompensationStatus;
-use super::types::EnrichmentSuggestion;
 use crate::mission::formation::perch::enrich_perch;
 use crate::mission::formation::safety_envelope::enrich_waypoint;
 use crate::mission::formation::transit::assess_transit_safety;
@@ -210,9 +209,15 @@ pub fn build_output(
         })
     });
 
-    let formation_design = ctx.suggestion.map(|s| {
+    let formation_design = ctx.suggestion.and_then(|suggestion| {
+        let reqs = ctx.input.safety_requirements.as_ref()?;
         let waypoints = to_waypoints(&ctx.input.waypoints);
-        compute_formation_report(s.perch, s.requirements, &wp_mission.legs, &waypoints)
+        Some(compute_formation_report(
+            suggestion,
+            reqs,
+            &wp_mission.legs,
+            &waypoints,
+        ))
     });
 
     PipelineOutput {
@@ -361,57 +366,78 @@ pub fn plan_waypoints_from_transfer(
 
 /// Core enrichment computation shared by CLI pipeline and API handler.
 ///
-/// Attempts [`enrich_perch()`]; on failure, falls back to unenriched ROE.
-/// Both [`suggest_enrichment()`] and the API handler delegate to this.
-#[must_use]
+/// On success returns an [`EnrichmentSuggestion::Enriched`]; on failure
+/// propagates the underlying [`FormationDesignError`] without smuggling it
+/// into a third result variant — error handling is the caller's
+/// responsibility.
+///
+/// # Invariants
+///
+/// - `requirements.min_separation_km > 0`
+/// - `chief_at_arrival.a_km > 0`, `chief_at_arrival.e < 1`
+///
+/// # Validity regime
+///
+/// `requirements.min_separation_km` must satisfy
+/// `min_separation_km ≤ a · LINEARIZATION_PERTURBATION_BOUND
+/// / VBAR_RBAR_PERTURBATION_RATIO` for V-bar/R-bar perches; Custom perches
+/// have a geometry-dependent threshold.
+///
+/// # Errors
+///
+/// Returns [`FormationDesignError`] if [`enrich_perch`] fails: singular
+/// `T_pos` geometry, separation outside the linearization bound, propagation
+/// failure, or invalid chief elements.
 pub fn suggest_enrichment_from_parts(
     perch: &PerchGeometry,
     chief_at_arrival: &KeplerianElements,
-    unenriched_roe: QuasiNonsingularROE,
     requirements: &SafetyRequirements,
-) -> EnrichmentSuggestion {
-    let perch_result = match enrich_perch(perch, chief_at_arrival, requirements) {
-        Ok(safe_perch) => PerchEnrichmentResult::Enriched(safe_perch),
-        Err(e) => PerchEnrichmentResult::Fallback {
-            unenriched_roe,
-            reason: e.into(),
+) -> Result<EnrichmentSuggestion, FormationDesignError> {
+    let safe_perch = enrich_perch(perch, chief_at_arrival, requirements)?;
+    Ok(EnrichmentSuggestion::Enriched {
+        // SafePerch.alignment carries the resolved choice for `Auto`.
+        requirements: SafetyRequirements {
+            min_separation_km: requirements.min_separation_km,
+            alignment: safe_perch.alignment,
         },
-    };
-    EnrichmentSuggestion {
-        perch: perch_result,
-        requirements: *requirements,
-    }
+        safe_perch,
+    })
 }
 
 /// Compute enrichment suggestion from a [`MissionInput`] without mutating the transfer.
 ///
-/// Returns `None` if `safety_requirements` is not set on the input.
-/// Delegates to [`suggest_enrichment_from_parts()`].
-#[must_use]
+/// Returns `Ok(None)` when `safety_requirements` is `None` (caller did not
+/// request enrichment), `Ok(Some(_))` on success, or propagates the
+/// underlying [`FormationDesignError`] on failure.
+///
+/// # Errors
+///
+/// Returns [`FormationDesignError`] when [`suggest_enrichment_from_parts`]
+/// fails — see its documentation for the failure modes.
 pub fn suggest_enrichment(
     transfer: &TransferResult,
     input: &MissionInput,
-) -> Option<EnrichmentSuggestion> {
-    input.safety_requirements.as_ref().map(|reqs| {
-        suggest_enrichment_from_parts(
-            &input.perch,
-            &transfer.plan.chief_at_arrival,
-            transfer.plan.perch_roe,
-            reqs,
-        )
-    })
+) -> Result<Option<EnrichmentSuggestion>, FormationDesignError> {
+    input
+        .safety_requirements
+        .as_ref()
+        .map(|reqs| {
+            suggest_enrichment_from_parts(&input.perch, &transfer.plan.chief_at_arrival, reqs)
+        })
+        .transpose()
 }
 
 /// Apply accepted perch enrichment to the transfer result.
 ///
-/// If the suggestion contains an `Enriched` perch, replaces
+/// If the suggestion is [`EnrichmentSuggestion::Enriched`], replaces
 /// `transfer.plan.perch_roe` with the enriched ROE.
+/// [`EnrichmentSuggestion::Baseline`] is a no-op.
 /// Must be called before [`plan_waypoints_from_transfer()`].
 pub fn apply_perch_enrichment(
     transfer: &mut TransferResult,
     suggestion: &EnrichmentSuggestion,
 ) {
-    if let PerchEnrichmentResult::Enriched(ref safe_perch) = suggestion.perch {
+    if let EnrichmentSuggestion::Enriched { safe_perch, .. } = suggestion {
         transfer.plan.perch_roe = safe_perch.roe;
     }
 }
@@ -472,8 +498,8 @@ pub fn accept_waypoint_enrichment(
     replan_from_transfer(transfer, input, waypoint_index, None)
 }
 
-/// Build a [`FormationDesignReport`] from a perch enrichment result, safety
-/// requirements, and completed maneuver legs.
+/// Build a [`FormationDesignReport`] from a perch enrichment suggestion,
+/// safety requirements, and completed maneuver legs.
 ///
 /// Computes transit e/i monitoring for each leg and aggregates into a
 /// report suitable for serialization to CLI or API clients.
@@ -485,7 +511,7 @@ pub fn accept_waypoint_enrichment(
 /// at the correct epoch for each leg.
 ///
 /// # Arguments
-/// * `perch_result` — perch enrichment outcome (baseline or enriched ROE).
+/// * `perch_suggestion` — perch enrichment outcome (baseline or enriched).
 /// * `reqs` — safety requirements (min separation, alignment preference).
 /// * `legs` — completed maneuver legs from targeting (1:1 with `waypoints`).
 /// * `waypoints` — domain waypoints with optional velocity constraints.
@@ -497,8 +523,8 @@ pub fn accept_waypoint_enrichment(
 /// - `reqs.min_separation_km > 0`.
 #[must_use]
 pub fn compute_formation_report(
-    perch_result: PerchEnrichmentResult,
-    reqs: SafetyRequirements,
+    perch_suggestion: EnrichmentSuggestion,
+    reqs: &SafetyRequirements,
     legs: &[crate::mission::types::ManeuverLeg],
     waypoints: &[crate::mission::types::Waypoint],
 ) -> FormationDesignReport {
@@ -509,9 +535,13 @@ pub fn compute_formation_report(
     );
 
     // R2: resolve alignment once at perch, propagate to all waypoints.
-    // If perch enrichment succeeded, use the resolved concrete alignment
-    // (Auto → Parallel or AntiParallel). On fallback, use original reqs.
-    let resolved_reqs = perch_result.resolve_requirements(&reqs);
+    // When perch enrichment succeeded the resolved concrete alignment
+    // (Auto → Parallel or AntiParallel) is on the suggestion; otherwise
+    // fall back to the caller's original `reqs`.
+    let resolved_reqs = perch_suggestion
+        .resolved_requirements()
+        .copied()
+        .unwrap_or(*reqs);
 
     // Enrich each waypoint using the correct mode per waypoint:
     // - `None` velocity → position-only (3-DOF null-space, actionable suggestion).
@@ -585,7 +615,7 @@ pub fn compute_formation_report(
     });
 
     FormationDesignReport {
-        perch: perch_result,
+        perch: perch_suggestion,
         waypoints: enriched_waypoints,
         transit_safety,
         mission_min_ei_separation_km,
@@ -670,7 +700,7 @@ pub fn execute_mission_from_transfer(
 ) -> Result<PipelineOutput, PipelineError> {
     let propagator = to_propagation_model(&input.propagator);
 
-    let suggestion = suggest_enrichment(transfer, input);
+    let suggestion = suggest_enrichment(transfer, input)?;
     if let Some(ref s) = suggestion {
         apply_perch_enrichment(transfer, s);
     }
@@ -731,7 +761,7 @@ pub fn replan_from_transfer(
 ) -> Result<PipelineOutput, PipelineError> {
     let propagator = to_propagation_model(&input.propagator);
 
-    let suggestion = suggest_enrichment(transfer, input);
+    let suggestion = suggest_enrichment(transfer, input)?;
     if let Some(ref s) = suggestion {
         apply_perch_enrichment(transfer, s);
     }

@@ -1,6 +1,7 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo } from 'react';
 import { useNavigate } from 'react-router';
 import { ArrowRight } from 'lucide-react';
+import { useShallow } from 'zustand/react/shallow';
 
 import { match } from '@railway-ts/pipelines/result';
 import { useForm } from '@railway-ts/use-form';
@@ -62,14 +63,17 @@ function buildPerch(values: LambertFormValues): PerchGeometry {
 type ComputedTransfer =
   | { kind: 'idle' }
   | { kind: 'error'; message: string }
-  | { kind: 'ok'; transfer: TransferResult; enrichment: EnrichmentSuggestion | null };
+  | { kind: 'ok'; transfer: TransferResult; enrichment: EnrichmentSuggestion };
 
 export function TransferPanel() {
   const navigate = useNavigate();
-  const transfer = usePlanner((s) => s.transfer);
-  const enrichment = usePlanner((s) => s.enrichment);
-  const safetyRequirements = usePlanner((s) => s.safetyRequirements);
-  const proximityConfigRaw = usePlanner((s) => s.proximityConfig);
+  const { transferSlot, safetyRequirements, proximityConfigRaw } = usePlanner(
+    useShallow((s) => ({
+      transferSlot: s.transferSlot,
+      safetyRequirements: s.safetyRequirements,
+      proximityConfigRaw: s.proximityConfig,
+    })),
+  );
   const chiefState = useConfig((s) => s.chiefState);
   const deputyState = useConfig((s) => s.deputyState);
 
@@ -80,19 +84,6 @@ export function TransferPanel() {
     validationMode: 'live',
   });
 
-  const {
-    lambert_tof_s,
-    direction,
-    revolutions,
-    perch_mode,
-    perch_offset_km,
-    perch_da,
-    perch_dlambda,
-    perch_dex,
-    perch_dey,
-    perch_dix,
-    perch_diy,
-  } = form.values;
   const formIsValid = form.isValid;
 
   // Lambert is sync via WASM (microseconds), so the candidate transfer is a
@@ -104,13 +95,16 @@ export function TransferPanel() {
     if (chiefState.status !== 'loaded' || deputyState.status !== 'loaded') {
       return { kind: 'error', message: 'chief and deputy must be loaded' };
     }
-    const lambertConfig: LambertConfig = { direction, revolutions };
+    const lambertConfig: LambertConfig = {
+      direction: form.values.direction,
+      revolutions: form.values.revolutions,
+    };
     const result = computeTransfer({
       chief_eci: chiefState.vector,
       deputy_eci: deputyState.vector,
       perch: buildPerch(form.values),
-      proximity: selectProximityConfig(usePlanner.getState()),
-      lambert_tof_s,
+      proximity: selectProximityConfig(proximityConfigRaw),
+      lambert_tof_s: form.values.lambert_tof_s,
       lambert_config: lambertConfig,
       ...(safetyRequirements ? { safety_requirements: safetyRequirements } : {}),
     });
@@ -122,28 +116,7 @@ export function TransferPanel() {
       }),
       err: (e): ComputedTransfer => ({ kind: 'error', message: e.message }),
     });
-    // form.values is captured by buildPerch; the listed scalars are the
-    // change-detection surface. proximityConfigRaw drives reactivity on the
-    // selector default-fallback inside the memo.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [
-    formIsValid,
-    chiefState,
-    deputyState,
-    safetyRequirements,
-    proximityConfigRaw,
-    lambert_tof_s,
-    direction,
-    revolutions,
-    perch_mode,
-    perch_offset_km,
-    perch_da,
-    perch_dlambda,
-    perch_dex,
-    perch_dey,
-    perch_dix,
-    perch_diy,
-  ]);
+  }, [formIsValid, chiefState, deputyState, safetyRequirements, proximityConfigRaw, form.values]);
 
   const lambertError = computed.kind === 'error' ? computed.message : null;
 
@@ -155,31 +128,8 @@ export function TransferPanel() {
     }
   }, [computed]);
 
-  // Two-beat confirm on fallback enrichment. Keying the pending state to the
-  // (enrichment, transfer) pair lets `confirmPending` derive to false when the
-  // solver re-runs — no setState-in-effect needed to reset it.
-  const [pendingFor, setPendingFor] = useState<{
-    enrichment: EnrichmentSuggestion | null;
-    transfer: TransferResult | null;
-  } | null>(null);
-
-  const confirmPending =
-    pendingFor !== null && pendingFor.enrichment === enrichment && pendingFor.transfer === transfer;
-
-  useEffect(() => {
-    if (!confirmPending) return;
-    const timer = setTimeout(() => setPendingFor(null), 5000);
-    return () => clearTimeout(timer);
-  }, [confirmPending]);
-
-  const needsConfirm = enrichment?.perch.status === 'fallback';
-
   const handleAccept = () => {
-    if (transfer === null) return;
-    if (needsConfirm && !confirmPending) {
-      setPendingFor({ enrichment, transfer });
-      return;
-    }
+    if (transferSlot === null) return;
     usePlanner.getState().acceptTransfer();
     void navigate('/proximity');
   };
@@ -190,7 +140,7 @@ export function TransferPanel() {
   // arc and Δv readouts still render so the user can see why their inputs
   // are bad.
   const subSurface = usePlanner(selectTransferSubSurface);
-  const canAccept = transfer !== null && lambertError === null && subSurface === null;
+  const canAccept = transferSlot !== null && lambertError === null && subSurface === null;
   const acceptDisabledReason =
     subSurface !== null
       ? 'transfer below 200 km altitude floor — adjust tof, revolutions, or direction'
@@ -293,7 +243,7 @@ export function TransferPanel() {
         />
       </FieldErrorContext>
 
-      <DeltaVReadout transfer={transfer} enrichment={enrichment} />
+      <DeltaVReadout slot={transferSlot} />
 
       <button
         type="button"
@@ -301,13 +251,9 @@ export function TransferPanel() {
         disabled={!canAccept}
         aria-label={acceptDisabledReason}
         title={acceptDisabledReason}
-        className={`mt-1 flex cursor-pointer items-center justify-center gap-1.5 rounded-xs border px-2 py-1.5 font-mono text-[10px] tracking-wider uppercase transition-colors disabled:cursor-not-allowed disabled:border-border disabled:bg-surface-2 disabled:text-text-dim disabled:hover:bg-surface-2 ${
-          confirmPending
-            ? 'border-signal-hold bg-signal-hold-dim text-signal-hold hover:bg-signal-hold/10'
-            : 'border-accent bg-accent-dim text-accent hover:bg-accent/10'
-        }`}
+        className="mt-1 flex cursor-pointer items-center justify-center gap-1.5 rounded-xs border border-accent bg-accent-dim px-2 py-1.5 font-mono text-[10px] tracking-wider text-accent uppercase transition-colors hover:bg-accent/10 disabled:cursor-not-allowed disabled:border-border disabled:bg-surface-2 disabled:text-text-dim disabled:hover:bg-surface-2"
       >
-        {confirmPending ? 'confirm: accept fallback' : 'accept transfer'}
+        accept transfer
         <ArrowRight size={11} strokeWidth={1.75} />
       </button>
 

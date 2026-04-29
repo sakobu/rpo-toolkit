@@ -18,6 +18,17 @@
 //! No SVD, no iteration, no optimization — the entire algorithm is a quadratic
 //! formula + atan2 + direct assignment.
 //!
+//! # Invariant: V-bar/R-bar parallel zero-baseline perturbation norm
+//!
+//! For the most common perch ("V-bar" / "R-bar" with baseline ROE = 0 and
+//! `EiAlignment::Parallel`), the projection yields, at any chief argument-of-
+//! latitude `u`, an enriched ROE of
+//! `(d_min, 0, d_min cos u, d_min sin u, d_min cos u, d_min sin u)`.
+//! The L2 perturbation norm is therefore u-invariant and equals
+//! `‖Δ‖ = √3 · d_min`. This identity drives the
+//! [`super::VBAR_RBAR_PERTURBATION_RATIO`] constant exposed via WASM and is
+//! locked in by `vbar_rbar_parallel_perturbation_norm_equals_sqrt3_dmin`.
+//!
 //! # References
 //!
 //! - D'Amico Eq. 2.17: `T_pos` matrix (ROE → RIC position mapping)
@@ -413,6 +424,7 @@ pub fn enrich_waypoint_with_pre_rotation(
 
 #[cfg(test)]
 mod tests {
+    use super::super::VBAR_RBAR_PERTURBATION_RATIO;
     use super::*;
     use crate::elements::roe_to_ric::{compute_t_position, ric_position_to_roe};
     use crate::test_helpers::{damico_table21_chief, iss_like_elements};
@@ -680,6 +692,56 @@ mod tests {
             "Phase angle = {} rad, expected near 0",
             ei.phase_angle_rad
         );
+    }
+
+    /// Locks in the closed-form identity that drives the frontend slider cap:
+    /// for V-bar/R-bar parallel zero-baseline perches, the perturbation norm
+    /// is `‖Δ‖ = √3 · d_min` (dimensionless), independent of chief argument-
+    /// of-latitude `u`. See module docs and
+    /// [`super::super::VBAR_RBAR_PERTURBATION_RATIO`].
+    ///
+    /// Sweeps four `u` values (0, π/4, π/2, π) on `damico_table21_chief()` to
+    /// catch any regression that would make the ratio u-dependent.
+    #[test]
+    fn vbar_rbar_parallel_perturbation_norm_equals_sqrt3_dmin() {
+        let baseline = QuasiNonsingularROE {
+            da: 0.0,
+            dlambda: 0.0,
+            dex: 0.0,
+            dey: 0.0,
+            dix: 0.0,
+            diy: 0.0,
+        };
+        let d_min_km = 0.5;
+
+        for &u in &[
+            0.0,
+            std::f64::consts::FRAC_PI_4,
+            std::f64::consts::FRAC_PI_2,
+            std::f64::consts::PI,
+        ] {
+            let mut chief = damico_table21_chief();
+            // mean_arg_of_lat() = aop_rad + mean_anomaly_rad; vary u via mean_anomaly.
+            chief.mean_anomaly_rad = u - chief.aop_rad;
+
+            let reqs = SafetyRequirements {
+                min_separation_km: d_min_km,
+                alignment: EiAlignment::Parallel,
+            };
+            let (enriched, _) =
+                compute_safety_projection(&baseline, &chief, &reqs, 0.0).unwrap();
+
+            let perturbation_norm =
+                (enriched.to_vector() - baseline.to_vector()).norm();
+            let d_min_dimless = d_min_km / chief.a_km;
+            let expected = VBAR_RBAR_PERTURBATION_RATIO * d_min_dimless;
+
+            assert!(
+                (perturbation_norm - expected).abs() < ROE_COMPONENT_TOL,
+                "u = {u}: ‖Δ‖ = {perturbation_norm}, expected {expected} \
+                 (= VBAR_RBAR_PERTURBATION_RATIO · d_min/a)"
+            );
+        }
     }
 
     // -----------------------------------------------------------------------

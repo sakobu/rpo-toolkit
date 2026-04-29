@@ -4,6 +4,7 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use rpo_core::elements::keplerian_conversions::ConversionError;
+use rpo_core::mission::formation::FormationDesignError;
 use rpo_core::mission::MissionError;
 use rpo_core::propagation::{
     CovarianceError, LambertError, PropagationError,
@@ -85,6 +86,12 @@ impl From<MissionError> for CliError {
 
 impl From<ConversionError> for CliError {
     fn from(e: ConversionError) -> Self {
+        Self::Pipeline(NyxPipelineError::from(e))
+    }
+}
+
+impl From<FormationDesignError> for CliError {
+    fn from(e: FormationDesignError) -> Self {
         Self::Pipeline(NyxPipelineError::from(e))
     }
 }

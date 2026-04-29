@@ -5,6 +5,7 @@
 
 use rpo_core::elements::keplerian_conversions::ConversionError;
 use rpo_core::mission::errors::MissionError;
+use rpo_core::mission::formation::FormationDesignError;
 use rpo_core::propagation::covariance::CovarianceError;
 use rpo_core::propagation::lambert::LambertError;
 use rpo_core::propagation::propagator::PropagationError;
@@ -66,6 +67,12 @@ impl From<CovarianceError> for PipelineError {
 
 impl From<ConversionError> for PipelineError {
     fn from(e: ConversionError) -> Self {
+        Self::Core(rpo_core::pipeline::PipelineError::from(e))
+    }
+}
+
+impl From<FormationDesignError> for PipelineError {
+    fn from(e: FormationDesignError) -> Self {
         Self::Core(rpo_core::pipeline::PipelineError::from(e))
     }
 }

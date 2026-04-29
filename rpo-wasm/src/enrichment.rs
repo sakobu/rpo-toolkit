@@ -5,10 +5,8 @@ use serde::Serialize;
 use tsify_next::Tsify;
 use wasm_bindgen::prelude::*;
 
-use rpo_core::mission::formation::{EnrichedWaypoint, SafetyRequirements};
-use rpo_core::pipeline::types::{
-    EnrichmentSuggestion, MissionInput, PipelineOutput, TransferResult,
-};
+use rpo_core::mission::formation::{EnrichedWaypoint, EnrichmentSuggestion, SafetyRequirements};
+use rpo_core::pipeline::types::{MissionInput, PipelineOutput, TransferResult};
 use rpo_core::types::{KeplerianElements, QuasiNonsingularROE};
 
 use crate::error::WasmError;
@@ -36,15 +34,18 @@ pub struct EnrichmentAcceptResult {
 /// * `transfer` — Pre-computed transfer result (classification + perch ROE).
 /// * `input` — Full pipeline input (must include `safety_requirements` for enrichment).
 ///
-/// Returns `None` if safety requirements are not configured or enrichment
-/// is not applicable.
-#[must_use]
+/// Returns `Ok(None)` when safety requirements are not configured;
+/// `Ok(Some(_))` on successful enrichment; `Err(_)` on enrichment failure.
+///
+/// # Errors
+///
+/// Returns [`WasmError`] if perch enrichment fails.
 #[wasm_bindgen]
 pub fn suggest_enrichment(
     transfer: TransferResult,
     input: MissionInput,
-) -> Option<EnrichmentSuggestion> {
-    rpo_core::pipeline::suggest_enrichment(&transfer, &input)
+) -> Result<Option<EnrichmentSuggestion>, WasmError> {
+    rpo_core::pipeline::suggest_enrichment(&transfer, &input).map_err(WasmError::from)
 }
 
 /// Apply a perch enrichment suggestion to the transfer result.

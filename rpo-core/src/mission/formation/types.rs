@@ -6,13 +6,18 @@ use serde::{Deserialize, Serialize};
 use crate::mission::safety::EiSeparation;
 use crate::types::QuasiNonsingularROE;
 
-use super::errors::PerchFallbackReason;
-
 // ---------------------------------------------------------------------------
 // Configuration
 // ---------------------------------------------------------------------------
 
 /// Safety requirements for formation design enrichment.
+///
+/// No `Default` — every construction site must specify a positive
+/// `min_separation_km` and an explicit alignment, matching the
+/// `min_separation_km > 0` invariant documented in the `safety_envelope`
+/// module. The "no requirements requested" state is modeled by the
+/// [`EnrichmentSuggestion::Baseline`] variant rather than a zero-valued
+/// sentinel of this struct.
 #[cfg_attr(feature = "wasm", derive(tsify_next::Tsify))]
 #[cfg_attr(feature = "wasm", tsify(into_wasm_abi, from_wasm_abi))]
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
@@ -126,39 +131,54 @@ pub struct SafePerch {
     pub alignment: EiAlignment,
 }
 
-/// Result of perch enrichment — distinguishes success from fallback.
+/// Outcome of perch enrichment — what the engine suggests to the caller.
+///
+/// Two states only:
+/// - [`Self::Enriched`]: requirements were supplied and the projection
+///   succeeded; carries the safe perch and the requirements that produced
+///   it (with `EiAlignment::Auto` already resolved to a concrete alignment).
+/// - [`Self::Baseline`]: no requirements were supplied; carries the
+///   geometric perch ROE so callers can render the "no enrichment" state
+///   without nullable plumbing.
+///
+/// Enrichment-time errors propagate as [`super::FormationDesignError`] up
+/// the call chain rather than being smuggled into a third "fallback"
+/// variant.
 #[cfg_attr(feature = "wasm", derive(tsify_next::Tsify))]
 #[cfg_attr(feature = "wasm", tsify(into_wasm_abi, from_wasm_abi))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "status", rename_all = "snake_case")]
-pub enum PerchEnrichmentResult {
-    /// Enrichment succeeded — enriched ROE replaces geometric perch as departure state.
-    Enriched(SafePerch),
-    /// Baseline: geometric perch ROE, no enrichment applied.
-    Baseline(QuasiNonsingularROE),
-    /// Enrichment failed — pipeline continued with un-enriched geometric perch.
-    Fallback {
-        /// The un-enriched geometric perch ROE (used as-is for targeting).
-        unenriched_roe: QuasiNonsingularROE,
-        /// Why enrichment failed.
-        reason: PerchFallbackReason,
+pub enum EnrichmentSuggestion {
+    /// Enrichment succeeded — the enriched ROE replaces the geometric
+    /// perch as the departure state on accept.
+    Enriched {
+        /// Safe perch geometry (e/i vectors aligned to maximize passive safety).
+        safe_perch: SafePerch,
+        /// Requirements that produced this suggestion. `alignment` reflects
+        /// the resolved choice (`Auto` will be `Parallel` or `AntiParallel`).
+        requirements: SafetyRequirements,
+    },
+    /// No requirements requested — geometric perch ROE preserved.
+    Baseline {
+        /// Geometric perch ROE (unchanged from `transfer.plan.perch_roe`).
+        perch_roe: QuasiNonsingularROE,
     },
 }
 
-impl PerchEnrichmentResult {
-    /// Resolve dynamic alignment from enrichment, falling back to original requirements.
+impl EnrichmentSuggestion {
+    /// Resolved safety requirements when enrichment succeeded.
     ///
-    /// When perch enrichment succeeded and resolved `EiAlignment::Auto` to a
-    /// concrete alignment, returns requirements with that resolved alignment.
-    /// On `Baseline` or `Fallback`, returns the original requirements unchanged.
+    /// Returns `Some` only for [`Self::Enriched`]; the requirements'
+    /// `alignment` is the concrete choice made during projection (so a
+    /// caller that requested `Auto` sees `Parallel` / `AntiParallel`
+    /// here). Returns `None` for [`Self::Baseline`] — callers that need
+    /// requirements at the baseline must source them elsewhere
+    /// (e.g., `MissionInput::safety_requirements`).
     #[must_use]
-    pub fn resolve_requirements(&self, base: &SafetyRequirements) -> SafetyRequirements {
+    pub const fn resolved_requirements(&self) -> Option<&SafetyRequirements> {
         match self {
-            Self::Enriched(sp) => SafetyRequirements {
-                min_separation_km: base.min_separation_km,
-                alignment: sp.alignment,
-            },
-            Self::Baseline(_) | Self::Fallback { .. } => *base,
+            Self::Enriched { requirements, .. } => Some(requirements),
+            Self::Baseline { .. } => None,
         }
     }
 }
@@ -224,8 +244,8 @@ pub struct TransitSafetyReport {
 #[cfg_attr(feature = "wasm", tsify(into_wasm_abi, from_wasm_abi))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FormationDesignReport {
-    /// Perch enrichment result — either enriched or fallback with reason.
-    pub perch: PerchEnrichmentResult,
+    /// Perch enrichment outcome — either enriched or baseline.
+    pub perch: EnrichmentSuggestion,
     /// Per-waypoint enrichment results (advisory), indexed by leg.
     /// `None` if enrichment failed for that waypoint.
     pub waypoints: Vec<Option<EnrichedWaypoint>>,

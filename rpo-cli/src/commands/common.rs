@@ -61,7 +61,7 @@ pub fn plan_with_physics(
     status!(spinner, "Classification + Lambert transfer...");
     let transfer_input = TransferComputationInput::from(input);
     let mut transfer = compute_transfer(&transfer_input)?;
-    let suggestion = suggest_enrichment(&transfer, &input.base);
+    let suggestion = suggest_enrichment(&transfer, &input.base)?;
     if let Some(ref s) = suggestion {
         apply_perch_enrichment(&mut transfer, s);
     }

@@ -5,6 +5,7 @@
 
 use crate::elements::keplerian_conversions::ConversionError;
 use crate::mission::errors::MissionError;
+use crate::mission::formation::FormationDesignError;
 use crate::pipeline::transfer::ArcDensificationError;
 use crate::propagation::covariance::CovarianceError;
 use crate::propagation::propagator::PropagationError;
@@ -28,6 +29,9 @@ pub enum PipelineError {
     /// Lambert visualization-arc densification error.
     #[error(transparent)]
     ArcDensification(#[from] ArcDensificationError),
+    /// Formation-design / perch-enrichment error.
+    #[error(transparent)]
+    FormationDesign(#[from] FormationDesignError),
     /// A required field is missing for the requested operation.
     #[error("{field} required for {context}")]
     MissingField {

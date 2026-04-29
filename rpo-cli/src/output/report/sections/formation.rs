@@ -3,8 +3,7 @@
 use std::fmt::Write;
 
 use rpo_core::mission::{
-    EiAlignment, EnrichmentMode, FormationDesignReport,
-    PerchEnrichmentResult, PerchFallbackReason,
+    EiAlignment, EnrichmentMode, EnrichmentSuggestion, FormationDesignReport,
 };
 
 use crate::output::fmt::{fmt_duration, fmt_m, fmt_roe_component};
@@ -23,7 +22,7 @@ pub fn write_formation_design_md(out: &mut String, report: &FormationDesignRepor
     write_perch_enrichment_md(out, report);
 
     // Consolidated e/i context block — emitted once when enrichment is active
-    if matches!(report.perch, PerchEnrichmentResult::Enriched(_)) {
+    if matches!(report.perch, EnrichmentSuggestion::Enriched { .. }) {
         let _ = writeln!(
             out,
             "> **e/i context:** V-bar perch geometry has zero e/i separation by construction. \
@@ -52,16 +51,13 @@ pub fn write_formation_design_condensed_md(out: &mut String, report: &FormationD
 
     // Perch status summary
     let perch_line = match &report.perch {
-        PerchEnrichmentResult::Enriched(safe_perch) => format!(
+        EnrichmentSuggestion::Enriched { safe_perch, .. } => format!(
             "ENRICHED ({}, \u{03b4}e = {}, \u{03b4}i = {})",
             format_alignment(safe_perch.alignment),
             fmt_m(safe_perch.de_magnitude_km, 1),
             fmt_m(safe_perch.di_magnitude_km, 1),
         ),
-        PerchEnrichmentResult::Baseline(_) => "NOT APPLIED (baseline)".to_string(),
-        PerchEnrichmentResult::Fallback { reason, .. } => {
-            format!("FALLBACK ({})", format_fallback_reason(reason))
-        }
+        EnrichmentSuggestion::Baseline { .. } => "NOT APPLIED (baseline)".to_string(),
     };
     let _ = writeln!(out, "| Perch | {perch_line} |");
 
@@ -96,7 +92,7 @@ pub fn write_formation_design_condensed_md(out: &mut String, report: &FormationD
 fn write_perch_enrichment_md(out: &mut String, report: &FormationDesignReport) {
     let _ = writeln!(out, "### Perch Enrichment\n");
     match &report.perch {
-        PerchEnrichmentResult::Enriched(safe_perch) => {
+        EnrichmentSuggestion::Enriched { safe_perch, .. } => {
             let _ = writeln!(out, "| Parameter | Value |");
             let _ = writeln!(out, "| --- | --- |");
             let _ = writeln!(out, "| Status | ENRICHED |");
@@ -153,16 +149,10 @@ fn write_perch_enrichment_md(out: &mut String, report: &FormationDesignReport) {
                 );
             }
         }
-        PerchEnrichmentResult::Baseline(_) => {
+        EnrichmentSuggestion::Baseline { .. } => {
             let _ = writeln!(out, "| Parameter | Value |");
             let _ = writeln!(out, "| --- | --- |");
             let _ = writeln!(out, "| Status | NOT APPLIED (baseline) |");
-        }
-        PerchEnrichmentResult::Fallback { reason, .. } => {
-            let _ = writeln!(out, "| Parameter | Value |");
-            let _ = writeln!(out, "| --- | --- |");
-            let _ = writeln!(out, "| Status | FALLBACK |");
-            let _ = writeln!(out, "| Reason | {} |", format_fallback_reason(reason));
         }
     }
     let _ = writeln!(out);
@@ -279,44 +269,3 @@ fn format_enrichment_mode(mode: EnrichmentMode) -> &'static str {
     }
 }
 
-/// Format a perch fallback reason as a concise human-readable string.
-fn format_fallback_reason(reason: &PerchFallbackReason) -> String {
-    match reason {
-        PerchFallbackReason::SingularGeometry { mean_arg_lat_rad } => {
-            format!(
-                "singular geometry at mean arg lat = {:.2}\u{00b0}",
-                mean_arg_lat_rad.to_degrees(),
-            )
-        }
-        PerchFallbackReason::SeparationUnachievable {
-            requested_km,
-            achievable_km,
-        } => {
-            format!(
-                "requested {} exceeds achievable {}",
-                fmt_m(*requested_km, 1),
-                fmt_m(*achievable_km, 1),
-            )
-        }
-        PerchFallbackReason::InvalidChiefElements { detail } => {
-            format!("invalid chief elements: {detail}")
-        }
-        PerchFallbackReason::SafetyAnalysis { detail } => {
-            format!("safety analysis failed: {detail}")
-        }
-        PerchFallbackReason::Propagation { detail } => {
-            format!("propagation failed: {detail}")
-        }
-        PerchFallbackReason::KeplerFailure { detail } => {
-            format!("kepler failure: {detail}")
-        }
-        PerchFallbackReason::InsufficientSampling {
-            total_samples,
-            required_per_orbit,
-        } => {
-            format!(
-                "insufficient sampling: {total_samples} samples < {required_per_orbit} required/orbit"
-            )
-        }
-    }
-}

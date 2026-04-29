@@ -30,16 +30,17 @@ export type ComputeTransferInput = {
 
 export type ComputeTransferResult = {
   transfer: TransferResult;
-  enrichment: EnrichmentSuggestion | null;
+  enrichment: EnrichmentSuggestion;
 };
 
 /**
  * Compute a Lambert transfer in-browser via WASM.
  *
- * Replaces the previous WebSocket round-trip — the in-tree Izzo solver runs
- * in microseconds, no network. When `safety_requirements` is supplied, also
- * computes the matching perch enrichment suggestion (mirrors the old WS
- * `TransferResult` shape).
+ * The in-tree Izzo solver runs in microseconds. The accompanying
+ * `enrichment` is always present: `{ status: 'baseline', perch_roe }` when
+ * no `safety_requirements` is supplied, otherwise `{ status: 'enriched',
+ * safe_perch, requirements }` on success or a `WasmError` with
+ * `code: 'formation'` on failure.
  */
 export function computeTransfer(
   input: ComputeTransferInput,
@@ -59,7 +60,7 @@ export function computeTransfer(
     ),
     mapWith((out) => ({
       transfer: out.transfer,
-      enrichment: out.enrichment ?? null,
+      enrichment: out.enrichment,
     })),
   );
 }

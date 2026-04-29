@@ -7,7 +7,7 @@ import { getEngineConstants } from '@/wasm/constants';
 const BORDERLINE_FRACTION = 0.1;
 
 export function ThresholdAdvisories() {
-  const threshold = usePlanner((s) => selectProximityConfig(s).roe_threshold);
+  const threshold = usePlanner((s) => selectProximityConfig(s.proximityConfig).roe_threshold);
   const classification = usePlanner((s) => s.classification);
 
   const softMax = getEngineConstants().roe_threshold_default;

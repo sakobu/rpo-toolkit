@@ -82,6 +82,7 @@ impl From<PipelineError> for WasmError {
                 WasmErrorCode::Propagation
             }
             PipelineError::Covariance(_) => WasmErrorCode::Covariance,
+            PipelineError::FormationDesign(_) => WasmErrorCode::Formation,
             PipelineError::MissingField { .. } => WasmErrorCode::MissingField,
             PipelineError::EmptyTrajectory => WasmErrorCode::EmptyTrajectory,
         };

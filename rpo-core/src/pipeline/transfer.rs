@@ -11,7 +11,7 @@ use crate::elements::keplerian_conversions::{keplerian_to_state, ConversionError
 use crate::elements::state_to_keplerian;
 use crate::mission::config::ProximityConfig;
 use crate::mission::errors::MissionError;
-use crate::mission::formation::SafetyRequirements;
+use crate::mission::formation::{EnrichmentSuggestion, SafetyRequirements};
 use crate::mission::planning::{classify_separation, perch_to_roe};
 use crate::mission::types::{MissionPhase, MissionPlan, PerchGeometry};
 use crate::types::elements::KeplerError;
@@ -23,7 +23,7 @@ use crate::types::{KeplerianElements, QuasiNonsingularROE, StateVector};
 use super::errors::PipelineError;
 use super::execute::{execute_mission_from_transfer, suggest_enrichment_from_parts};
 use super::types::{
-    EnrichmentSuggestion, PipelineInput, PipelineOutput, TransferComputationInput, TransferResult,
+    PipelineInput, PipelineOutput, TransferComputationInput, TransferResult,
 };
 
 /// Plan a complete mission with Lambert transfer support.
@@ -246,30 +246,47 @@ fn build_far_field_outputs(
     })
 }
 
-/// Compute a transfer end-to-end and, when `safety_requirements` is supplied,
-/// the matching perch enrichment suggestion.
+/// Compute a transfer end-to-end together with its perch enrichment outcome.
 ///
-/// One-call shorthand the WASM and CLI surfaces share so the orchestration
-/// (`compute_transfer` + `suggest_enrichment_from_parts`) lives in one
-/// place rather than duplicated at every binding boundary.
+/// Always returns an [`EnrichmentSuggestion`]:
+/// - `Some(reqs)` → enrichment is attempted; on success the returned
+///   suggestion is [`EnrichmentSuggestion::Enriched`]; on failure the
+///   underlying [`crate::mission::formation::FormationDesignError`]
+///   propagates via [`PipelineError`].
+/// - `None` → suggestion is [`EnrichmentSuggestion::Baseline`] carrying
+///   the geometric perch ROE so callers (CLI report, WASM consumer) can
+///   render the "no requirements requested" state without nullable
+///   plumbing.
+///
+/// # Invariants
+///
+/// - `input.chief_state.epoch == input.deputy_state.epoch`
+/// - `input.lambert_tof_s > 0` (when single-burn classification produces a
+///   transfer)
+///
+/// # Validity regime
+///
+/// When `safety_requirements` is supplied, the requested
+/// `min_separation_km` must lie within the linearization regime — see
+/// [`super::execute::suggest_enrichment_from_parts`] for the exact bound.
 ///
 /// # Errors
 ///
 /// Returns [`PipelineError`] on any classification, Lambert, propagation,
-/// or arc-densification failure.
+/// arc-densification, or perch-enrichment failure.
 pub fn compute_transfer_with_enrichment(
     input: &TransferComputationInput,
     safety_requirements: Option<&SafetyRequirements>,
-) -> Result<(TransferResult, Option<EnrichmentSuggestion>), PipelineError> {
+) -> Result<(TransferResult, EnrichmentSuggestion), PipelineError> {
     let transfer = compute_transfer(input)?;
-    let enrichment = safety_requirements.map(|reqs| {
-        suggest_enrichment_from_parts(
-            &input.perch,
-            &transfer.plan.chief_at_arrival,
-            transfer.plan.perch_roe,
-            reqs,
-        )
-    });
+    let enrichment = match safety_requirements {
+        Some(reqs) => {
+            suggest_enrichment_from_parts(&input.perch, &transfer.plan.chief_at_arrival, reqs)?
+        }
+        None => EnrichmentSuggestion::Baseline {
+            perch_roe: transfer.plan.perch_roe,
+        },
+    };
     Ok((transfer, enrichment))
 }
 
@@ -349,15 +366,14 @@ mod tests {
     use crate::mission::formation::safety_envelope::enrich_waypoint;
     use crate::mission::formation::types::EnrichmentMode;
     use crate::mission::formation::{
-        EiAlignment, PerchEnrichmentResult, PerchFallbackReason, SafetyRequirements,
+        EiAlignment, EnrichmentSuggestion, SafetyRequirements,
     };
     use crate::mission::planning::compute_transfer_eclipse;
     use crate::mission::safety::compute_ei_separation;
     use crate::pipeline::{
         accept_waypoint_enrichment, apply_perch_enrichment, compute_safety_analysis,
         default_perch, plan_waypoints_from_transfer, suggest_enrichment, to_propagation_model,
-        EnrichmentSuggestion, MissionInput, PropagatorChoice, WaypointInput,
-        DEFAULT_LAMBERT_TOF_S,
+        MissionInput, PropagatorChoice, WaypointInput, DEFAULT_LAMBERT_TOF_S,
     };
     use crate::propagation::lambert::TransferDirection;
     use crate::propagation::stm::propagate_roe_stm;
@@ -916,7 +932,10 @@ mod tests {
             .as_ref()
             .expect("formation_design should be Some");
 
-        assert!(matches!(report.perch, PerchEnrichmentResult::Enriched(_)));
+        assert!(matches!(
+            report.perch,
+            EnrichmentSuggestion::Enriched { .. },
+        ));
 
         let roe = &output.perch_roe;
         let ei_magnitude = (roe.dex * roe.dex
@@ -926,8 +945,8 @@ mod tests {
             .sqrt();
         assert!(ei_magnitude > ENRICHMENT_NONZERO_TOL);
 
-        if let PerchEnrichmentResult::Enriched(ref sp) = report.perch {
-            let diff = (sp.roe.to_vector() - roe.to_vector()).norm();
+        if let EnrichmentSuggestion::Enriched { ref safe_perch, .. } = report.perch {
+            let diff = (safe_perch.roe.to_vector() - roe.to_vector()).norm();
             assert!(diff < ROE_IDENTITY_TOL);
         }
 
@@ -964,7 +983,7 @@ mod tests {
         let transfer = compute_transfer_from_pipeline(&input).unwrap();
 
         let original_perch_roe = transfer.plan.perch_roe;
-        let suggestion = suggest_enrichment(&transfer, &input.base);
+        let suggestion = suggest_enrichment(&transfer, &input.base).unwrap();
 
         assert!(suggestion.is_some());
         assert!(
@@ -977,7 +996,7 @@ mod tests {
     fn test_suggest_enrichment_none_without_requirements() {
         let input = far_field_input();
         let transfer = compute_transfer_from_pipeline(&input).unwrap();
-        let suggestion = suggest_enrichment(&transfer, &input.base);
+        let suggestion = suggest_enrichment(&transfer, &input.base).unwrap();
         assert!(suggestion.is_none());
     }
 
@@ -987,7 +1006,7 @@ mod tests {
         let mut transfer = compute_transfer_from_pipeline(&input).unwrap();
 
         let original_perch_roe = transfer.plan.perch_roe;
-        let suggestion = suggest_enrichment(&transfer, &input.base).unwrap();
+        let suggestion = suggest_enrichment(&transfer, &input.base).unwrap().unwrap();
 
         apply_perch_enrichment(&mut transfer, &suggestion);
 
@@ -998,23 +1017,14 @@ mod tests {
     }
 
     #[test]
-    fn test_apply_perch_enrichment_fallback_no_mutate() {
+    fn test_apply_perch_enrichment_baseline_no_mutate() {
         let input = proximity_input_with_enrichment();
         let mut transfer = compute_transfer_from_pipeline(&input).unwrap();
 
         let original_perch_roe = transfer.plan.perch_roe;
 
-        let suggestion = EnrichmentSuggestion {
-            perch: PerchEnrichmentResult::Fallback {
-                unenriched_roe: original_perch_roe,
-                reason: PerchFallbackReason::SingularGeometry {
-                    mean_arg_lat_rad: 0.0,
-                },
-            },
-            requirements: SafetyRequirements {
-                min_separation_km: ENRICHMENT_SAFETY_MIN_SEP_KM,
-                alignment: EiAlignment::Parallel,
-            },
+        let suggestion = EnrichmentSuggestion::Baseline {
+            perch_roe: original_perch_roe,
         };
 
         apply_perch_enrichment(&mut transfer, &suggestion);
@@ -1039,7 +1049,7 @@ mod tests {
         let transfer = compute_transfer_from_pipeline(&input).unwrap();
         let propagator = to_propagation_model(&input.base.propagator);
         let mut transfer2 = transfer;
-        let suggestion = suggest_enrichment(&transfer2, &input.base);
+        let suggestion = suggest_enrichment(&transfer2, &input.base).unwrap();
         if let Some(ref s) = suggestion {
             apply_perch_enrichment(&mut transfer2, s);
         }

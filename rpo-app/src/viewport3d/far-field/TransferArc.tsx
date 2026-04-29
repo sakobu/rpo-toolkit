@@ -2,7 +2,7 @@ import { useMemo } from 'react';
 import { Line } from '@react-three/drei';
 import { Quaternion, Vector3 } from 'three';
 
-import { selectTransferSubSurface, usePlanner } from '@/stores/planner';
+import { selectTransfer, selectTransferSubSurface, usePlanner } from '@/stores/planner';
 import type { Vec3 } from '@/viewport3d/types';
 
 import {
@@ -72,7 +72,7 @@ type Scene = {
  * transfer is active.
  */
 export default function TransferArc() {
-  const transfer = usePlanner((s) => s.transfer);
+  const transfer = usePlanner(selectTransfer);
   const subSurface = usePlanner(selectTransferSubSurface);
 
   const scene = useMemo<Scene | null>(() => {

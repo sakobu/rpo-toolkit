@@ -11,9 +11,7 @@ use crate::mission::cola_assessment::{SecondaryViolation, SkippedLeg};
 use crate::mission::avoidance::{AvoidanceManeuver, ColaConfig};
 use crate::mission::closest_approach::ClosestApproach;
 use crate::mission::config::{MissionConfig, ProximityConfig};
-use crate::mission::formation::{
-    FormationDesignReport, PerchEnrichmentResult, SafetyRequirements,
-};
+use crate::mission::formation::{FormationDesignReport, SafetyRequirements};
 use crate::mission::free_drift::FreeDriftAnalysis;
 use crate::mission::monte_carlo::{MonteCarloConfig, MonteCarloReport};
 use crate::mission::types::{MissionPhase, MissionPlan, PerchGeometry, WaypointMission};
@@ -260,22 +258,6 @@ impl Default for PlanVariant {
     fn default() -> Self {
         Self::Baseline
     }
-}
-
-// ---- EnrichmentSuggestion ----
-
-/// Read-only enrichment suggestion computed by `suggest_enrichment()`.
-///
-/// Contains the perch enrichment result and requirements.
-/// Does NOT imply mutation — call `apply_perch_enrichment()` to apply.
-#[cfg_attr(feature = "wasm", derive(tsify_next::Tsify))]
-#[cfg_attr(feature = "wasm", tsify(into_wasm_abi, from_wasm_abi))]
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct EnrichmentSuggestion {
-    /// Perch enrichment result (enriched or fallback).
-    pub perch: PerchEnrichmentResult,
-    /// Safety requirements used for enrichment.
-    pub requirements: SafetyRequirements,
 }
 
 // ---- TransferResult ----

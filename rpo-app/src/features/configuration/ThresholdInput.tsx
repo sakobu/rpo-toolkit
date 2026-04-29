@@ -17,7 +17,7 @@ export function ThresholdInput() {
     linearization_perturbation_bound: maxThreshold,
   } = getEngineConstants();
   const [draft, setDraft] = useState<string>(() =>
-    String(selectProximityConfig(usePlanner.getState()).roe_threshold),
+    String(selectProximityConfig(usePlanner.getState().proximityConfig).roe_threshold),
   );
   const [error, setError] = useState<string | undefined>(undefined);
 
