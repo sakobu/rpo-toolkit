@@ -1,6 +1,6 @@
 # RPO WASM Engine
 
-The `rpo-wasm` crate provides WebAssembly bindings for the RPO analytical engine. It exposes 18 functions to JavaScript, covering classification, waypoint mission planning, safety analysis, covariance propagation, eclipse computation, formation design enrichment, and state queries. All functions run entirely in the browser with no server round-trip. TypeScript definitions are auto-generated via `tsify-next`.
+The `rpo-wasm` crate provides WebAssembly bindings for the RPO analytical engine. It exposes 22 functions to JavaScript, covering classification, Lambert transfer (in-tree Izzo solver), waypoint mission planning, safety analysis, covariance propagation, eclipse computation, formation design enrichment, and state queries. All functions run entirely in the browser with no server round-trip. TypeScript definitions are auto-generated via `tsify-next`.
 
 ## Build
 
@@ -36,10 +36,14 @@ await init();
 ```
 Browser (rpo-wasm)                          Server (rpo-api)
 -------------------------------             -------------------------
-classify_separation()                       compute_transfer()  <- Lambert (nyx)
-plan_waypoint_mission()                     extract_drag()      <- nyx full-physics
-execute_mission_from_transfer()             validate()          <- nyx validation
-replan_from_transfer()                      run_mc()            <- nyx Monte Carlo
+classify_separation()                       extract_drag()      <- nyx full-physics
+solve_lambert()                             validate()          <- nyx validation
+solve_lambert_with_config()                 run_mc()            <- nyx Monte Carlo
+solve_lambert_branches()
+compute_transfer_with_enrichment()
+plan_waypoint_mission()
+execute_mission_from_transfer()
+replan_from_transfer()
 compute_mission_covariance()
 compute_free_drift_analysis()
 compute_poca_analysis()
@@ -56,7 +60,7 @@ accept_waypoint_enrichment()
 enrich_waypoint()
 ```
 
-The browser holds all mission state. The server handles only the 4 operations requiring nyx-space (Lambert transfer, drag extraction, full-physics validation, Monte Carlo ensemble). Every other computation runs locally via WASM.
+The browser holds all mission state. The server handles only the 3 operations requiring nyx-space (drag extraction, full-physics validation, Monte Carlo ensemble). Every other computation — including the Lambert transfer — runs locally via WASM.
 
 **Ownership model.** All parameters are passed by value across the WASM boundary. Inputs are consumed, and new objects are returned. There are no mutable references or shared state -- each call is a pure function from the JavaScript perspective. Functions that need to return both a result and a mutated input (e.g., `execute_mission_from_transfer`) wrap them in a combined output struct.
 
@@ -82,6 +86,7 @@ All codes are `snake_case` strings.
 | ------------------ | ------------------------------------------------------------- |
 | `mission`          | Mission planning error (classification, targeting, waypoints) |
 | `propagation`      | Propagation error (STM, Keplerian)                            |
+| `lambert`          | Lambert solver error (convergence, degenerate geometry, bad TOF) |
 | `covariance`       | Covariance propagation error                                  |
 | `avoidance`        | Collision avoidance maneuver error                            |
 | `missing_field`    | A required field is missing                                   |
@@ -151,6 +156,52 @@ const mission = plan_waypoint_mission(
 );
 ```
 
+### Lambert / Transfer
+
+In-tree Izzo Lambert solver. Single solver code path. Multi-rev respects the requested direction. `TransferDirection::Auto` evaluates short-way and long-way and returns the lower-Δv branch.
+
+| Function                          | Return                  | Fallible |
+| --------------------------------- | ----------------------- | -------- |
+| `solve_lambert`                   | `LambertTransfer`       | yes      |
+| `solve_lambert_with_config`       | `LambertTransfer`       | yes      |
+| `solve_lambert_branches`          | `LambertTransfer[]`     | yes      |
+| `compute_transfer_with_enrichment`| `ComputeTransferOutput` | yes      |
+
+```typescript
+solve_lambert(departure: StateVector, arrival: StateVector): LambertTransfer
+solve_lambert_with_config(departure: StateVector, arrival: StateVector, config: LambertConfig): LambertTransfer
+solve_lambert_branches(departure: StateVector, arrival: StateVector, max_revs: number): LambertTransfer[]
+compute_transfer_with_enrichment(input: TransferComputationInput, safety_requirements: SafetyRequirements | null): ComputeTransferOutput
+```
+
+`solve_lambert` solves the single-revolution direct problem with `TransferDirection::Auto`.
+
+`solve_lambert_with_config` accepts an explicit `LambertConfig { direction, revolutions }`. For `revolutions == 0`, returns the single-revolution transfer in the requested direction. For `revolutions >= 1`, returns the long-period (low-energy) branch of the M=N family in that direction.
+
+`solve_lambert_branches` returns every feasible Lambert branch (short-way + long-way, 0..=max_revs revolutions) sorted by Δv ascending. Designed for "browse transfer options" UX where the operator picks a branch.
+
+`compute_transfer_with_enrichment` is the higher-level pipeline: classify → Lambert → perch geometry → arc densification, with optional perch enrichment. Output bundles a `TransferResult` and an `EnrichmentSuggestion` (`Baseline` when no requirements supplied, `Enriched` on success). Lambert-stage failures throw `WasmError` with code `lambert`; enrichment failures throw with code `formation`.
+
+```typescript
+// Single-rev, auto direction
+const transfer = solve_lambert(departure, arrival);
+
+// Explicit multi-rev, long-way
+const m2 = solve_lambert_with_config(departure, arrival, {
+  direction: "long_way",
+  revolutions: 2,
+});
+
+// Browse all feasible branches (0..=2 revs both directions)
+const branches = solve_lambert_branches(departure, arrival, 2);
+
+// Full far-field pipeline
+const { transfer: tx, enrichment } = compute_transfer_with_enrichment(
+  transferInput,
+  safetyRequirements,  // pass null for the baseline-only path
+);
+```
+
 ### Mission
 
 Mission execution and replanning from a pre-computed Lambert transfer.
@@ -165,7 +216,7 @@ execute_mission_from_transfer(transfer: TransferResult, input: MissionInput): Mi
 replan_from_transfer(transfer: TransferResult, input: MissionInput, modified_index: number, cached_mission?: WaypointMission | null): MissionResult
 ```
 
-`execute_mission_from_transfer` runs the full analytical pipeline from a server-provided Lambert transfer result.
+`execute_mission_from_transfer` runs the full analytical pipeline from a `TransferResult` produced by `compute_transfer_with_enrichment` (or any other route that yields one).
 
 `replan_from_transfer` re-executes the mission after modifying a waypoint. When a `cached_mission` is provided, converged legs before `modified_index` are preserved, avoiding redundant re-targeting.
 
@@ -463,13 +514,13 @@ const mission = plan_waypoint_mission(
 
 ### Far-Field Mission
 
-A far-field mission begins with a Lambert transfer computed on the server, then proceeds with all planning and analysis in the browser.
+A far-field mission begins with a Lambert transfer computed locally in the browser (microseconds), then proceeds with all planning and analysis in WASM. The server is only consulted for drag extraction, validation, and Monte Carlo.
 
 ```
 Browser (WASM)                              Server
 --------------                              ------
 classify_separation() -> far_field
-                                            compute_transfer -> transfer_result
+compute_transfer_with_enrichment()
                                             extract_drag -> drag_result
 execute_mission_from_transfer()
 compute_safety_analysis()

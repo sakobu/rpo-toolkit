@@ -1,16 +1,19 @@
 # RPO WebSocket API
 
-The `rpo-api` crate provides a stateless WebSocket server for the RPO mission planner. It handles the 4 operations that require nyx-space: Lambert transfer, drag extraction, full-physics validation, and Monte Carlo ensemble. All analytical operations (classify, waypoint planning, targeting, safety, formation design, covariance, eclipse, POCA, COLA, free-drift) run in the browser via the WASM engine (`rpo-wasm`).
+The `rpo-api` crate provides a stateless WebSocket server for the RPO mission planner. It handles the 3 operations that require nyx-space: drag extraction, full-physics validation, and Monte Carlo ensemble. All analytical operations (classify, Lambert transfer, waypoint planning, targeting, safety, formation design, covariance, eclipse, POCA, COLA, free-drift) run in the browser via the WASM engine (`rpo-wasm`).
 
 ## Architecture
 
 ```
-Browser (rpo-wasm)                     Server (rpo-api)
-─────────────────                      ────────────────
-classify_separation()                  compute_transfer()  ← Lambert solver (nyx)
-plan_waypoint_mission()                extract_drag()      ← nyx full-physics sim
-compute_safety_analysis()              validate()          ← nyx full-physics validation
-compute_mission_covariance()           run_mc()            ← nyx Monte Carlo ensemble
+Browser (rpo-wasm)                          Server (rpo-api)
+─────────────────                           ────────────────
+classify_separation()                       extract_drag()   ← nyx full-physics sim
+solve_lambert() / *_with_config() /         validate()       ← nyx full-physics validation
+  *_branches()                              run_mc()         ← nyx Monte Carlo ensemble
+compute_transfer_with_enrichment()
+plan_waypoint_mission()
+compute_safety_analysis()
+compute_mission_covariance()
 compute_transfer_eclipse()
 compute_mission_eclipse()
 assess_cola()
@@ -55,22 +58,7 @@ All messages are JSON text frames with a `"type"` discriminator tag (serde inter
 
 ## Client Messages
 
-### compute_transfer
-
-Classify chief/deputy separation and solve Lambert transfer (far-field) or compute perch states (proximity). Synchronous (~100ms for far-field, microseconds for proximity).
-
-| Field            | Type                 | Required | Description                                           |
-| ---------------- | -------------------- | -------- | ----------------------------------------------------- |
-| `type`           | `"compute_transfer"` | yes      | Message discriminator                                 |
-| `request_id`     | `u64`                | yes      | Client-assigned correlation ID                        |
-| `chief`          | `StateVector`        | yes      | Chief ECI state vector                                |
-| `deputy`         | `StateVector`        | yes      | Deputy ECI state vector (same epoch as chief)         |
-| `perch`          | `PerchGeometry`      | yes      | Perch geometry for Lambert arrival                    |
-| `proximity`      | `ProximityConfig`    | yes      | Far-field vs. proximity classification thresholds     |
-| `lambert_tof_s`  | `f64`                | yes      | Lambert time-of-flight (seconds)                      |
-| `lambert_config` | `LambertConfig`      | yes      | Lambert solver configuration (direction, revolutions) |
-
-Response: `transfer_result`
+The server exposes 4 client messages: `extract_drag`, `validate`, `run_mc`, and `cancel`.
 
 ### extract_drag
 
@@ -159,25 +147,7 @@ Response: `cancelled`
 
 ## Server Messages
 
-### transfer_result
-
-Lambert transfer result (classification + perch states). Response to `compute_transfer`.
-
-| Field        | Type                | Description                                                                                        |
-| ------------ | ------------------- | -------------------------------------------------------------------------------------------------- |
-| `type`       | `"transfer_result"` | Message discriminator                                                                              |
-| `request_id` | `u64`               | Correlation ID from the client request                                                             |
-| `result`     | `TransferResult`    | Mission plan (phase, transfer, perch ROE, chief elements), perch states, arrival epoch, Lambert Δv |
-
-`TransferResult` fields:
-
-| Field             | Type          | Description                                                                  |
-| ----------------- | ------------- | ---------------------------------------------------------------------------- |
-| `plan`            | `MissionPlan` | Phase classification, Lambert transfer, perch ROE, chief elements at arrival |
-| `perch_chief`     | `StateVector` | Chief ECI state at Lambert arrival (or original if proximity)                |
-| `perch_deputy`    | `StateVector` | Deputy ECI state at perch (or original if proximity)                         |
-| `arrival_epoch`   | `string`      | ISO 8601 epoch at Lambert arrival                                            |
-| `lambert_dv_km_s` | `f64`         | Lambert Δv magnitude (0.0 if proximity)                                      |
+The server emits 7 message types: `drag_result`, `validation_result`, `monte_carlo_result`, `progress`, `error`, `cancelled`, and `heartbeat`.
 
 ### drag_result
 
@@ -255,34 +225,15 @@ Sent every 30 seconds while a background job is running. The counter resets to 0
 
 All error codes are lowercase `snake_case` strings.
 
-| Code                | Description                                               |
-| ------------------- | --------------------------------------------------------- |
-| `lambert_failure`   | Lambert solver failure (convergence, degenerate geometry) |
-| `nyx_bridge_error`  | Nyx bridge error (almanac, dynamics, propagation)         |
-| `validation_error`  | Full-physics validation error                             |
-| `monte_carlo_error` | Monte Carlo execution error                               |
-| `invalid_input`     | Malformed JSON, missing fields, bad values                |
-| `cancelled`         | Operation was cancelled by the client                     |
+| Code                | Description                                       |
+| ------------------- | ------------------------------------------------- |
+| `nyx_bridge_error`  | Nyx bridge error (almanac, dynamics, propagation) |
+| `validation_error`  | Full-physics validation error                     |
+| `monte_carlo_error` | Monte Carlo execution error                       |
+| `invalid_input`     | Malformed JSON, missing fields, bad values        |
+| `cancelled`         | Operation was cancelled by the client             |
 
 The `detail` field carries per-error diagnostic data. Examples:
-
-`lambert_failure` (convergence):
-
-```json
-{
-  "reason": "solver_convergence_failure",
-  "details": "Lambert solver did not converge after 50 iterations"
-}
-```
-
-`lambert_failure` (invalid input):
-
-```json
-{
-  "reason": "invalid_input",
-  "details": "Non-positive time of flight: -100.0 s"
-}
-```
 
 `invalid_input` (malformed JSON):
 
@@ -304,24 +255,24 @@ The `detail` field carries per-error diagnostic data. Examples:
 
 ## Background Job Behavior
 
-- Only one background job runs at a time (`extract_drag`, `validate`, `run_mc`).
+- Every server-handled request is a background job (`extract_drag`, `validate`, `run_mc`).
+- Only one background job runs at a time per connection.
 - Sending a new background request automatically cancels the active job.
 - Cancellation is cooperative: handlers check the cancel flag before starting heavy computation.
 - `heartbeat` messages are sent every 30 seconds during background jobs to keep the connection alive through proxies.
 - When the connection closes, any active background job is cancelled.
-- `compute_transfer` is synchronous (not a background job) -- it replies immediately.
 
 ## Typical Flows
 
 ### Far-Field Mission
 
-The browser handles classification, waypoint planning, and all analytical operations via WASM. The server is called only for nyx-dependent steps.
+The browser handles all analytical operations via WASM. The server is called only for nyx-dependent steps.
 
 ```
 Browser (WASM)                              Server
 ──────────────                              ──────
 classify_separation() → far_field
-                                            compute_transfer → transfer_result (~100ms)
+compute_transfer_with_enrichment() (μs)
                                             extract_drag → drag_result (~3s)
 plan_waypoint_mission()
 compute_safety_analysis()
@@ -347,52 +298,6 @@ compute_safety_analysis()
 ```
 
 ## Examples
-
-### compute_transfer
-
-Request:
-
-```json
-{
-  "type": "compute_transfer",
-  "request_id": 1,
-  "chief": {
-    "epoch": "2024-01-01T00:00:00 UTC",
-    "position_eci_km": [5876.261, 3392.661, 0.0],
-    "velocity_eci_km_s": [-2.380512, 4.123167, 6.006917]
-  },
-  "deputy": {
-    "epoch": "2024-01-01T00:00:00 UTC",
-    "position_eci_km": [6876.261, 2392.661, 500.0],
-    "velocity_eci_km_s": [-2.180512, 4.323167, 5.806917]
-  },
-  "perch": { "v_bar": { "along_track_km": 2.0 } },
-  "proximity": { "roe_threshold": 0.005 },
-  "lambert_tof_s": 3600.0,
-  "lambert_config": { "direction": "auto", "revolutions": 0 }
-}
-```
-
-Response:
-
-```json
-{
-  "type": "transfer_result",
-  "request_id": 1,
-  "result": {
-    "plan": {
-      "phase": { "far_field": { "...": "..." } },
-      "transfer": { "...": "..." },
-      "perch_roe": { "...": "..." },
-      "chief_at_arrival": { "...": "..." }
-    },
-    "perch_chief": { "...": "..." },
-    "perch_deputy": { "...": "..." },
-    "arrival_epoch": "2024-01-01T01:00:00 UTC",
-    "lambert_dv_km_s": 0.123
-  }
-}
-```
 
 ### extract_drag
 
@@ -505,21 +410,6 @@ Malformed JSON (no `request_id` available):
   "detail": {
     "reason": "malformed_json",
     "detail": "missing field `type` at line 1 column 2"
-  }
-}
-```
-
-Lambert failure:
-
-```json
-{
-  "type": "error",
-  "request_id": 1,
-  "code": "lambert_failure",
-  "message": "Lambert solver error: Lambert solver did not converge",
-  "detail": {
-    "reason": "solver_convergence_failure",
-    "details": "Lambert solver did not converge after 50 iterations"
   }
 }
 ```

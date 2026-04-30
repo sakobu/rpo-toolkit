@@ -28,7 +28,7 @@
     "lambert_config": {
       "$ref": "#/$defs/LambertConfig",
       "description": "Lambert solver configuration (direction and revolution count).",
-      "default": { "direction": "short_way", "revolutions": 0 }
+      "default": { "direction": "auto", "revolutions": 0 }
     },
     "waypoints": {
       "type": "array",
@@ -228,17 +228,17 @@
     },
     "LambertConfig": {
       "type": "object",
-      "description": "Configuration for the Lambert transfer solver. Single-rev (revolutions == 0) routes through the Gooding solver; multi-rev (revolutions > 0) routes through Izzo. Multi-rev ignores the direction field — nyx's multi-rev TransferKind has no long-way variant.",
+      "description": "Configuration for the in-tree Izzo Lambert transfer solver. Single code path at all revolution counts: 0 = direct transfer, N >= 1 = the long-period (low-energy) branch of the M=N family. The `direction` field is honored at every revolution count; `auto` evaluates short-way and long-way and returns the lower-Δv branch.",
       "properties": {
         "direction": {
           "type": "string",
-          "description": "Transfer direction selection. Default is short_way rather than auto: nyx-space 2.3.1's Auto dispatch has a known typo in direction-of-motion (see docs/nyx-lambert-bug-report.md), so the default avoids silently exercising the buggy path. Ignored when revolutions > 0.",
+          "description": "Transfer direction selection. `auto` returns the lower-Δv of short-way and long-way (recommended for interactive use). Honored at all revolution counts.",
           "enum": ["auto", "short_way", "long_way"],
-          "default": "short_way"
+          "default": "auto"
         },
         "revolutions": {
           "type": "integer",
-          "description": "Number of complete revolutions (0 = direct transfer, Gooding; >0 = multi-rev, Izzo).",
+          "description": "Number of complete revolutions (0 = direct transfer; N >= 1 = long-period branch of the M=N multi-revolution family).",
           "minimum": 0,
           "maximum": 255,
           "default": 0

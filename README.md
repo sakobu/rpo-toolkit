@@ -2,7 +2,7 @@
 
 RPO Toolkit is a paper-traceable implementation of spacecraft rendezvous and proximity-operations mission design in Rust. Every algorithm — quasi-nonsingular ROE, J2 and DMF-drag analytical STMs, e/i-separation passive safety, null-space-projected formation design, Brent-refined closest-approach — cites its source equation (Koenig 2017, D'Amico 2010, Meeus) and is validated against nyx-space full-physics propagation to the meter.
 
-The workspace is split into two engines: a microsecond, browser-deployable analytical core (MIT/Apache) and a full-physics numerical engine (AGPL, via nyx-space) for Lambert transfers, validation, and Monte Carlo. The same mission designer that plans a formation in a browser tab runs Monte Carlo on a server.
+The workspace is split into two engines: a microsecond, browser-deployable analytical core (MIT/Apache) and a full-physics numerical engine (AGPL, via nyx-space) for drag extraction, validation, and Monte Carlo. The same mission designer that plans a formation in a browser tab runs Monte Carlo on a server.
 
 ## Who this is for
 
@@ -29,7 +29,7 @@ rpo-nyx (AGPL-3.0)  <--  rpo-cli (AGPL-3.0)
 | **WASM**          | Yes (`wasm32-unknown-unknown`)                          | No (requires nyx/anise/rayon)              |
 | **Speed**         | Microseconds                                            | Seconds to minutes                         |
 | **Perturbations** | J2 + differential drag (DMF)                            | Full: gravity field, drag, SRP, 3rd-body   |
-| **Use cases**     | Formation design, targeting, covariance, interactive UI | Lambert transfers, validation, Monte Carlo |
+| **Use cases**     | Lambert transfers, formation design, targeting, covariance, interactive UI | Drag extraction, validation, Monte Carlo |
 | **Valid regime**  | ROE-linear (delta-r/r < 0.5%)                           | Any separation                             |
 
 ## Quick Start
@@ -63,7 +63,7 @@ See [CLI Reference](docs/CLI.md) for all commands and flags.
 flowchart TD
     A["Configure spacecraft\n(chief + deputy)"] --> B["Upload ECI\nstate vectors"]
     B --> C{"Auto-classify\n(microseconds)"}
-    C -- "Far-field\n(delta-r/r >= 0.005)" --> D["Lambert transfer\n+ perch handoff\n(~100 ms)"]
+    C -- "Far-field\n(delta-r/r >= 0.005)" --> D["Lambert transfer\n+ perch handoff\n(microseconds)"]
     C -- "Proximity\n(delta-r/r < 0.005)" --> E2["Drag estimation\nfrom current states\n(~3 s, async)"]
     D -- "iterate" --> D
     D -- "lock in" --> E1["Drag estimation\nfrom perch states\n(~3 s, async)"]
@@ -79,7 +79,7 @@ flowchart TD
 | Step                         | Function                                                                               | Engine     | Speed        |
 | ---------------------------- | -------------------------------------------------------------------------------------- | ---------- | ------------ |
 | Classify separation          | `classify_separation()`                                                                | Analytical | microseconds |
-| Lambert transfer             | `solve_lambert()`                                                                      | nyx-space  | ~100 ms      |
+| Lambert transfer             | `solve_lambert()`                                                                      | Analytical | microseconds |
 | Drag estimation              | `extract_dmf_rates()`                                                                  | nyx-space  | ~3 s         |
 | Waypoint targeting + eclipse | `plan_waypoint_mission()`                                                              | Analytical | microseconds |
 | Formation design             | `suggest_enrichment_from_parts()`, `enrich_waypoint()`, `accept_waypoint_enrichment()` | Analytical | microseconds |
@@ -153,7 +153,7 @@ Regression tests enforce conservative pass/fail gates with ~10× margin over obs
 
 ### Rust
 
-For the full pipeline (classify -> Lambert -> waypoints -> covariance -> eclipse), use `rpo_nyx::pipeline::execute_mission()`. For WASM/browser contexts, use `rpo_core::pipeline::execute_mission_from_transfer()` with a server-provided `TransferResult`. The sketch below shows the lower-level waypoint planning API (analytical only, no nyx dependency); `examples/mission.json` is a complete runnable scenario driven via `rpo-cli`.
+For the full pipeline (classify -> Lambert -> waypoints -> covariance -> eclipse), use `rpo_nyx::pipeline::execute_mission()`. For WASM/browser contexts, the analytical Lambert solver lives in `rpo_core::propagation::lambert` and `rpo_core::pipeline::compute_transfer_with_enrichment()`; pair it with `rpo_core::pipeline::execute_mission_from_transfer()` for end-to-end browser-side planning. The sketch below shows the lower-level waypoint planning API (analytical only, no nyx dependency); `examples/mission.json` is a complete runnable scenario driven via `rpo-cli`.
 
 ```rust
 use rpo_core::prelude::*;
@@ -190,6 +190,7 @@ The `rpo-wasm` crate compiles to WebAssembly with auto-generated TypeScript defi
 ```typescript
 import init, {
   classify_separation,
+  compute_transfer_with_enrichment,
   plan_waypoint_mission,
   compute_safety_analysis,
 } from "rpo-wasm";
@@ -199,9 +200,10 @@ await init();
 // Classify — far-field or proximity?
 const phase = classify_separation(chief, deputy, { roe_threshold: 0.005 });
 if (!("proximity" in phase)) {
-  // Far-field: request a Lambert transfer from rpo-api over WebSocket
-  // (see docs/API.md), then resume from the perch state.
-  throw new Error("Far-field: Lambert transfer required");
+  // Far-field: solve Lambert locally (microseconds, no server round-trip),
+  // then resume from the perch state.
+  const { transfer } = compute_transfer_with_enrichment(transferInput, null);
+  // ... use `transfer` as the departure for the proximity-ops loop below.
 }
 
 // Plan — a 2-waypoint approach in microseconds
@@ -238,11 +240,11 @@ All input/output types have full TypeScript definitions. See [docs/WASM.md](docs
 - [Validation](docs/validation.md) -- test-suite gates, per-component Koenig accuracy
 - [Input Schema](docs/schema/pipeline-input.schema.json) -- shared JSON schema for `PipelineInput`
 
-The CLI provides batch execution and shell-composable plumbing for scripting. The WebSocket API is a stateless backend for the 4 nyx-dependent operations (Lambert transfer, drag extraction, validation, Monte Carlo) with progress streaming. The WASM crate exposes the full analytical engine to the browser with auto-generated TypeScript definitions.
+The CLI provides batch execution and shell-composable plumbing for scripting. The WebSocket API is a stateless backend for the 3 nyx-dependent operations (drag extraction, validation, Monte Carlo) with progress streaming. The WASM crate exposes the full analytical engine to the browser with auto-generated TypeScript definitions.
 
 ## Testing
 
-693 tests across 5 crates (403 rpo-core, 142 rpo-nyx, 77 rpo-cli, 48 rpo-wasm, 23 rpo-api). 32 full-physics tests are `#[ignore]` by default — running `validate`, `mc`, or `cargo test -- --ignored` downloads ~50 MB of ANISE kernels (DE440s, PCK) on first use and caches them. Analytical-only operations (`mission` without `--auto-drag`, all WASM functions) have no external dependencies.
+689 tests across 5 crates (455 rpo-core, 98 rpo-nyx, 77 rpo-cli, 48 rpo-wasm, 11 rpo-api). 34 full-physics tests are `#[ignore]` by default — running `validate`, `mc`, or `cargo test -- --ignored` downloads ~50 MB of ANISE kernels (DE440s, PCK) on first use and caches them. Analytical-only operations (`mission` without `--auto-drag`, all WASM functions) have no external dependencies.
 
 ```bash
 cargo test                      # full suite (5 crates)
@@ -255,6 +257,7 @@ cargo clippy --workspace -- -D warnings   # lint (pedantic)
 
 - **Koenig, Guffanti, D'Amico** -- "New State Transition Matrices for Spacecraft Relative Motion in Perturbed Orbits" ([PDF](docs/references/Koenig_Guffanti_Damico.pdf)), JGCD 2017. J2/drag STMs, ROE definitions, perturbation parameters.
 - **D'Amico** -- "Autonomous Formation Flying in Low Earth Orbit" ([PDF](docs/references/Damico_PhD.pdf)), PhD thesis, TU Delft 2010. QNS ROE, e/i separation, formation design, collision avoidance.
+- **Izzo** -- "Revisiting Lambert's Problem" ([PDF](docs/references/Izzo.pdf)), _Celestial Mechanics and Dynamical Astronomy_ 121.1:1-15, 2015. In-tree Izzo Lambert solver: Lancaster-Blanchard time-of-flight, Householder iteration, multi-revolution branches.
 
 - **Meeus** -- _Astronomical Algorithms_, 2nd ed. Sun/Moon ephemeris, eclipse geometry.
 - **Brent** -- _Algorithms for Minimization without Derivatives_, 1973. Root-bracketing for closest-approach refinement.
@@ -267,7 +270,7 @@ Solo-authored, actively developed, research-grade Rust. Not on `crates.io` — b
 
 **In progress / next:**
 
-1. **React Three Fiber frontend** — interactive 3D mission designer running in the browser via the WASM analytical engine, WebSocket to `rpo-api` for nyx-dependent operations (Lambert, validation, Monte Carlo). Analytical ops stay sub-frame; numerical ops stream progress.
+1. **React Three Fiber frontend** — interactive 3D mission designer running in the browser via the WASM analytical engine, WebSocket to `rpo-api` for nyx-dependent operations (drag extraction, validation, Monte Carlo). Analytical ops stay sub-frame; numerical ops stream progress.
 2. **Drag-aware formation design** — DMF-rate feedback into waypoint null-space enrichment so drift compensation happens upstream of the analyst advisory rather than as a post-hoc warning.
 3. **Extended orbit regimes** — GEO and HEO validation; appropriate STM extensions; finite-burn modeling for maneuvers that cannot be treated as impulsive.
 
