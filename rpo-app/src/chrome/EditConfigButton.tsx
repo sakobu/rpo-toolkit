@@ -16,6 +16,7 @@ const TOOLTIP_WARN = 'Edit configuration — editing inputs will reset downstrea
 export function EditConfigButton({ variant = 'inline' }: EditConfigButtonProps) {
   const navigate = useNavigate();
   const hasDownstreamToLose = usePlanner((s) => s.phases.xfr.state === 'done');
+
   const onClick = withBlur(() => {
     void navigate('/');
   });

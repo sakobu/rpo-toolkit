@@ -86,19 +86,18 @@ export function TransferPanel() {
 
   const formIsValid = form.isValid;
 
-  // Lambert is sync via WASM (microseconds), so the candidate transfer is a
-  // pure function of form values + upstream config. Derive it via useMemo;
-  // a small effect below mirrors the result into the planner store for the
-  // 3D viewport and other consumers.
   const computed = useMemo<ComputedTransfer>(() => {
     if (!formIsValid) return { kind: 'idle' };
+
     if (chiefState.status !== 'loaded' || deputyState.status !== 'loaded') {
       return { kind: 'error', message: 'chief and deputy must be loaded' };
     }
+
     const lambertConfig: LambertConfig = {
       direction: form.values.direction,
       revolutions: form.values.revolutions,
     };
+
     const result = computeTransfer({
       chief_eci: chiefState.vector,
       deputy_eci: deputyState.vector,
@@ -108,6 +107,7 @@ export function TransferPanel() {
       lambert_config: lambertConfig,
       ...(safetyRequirements ? { safety_requirements: safetyRequirements } : {}),
     });
+
     return match(result, {
       ok: ({ transfer: tr, enrichment: enr }): ComputedTransfer => ({
         kind: 'ok',
@@ -134,11 +134,6 @@ export function TransferPanel() {
     void navigate('/proximity');
   };
 
-  // Sub-surface conics are non-physical — block ACCEPT TRANSFER until the
-  // user adjusts their inputs (TOF, revolutions, direction) enough to lift
-  // the transfer ellipse's perigee above `MIN_PERIAPSIS_ALTITUDE_KM`. The
-  // arc and Δv readouts still render so the user can see why their inputs
-  // are bad.
   const subSurface = usePlanner(selectTransferSubSurface);
   const canAccept = transferSlot !== null && lambertError === null && subSurface === null;
   const acceptDisabledReason =

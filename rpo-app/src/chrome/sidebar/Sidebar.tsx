@@ -45,16 +45,12 @@ export function Sidebar() {
   const phases = usePlanner(useShallow((s) => s.phases));
   const editPhase = usePlanner((s) => s.editPhase);
 
-  // Editing a completed phase reverts the viewport to where that phase's
-  // planning happens — xfr → far-field (Lambert is planned in ECI). Pair the
-  // state reset with the route change at the call site, mirroring the
-  // acceptTransfer + navigate('/proximity') pattern in TransferPanel.
+  useHotkey('s', cycleSidebar);
+
   const handleEdit = (key: PhaseKey) => {
     editPhase(key);
     if (key === 'xfr') void navigate('/far-field');
   };
-
-  useHotkey('s', cycleSidebar);
 
   if (sidebar === 'hidden') return null;
   if (sidebar === 'collapsed') return <SidebarRail />;

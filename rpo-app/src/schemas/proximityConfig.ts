@@ -2,9 +2,6 @@ import * as S from '@railway-ts/pipelines/schema';
 
 import { getEngineConstants } from '@/wasm/constants';
 
-// UI sanity floor — catches typos like `0.001` → `0.01`. No engine source;
-// the engine doesn't care about a lower bound, only the linearization-bound
-// upper bound. Keep this in TS.
 export const ROE_THRESHOLD_MIN = 0.0001;
 
 export function proximityConfigSchema() {

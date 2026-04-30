@@ -73,10 +73,6 @@ export const LAMBERT_REQUEST_DEFAULTS = {
   perch_diy: number;
 };
 
-// Numeric field with type/finiteness checks only — range bounds are applied
-// conditionally below so hidden fields (perch_offset_km in custom mode, the
-// perch_d* fields outside custom mode) don't block `form.isValid` and freeze
-// `useFormAutoSubmission`.
 const numericField = S.required(
   S.chain(S.parseNumber('Must be a number'), S.finite('Must be finite')),
 );

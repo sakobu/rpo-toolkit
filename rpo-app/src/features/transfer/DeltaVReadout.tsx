@@ -18,11 +18,8 @@ function EnrichmentBadge({ enrichment }: { enrichment: EnrichmentSuggestion }) {
 }
 
 export function DeltaVReadout({ slot }: { slot: TransferSlot | null }) {
-  // Sub-surface (non-physical) conics still render their Δv numbers (so the
-  // user can see what their inputs produced) plus a periapsis callout; the
-  // parent gates the ACCEPT TRANSFER button on the same selector. Hooks must
-  // run unconditionally — keep this above the early returns.
   const subSurface = usePlanner(selectTransferSubSurface);
+
   if (slot === null) {
     return (
       <div className="flex flex-col gap-1 rounded-xs border border-border bg-surface-2 px-2 py-1.5">
@@ -30,12 +27,14 @@ export function DeltaVReadout({ slot }: { slot: TransferSlot | null }) {
       </div>
     );
   }
+
   const { transfer, enrichment } = slot;
   const lambert = transfer.plan.transfer ?? null;
   const depDv = lambert ? vectorMag(lambert.departure_dv_eci_km_s) * 1000 : null;
   const arrDv = lambert ? vectorMag(lambert.arrival_dv_eci_km_s) * 1000 : null;
   const enriched = enrichment.status === 'enriched';
   const perchRoe = enriched ? enrichment.safe_perch.roe : transfer.plan.perch_roe;
+
   return (
     <div className="flex flex-col gap-1.5">
       <div className="flex flex-col gap-1 rounded-xs border border-border bg-surface-2 px-2 py-1.5">
